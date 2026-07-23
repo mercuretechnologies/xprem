@@ -49,8 +49,9 @@ func TestPublishGroupPersistencePostgres(t *testing.T) {
 	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *rolloutUpdate))
 	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *rolloutUpdate, uuid.NewString()))
 
-	items, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch)
+	page, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, nil, 100)
 	require.NoError(t, err)
+	items := page.Items
 	require.Len(t, items, 5)
 
 	groupsById := map[string]*string{}
@@ -172,8 +173,9 @@ func TestPublishGroupRolloutActivationPostgres(t *testing.T) {
 
 	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *ios, uuid.NewString()))
 	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *android, uuid.NewString()))
-	items, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch)
+	page, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, nil, 100)
 	require.NoError(t, err)
+	items := page.Items
 	require.Len(t, items, 2)
 	for _, item := range items {
 		require.NotNil(t, item.PublishGroup)

@@ -106,11 +106,12 @@ describe('republish command flow', () => {
   });
 
   it('offers the publish group mode and republishes the group in one call', async () => {
-    vi.mocked(fetchUpdates).mockResolvedValue([
-      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
-      serverUpdate({ updateId: '200', platform: 'android', publishGroup: 'group-a' }),
-      serverUpdate({ updateId: '300', platform: 'ios', publishGroup: undefined }),
-    ]);
+    // The android member is beyond this page boundary. The CLI must submit the
+    // group id instead of constructing a partial republish from loaded members.
+    vi.mocked(fetchUpdates).mockResolvedValue({
+      items: [serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' })],
+      nextCursor: '100',
+    });
     answerPrompts({
       runtimeVersion: '1.0.0',
       mode: 'group',
@@ -126,13 +127,17 @@ describe('republish command flow', () => {
     expect(url.searchParams.get('runtimeVersion')).toBe('1.0.0');
     expect(url.searchParams.has('updateId')).toBe(false);
     expect(url.searchParams.has('platform')).toBe(false);
+    expect(fetchUpdates).toHaveBeenCalledTimes(1);
   });
 
   it('republishes a single update through the historical wire format', async () => {
-    vi.mocked(fetchUpdates).mockResolvedValue([
-      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
-      serverUpdate({ updateId: '200', platform: 'android', publishGroup: 'group-a' }),
-    ]);
+    vi.mocked(fetchUpdates).mockResolvedValue({
+      items: [
+        serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
+        serverUpdate({ updateId: '200', platform: 'android', publishGroup: 'group-a' }),
+      ],
+      nextCursor: null,
+    });
     answerPrompts({
       runtimeVersion: '1.0.0',
       mode: 'single',
@@ -149,10 +154,13 @@ describe('republish command flow', () => {
   });
 
   it('skips the mode question when --platform narrows the run', async () => {
-    vi.mocked(fetchUpdates).mockResolvedValue([
-      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
-      serverUpdate({ updateId: '200', platform: 'android', publishGroup: 'group-a' }),
-    ]);
+    vi.mocked(fetchUpdates).mockResolvedValue({
+      items: [
+        serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
+        serverUpdate({ updateId: '200', platform: 'android', publishGroup: 'group-a' }),
+      ],
+      nextCursor: null,
+    });
     answerPrompts({
       runtimeVersion: '1.0.0',
       update: (question: any) => question.choices[0].value,
@@ -166,9 +174,10 @@ describe('republish command flow', () => {
   });
 
   it('skips the mode question when the branch has no publish groups', async () => {
-    vi.mocked(fetchUpdates).mockResolvedValue([
-      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: undefined }),
-    ]);
+    vi.mocked(fetchUpdates).mockResolvedValue({
+      items: [serverUpdate({ updateId: '100', platform: 'ios', publishGroup: undefined })],
+      nextCursor: null,
+    });
     answerPrompts({
       runtimeVersion: '1.0.0',
       update: (question: any) => question.choices[0].value,
@@ -180,10 +189,64 @@ describe('republish command flow', () => {
     expect(lastPostUrl().searchParams.get('updateId')).toBe('100');
   });
 
+  it('loads another page in the single-update picker and focuses the new choices', async () => {
+    vi.mocked(fetchUpdates)
+      .mockResolvedValueOnce({
+        items: [serverUpdate({ updateId: '200', publishGroup: undefined })],
+        nextCursor: '200',
+      })
+      .mockResolvedValueOnce({
+        items: [serverUpdate({ updateId: '100', publishGroup: undefined })],
+        nextCursor: null,
+      });
+    let updatePromptCount = 0;
+    answerPrompts({
+      runtimeVersion: '1.0.0',
+      update: (question: any) => {
+        updatePromptCount += 1;
+        if (updatePromptCount === 1) {
+          return question.choices.at(-1).value;
+        }
+        expect(question.initial).toBe(1);
+        return question.choices[1].value;
+      },
+    });
+
+    await Republish.run(['--branch', 'main'], eoasRoot);
+
+    expect(fetchUpdates).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cursor: '200', limit: 20 })
+    );
+    expect(lastPostUrl().searchParams.get('updateId')).toBe('100');
+  });
+
+  it('automatically skips a page containing only rollback markers', async () => {
+    vi.mocked(fetchUpdates)
+      .mockResolvedValueOnce({
+        items: [serverUpdate({ updateUUID: 'Rollback to embedded', updateId: '200' })],
+        nextCursor: '200',
+      })
+      .mockResolvedValueOnce({
+        items: [serverUpdate({ updateId: '100', publishGroup: undefined })],
+        nextCursor: null,
+      });
+    answerPrompts({
+      runtimeVersion: '1.0.0',
+      update: (question: any) => question.choices[0].value,
+    });
+
+    await Republish.run(['--branch', 'main'], eoasRoot);
+
+    expect(fetchUpdates).toHaveBeenCalledTimes(2);
+    expect(lastPostUrl().searchParams.get('updateId')).toBe('100');
+  });
+
   it('targets the origin passed as --serverUrl instead of the config one', async () => {
-    vi.mocked(fetchUpdates).mockResolvedValue([
-      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: undefined }),
-    ]);
+    vi.mocked(fetchUpdates).mockResolvedValue({
+      items: [serverUpdate({ updateId: '100', platform: 'ios', publishGroup: undefined })],
+      nextCursor: null,
+    });
     answerPrompts({
       runtimeVersion: '1.0.0',
       update: (question: any) => question.choices[0].value,

@@ -235,6 +235,20 @@ WHERE a.id = $1
   AND u.checked_at IS NOT NULL
 ORDER BY u.created_at DESC;
 
+-- name: GetUpdatesPageByBranchNameAndRuntimeVersion :many
+SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash, u.platform, u.message, u.checked_at, u.rollout_percentage, u.control_update_id, u.publish_group
+FROM updates u
+JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+JOIN branches b ON u.branch_id = b.id
+JOIN apps a ON b.app_id = a.id
+WHERE a.id = sqlc.arg('app_id')
+  AND rv.version = sqlc.arg('runtime_version')
+  AND b.name = sqlc.arg('branch_name')
+  AND u.checked_at IS NOT NULL
+  AND (sqlc.narg('before_id')::BIGINT IS NULL OR u.id < sqlc.narg('before_id'))
+ORDER BY u.id DESC
+LIMIT sqlc.arg('row_limit');
+
 -- name: GetUpdateFeed :many
 SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash,
        u.platform, u.message, u.rollout_percentage, u.control_update_id,

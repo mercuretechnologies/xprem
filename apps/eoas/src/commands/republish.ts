@@ -9,6 +9,7 @@ import { ora } from '../lib/ora';
 import { isExpoInstalled } from '../lib/package';
 import { promptAsync } from '../lib/prompts';
 import {
+  PublishGroupSummary,
   ServerUpdateItem,
   describePublishGroup,
   fetchRuntimeVersions,
@@ -16,6 +17,12 @@ import {
   groupPublishedUpdates,
 } from '../lib/serverUpdates';
 import { resolveVcsClient } from '../lib/vcs';
+
+const UPDATES_PAGE_SIZE = 20;
+
+type GroupSelection = { kind: 'group'; group: PublishGroupSummary } | { kind: 'loadMore' };
+
+type UpdateSelection = { kind: 'update'; update: ServerUpdateItem } | { kind: 'loadMore' };
 
 export default class Publish extends Command {
   static override args = {};
@@ -107,29 +114,47 @@ export default class Publish extends Command {
       })),
     });
     Log.log(`Selected runtime version: ${selectedRuntimeVersion.runtimeVersion}`);
-    let allUpdates: ServerUpdateItem[];
+    const updates: ServerUpdateItem[] = [];
+    let nextCursor: string | null | undefined;
+    const loadNextPage = async (): Promise<void> => {
+      const previousCount = updates.length;
+      do {
+        const page = await fetchUpdates({
+          baseUrl,
+          appId,
+          branch,
+          runtimeVersion: selectedRuntimeVersion.runtimeVersion,
+          credentials,
+          cursor: nextCursor ?? undefined,
+          limit: UPDATES_PAGE_SIZE,
+        });
+        // Rollbacks have no files to republish. Apply a requested platform
+        // before presenting pages, but do not fetch ahead merely to fill 20.
+        updates.push(
+          ...page.items.filter(
+            update =>
+              update.updateUUID !== 'Rollback to embedded' &&
+              (platform === 'all' || update.platform === platform)
+          )
+        );
+        nextCursor = page.nextCursor;
+      } while (updates.length === previousCount && nextCursor);
+    };
+
     try {
-      allUpdates = await fetchUpdates({
-        baseUrl,
-        appId,
-        branch,
-        runtimeVersion: selectedRuntimeVersion.runtimeVersion,
-        credentials,
-      });
+      await loadNextPage();
     } catch (e) {
       Log.error(e instanceof Error ? e.message : e);
       process.exit(1);
     }
-    // Rollback markers have no files to republish.
-    const updates = allUpdates.filter(u => u.updateUUID !== 'Rollback to embedded');
-    if (updates.length === 0) {
+    if (updates.length === 0 && !nextCursor) {
       Log.error(
-        `No republishable updates found for runtime version ${selectedRuntimeVersion.runtimeVersion}.`
+        `No republishable updates found for runtime version ${selectedRuntimeVersion.runtimeVersion} on platform ${platform}.`
       );
       process.exit(1);
     }
 
-    const { groups } = groupPublishedUpdates(updates);
+    let { groups } = groupPublishedUpdates(updates);
     // Offer the group mode only when there is something to group and the user
     // did not already narrow the run to one platform.
     let mode: 'group' | 'single' = 'single';
@@ -155,16 +180,39 @@ export default class Publish extends Command {
     }
 
     if (mode === 'group') {
-      const selectedGroup = await promptAsync({
-        type: 'select',
-        name: 'group',
-        message: 'Select a publish to republish',
-        choices: groups.map(group => ({
-          ...describePublishGroup(group),
-          value: group,
-        })),
-      });
-      const group = selectedGroup.group;
+      let group: PublishGroupSummary | undefined;
+      let initialChoiceIndex = 0;
+      while (!group) {
+        const choices: { title: string; value: GroupSelection; description?: string }[] =
+          groups.map(candidate => ({
+            ...describePublishGroup(candidate),
+            value: { kind: 'group', group: candidate },
+          }));
+        if (nextCursor) {
+          choices.push({ title: 'Load more publishes', value: { kind: 'loadMore' } });
+        }
+        const selectedGroup = await promptAsync({
+          type: 'select',
+          name: 'group',
+          message: 'Select a publish to republish',
+          choices,
+          initial: initialChoiceIndex,
+        });
+        const selection = selectedGroup.group as GroupSelection;
+        if (selection.kind === 'loadMore') {
+          const previousGroupCount = groups.length;
+          try {
+            await loadNextPage();
+          } catch (e) {
+            Log.error(e instanceof Error ? e.message : e);
+            process.exit(1);
+          }
+          groups = groupPublishedUpdates(updates).groups;
+          initialChoiceIndex = Math.min(previousGroupCount, Math.max(0, groups.length - 1));
+        } else {
+          group = selection.group;
+        }
+      }
       const republishUrl = new URL(`${baseUrl}/${appId}/republish/${branch}`);
       republishUrl.searchParams.set('runtimeVersion', selectedRuntimeVersion.runtimeVersion);
       republishUrl.searchParams.set('publishGroup', group.publishGroup);
@@ -193,29 +241,45 @@ export default class Publish extends Command {
       return;
     }
 
-    const platformUpdates = updates.filter(u => platform === 'all' || u.platform === platform);
-    if (platformUpdates.length === 0) {
-      Log.error(
-        `No republishable updates found for runtime version ${selectedRuntimeVersion.runtimeVersion} on platform ${platform}.`
-      );
-      process.exit(1);
+    let selectedUpdate: ServerUpdateItem | undefined;
+    let initialChoiceIndex = 0;
+    while (!selectedUpdate) {
+      const choices: { title: string; value: UpdateSelection; description?: string }[] =
+        updates.map(update => ({
+          title: update.updateUUID,
+          value: { kind: 'update', update },
+          description: `Created at: ${update.createdAt}, Platform: ${update.platform}, Commit hash: ${update.commitHash}`,
+        }));
+      if (nextCursor) {
+        choices.push({ title: 'Load more updates', value: { kind: 'loadMore' } });
+      }
+      const answer = await promptAsync({
+        type: 'select',
+        name: 'update',
+        message: 'Select an update to republish',
+        choices,
+        initial: initialChoiceIndex,
+      });
+      const selection = answer.update as UpdateSelection;
+      if (selection.kind === 'loadMore') {
+        const firstNewUpdateIndex = updates.length;
+        try {
+          await loadNextPage();
+        } catch (e) {
+          Log.error(e instanceof Error ? e.message : e);
+          process.exit(1);
+        }
+        initialChoiceIndex = Math.min(firstNewUpdateIndex, Math.max(0, updates.length - 1));
+      } else {
+        selectedUpdate = selection.update;
+      }
     }
-    const selectedUpdated = await promptAsync({
-      type: 'select',
-      name: 'update',
-      message: 'Select an update to republish',
-      choices: platformUpdates.map(update => ({
-        title: update.updateUUID,
-        value: update,
-        description: `Created at: ${update.createdAt}, Platform: ${update.platform}, Commit hash: ${update.commitHash}`,
-      })),
-    });
-    Log.log(`Re-publishing update: ${selectedUpdated.update.updateUUID}`);
+    Log.log(`Re-publishing update: ${selectedUpdate.updateUUID}`);
     const republishUrl = new URL(`${baseUrl}/${appId}/republish/${branch}`);
-    republishUrl.searchParams.set('platform', selectedUpdated.update.platform);
+    republishUrl.searchParams.set('platform', selectedUpdate.platform);
     republishUrl.searchParams.set('runtimeVersion', selectedRuntimeVersion.runtimeVersion);
-    republishUrl.searchParams.set('updateId', selectedUpdated.update.updateId);
-    republishUrl.searchParams.set('commitHash', selectedUpdated.update.commitHash);
+    republishUrl.searchParams.set('updateId', selectedUpdate.updateId);
+    republishUrl.searchParams.set('commitHash', selectedUpdate.commitHash);
     const republishSpinner = ora('🔄 Republishing update...').start();
     const republishResponse = await fetchWithRetries(republishUrl.toString(), {
       method: 'POST',

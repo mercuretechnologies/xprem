@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	defaultUpdateFeedLimit = 50
-	maxUpdateFeedLimit     = 100
+	defaultUpdatesPageLimit = 20
+	maxUpdatesPageLimit     = 100
+	defaultUpdateFeedLimit  = 50
+	maxUpdateFeedLimit      = 100
 	// maxPublishBodyBytes caps the two publish bodies below. They hold a
 	// platform, an id and a short message, so anything larger is a mistake or
 	// an attempt to make the server buffer a request body.
@@ -129,15 +131,25 @@ func (h *UpdateHandler) GetUpdatesHandler(w http.ResponseWriter, r *http.Request
 		handlers.RenderError(w, http.StatusBadRequest, "Runtime version is empty")
 		return
 	}
-	cacheKey := dashboard.ComputeGetUpdatesCacheKey(appId, branchName, runtimeVersion)
-	cache := cache2.GetCache()
-	if cacheValue := cache.Get(cacheKey); cacheValue != "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(cacheValue))
-		return
+	var cursor *int64
+	if rawCursor := r.URL.Query().Get("cursor"); rawCursor != "" {
+		parsedCursor, err := strconv.ParseInt(rawCursor, 10, 64)
+		if err != nil || parsedCursor <= 0 {
+			handlers.RenderError(w, http.StatusBadRequest, "Cursor must be a positive update ID")
+			return
+		}
+		cursor = &parsedCursor
 	}
-	updates, err := h.updateService.GetUpdatesByRunTimeVersionAndBranchName(r.Context(), appId, runtimeVersion, branchName)
+	limit := defaultUpdatesPageLimit
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > maxUpdatesPageLimit {
+			handlers.RenderError(w, http.StatusBadRequest, "Limit must be between 1 and 100")
+			return
+		}
+		limit = parsedLimit
+	}
+	updates, err := h.updateService.GetUpdatesByRunTimeVersionAndBranchName(r.Context(), appId, runtimeVersion, branchName, cursor, limit)
 	if err != nil {
 		var valErr *validation.Error
 		if errors.As(err, &valErr) {
@@ -151,9 +163,6 @@ func (h *UpdateHandler) GetUpdatesHandler(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
-
-	ttl := 3600
-	cache.Set(cacheKey, string(marshaledResponse), &ttl)
 }
 
 // publishResponse is the shared body of both write routes below: the rows that
