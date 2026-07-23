@@ -2321,6 +2321,81 @@ func (q *Queries) GetUpdatesMetadataByBranchName(ctx context.Context, arg GetUpd
 	return items, nil
 }
 
+const getUpdatesPageByBranchNameAndRuntimeVersion = `-- name: GetUpdatesPageByBranchNameAndRuntimeVersion :many
+SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash, u.platform, u.message, u.checked_at, u.rollout_percentage, u.control_update_id, u.publish_group
+FROM updates u
+JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+JOIN branches b ON u.branch_id = b.id
+JOIN apps a ON b.app_id = a.id
+WHERE a.id = $1
+  AND rv.version = $2
+  AND b.name = $3
+  AND u.checked_at IS NOT NULL
+  AND ($4::BIGINT IS NULL OR u.id < $4)
+ORDER BY u.id DESC
+LIMIT $5
+`
+
+type GetUpdatesPageByBranchNameAndRuntimeVersionParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	RuntimeVersion string      `json:"runtime_version"`
+	BranchName     string      `json:"branch_name"`
+	BeforeID       *int64      `json:"before_id"`
+	RowLimit       int32       `json:"row_limit"`
+}
+
+type GetUpdatesPageByBranchNameAndRuntimeVersionRow struct {
+	ID                int64              `json:"id"`
+	UpdateUuid        pgtype.UUID        `json:"update_uuid"`
+	UpdateType        int32              `json:"update_type"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	CommitHash        string             `json:"commit_hash"`
+	Platform          string             `json:"platform"`
+	Message           *string            `json:"message"`
+	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
+	RolloutPercentage *int32             `json:"rollout_percentage"`
+	ControlUpdateID   *int64             `json:"control_update_id"`
+	PublishGroup      pgtype.UUID        `json:"publish_group"`
+}
+
+func (q *Queries) GetUpdatesPageByBranchNameAndRuntimeVersion(ctx context.Context, arg GetUpdatesPageByBranchNameAndRuntimeVersionParams) ([]GetUpdatesPageByBranchNameAndRuntimeVersionRow, error) {
+	rows, err := q.db.Query(ctx, getUpdatesPageByBranchNameAndRuntimeVersion,
+		arg.AppID,
+		arg.RuntimeVersion,
+		arg.BranchName,
+		arg.BeforeID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUpdatesPageByBranchNameAndRuntimeVersionRow
+	for rows.Next() {
+		var i GetUpdatesPageByBranchNameAndRuntimeVersionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UpdateUuid,
+			&i.UpdateType,
+			&i.CreatedAt,
+			&i.CommitHash,
+			&i.Platform,
+			&i.Message,
+			&i.CheckedAt,
+			&i.RolloutPercentage,
+			&i.ControlUpdateID,
+			&i.PublishGroup,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserAppGrant = `-- name: GetUserAppGrant :one
 SELECT g.user_id, g.app_id, g.role_id, g.extra_permissions,
        r.permissions AS role_permissions

@@ -52,7 +52,9 @@ func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, b
 
 func sortNewestFirst(updates []types.Update) []types.Update {
 	sort.Slice(updates, func(i, j int) bool {
-		return updates[i].CreatedAt > updates[j].CreatedAt
+		idI, _ := strconv.ParseInt(updates[i].UpdateId, 10, 64)
+		idJ, _ := strconv.ParseInt(updates[j].UpdateId, 10, 64)
+		return idI > idJ
 	})
 	return updates
 }
@@ -170,20 +172,24 @@ func (s *BucketUpdateStore) GetUpdateDetails(ctx context.Context, appId string, 
 	}, nil
 }
 
-func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string) ([]types.UpdateItem, error) {
-
+func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error) {
 	updates, err := s.bucket.GetUpdates(appId, branchName, runtimeVersion)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch updates: %w", err)
+		return types.UpdatesPage{}, fmt.Errorf("failed to fetch updates: %w", err)
 	}
 
-	var updatesResponse []types.UpdateItem
+	updates = sortNewestFirst(updates)
+	updatesResponse := make([]types.UpdateItem, 0, limit+1)
 	for _, update := range updates {
+		updateID, err := strconv.ParseInt(update.UpdateId, 10, 64)
+		if err != nil || (cursor != nil && updateID >= *cursor) {
+			continue
+		}
 		isValid := s.isUpdateValid(update)
 		if !isValid {
 			continue
 		}
-		numberUpdate, _ := strconv.ParseInt(update.UpdateId, 10, 64)
+		numberUpdate := updateID
 		storedMetadata, _ := update2.RetrieveUpdateStoredMetadata(update)
 		updateType := s.updateType(update)
 		if updateType == types.Rollback {
@@ -195,6 +201,9 @@ func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.
 				Platform:   storedMetadata.Platform,
 				Message:    storedMetadata.Message,
 			})
+			if len(updatesResponse) == limit+1 {
+				break
+			}
 			continue
 		}
 
@@ -214,13 +223,17 @@ func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.
 			Platform:   storedMetadata.Platform,
 			Message:    storedMetadata.Message,
 		})
+		if len(updatesResponse) == limit+1 {
+			break
+		}
 	}
-	sort.Slice(updatesResponse, func(i, j int) bool {
-		timeI, _ := time.Parse(time.RFC3339, updatesResponse[i].CreatedAt)
-		timeJ, _ := time.Parse(time.RFC3339, updatesResponse[j].CreatedAt)
-		return timeI.After(timeJ)
-	})
-	return updatesResponse, nil
+	var nextCursor *string
+	if len(updatesResponse) > limit {
+		cursorValue := updatesResponse[limit-1].UpdateId
+		nextCursor = &cursorValue
+		updatesResponse = updatesResponse[:limit]
+	}
+	return types.UpdatesPage{Items: updatesResponse, NextCursor: nextCursor}, nil
 }
 
 // GetUpdate reconstructs an update handle from its id without touching the

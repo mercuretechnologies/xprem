@@ -506,6 +506,21 @@ func TestUpdatesWithoutAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, respRec.Code)
 }
 
+func TestUpdatesRejectsInvalidPagination(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter(testContainer())
+	token := login().Token
+
+	for _, query := range []string{"cursor=invalid", "cursor=0", "limit=0", "limit=101"} {
+		respRec := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/apps/test-app-id/branch/branch-1/runtimeVersion/1/updates?"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(respRec, req)
+		assert.Equal(t, http.StatusBadRequest, respRec.Code, query)
+	}
+}
+
 func TestUpdatesRegularBranch1(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
@@ -519,7 +534,7 @@ func TestUpdatesRegularBranch1(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "[{\"updateUUID\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
 }
 
 func TestUpdatesMultiBranch2(t *testing.T) {
@@ -535,7 +550,41 @@ func TestUpdatesMultiBranch2(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "[{\"updateUUID\":\"68e096e2-a619-9d56-7f7c-89f97bc27312\",\"updateId\":\"1737455526\",\"createdAt\":\"1970-01-21T02:37:35Z\",\"commitHash\":\"\",\"platform\":\"ios\"},{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666629141\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666304169\",\"createdAt\":\"1970-01-20T06:51:44Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"68e096e2-a619-9d56-7f7c-89f97bc27312\",\"updateId\":\"1737455526\",\"createdAt\":\"1970-01-21T02:37:35Z\",\"commitHash\":\"\",\"platform\":\"ios\"},{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666629141\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666304169\",\"createdAt\":\"1970-01-20T06:51:44Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
+}
+
+func TestUpdatesCursorPagination(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter(testContainer())
+	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+		func(req *http.Request) (*http.Response, error) {
+			return MockExpoBranchesMappingResponse([]map[string]interface{}{{"id": "branch-1", "name": "branch-1"}, {"id": "branch-2", "name": "branch-2"}}, []map[string]interface{}{{"id": "staging", "name": "staging", "branchMapping": "{\"data\":[{\"branchId\":\"branch-1\",\"branchMappingLogic\":\"true\"}],\"version\":0}"}})
+		})
+	token := login().Token
+
+	fetchPage := func(path string) types.UpdatesPage {
+		respRec := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		router.ServeHTTP(respRec, req)
+		assert.Equal(t, http.StatusOK, respRec.Code)
+		var page types.UpdatesPage
+		assert.NoError(t, json.Unmarshal(respRec.Body.Bytes(), &page))
+		return page
+	}
+
+	first := fetchPage("/api/apps/test-app-id/branch/branch-2/runtimeVersion/1/updates?limit=2")
+	assert.Equal(t, []string{"1737455526", "1674170951"}, []string{first.Items[0].UpdateId, first.Items[1].UpdateId})
+	assert.Equal(t, "1674170951", *first.NextCursor)
+
+	second := fetchPage("/api/apps/test-app-id/branch/branch-2/runtimeVersion/1/updates?limit=2&cursor=" + *first.NextCursor)
+	assert.Equal(t, []string{"1666629141", "1666629107"}, []string{second.Items[0].UpdateId, second.Items[1].UpdateId})
+	assert.Equal(t, "1666629107", *second.NextCursor)
+
+	last := fetchPage("/api/apps/test-app-id/branch/branch-2/runtimeVersion/1/updates?limit=2&cursor=" + *second.NextCursor)
+	assert.Equal(t, []string{"1666304169"}, []string{last.Items[0].UpdateId})
+	assert.Nil(t, last.NextCursor)
 }
 
 func TestUpdatesSomeNotValidBranch4(t *testing.T) {
@@ -551,5 +600,5 @@ func TestUpdatesSomeNotValidBranch4(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "[{\"updateUUID\":\"3f23a8c4-cd0e-a5a4-63f2-bb2841e95a01\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"3f23a8c4-cd0e-a5a4-63f2-bb2841e95a01\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
 }

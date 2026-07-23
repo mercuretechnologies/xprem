@@ -208,6 +208,11 @@ export type PublishResult = {
   publishGroup?: string;
 };
 
+export type UpdatesPage = {
+  items: UpdateRecord[];
+  nextCursor: string | null;
+};
+
 // One active per-update rollout row (eoas publishes one per platform, so a
 // single rollout on a runtime version can have up to two rows).
 export type UpdateRolloutInfo = {
@@ -1348,9 +1353,11 @@ export class ApiClient {
       }
     );
   }
-  public async getUpdates(branch: string, runtimeVersion: string) {
-    return this.request<UpdateRecord[]>(
-      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates`,
+  public async getUpdates(branch: string, runtimeVersion: string, cursor?: string, limit = 20) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<UpdatesPage>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates?${query.toString()}`,
       {
         method: 'GET',
       }

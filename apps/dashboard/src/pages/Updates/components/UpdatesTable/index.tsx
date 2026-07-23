@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api, UpdateRecord } from '@/lib/api.ts';
 import { ApiError } from '@/components/APIError';
 import { DataTable } from '@/components/DataTable';
@@ -14,6 +14,9 @@ import { TimestampCell } from '@/components/ui/timestamp-cell';
 import { UpdatesBreadcrumb } from '@/pages/Updates/components/UpdatesBreadcrumb';
 import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
+import { Button } from '@/components/ui/button';
+
+const UPDATES_PAGE_SIZE = 20;
 
 export const UpdatesTable = ({
   branch,
@@ -28,11 +31,17 @@ export const UpdatesTable = ({
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['updates', selectedAppId, branch, runtimeVersion],
-    queryFn: () => api.getUpdates(branch, runtimeVersion),
+  const updatesQuery = useInfiniteQuery({
+    queryKey: ['updates', selectedAppId, branch, runtimeVersion, UPDATES_PAGE_SIZE],
+    queryFn: ({ pageParam }) =>
+      api.getUpdates(branch, runtimeVersion, pageParam, UPDATES_PAGE_SIZE),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
     enabled: !!selectedAppId,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
   });
+  const updates = updatesQuery.data?.pages.flatMap(page => page.items) ?? [];
 
   // Rollout state is read fresh (control-plane only). It drives the card above
   // the table and the "Control" markers in the passive Rollout column.
@@ -53,7 +62,7 @@ export const UpdatesTable = ({
   // at 100 ids.
   const isUuid = (value: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  const byNumericId = new Map((data ?? []).map(u => [u.updateId, u]));
+  const byNumericId = new Map(updates.map(u => [u.updateId, u]));
   const rolloutUuids = activeRollout
     .map(r => byNumericId.get(r.updateId)?.updateUUID)
     .filter((uuid): uuid is string => !!uuid && isUuid(uuid));
@@ -82,7 +91,7 @@ export const UpdatesTable = ({
   return (
     <div className="w-full flex-1">
       {showBreadcrumb && <UpdatesBreadcrumb branch={branch} runtimeVersion={runtimeVersion} />}
-      {!!error && <ApiError error={error} />}
+      {!!updatesQuery.error && <ApiError error={updatesQuery.error} />}
       {!!rolloutQuery.error && <ApiError error={rolloutQuery.error} />}
       {!!healthQuery.error && <ApiError error={healthQuery.error} />}
       {CONTROL_PLANE_ENABLED && activeRollout.length > 0 && (
@@ -99,7 +108,7 @@ export const UpdatesTable = ({
       )}
       <UpdateDetailsSheet ref={sheetRef} branch={branch} runtimeVersion={runtimeVersion} />
       <DataTable
-        loading={isLoading}
+        loading={updatesQuery.isLoading}
         columns={[
           {
             header: 'Update',
@@ -192,13 +201,24 @@ export const UpdatesTable = ({
             cell: ({ row }) => <TimestampCell dateString={row.original.createdAt} showSeconds />,
           },
         ]}
-        data={data ?? []}
+        data={updates}
         defaultSorting={[{ id: 'createdAt', desc: true }]}
         emptyMessage="No updates published for this runtime version yet."
         onRowClick={row => {
           sheetRef?.current?.openSheet(row);
         }}
       />
+      {updatesQuery.hasNextPage && (
+        <div className="mt-4 flex justify-center">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={updatesQuery.isFetchingNextPage}
+            onClick={() => void updatesQuery.fetchNextPage()}>
+            {updatesQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };

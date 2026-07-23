@@ -92,6 +92,11 @@ type PublishGroupMember struct {
 	CommitHash string
 }
 
+type UpdatesPage struct {
+	Items      []UpdateItem `json:"items"`
+	NextCursor *string      `json:"nextCursor"`
+}
+
 type UpdateStoredMetadata struct {
 	Platform   string `json:"platform"`
 	CommitHash string `json:"commitHash"`

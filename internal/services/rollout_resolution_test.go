@@ -271,8 +271,8 @@ func (r *fakeUpdateRepo) GetUpdateByBranchNameAndRuntime(_ context.Context, _ st
 	return pgdb.GetUpdateByBranchNameAndRuntimeRow{}, nil
 }
 
-func (r *fakeUpdateRepo) GetUpdatesByRunTimeVersionAndBranchName(_ context.Context, _, _, _ string) ([]types.UpdateItem, error) {
-	return nil, nil
+func (r *fakeUpdateRepo) GetUpdatesByRunTimeVersionAndBranchName(_ context.Context, _, _, _ string, _ *int64, _ int) (types.UpdatesPage, error) {
+	return types.UpdatesPage{}, nil
 }
 
 func (r *fakeUpdateRepo) GetUpdateFeed(_ context.Context, _ string, _ types.UpdateFeedQuery) ([]types.UpdateFeedItem, error) {
