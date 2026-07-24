@@ -151,6 +151,7 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("preparing health event batch: %w", err)
 	}
+	defer batch.Close()
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
 		var previous any
@@ -206,6 +207,7 @@ func (h *HealthHistory) captureSnapshots(ctx context.Context) {
 		log.Printf("observe: preparing health snapshot batch failed: %v", err)
 		return
 	}
+	defer batch.Close()
 	for _, row := range rows {
 		if err := appendSnapshot(batch, row, bucket, now); err != nil {
 			log.Printf("observe: appending health snapshot failed: %v", err)

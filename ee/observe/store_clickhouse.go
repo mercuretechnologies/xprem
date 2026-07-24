@@ -46,6 +46,7 @@ func (s *ClickHouseTelemetrySink) InsertMetrics(ctx context.Context, rows []Metr
 	if err != nil {
 		return err
 	}
+	defer batch.Close()
 	for _, row := range rows {
 		if err := batch.Append(
 			row.AppID, row.EASClientID, row.UpdateID, row.Branch, row.Channel,
@@ -71,6 +72,7 @@ func (s *ClickHouseTelemetrySink) InsertLogs(ctx context.Context, rows []LogRow)
 	if err != nil {
 		return err
 	}
+	defer batch.Close()
 	for _, row := range rows {
 		isFatal := uint8(0)
 		if row.IsFatal {

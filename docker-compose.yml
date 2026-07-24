@@ -21,32 +21,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-dev
-    depends_on:
-      geoipupdate:
-        condition: service_healthy
     ports:
       - "3000:3000"
     volumes:
       - .:/app
       - ~/.aws:/root/.aws:ro
       - ./updates:/updates
-      - geoip_data:/usr/share/GeoIP:ro
     env_file:
       - .env
-    environment:
-      GEOIP_MMDB_PATH: /usr/share/GeoIP/GeoLite2-City.mmdb
     command: reflex -r '\.go' -s -- sh -c "ls -l cmd/api && go run cmd/api/main.go"
-
-  geoipupdate:
-    image: ghcr.io/maxmind/geoipupdate:v7.1.1
-    restart: unless-stopped
-    environment:
-      GEOIPUPDATE_ACCOUNT_ID: ${GEOIPUPDATE_ACCOUNT_ID:?Set GEOIPUPDATE_ACCOUNT_ID in .env}
-      GEOIPUPDATE_LICENSE_KEY: ${GEOIPUPDATE_LICENSE_KEY:?Set GEOIPUPDATE_LICENSE_KEY in .env}
-      GEOIPUPDATE_EDITION_IDS: GeoLite2-City
-      GEOIPUPDATE_FREQUENCY: 72
-    volumes:
-      - geoip_data:/usr/share/GeoIP
 
   postgres:
     image: postgres:latest
@@ -63,11 +46,11 @@ services:
     image: clickhouse/clickhouse-server:25.3
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-secret}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD in .env}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-expo_ota_dev}
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     ulimits:
       nofile:
         soft: 262144
@@ -88,4 +71,3 @@ services:
 volumes:
   postgres_data:
   clickhouse_data:
-  geoip_data:

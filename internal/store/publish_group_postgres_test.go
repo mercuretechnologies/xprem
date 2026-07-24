@@ -171,7 +171,9 @@ func TestGetUpdateFeedMarksCurrentAndRolloutControlForHealth(t *testing.T) {
 	for _, item := range items {
 		byID[item.UpdateId] = item
 	}
-	assert.False(t, byID["100"].HealthRelevant, "superseded update is historical")
+	superseded, ok := byID["100"]
+	require.True(t, ok, "superseded update is present")
+	assert.False(t, superseded.HealthRelevant, "superseded update is historical")
 	assert.True(t, byID["200"].HealthRelevant, "active rollout control keeps live health")
 	assert.True(t, byID["300"].HealthRelevant, "active rollout candidate keeps live health")
 }
