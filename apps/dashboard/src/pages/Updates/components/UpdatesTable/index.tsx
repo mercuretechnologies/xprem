@@ -53,11 +53,14 @@ export const UpdatesTable = ({
   // at 100 ids.
   const isUuid = (value: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  const updateUUIDs = [...(data ?? [])]
-    .filter(u => isUuid(u.updateUUID))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 100)
-    .map(u => u.updateUUID);
+  const byNumericId = new Map((data ?? []).map(u => [u.updateId, u]));
+  const rolloutUuids = activeRollout
+    .map(r => byNumericId.get(r.updateId)?.updateUUID)
+    .filter((uuid): uuid is string => !!uuid && isUuid(uuid));
+  const controlUuids = activeRollout
+    .map(r => (r.controlUpdateId ? byNumericId.get(r.controlUpdateId)?.updateUUID : undefined))
+    .filter((uuid): uuid is string => !!uuid && isUuid(uuid));
+  const updateUUIDs = [...new Set([...rolloutUuids, ...controlUuids])].slice(0, 100);
   const healthQuery = useQuery({
     queryKey: ['update-health', selectedAppId, branch, runtimeVersion, updateUUIDs.join(',')],
     queryFn: () => api.getUpdateHealth(updateUUIDs),
@@ -73,13 +76,6 @@ export const UpdatesTable = ({
   // A rollout spans one row per platform, each a DISTINCT update: aggregate
   // the raw cohorts across the rollout set (and the control set) so an
   // iOS-only crash storm cannot hide behind a healthy Android row.
-  const byNumericId = new Map((data ?? []).map(u => [u.updateId, u]));
-  const rolloutUuids = activeRollout
-    .map(r => byNumericId.get(r.updateId)?.updateUUID)
-    .filter((uuid): uuid is string => !!uuid && isUuid(uuid));
-  const controlUuids = activeRollout
-    .map(r => (r.controlUpdateId ? byNumericId.get(r.controlUpdateId)?.updateUUID : undefined))
-    .filter((uuid): uuid is string => !!uuid && isUuid(uuid));
   const rolloutHealth = aggregateUpdateHealth(rolloutUuids.map(uuid => healthByUuid?.[uuid]));
   const controlHealth = aggregateUpdateHealth(controlUuids.map(uuid => healthByUuid?.[uuid]));
 
