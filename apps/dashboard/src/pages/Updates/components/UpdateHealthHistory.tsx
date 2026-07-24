@@ -60,6 +60,7 @@ const aggregateSeries = (
         current.faultyDevices += point.faultyDevices;
         current.updateIssues += point.updateIssues;
         current.runtimeIssues += point.runtimeIssues;
+        if (point.capturedAt > current.capturedAt) current.capturedAt = point.capturedAt;
       } else {
         byTimestamp.set(point.timestamp, { ...point });
       }
@@ -169,7 +170,7 @@ export const UpdateHealthHistory = ({
     queryKey: ['update-health-history', selectedAppId, updateUUIDs.join(','), from],
     queryFn: () => api.getUpdateHealthHistory(updateUUIDs, from),
     enabled: !!selectedAppId && updateUUIDs.length > 0,
-    refetchInterval: live ? 60_000 : false,
+    refetchInterval: live ? 5_000 : false,
   });
   const aggregated = useMemo(
     () =>
@@ -193,6 +194,11 @@ export const UpdateHealthHistory = ({
   const timestamps = allPoints.map(point => point.timestamp).sort();
   const start = timestamps[0];
   const end = timestamps[timestamps.length - 1];
+  const lastCapturedAt = allPoints
+    .map(point => point.capturedAt)
+    .filter(Boolean)
+    .sort()
+    .pop();
   const selectedOption = metricOptions.find(option => option.key === metric) ?? metricOptions[0];
   const chartSeries =
     metric === 'health' ? healthSeries : metric === 'adoption' ? adoptionSeries : faults;
@@ -218,13 +224,18 @@ export const UpdateHealthHistory = ({
       <div className="flex items-end justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium">Health over time</h3>
-          <p className="text-xs text-muted-foreground">One-minute device snapshots.</p>
+          <p className="text-xs text-muted-foreground">
+            Near-real-time health, retained in one-minute buckets.
+          </p>
         </div>
-        {start && end && (
-          <span className="text-right font-mono text-[10px] text-muted-foreground">
-            {new Date(start).toLocaleString()} – {new Date(end).toLocaleString()}
-          </span>
-        )}
+        <div className="text-right font-mono text-[10px] text-muted-foreground">
+          {start && end && (
+            <div>
+              {new Date(start).toLocaleString()} – {new Date(end).toLocaleString()}
+            </div>
+          )}
+          {lastCapturedAt && <div>Synced {new Date(lastCapturedAt).toLocaleTimeString()}</div>}
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border bg-card shadow-card">

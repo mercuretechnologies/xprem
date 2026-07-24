@@ -20,6 +20,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"expo-open-ota/internal/database"
 	"expo-open-ota/internal/database/postgres"
@@ -774,6 +775,107 @@ func TestRecordUpdateFailuresCaptureOnce(t *testing.T) {
 		  AND event_type = 'failure'`,
 		appID, deviceID, failedUpdate).Scan(&outboxRows))
 	require.Equal(t, 1, outboxRows, "replayed failure headers must emit one historical event")
+}
+
+func TestRuntimeFailureRecoveryUsesEventTime(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	deviceID := uuid.NewString()
+	updateID := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, updateID)
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateID))
+
+	crashedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Millisecond)
+	require.NoError(t, store.RecordRuntimeFailure(
+		ctx, appID, deviceID, updateID, "TypeError: boom", crashedAt,
+	))
+
+	// A startup at the same instant cannot prove that a later JS session ran:
+	// crash wins ties.
+	require.NoError(t, store.ResolveRuntimeFailure(ctx, appID, deviceID, updateID, crashedAt))
+	health, err := store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, health[updateID].RuntimeIssues)
+	require.EqualValues(t, 1, health[updateID].FailedStillOn)
+
+	recoveredAt := crashedAt.Add(time.Second)
+	require.NoError(t, store.ResolveRuntimeFailure(ctx, appID, deviceID, updateID, recoveredAt))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.Zero(t, health[updateID].RuntimeIssues)
+	require.Zero(t, health[updateID].FailedStillOn)
+
+	// An offline batch may deliver an older crash after the recovery. Event
+	// time, not ingestion order, keeps the device healthy.
+	require.NoError(t, store.RecordRuntimeFailure(
+		ctx, appID, deviceID, updateID, "late old crash", crashedAt.Add(-time.Second),
+	))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.Zero(t, health[updateID].RuntimeIssues)
+
+	// A genuinely newer crash reopens the same row and emits another immutable
+	// transition; the following newer startup resolves it again.
+	secondCrashAt := recoveredAt.Add(time.Second)
+	require.NoError(t, store.RecordRuntimeFailure(
+		ctx, appID, deviceID, updateID, "second crash", secondCrashAt,
+	))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, health[updateID].RuntimeIssues)
+	require.NoError(t, store.ResolveRuntimeFailure(
+		ctx, appID, deviceID, updateID, secondCrashAt.Add(time.Second),
+	))
+
+	rows, err := pool.Query(ctx, `
+		SELECT event_type, occurred_at
+		FROM device_health_outbox
+		WHERE app_id = $1 AND eas_client_id = $2 AND update_id = $3
+		  AND event_type IN ('failure', 'recovered')
+		ORDER BY occurred_at, event_type`,
+		appID, deviceID, updateID)
+	require.NoError(t, err)
+	defer rows.Close()
+	type transition struct {
+		eventType  string
+		occurredAt time.Time
+	}
+	var transitions []transition
+	for rows.Next() {
+		var item transition
+		require.NoError(t, rows.Scan(&item.eventType, &item.occurredAt))
+		item.occurredAt = item.occurredAt.UTC()
+		transitions = append(transitions, item)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []transition{
+		{eventType: "failure", occurredAt: crashedAt},
+		{eventType: "recovered", occurredAt: recoveredAt},
+		{eventType: "failure", occurredAt: secondCrashAt},
+		{eventType: "recovered", occurredAt: secondCrashAt.Add(time.Second)},
+	}, transitions)
+
+	// A startup can reach the server before a delayed older crash from another
+	// batch. The standalone runtime watermark must remember it even though no
+	// failure row exists yet.
+	otherDeviceID := uuid.NewString()
+	startedAt := crashedAt.Add(5 * time.Minute)
+	require.NoError(t, store.ResolveRuntimeFailure(
+		ctx, appID, otherDeviceID, updateID, startedAt,
+	))
+	require.NoError(t, store.RecordRuntimeFailure(
+		ctx, appID, otherDeviceID, updateID, "offline old crash", startedAt.Add(-time.Second),
+	))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.Zero(t, health[updateID].RuntimeIssues)
+	var otherFailureRows int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM device_update_failures
+		WHERE app_id = $1 AND eas_client_id = $2 AND update_id = $3`,
+		appID, otherDeviceID, updateID).Scan(&otherFailureRows))
+	require.Zero(t, otherFailureRows)
 }
 
 func TestRecordUpdateFailuresRejectsAnotherAppsUpdate(t *testing.T) {

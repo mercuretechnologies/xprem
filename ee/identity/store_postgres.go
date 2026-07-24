@@ -11,6 +11,7 @@ import (
 	"expo-open-ota/internal/database/postgres/pgdb"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -562,9 +563,64 @@ func (s *PostgresIdentityStore) RecordUpdateFailures(ctx context.Context, appID 
 			UpdateUuid:  updateUUID,
 			FailureType: string(failureType),
 			FatalError:  fatalError,
+			OccurredAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 		}); err != nil {
 			return fmt.Errorf("recording update failure: %w", err)
 		}
+	}
+	return nil
+}
+
+// RecordRuntimeFailure persists one JS crash using the device event timestamp.
+// That timestamp is bounded by the OTLP decoder before reaching this method.
+func (s *PostgresIdentityStore) RecordRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, fatalError string, occurredAt time.Time) error {
+	appUUID, err := toPgUUID(appID)
+	if err != nil {
+		return err
+	}
+	clientUUID, err := toPgUUID(easClientID)
+	if err != nil {
+		return err
+	}
+	updateUUID, err := toPgUUID(updateID)
+	if err != nil {
+		return err
+	}
+	if err := s.engine.RecordDeviceRuntimeFailure(ctx, pgdb.RecordDeviceRuntimeFailureParams{
+		AppID:       appUUID,
+		EasClientID: clientUUID,
+		UpdateUuid:  updateUUID,
+		FatalError:  fatalError,
+		OccurredAt:  pgtype.Timestamptz{Time: occurredAt.UTC(), Valid: true},
+	}); err != nil {
+		return fmt.Errorf("recording runtime failure: %w", err)
+	}
+	return nil
+}
+
+// ResolveRuntimeFailure marks a JS failure healthy only when this startup is
+// strictly newer than the latest crash. Native update_issue rows are never
+// resolved by JS activity.
+func (s *PostgresIdentityStore) ResolveRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, occurredAt time.Time) error {
+	appUUID, err := toPgUUID(appID)
+	if err != nil {
+		return err
+	}
+	clientUUID, err := toPgUUID(easClientID)
+	if err != nil {
+		return err
+	}
+	updateUUID, err := toPgUUID(updateID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.engine.ResolveDeviceRuntimeFailure(ctx, pgdb.ResolveDeviceRuntimeFailureParams{
+		AppID:       appUUID,
+		EasClientID: clientUUID,
+		UpdateUuid:  updateUUID,
+		OccurredAt:  pgtype.Timestamptz{Time: occurredAt.UTC(), Valid: true},
+	}); err != nil {
+		return fmt.Errorf("resolving runtime failure: %w", err)
 	}
 	return nil
 }

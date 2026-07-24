@@ -96,24 +96,34 @@ func (h *HealthHistory) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-outboxTicker.C:
-			h.drainOutbox(ctx)
+			if h.drainOutbox(ctx) {
+				// Health changed: refresh the current minute immediately.
+				// ClickHouse keeps one logical point per minute via argMax.
+				h.captureSnapshots(ctx)
+			}
 		case <-snapshotTicker.C:
+			// Heartbeat repairs a missed trigger and records quiet periods.
 			h.captureSnapshots(ctx)
 		}
 	}
 }
 
-func (h *HealthHistory) drainOutbox(ctx context.Context) {
+// drainOutbox reports whether at least one event reached ClickHouse. The
+// caller uses that as a cheap change notification for the snapshot projection.
+func (h *HealthHistory) drainOutbox(ctx context.Context) bool {
+	delivered := false
 	for ctx.Err() == nil {
 		count, err := h.deliverOutboxBatch(ctx)
 		if err != nil {
 			log.Printf("observe: health-history outbox delivery failed: %v", err)
-			return
+			return delivered
 		}
+		delivered = delivered || count > 0
 		if count < healthOutboxBatchSize {
-			return
+			return delivered
 		}
 	}
+	return delivered
 }
 
 func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
@@ -230,6 +240,7 @@ func appendSnapshot(batch snapshotBatch, row pgdb.ListCurrentUpdateHealthSnapsho
 // health projection.
 type HealthHistoryPoint struct {
 	Timestamp         time.Time `json:"timestamp"`
+	CapturedAt        time.Time `json:"capturedAt"`
 	Role              string    `json:"role"`
 	DevicesOnUpdate   uint64    `json:"devicesOnUpdate"`
 	SuccessfulDevices uint64    `json:"successfulDevices"`
@@ -248,6 +259,7 @@ func (h *HealthHistory) Read(
 	rows, err := h.clickhouse.Conn.Query(ctx, `
 		SELECT toString(update_id),
 		       bucket,
+		       max(captured_at),
 		       argMax(role, captured_at),
 		       argMax(devices_on_update, captured_at),
 		       argMax(successful_devices, captured_at),
@@ -272,6 +284,7 @@ func (h *HealthHistory) Read(
 		if err := rows.Scan(
 			&updateID,
 			&point.Timestamp,
+			&point.CapturedAt,
 			&point.Role,
 			&point.DevicesOnUpdate,
 			&point.SuccessfulDevices,

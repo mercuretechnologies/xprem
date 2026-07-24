@@ -224,6 +224,7 @@ export type UpdateHealthRecord = {
 
 export type UpdateHealthHistoryPoint = {
   timestamp: string;
+  capturedAt: string;
   role: 'current' | 'candidate' | 'control';
   devicesOnUpdate: number;
   successfulDevices: number;

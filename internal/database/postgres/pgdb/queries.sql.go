@@ -193,7 +193,7 @@ func (q *Queries) CountGrantsPerUser(ctx context.Context) ([]CountGrantsPerUserR
 
 const countUpdateFailures = `-- name: CountUpdateFailures :one
 SELECT COUNT(*) FROM device_update_failures
-WHERE app_id = $1 AND update_id = $2
+WHERE app_id = $1 AND update_id = $2 AND resolved_at IS NULL
 `
 
 type CountUpdateFailuresParams struct {
@@ -2905,6 +2905,7 @@ LEFT JOIN LATERAL (
     FROM device_update_failures f
     WHERE f.app_id = r.app_id
       AND f.update_id = r.update_uuid
+      AND f.resolved_at IS NULL
 ) failures ON TRUE
 `
 
@@ -3469,6 +3470,73 @@ func (q *Queries) PurgeExportedAuditLogEventsBefore(ctx context.Context, occurre
 	return q.db.Exec(ctx, purgeExportedAuditLogEventsBefore, occurredAt)
 }
 
+const recordDeviceRuntimeFailure = `-- name: RecordDeviceRuntimeFailure :exec
+WITH runtime_state AS (
+    INSERT INTO device_update_runtime_state (
+        app_id, eas_client_id, update_id, last_crashed_at
+    )
+    SELECT $1, $2, u.update_uuid, $5
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND u.update_uuid = $3
+      AND u.checked_at IS NOT NULL
+    ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+        last_crashed_at = GREATEST(
+            device_update_runtime_state.last_crashed_at,
+            EXCLUDED.last_crashed_at
+        )
+    RETURNING app_id, eas_client_id, update_id,
+              last_started_at, last_crashed_at
+)
+INSERT INTO device_update_failures (
+    app_id, eas_client_id, update_id, failure_type, fatal_error,
+    first_seen_at, last_seen_at
+)
+SELECT app_id, eas_client_id, update_id, 'runtime_issue',
+       $4, $5, $5
+FROM runtime_state
+WHERE last_started_at IS NULL OR last_crashed_at >= last_started_at
+ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+    last_seen_at = GREATEST(
+        device_update_failures.last_seen_at,
+        EXCLUDED.last_seen_at
+    ),
+    resolved_at = CASE
+        WHEN device_update_failures.failure_type = 'runtime_issue'
+         AND device_update_failures.resolved_at IS NOT NULL
+         AND EXCLUDED.last_seen_at > device_update_failures.resolved_at
+        THEN NULL
+        ELSE device_update_failures.resolved_at
+    END,
+    fatal_error = CASE
+        WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
+        ELSE device_update_failures.fatal_error
+    END
+`
+
+type RecordDeviceRuntimeFailureParams struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	EasClientID pgtype.UUID        `json:"eas_client_id"`
+	UpdateUuid  pgtype.UUID        `json:"update_uuid"`
+	FatalError  string             `json:"fatal_error"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+}
+
+// Runtime crash transition. The watermark upsert serializes concurrent
+// startup/crash delivery for this device+update; only the newest source event
+// can change current health.
+func (q *Queries) RecordDeviceRuntimeFailure(ctx context.Context, arg RecordDeviceRuntimeFailureParams) error {
+	_, err := q.db.Exec(ctx, recordDeviceRuntimeFailure,
+		arg.AppID,
+		arg.EasClientID,
+		arg.UpdateUuid,
+		arg.FatalError,
+		arg.OccurredAt,
+	)
+	return err
+}
+
 const registerDevice = `-- name: RegisterDevice :execrows
 INSERT INTO device_identity (app_id, eas_client_id, country_code, city, lat, lng, current_update_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -3525,6 +3593,58 @@ type RepointChannelToRolloutBranchParams struct {
 // rollout guard because it is a distinct statement.
 func (q *Queries) RepointChannelToRolloutBranch(ctx context.Context, arg RepointChannelToRolloutBranchParams) (int64, error) {
 	result, err := q.db.Exec(ctx, repointChannelToRolloutBranch, arg.AppID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resolveDeviceRuntimeFailure = `-- name: ResolveDeviceRuntimeFailure :execrows
+WITH runtime_state AS (
+    INSERT INTO device_update_runtime_state (
+        app_id, eas_client_id, update_id, last_started_at
+    )
+    SELECT $1, $2, u.update_uuid, $4
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND u.update_uuid = $3
+      AND u.checked_at IS NOT NULL
+    ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+        last_started_at = GREATEST(
+            device_update_runtime_state.last_started_at,
+            EXCLUDED.last_started_at
+        )
+    RETURNING app_id, eas_client_id, update_id, last_started_at
+)
+UPDATE device_update_failures failure
+SET resolved_at = runtime_state.last_started_at
+FROM runtime_state
+WHERE failure.app_id = runtime_state.app_id
+  AND failure.eas_client_id = runtime_state.eas_client_id
+  AND failure.update_id = runtime_state.update_id
+  AND failure.failure_type = 'runtime_issue'
+  AND failure.resolved_at IS NULL
+  AND failure.last_seen_at < runtime_state.last_started_at
+`
+
+type ResolveDeviceRuntimeFailureParams struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	EasClientID pgtype.UUID        `json:"eas_client_id"`
+	UpdateUuid  pgtype.UUID        `json:"update_uuid"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
+}
+
+// Successful JS startup. Recording the watermark even without an existing
+// failure prevents a delayed older crash from regressing the device. Strict
+// comparison makes a crash win timestamp ties.
+func (q *Queries) ResolveDeviceRuntimeFailure(ctx context.Context, arg ResolveDeviceRuntimeFailureParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveDeviceRuntimeFailure,
+		arg.AppID,
+		arg.EasClientID,
+		arg.UpdateUuid,
+		arg.OccurredAt,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -3946,6 +4066,7 @@ LEFT JOIN device_identity d
    AND d.current_update_id = f.update_id
 WHERE f.app_id = $1
   AND f.update_id = ANY($2::uuid[])
+  AND f.resolved_at IS NULL
 GROUP BY f.update_id
 `
 
@@ -4077,15 +4198,22 @@ func (q *Queries) UpdateUserPasswordByID(ctx context.Context, arg UpdateUserPass
 }
 
 const upsertDeviceUpdateFailure = `-- name: UpsertDeviceUpdateFailure :exec
-INSERT INTO device_update_failures (app_id, eas_client_id, update_id, failure_type, fatal_error)
-SELECT $1, $2, u.update_uuid, $4, $5
+INSERT INTO device_update_failures (
+    app_id, eas_client_id, update_id, failure_type, fatal_error,
+    first_seen_at, last_seen_at
+)
+SELECT $1, $2, u.update_uuid, $4, $5,
+       $6, $6
 FROM updates u
 JOIN branches b ON b.id = u.branch_id
 WHERE b.app_id = $1
   AND u.update_uuid = $3
   AND u.checked_at IS NOT NULL
 ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
-    last_seen_at = CURRENT_TIMESTAMP,
+    last_seen_at = GREATEST(
+        device_update_failures.last_seen_at,
+        EXCLUDED.last_seen_at
+    ),
     fatal_error = CASE
         WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
         ELSE device_update_failures.fatal_error
@@ -4093,18 +4221,16 @@ ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
 `
 
 type UpsertDeviceUpdateFailureParams struct {
-	AppID       pgtype.UUID `json:"app_id"`
-	EasClientID pgtype.UUID `json:"eas_client_id"`
-	UpdateUuid  pgtype.UUID `json:"update_uuid"`
-	FailureType string      `json:"failure_type"`
-	FatalError  string      `json:"fatal_error"`
+	AppID       pgtype.UUID        `json:"app_id"`
+	EasClientID pgtype.UUID        `json:"eas_client_id"`
+	UpdateUuid  pgtype.UUID        `json:"update_uuid"`
+	FailureType string             `json:"failure_type"`
+	FatalError  string             `json:"fatal_error"`
+	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
 }
 
-// Records one failure. Capture-once on fatal_error AND failure_type: the
-// client sends Expo-Fatal-Error exactly once (the poll right after the
-// crash), so a first non-empty capture is authoritative and sticky header
-// re-sends never blank or overwrite it; the first recorded source likewise
-// keeps its type (the health math never reads the type, display does).
+// Records a manifest/native failure at server receipt time. fatal_error and
+// failure_type stay capture-once.
 func (q *Queries) UpsertDeviceUpdateFailure(ctx context.Context, arg UpsertDeviceUpdateFailureParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceUpdateFailure,
 		arg.AppID,
@@ -4112,6 +4238,7 @@ func (q *Queries) UpsertDeviceUpdateFailure(ctx context.Context, arg UpsertDevic
 		arg.UpdateUuid,
 		arg.FailureType,
 		arg.FatalError,
+		arg.OccurredAt,
 	)
 	return err
 }

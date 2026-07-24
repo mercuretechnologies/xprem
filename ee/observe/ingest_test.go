@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/internal/database"
@@ -46,6 +47,13 @@ type recordedFailure struct {
 	failureType identity.FailureType
 }
 
+type recordedRuntimeSignal struct {
+	kind       string
+	device     string
+	updateID   string
+	occurredAt time.Time
+}
+
 type recordingMutator struct {
 	// The embedded Store supplies the dashboard query methods (never called on
 	// the ingest path) so the fake satisfies identity.Store; only the write
@@ -54,6 +62,7 @@ type recordingMutator struct {
 	sets         []map[string]any
 	unsets       [][]string
 	failures     []recordedFailure
+	runtime      []recordedRuntimeSignal
 	fail         bool
 	failFailures bool
 	// hadDeadline proves the HTTP handler bounds each store operation.
@@ -65,6 +74,26 @@ func (m *recordingMutator) RecordUpdateFailures(_ context.Context, _ string, eas
 		return fmt.Errorf("database is down")
 	}
 	m.failures = append(m.failures, recordedFailure{device: easClientID, updateIDs: updateIDs, fatal: fatalError, failureType: failureType})
+	return nil
+}
+
+func (m *recordingMutator) RecordRuntimeFailure(_ context.Context, _ string, easClientID string, updateID string, _ string, occurredAt time.Time) error {
+	if m.failFailures {
+		return fmt.Errorf("database is down")
+	}
+	m.runtime = append(m.runtime, recordedRuntimeSignal{
+		kind: "failure", device: easClientID, updateID: updateID, occurredAt: occurredAt,
+	})
+	return nil
+}
+
+func (m *recordingMutator) ResolveRuntimeFailure(_ context.Context, _ string, easClientID string, updateID string, occurredAt time.Time) error {
+	if m.failFailures {
+		return fmt.Errorf("database is down")
+	}
+	m.runtime = append(m.runtime, recordedRuntimeSignal{
+		kind: "recovered", device: easClientID, updateID: updateID, occurredAt: occurredAt,
+	})
 	return nil
 }
 
@@ -234,13 +263,12 @@ func TestHandleLogsJSCrashProjection(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, recorder.Code)
 		// One call: the same (device, update) pair collapses, the
 		// embedded-bundle device is skipped (no update to blame).
-		require.Len(t, mutator.failures, 1)
-		failure := mutator.failures[0]
+		require.Len(t, mutator.runtime, 1)
+		failure := mutator.runtime[0]
+		require.Equal(t, "failure", failure.kind)
 		require.Equal(t, "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", failure.device)
 		// The raw uppercase wire id was normalized by the flatten pass.
-		require.Equal(t, []string{"b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d"}, failure.updateIDs)
-		require.Equal(t, "TypeError: undefined is not a function", failure.fatal)
-		require.Equal(t, identity.FailureTypeRuntime, failure.failureType)
+		require.Equal(t, "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d", failure.updateID)
 	})
 
 	t.Run("failure-store outage is a retryable 503", func(t *testing.T) {
@@ -254,6 +282,64 @@ func TestHandleLogsJSCrashProjection(t *testing.T) {
 		recorder := serveIngest(NewIngestHandler(nil, nil, nil, nil), http.MethodPost, logsPath, []byte(jsCrashLogsFixture))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
 	})
+}
+
+const runtimeRecoveryLogsFixture = `{
+  "resourceLogs": [{
+    "resource": {"attributes": [
+      {"key": "expo.eas_client.id", "value": {"stringValue": "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}},
+      {"key": "expo.app.updates.id", "value": {"stringValue": "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d"}},
+      {"key": "os.name", "value": {"stringValue": "ios"}}
+    ]},
+    "scopeLogs": [{"scope": {"name": "expo-observe"}, "logRecords": [
+      {
+        "timeUnixNano": 1767960490000000000,
+        "attributes": [{"key": "event.name", "value": {"stringValue": "app_started"}}]
+      },
+      {
+        "timeUnixNano": 1767960489000000000,
+        "attributes": [{"key": "event.name", "value": {"stringValue": "expo_open_ota_js_crash"}}]
+      }
+    ]}]
+  }]
+}`
+
+func TestHandleLogsRuntimeRecoveryUsesEventOrder(t *testing.T) {
+	mutator := &recordingMutator{}
+	handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(runtimeRecoveryLogsFixture))
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, []recordedRuntimeSignal{
+		{
+			kind:       "failure",
+			device:     "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+			updateID:   "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d",
+			occurredAt: time.Unix(1767960489, 0).UTC(),
+		},
+		{
+			kind:       "recovered",
+			device:     "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+			updateID:   "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d",
+			occurredAt: time.Unix(1767960490, 0).UTC(),
+		},
+	}, mutator.runtime)
+}
+
+func TestNormalizeRuntimeHealthSignalsOrdersAndCompacts(t *testing.T) {
+	firstCrash := time.Unix(1767960489, 0).UTC()
+	tiedAt := firstCrash.Add(time.Second)
+	signals := []runtimeHealthSignal{
+		{state: runtimeFaulty, fatalError: "later crash", occurredAt: tiedAt},
+		{state: runtimeHealthy, occurredAt: tiedAt},
+		{state: runtimeHealthy, occurredAt: firstCrash.Add(500 * time.Millisecond)},
+		{state: runtimeFaulty, fatalError: "first crash", occurredAt: firstCrash},
+	}
+
+	require.Equal(t, []runtimeHealthSignal{
+		{state: runtimeFaulty, fatalError: "first crash", occurredAt: firstCrash},
+		{state: runtimeHealthy, occurredAt: tiedAt},
+		{state: runtimeFaulty, fatalError: "later crash", occurredAt: tiedAt},
+	}, normalizeRuntimeHealthSignals(signals))
 }
 
 // End-to-end against a real Postgres: an SDK-shaped batch lands as a device

@@ -1276,25 +1276,107 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     current_update_id = COALESCE(EXCLUDED.current_update_id, device_identity.current_update_id);
 
 
--- Records one failure. Capture-once on fatal_error AND failure_type: the
--- client sends Expo-Fatal-Error exactly once (the poll right after the
--- crash), so a first non-empty capture is authoritative and sticky header
--- re-sends never blank or overwrite it; the first recorded source likewise
--- keeps its type (the health math never reads the type, display does).
+-- Records a manifest/native failure at server receipt time. fatal_error and
+-- failure_type stay capture-once.
 -- name: UpsertDeviceUpdateFailure :exec
-INSERT INTO device_update_failures (app_id, eas_client_id, update_id, failure_type, fatal_error)
-SELECT $1, $2, u.update_uuid, sqlc.arg(failure_type), sqlc.arg(fatal_error)
+INSERT INTO device_update_failures (
+    app_id, eas_client_id, update_id, failure_type, fatal_error,
+    first_seen_at, last_seen_at
+)
+SELECT $1, $2, u.update_uuid, sqlc.arg(failure_type), sqlc.arg(fatal_error),
+       sqlc.arg(occurred_at), sqlc.arg(occurred_at)
 FROM updates u
 JOIN branches b ON b.id = u.branch_id
 WHERE b.app_id = $1
   AND u.update_uuid = $3
   AND u.checked_at IS NOT NULL
 ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
-    last_seen_at = CURRENT_TIMESTAMP,
+    last_seen_at = GREATEST(
+        device_update_failures.last_seen_at,
+        EXCLUDED.last_seen_at
+    ),
     fatal_error = CASE
         WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
         ELSE device_update_failures.fatal_error
     END;
+
+-- Runtime crash transition. The watermark upsert serializes concurrent
+-- startup/crash delivery for this device+update; only the newest source event
+-- can change current health.
+-- name: RecordDeviceRuntimeFailure :exec
+WITH runtime_state AS (
+    INSERT INTO device_update_runtime_state (
+        app_id, eas_client_id, update_id, last_crashed_at
+    )
+    SELECT $1, $2, u.update_uuid, sqlc.arg(occurred_at)
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND u.update_uuid = $3
+      AND u.checked_at IS NOT NULL
+    ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+        last_crashed_at = GREATEST(
+            device_update_runtime_state.last_crashed_at,
+            EXCLUDED.last_crashed_at
+        )
+    RETURNING app_id, eas_client_id, update_id,
+              last_started_at, last_crashed_at
+)
+INSERT INTO device_update_failures (
+    app_id, eas_client_id, update_id, failure_type, fatal_error,
+    first_seen_at, last_seen_at
+)
+SELECT app_id, eas_client_id, update_id, 'runtime_issue',
+       sqlc.arg(fatal_error), sqlc.arg(occurred_at), sqlc.arg(occurred_at)
+FROM runtime_state
+WHERE last_started_at IS NULL OR last_crashed_at >= last_started_at
+ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+    last_seen_at = GREATEST(
+        device_update_failures.last_seen_at,
+        EXCLUDED.last_seen_at
+    ),
+    resolved_at = CASE
+        WHEN device_update_failures.failure_type = 'runtime_issue'
+         AND device_update_failures.resolved_at IS NOT NULL
+         AND EXCLUDED.last_seen_at > device_update_failures.resolved_at
+        THEN NULL
+        ELSE device_update_failures.resolved_at
+    END,
+    fatal_error = CASE
+        WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
+        ELSE device_update_failures.fatal_error
+    END;
+
+-- Successful JS startup. Recording the watermark even without an existing
+-- failure prevents a delayed older crash from regressing the device. Strict
+-- comparison makes a crash win timestamp ties.
+-- name: ResolveDeviceRuntimeFailure :execrows
+WITH runtime_state AS (
+    INSERT INTO device_update_runtime_state (
+        app_id, eas_client_id, update_id, last_started_at
+    )
+    SELECT $1, $2, u.update_uuid, sqlc.arg(occurred_at)
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND u.update_uuid = $3
+      AND u.checked_at IS NOT NULL
+    ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+        last_started_at = GREATEST(
+            device_update_runtime_state.last_started_at,
+            EXCLUDED.last_started_at
+        )
+    RETURNING app_id, eas_client_id, update_id, last_started_at
+)
+UPDATE device_update_failures failure
+SET resolved_at = runtime_state.last_started_at
+FROM runtime_state
+WHERE failure.app_id = runtime_state.app_id
+  AND failure.eas_client_id = runtime_state.eas_client_id
+  AND failure.update_id = runtime_state.update_id
+  AND failure.failure_type = 'runtime_issue'
+  AND failure.resolved_at IS NULL
+  AND failure.last_seen_at < runtime_state.last_started_at;
 
 -- Instant-T adoption: how many devices currently run this update.
 -- name: CountDevicesOnUpdate :one
@@ -1304,7 +1386,7 @@ WHERE app_id = $1 AND current_update_id = $2;
 -- Instant-T health: how many devices this update crashed on at launch.
 -- name: CountUpdateFailures :one
 SELECT COUNT(*) FROM device_update_failures
-WHERE app_id = $1 AND update_id = $2;
+WHERE app_id = $1 AND update_id = $2 AND resolved_at IS NULL;
 
 -- The fleet's adoption breakdown, biggest cohorts first. NULL update = the
 -- embedded bundle (or a device seen before this feature landed).
@@ -1346,6 +1428,7 @@ LEFT JOIN device_identity d
    AND d.current_update_id = f.update_id
 WHERE f.app_id = $1
   AND f.update_id = ANY(sqlc.arg(update_ids)::uuid[])
+  AND f.resolved_at IS NULL
 GROUP BY f.update_id;
 
 -- Durable ClickHouse delivery queue. The worker reads through a transaction;
@@ -1435,4 +1518,5 @@ LEFT JOIN LATERAL (
     FROM device_update_failures f
     WHERE f.app_id = r.app_id
       AND f.update_id = r.update_uuid
+      AND f.resolved_at IS NULL
 ) failures ON TRUE;

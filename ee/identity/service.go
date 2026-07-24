@@ -46,6 +46,11 @@ type IdentityMutator interface {
 	// RecordUpdateFailures stores failures per (device, update), fatal_error
 	// and failure_type captured once.
 	RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error
+	// RecordRuntimeFailure and ResolveRuntimeFailure apply timestamped JS
+	// session transitions. Source event time makes offline batch delivery
+	// order harmless; a crash wins ties.
+	RecordRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, fatalError string, occurredAt time.Time) error
+	ResolveRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, occurredAt time.Time) error
 }
 
 // FailureType tags where a device_update_failures row came from, which is
@@ -141,6 +146,14 @@ func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID str
 // update health works with no ClickHouse and no SDK.
 func (s *Service) RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error {
 	return s.store.RecordUpdateFailures(ctx, appID, easClientID, updateIDs, fatalError, failureType)
+}
+
+func (s *Service) RecordRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, fatalError string, occurredAt time.Time) error {
+	return s.store.RecordRuntimeFailure(ctx, appID, easClientID, updateID, fatalError, occurredAt)
+}
+
+func (s *Service) ResolveRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, occurredAt time.Time) error {
+	return s.store.ResolveRuntimeFailure(ctx, appID, easClientID, updateID, occurredAt)
 }
 
 // Request is one identity operation extracted from a log event.

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -186,8 +187,8 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	// telemetry insert: like a failed identity apply, a failed projection
 	// answers 503 so the device re-sends the batch (re-recording is
 	// idempotent, the upsert dedups).
-	if err := h.recordJSCrashFailures(r.Context(), appID, rows); err != nil {
-		log.Printf("observe: recording js crash failures failed: %v", err)
+	if err := h.recordRuntimeHealth(r.Context(), appID, rows); err != nil {
+		log.Printf("observe: recording runtime health failed: %v", err)
 		observeBatch(resultUnavailable)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
@@ -236,23 +237,53 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 // The resource attributes of such a record carry the running (= crashing)
 // update id, projected into device_update_failures as a runtime_issue. The
 // device keeps running the update (no rollback), unlike the manifest path.
-const JSCrashEventName = "expo_open_ota_js_crash"
+const (
+	JSCrashEventName    = "expo_open_ota_js_crash"
+	AppStartedEventName = "app_started"
+)
 
-// recordJSCrashFailures projects expo_open_ota_js_crash rows into the
-// failure registry, deduped per (device, update) within the batch (the
-// upsert dedups across batches, so a crash-per-session device still counts
-// once). Rows that cannot be attributed are skipped: a forged device id is
-// meaningless and a crash of the embedded bundle (zero-uuid sentinel) is not
-// an OTA update's failure. The rows also flow to ClickHouse unchanged: this
-// is a projection, not a diversion.
-func (h *IngestHandler) recordJSCrashFailures(ctx context.Context, appID string, rows []LogRow) error {
+type runtimeHealthState uint8
+
+const (
+	runtimeHealthy runtimeHealthState = iota
+	runtimeFaulty
+)
+
+type runtimeHealthKey struct {
+	device string
+	update string
+}
+
+type runtimeHealthSignal struct {
+	state      runtimeHealthState
+	fatalError string
+	occurredAt time.Time
+}
+
+// recordRuntimeHealth projects JS crash/start transitions into PostgreSQL.
+// Signals are ordered by their bounded OTLP event timestamps rather than
+// ingestion order: an offline batch can contain a newer startup before an
+// older crash on the wire. Consecutive equal states collapse to their newest
+// timestamp; raw ClickHouse logs still retain every original event.
+func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, rows []LogRow) error {
 	if h.identityService == nil {
 		return nil
 	}
-	type deviceUpdate struct{ device, update string }
-	var seen map[deviceUpdate]bool
+
+	for key, signals := range groupRuntimeHealthSignals(rows) {
+		for _, signal := range normalizeRuntimeHealthSignals(signals) {
+			if err := h.applyRuntimeHealthSignal(ctx, appID, key, signal); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func groupRuntimeHealthSignals(rows []LogRow) map[runtimeHealthKey][]runtimeHealthSignal {
+	grouped := make(map[runtimeHealthKey][]runtimeHealthSignal)
 	for _, row := range rows {
-		if row.EventName != JSCrashEventName {
+		if row.EventName != JSCrashEventName && row.EventName != AppStartedEventName {
 			continue
 		}
 		if _, err := uuid.Parse(row.EASClientID); err != nil {
@@ -262,19 +293,54 @@ func (h *IngestHandler) recordJSCrashFailures(ctx context.Context, appID string,
 		if row.UpdateID == ZeroUpdateID {
 			continue
 		}
-		key := deviceUpdate{device: row.EASClientID, update: row.UpdateID}
-		if seen[key] {
+		key := runtimeHealthKey{device: row.EASClientID, update: row.UpdateID}
+		state := runtimeHealthy
+		if row.EventName == JSCrashEventName {
+			state = runtimeFaulty
+		}
+		grouped[key] = append(grouped[key], runtimeHealthSignal{
+			state:      state,
+			fatalError: jsCrashMessage(row.Attributes),
+			occurredAt: row.Timestamp.UTC(),
+		})
+	}
+	return grouped
+}
+
+// normalizeRuntimeHealthSignals restores source-event order and collapses
+// repeated states. On equal timestamps, a crash wins over a healthy startup.
+func normalizeRuntimeHealthSignals(signals []runtimeHealthSignal) []runtimeHealthSignal {
+	sort.SliceStable(signals, func(i, j int) bool {
+		if signals[i].occurredAt.Equal(signals[j].occurredAt) {
+			return signals[i].state == runtimeHealthy && signals[j].state == runtimeFaulty
+		}
+		return signals[i].occurredAt.Before(signals[j].occurredAt)
+	})
+
+	compacted := make([]runtimeHealthSignal, 0, len(signals))
+	for _, signal := range signals {
+		if len(compacted) == 0 || compacted[len(compacted)-1].state != signal.state {
+			compacted = append(compacted, signal)
 			continue
 		}
-		if seen == nil {
-			seen = make(map[deviceUpdate]bool, 1)
+		last := &compacted[len(compacted)-1]
+		if last.fatalError == "" {
+			last.fatalError = signal.fatalError
 		}
-		seen[key] = true
-		if err := h.identityService.RecordUpdateFailures(ctx, appID, row.EASClientID, []string{row.UpdateID}, jsCrashMessage(row.Attributes), identity.FailureTypeRuntime); err != nil {
-			return err
-		}
+		last.occurredAt = signal.occurredAt
 	}
-	return nil
+	return compacted
+}
+
+func (h *IngestHandler) applyRuntimeHealthSignal(ctx context.Context, appID string, key runtimeHealthKey, signal runtimeHealthSignal) error {
+	if signal.state == runtimeFaulty {
+		return h.identityService.RecordRuntimeFailure(
+			ctx, appID, key.device, key.update, signal.fatalError, signal.occurredAt,
+		)
+	}
+	return h.identityService.ResolveRuntimeFailure(
+		ctx, appID, key.device, key.update, signal.occurredAt,
+	)
 }
 
 // jsCrashMessage pulls the conventional `message` attribute out of the row's

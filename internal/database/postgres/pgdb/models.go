@@ -117,6 +117,15 @@ type DeviceUpdateFailure struct {
 	FatalError  string             `json:"fatal_error"`
 	FirstSeenAt pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+	ResolvedAt  pgtype.Timestamptz `json:"resolved_at"`
+}
+
+type DeviceUpdateRuntimeState struct {
+	AppID         pgtype.UUID        `json:"app_id"`
+	EasClientID   pgtype.UUID        `json:"eas_client_id"`
+	UpdateID      pgtype.UUID        `json:"update_id"`
+	LastStartedAt pgtype.Timestamptz `json:"last_started_at"`
+	LastCrashedAt pgtype.Timestamptz `json:"last_crashed_at"`
 }
 
 type EnterpriseLicense struct {
