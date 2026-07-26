@@ -4,8 +4,9 @@
 -- Indexes for the columns added by 20260726120000_device_release_columns.sql,
 -- built CONCURRENTLY and therefore in their own migration: CREATE INDEX
 -- CONCURRENTLY cannot run inside a transaction, and goose wraps a migration in
--- one unless the file opts out as this one does. Splitting keeps the column
--- addition and its backfill atomic while these take no write lock.
+-- one unless the file opts out as this one does. Running after
+-- 20260726125000_device_release_backfill.sql also means these are built once
+-- over the final values instead of being maintained row by row through it.
 --
 -- It matters here specifically. device_identity is the hottest write path of
 -- the registry: every check-in past the debounce bumps last_seen_at, which is

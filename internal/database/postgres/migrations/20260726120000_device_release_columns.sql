@@ -30,35 +30,17 @@ ALTER TABLE device_identity ADD COLUMN IF NOT EXISTS runtime_version TEXT;
 ALTER TABLE device_identity ADD COLUMN IF NOT EXISTS platform TEXT;
 ALTER TABLE device_identity ADD COLUMN IF NOT EXISTS publish_group UUID;
 
--- Backfill from the joins being retired, so the existing fleet keeps its
--- release dimensions. It has to happen here rather than lazily: a device that
--- never changes update never writes again, and would otherwise read as unknown
--- forever. One statement, so it takes a write lock on device_identity for its
--- duration; on a multi-million-row registry plan the deploy accordingly.
-UPDATE device_identity d SET
-    branch_name = o.branch_name,
-    runtime_version = o.runtime_version,
-    platform = o.platform,
-    publish_group = o.publish_group
-FROM (
-    SELECT u.update_uuid,
-           b.app_id,
-           b.name AS branch_name,
-           rv.version AS runtime_version,
-           u.platform,
-           u.publish_group
-    FROM updates u
-    INNER JOIN branches b ON b.id = u.branch_id
-    LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
-    WHERE u.update_uuid IS NOT NULL
-) o
-WHERE d.current_update_id = o.update_uuid
-  AND d.app_id = o.app_id;
-
--- The indexes these columns need are built CONCURRENTLY in the migration that
--- follows this one, which cannot share a transaction with the schema change
--- above. Until it runs, a filter on the new columns falls back to the
--- app_id-scoped scan: slower than the final state, never wrong.
+-- The backfill of the existing fleet and the indexes these columns need each
+-- live in their own migration (20260726125000_device_release_backfill.sql and
+-- 20260726130000_device_release_indexes.sql), for the same reason in two forms:
+-- goose wraps a migration in a transaction, so anything kept here would run
+-- while the ACCESS EXCLUSIVE lock these statements take is still held, and
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction at all. Adding a
+-- nullable column with no default is a catalog-only change, so alone this file
+-- commits in milliseconds and releases that lock immediately.
+--
+-- Until those two run, the columns read NULL and a filter on them falls back to
+-- the app_id-scoped scan: slower than the final state, never wrong.
 
 -- +goose Down
 
