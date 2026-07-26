@@ -37,6 +37,16 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
   </label>
 );
 
+// Why a set filter does not narrow the page it is being shown on. The two
+// reasons are not interchangeable, and a chip that gives the wrong one sends
+// the reader looking in the wrong place: a condition qualifies a single
+// measurement, everything else is a dimension the panel's own source does not
+// carry.
+const notAppliedReason = (key: FilterKey) =>
+  dimensionCatalog.find(entry => entry.value === key)?.condition
+    ? 'Not applied here: this is the state the device was in during one timing, so it narrows the timings and nothing else.'
+    : 'Not applied here: this panel is served by the device registry, which does not carry this dimension.';
+
 export const FilterBar = ({
   filters,
   // Splitting only means something where charts are drawn.
@@ -507,11 +517,7 @@ export const FilterBar = ({
           {chipGroups.map(group => (
             <span
               key={`${group.key}:${group.label}`}
-              title={
-                group.applied
-                  ? undefined
-                  : 'Not applied here: update-group health comes from the device registry, which does not carry this dimension.'
-              }
+              title={group.applied ? undefined : notAppliedReason(group.key)}
               className={`flex items-center gap-1 rounded-full border py-1 pl-2.5 pr-1 text-[11px] ${
                 group.applied
                   ? 'border-primary/20 bg-primary/[0.07] text-foreground'
