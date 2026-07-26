@@ -6,6 +6,7 @@ package observe
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,4 +177,54 @@ func TestDecodeToleratesUnknownFields(t *testing.T) {
 	batch, err := DecodeMetrics(loadFixture(t, "unknown_fields.json"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, batch.Resources)
+}
+
+// logsWithoutSession is the shape that makes the hash's device component load
+// bearing: no session.id anywhere, which normalizeSessionID folds onto the zero
+// uuid for every record of every device.
+func logsWithoutSession(clientID, body string) []byte {
+	return []byte(`{"resourceLogs":[{"resource":{"attributes":[
+		{"key":"expo.eas_client.id","value":{"stringValue":"` + clientID + `"}}]},
+		"scopeLogs":[{"logRecords":[{"timeUnixNano":1767960489000000000,"severityNumber":9,
+		"severityText":"INFO","body":{"stringValue":"` + body + `"},
+		"attributes":[{"key":"event.name","value":{"stringValue":"exception"}}]}]}]}]}`)
+}
+
+func hashOfSingleLog(t *testing.T, body []byte) uint64 {
+	t.Helper()
+	batch, err := DecodeLogs(body)
+	require.NoError(t, err)
+	rows := FlattenLogs("app-1", batch, time.Now().UTC())
+	require.Len(t, rows, 1)
+	return rows[0].ContentHash
+}
+
+// Two phones logging the same line at the same instant are two records, and the
+// dedup key has to say so. Without the device in the hash they shared one, since
+// a missing session collapses onto a single value for the whole fleet.
+func TestContentHashSeparatesDevicesWithoutASession(t *testing.T) {
+	first := hashOfSingleLog(t, logsWithoutSession("8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "fetch failed"))
+	second := hashOfSingleLog(t, logsWithoutSession("7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d", "fetch failed"))
+	require.NotEqual(t, first, second, "two devices must not share one dedup identity")
+
+	// And the same device still hashes to itself, which is what makes a
+	// re-sent batch collapse rather than double.
+	repeated := hashOfSingleLog(t, logsWithoutSession("8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "fetch failed"))
+	require.Equal(t, first, repeated)
+}
+
+// is_fatal and severity_text are stored columns pulled out of the attributes, so
+// they are not covered by the attributes JSON the hash already carries. Two rows
+// that read differently on screen must not share an identity.
+func TestContentHashSeparatesFatalFromNonFatal(t *testing.T) {
+	const client = "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
+	plain := logsWithoutSession(client, "boom")
+	fatal := []byte(strings.Replace(string(plain),
+		`{"key":"event.name","value":{"stringValue":"exception"}}`,
+		`{"key":"event.name","value":{"stringValue":"exception"}},{"key":"is_fatal","value":{"boolValue":true}}`, 1))
+	require.NotEqual(t, hashOfSingleLog(t, plain), hashOfSingleLog(t, fatal))
+
+	warned := []byte(strings.Replace(string(plain), `"severityText":"INFO"`, `"severityText":"WARN"`, 1))
+	require.NotEqual(t, hashOfSingleLog(t, plain), hashOfSingleLog(t, warned),
+		"severity_text is stored, so it is part of what a row is")
 }
