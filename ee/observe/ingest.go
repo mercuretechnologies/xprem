@@ -99,7 +99,16 @@ func recordCheckIns[R any](
 	for i, row := range rows {
 		envelope := envelopeOf(row)
 		best, seen := newest[envelope.EASClientID]
-		if !seen || envelope.Timestamp.After(envelopeOf(rows[best]).Timestamp) {
+		// Not After: on equal timestamps the LAST row wins, because rows keep
+		// the order the device sent them and a backlog is sent oldest first.
+		// Ties are not a curiosity here, they are the normal shape of a stale
+		// batch: clampTimestamp folds an unparseable timestamp (the documented
+		// Android fallback) and anything past maxTimestampAge onto the
+		// ingestion instant, so a whole backlog can arrive sharing one. Taking
+		// the first of those is exactly the regression this function exists to
+		// avoid, and the registry's own staleness guard cannot catch it since
+		// both rows then claim the same observation time.
+		if !seen || !envelope.Timestamp.Before(envelopeOf(rows[best]).Timestamp) {
 			newest[envelope.EASClientID] = i
 		}
 	}

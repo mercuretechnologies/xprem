@@ -363,6 +363,36 @@ func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 	assert.EqualValues(t, 1, store.calls.Load(), "one check-in per device per batch")
 }
 
+// The same batch with every timestamp collapsed onto one instant, which is
+// what a stale backlog looks like once clampTimestamp has folded unparseable
+// or too-old wire timestamps onto the ingestion time. Order is the only signal
+// left, and the device sends oldest first, so the last row is the recent state.
+func TestRecordsPicksTheLastRowWhenTimestampsTie(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	ctx := context.Background()
+
+	clamped := time.Now()
+	rows := []LogRow{
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: clamped}},
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: clamped}},
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateB, Timestamp: clamped}},
+	}
+	recordCheckIns(ctx, recorder, testAppID, "", rows,
+		func(row LogRow) Envelope { return row.Envelope })
+
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.lastCurrent != nil
+	}, 2*time.Second, 10*time.Millisecond)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Equal(t, testUpdateB, store.lastCurrent.ID,
+		"tied timestamps must not hand the registry the update the device already left")
+}
+
 // Hardware reaches the registry only through telemetry, so the recorder has to
 // carry it and, above all, must not let the manifest polls that follow blank
 // it out or re-trigger a write on every poll.
