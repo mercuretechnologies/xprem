@@ -410,6 +410,51 @@ func TestIdentityRequestsFromBatch(t *testing.T) {
 	})
 }
 
+// The two passes of HandleLogs read the same decoded map, and the telemetry one
+// recognizes an identity record by its event.name. Building the identity
+// request used to strip that key in place, which left the second pass seeing a
+// nameless log record: the $set payload was written to ClickHouse verbatim,
+// past the schema allowlist that is the whole PII control. Every other test
+// here decodes its own batch, so only running the passes in the handler's order
+// catches it.
+func TestIdentityPassLeavesTelemetryRecognizable(t *testing.T) {
+	for _, op := range []string{"$set", "$set_once"} {
+		t.Run(op, func(t *testing.T) {
+			batch, err := DecodeLogs([]byte(strings.ReplaceAll(androidLogsFixture, "$set", op)))
+			require.NoError(t, err)
+
+			requests := identityRequestsFromBatch(batch, "app-1", "203.0.113.7")
+			require.Len(t, requests, 1)
+			require.Equal(t, "user_42", requests[0].Attributes["userId"])
+
+			rows := FlattenLogs("app-1", batch, time.Now().UTC())
+			require.Empty(t, rows, "an identity record must never reach the telemetry store")
+
+			attrs := batch.Resources[0].Records[0].Attributes
+			require.Equal(t, op, attrs[EventNameKey], "the decoded record is the caller's, not the request's")
+			require.Equal(t, "aaaa-1111", attrs[sessionIDKey])
+		})
+	}
+
+	// Coalescing merges into the first request's payload. Sharing that map with
+	// a decoded record would make the fold write the second $set into the first
+	// record's attributes.
+	t.Run("coalescing does not write back into the records", func(t *testing.T) {
+		batch, err := DecodeLogs([]byte(androidLogsFixture))
+		require.NoError(t, err)
+		requests := identityRequestsFromBatch(batch, "app-1", "")
+		require.Len(t, requests, 1)
+
+		folded := identity.CoalesceRequests(append(requests, identity.Request{
+			AppID: "app-1", EASClientID: requests[0].EASClientID, Op: identity.OpSet,
+			Attributes: map[string]any{"tenant": "acme"},
+		}))
+		require.Len(t, folded, 1)
+		require.Equal(t, "acme", folded[0].Attributes["tenant"])
+		require.NotContains(t, batch.Resources[0].Records[0].Attributes, "tenant")
+	})
+}
+
 // A sink that records what it was handed AND checks the row against the column
 // list the driver would bind it to. The round-trip tests that would catch a
 // type mismatch need a live ClickHouse and skip by default, so the shape of a
@@ -434,7 +479,11 @@ func (s *capturingSink) InsertLogs(_ context.Context, rows []LogRow) error {
 func TestHandleLogsEnrichesRowsWithPlace(t *testing.T) {
 	sink := &capturingSink{}
 	handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), sink, nil, nil)
-	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(androidLogsFixture))
+	// A telemetry record, since an identity one reaches no sink at all: this
+	// test used to post the stock $set fixture and read the row the identity
+	// pass had accidentally made unrecognizable.
+	body := strings.ReplaceAll(androidLogsFixture, "$set", "exception")
+	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(body))
 	require.Equal(t, http.StatusNoContent, recorder.Code)
 	require.NotEmpty(t, sink.logs)
 

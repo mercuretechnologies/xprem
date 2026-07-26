@@ -29,8 +29,12 @@ const unsetKeysAttributeKey = "keys"
 // RequestFromRecord builds an identity Request from one decoded log record.
 // The second return is false when the record carries nothing applicable
 // (a $unset without keys, a $set with an empty payload): skipping those saves
-// a store transaction that would be a no-op. attributes ownership transfers
-// to the request (the map is mutated to strip the envelope keys).
+// a store transaction that would be a no-op. The caller's map is never
+// mutated: the decoded attributes are the same map the telemetry pass reads
+// afterwards to recognize an identity record, and stripping the envelope in
+// place made that record unrecognizable, so its payload was persisted as a
+// nameless log line. The payload is copied into a map this request owns,
+// which CoalesceRequests is then free to merge into.
 func RequestFromRecord(appID string, easClientID string, op Op, attributes map[string]any, remoteIP string) (Request, bool) {
 	req := Request{AppID: appID, EASClientID: easClientID, Op: op, RemoteIP: remoteIP}
 	switch op {
@@ -45,12 +49,17 @@ func RequestFromRecord(appID string, easClientID string, op Op, attributes map[s
 			return Request{}, false
 		}
 	case OpSet, OpSetOnce:
-		delete(attributes, recordEventNameKey)
-		delete(attributes, recordSessionIDKey)
-		if len(attributes) == 0 {
+		payload := make(map[string]any, len(attributes))
+		for key, value := range attributes {
+			if key == recordEventNameKey || key == recordSessionIDKey {
+				continue
+			}
+			payload[key] = value
+		}
+		if len(payload) == 0 {
 			return Request{}, false
 		}
-		req.Attributes = attributes
+		req.Attributes = payload
 	default:
 		return Request{}, false
 	}
