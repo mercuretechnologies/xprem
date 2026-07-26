@@ -554,14 +554,6 @@ func (e *Explorer) readSummary(ctx context.Context, appID string, query Explorer
 	return nil
 }
 
-func metricIndex(metrics []MetricSeries) map[string]*MetricSeries {
-	index := make(map[string]*MetricSeries, len(metrics))
-	for i := range metrics {
-		index[metrics[i].Name] = &metrics[i]
-	}
-	return index
-}
-
 func metricDefinition(name string) MetricDefinition {
 	for _, definition := range observedMetricDefinitions {
 		if definition.Name == name {
@@ -581,14 +573,6 @@ func metricDefinition(name string) MetricDefinition {
 		Category:   "custom",
 		MinimumSDK: 55,
 	}
-}
-
-func metricNames(metrics []MetricSeries) []string {
-	names := make([]string, 0, len(metrics))
-	for _, metric := range metrics {
-		names = append(names, metric.Name)
-	}
-	return names
 }
 
 func (e *Explorer) readMetricStats(ctx context.Context, appID string, query ExplorerQuery, cohort bool) ([]MetricSeries, error) {
