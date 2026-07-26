@@ -653,6 +653,7 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	touch.DeviceModel = optionalText(device.Model)
 	touch.OsName = optionalText(device.OSName)
 	touch.OsVersion = optionalText(device.OSVersion)
+	touch.AppVersion = optionalText(device.AppVersion)
 	if geo != nil {
 		touch.CountryCode = geo.CountryCode
 		touch.City = geo.City
@@ -671,6 +672,7 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	register.DeviceModel = optionalText(device.Model)
 	register.OsName = optionalText(device.OSName)
 	register.OsVersion = optionalText(device.OSVersion)
+	register.AppVersion = optionalText(device.AppVersion)
 	if geo != nil {
 		register.CountryCode = geo.CountryCode
 		register.City = geo.City

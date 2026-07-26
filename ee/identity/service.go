@@ -179,10 +179,13 @@ type DeviceInfo struct {
 	Model     string
 	OSName    string
 	OSVersion string
+	// AppVersion is the store version of the binary, not the OTA update: two
+	// devices on the same update can sit on different builds.
+	AppVersion string
 }
 
 func (d DeviceInfo) IsZero() bool {
-	return d.Model == "" && d.OSName == "" && d.OSVersion == ""
+	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == ""
 }
 
 // PlaceOf resolves the country and the city centroid of a request IP.

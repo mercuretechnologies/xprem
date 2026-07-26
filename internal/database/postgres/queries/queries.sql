@@ -1466,6 +1466,7 @@ UPDATE device_identity SET
     device_model = COALESCE(sqlc.narg('device_model'), device_identity.device_model),
     os_name = COALESCE(sqlc.narg('os_name'), device_identity.os_name),
     os_version = COALESCE(sqlc.narg('os_version'), device_identity.os_version),
+    app_version = COALESCE(sqlc.narg('app_version'), device_identity.app_version),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2;
 
@@ -1486,13 +1487,13 @@ WITH origin AS (
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version,
+    device_model, os_name, os_version, app_version,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'),
     sqlc.narg('lng'), sqlc.narg('current_update_id'), sqlc.narg('device_model'),
-    sqlc.narg('os_name'), sqlc.narg('os_version'),
+    sqlc.narg('os_name'), sqlc.narg('os_version'), sqlc.narg('app_version'),
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
@@ -1511,7 +1512,8 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
         THEN device_identity.publish_group ELSE EXCLUDED.publish_group END,
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
-    os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version);
+    os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
+    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version);
 
 
 -- Records a manifest/native failure at server receipt time. fatal_error stays
@@ -1700,7 +1702,8 @@ SELECT o.id, o.event_type, o.app_id, o.eas_client_id, o.update_id, o.previous_up
        coalesce(d.os_name, '') AS os_name,
        coalesce(d.os_version, '') AS os_version,
        coalesce(d.device_model, '') AS device_model,
-       coalesce(d.country_code, '') AS country_code
+       coalesce(d.country_code, '') AS country_code,
+       coalesce(d.app_version, '') AS app_version
 FROM device_health_outbox o
 -- The EXISTS scopes the update to the event's app, not just its uuid. update_id
 -- originates from an unauthenticated header, so a device of app A can name an

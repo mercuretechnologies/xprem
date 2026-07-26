@@ -1198,15 +1198,27 @@ func TestUpdateHealthByIDs(t *testing.T) {
 	require.Zero(t, health[updateGhost])
 }
 
-// Hardware reaches the registry through telemetry only, so the column has to
-// survive every manifest poll that follows, and an OS upgrade has to land.
+// storedAppVersion reads the column directly: nothing on the read API exposes
+// it, because the only consumer is the outbox resolving an event's dimensions.
+func storedAppVersion(t *testing.T, pool *pgxpool.Pool, appID, deviceID string) *string {
+	t.Helper()
+	var appVersion *string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		"SELECT app_version FROM device_identity WHERE app_id = $1 AND eas_client_id = $2",
+		appID, deviceID).Scan(&appVersion))
+	return appVersion
+}
+
+// Hardware and store version reach the registry through telemetry only, so the
+// columns have to survive every manifest poll that follows, and an upgrade of
+// either has to land.
 func TestTouchDeviceHardwareCoalesce(t *testing.T) {
 	store, pool := setupIdentityStore(t)
 	appID := seedApp(t, pool)
 	ctx := context.Background()
 
 	deviceID := uuid.NewString()
-	reported := DeviceInfo{Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1"}
+	reported := DeviceInfo{Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1", AppVersion: "1.4.0"}
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, reported))
 
 	registered, err := store.GetDevice(ctx, appID, deviceID)
@@ -1215,6 +1227,7 @@ func TestTouchDeviceHardwareCoalesce(t *testing.T) {
 	require.Equal(t, "iPhone18,2", *registered.DeviceModel)
 	require.Equal(t, "iOS", *registered.OSName)
 	require.Equal(t, "26.1", *registered.OSVersion)
+	require.Equal(t, "1.4.0", *storedAppVersion(t, pool, appID, deviceID))
 
 	// A manifest poll knows no hardware and must leave it untouched.
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
@@ -1223,14 +1236,17 @@ func TestTouchDeviceHardwareCoalesce(t *testing.T) {
 	require.NotNil(t, kept.DeviceModel)
 	require.Equal(t, "iPhone18,2", *kept.DeviceModel)
 	require.Equal(t, "26.1", *kept.OSVersion)
+	require.Equal(t, "1.4.0", *storedAppVersion(t, pool, appID, deviceID))
 
-	// A real OS upgrade does land.
+	// A real OS upgrade does land, and so does a store release.
 	upgraded := reported
 	upgraded.OSVersion = "26.2"
+	upgraded.AppVersion = "1.5.0"
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, upgraded))
 	after, err := store.GetDevice(ctx, appID, deviceID)
 	require.NoError(t, err)
 	require.Equal(t, "26.2", *after.OSVersion)
+	require.Equal(t, "1.5.0", *storedAppVersion(t, pool, appID, deviceID))
 }
 
 // The same must hold on the registration arm, where the row does not exist yet

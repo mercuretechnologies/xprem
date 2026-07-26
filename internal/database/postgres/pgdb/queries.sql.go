@@ -1220,7 +1220,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 }
 
 const getDeviceIdentity = `-- name: GetDeviceIdentity :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 `
 
@@ -1250,12 +1250,13 @@ func (q *Queries) GetDeviceIdentity(ctx context.Context, arg GetDeviceIdentityPa
 		&i.RuntimeVersion,
 		&i.Platform,
 		&i.PublishGroup,
+		&i.AppVersion,
 	)
 	return i, err
 }
 
 const getDeviceIdentityForUpdate = `-- name: GetDeviceIdentityForUpdate :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 FOR UPDATE
 `
@@ -1286,6 +1287,7 @@ func (q *Queries) GetDeviceIdentityForUpdate(ctx context.Context, arg GetDeviceI
 		&i.RuntimeVersion,
 		&i.Platform,
 		&i.PublishGroup,
+		&i.AppVersion,
 	)
 	return i, err
 }
@@ -3161,7 +3163,8 @@ SELECT o.id, o.event_type, o.app_id, o.eas_client_id, o.update_id, o.previous_up
        coalesce(d.os_name, '') AS os_name,
        coalesce(d.os_version, '') AS os_version,
        coalesce(d.device_model, '') AS device_model,
-       coalesce(d.country_code, '') AS country_code
+       coalesce(d.country_code, '') AS country_code,
+       coalesce(d.app_version, '') AS app_version
 FROM device_health_outbox o
 LEFT JOIN updates u ON u.update_uuid = o.update_id
     AND EXISTS (
@@ -3193,6 +3196,7 @@ type ListDeviceHealthOutboxRow struct {
 	OsVersion        string             `json:"os_version"`
 	DeviceModel      string             `json:"device_model"`
 	CountryCode      string             `json:"country_code"`
+	AppVersion       string             `json:"app_version"`
 }
 
 // Durable ClickHouse delivery queue. The worker reads through a transaction;
@@ -3238,6 +3242,7 @@ func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]Li
 			&i.OsVersion,
 			&i.DeviceModel,
 			&i.CountryCode,
+			&i.AppVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -3250,7 +3255,7 @@ func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]Li
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group
+SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version
 FROM device_identity d
 WHERE d.app_id = $1
   AND (coalesce(cardinality($2::jsonb[]), 0) = 0 OR d.metadata @> ANY($2::jsonb[]))
@@ -3352,6 +3357,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 			&i.RuntimeVersion,
 			&i.Platform,
 			&i.PublishGroup,
+			&i.AppVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -4059,13 +4065,13 @@ WITH origin AS (
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version,
+    device_model, os_name, os_version, app_version,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8,
-    $9, $10,
+    $9, $10, $11,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
@@ -4082,7 +4088,8 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
         THEN device_identity.publish_group ELSE EXCLUDED.publish_group END,
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
-    os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version)
+    os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
+    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version)
 `
 
 type RegisterDeviceParams struct {
@@ -4096,6 +4103,7 @@ type RegisterDeviceParams struct {
 	DeviceModel     *string     `json:"device_model"`
 	OsName          *string     `json:"os_name"`
 	OsVersion       *string     `json:"os_version"`
+	AppVersion      *string     `json:"app_version"`
 }
 
 // Registration upsert for the passive path: the registry is uncapped (the
@@ -4115,6 +4123,7 @@ func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) 
 		arg.DeviceModel,
 		arg.OsName,
 		arg.OsVersion,
+		arg.AppVersion,
 	)
 	if err != nil {
 		return 0, err
@@ -4433,6 +4442,7 @@ UPDATE device_identity SET
     device_model = COALESCE($8, device_identity.device_model),
     os_name = COALESCE($9, device_identity.os_name),
     os_version = COALESCE($10, device_identity.os_version),
+    app_version = COALESCE($11, device_identity.app_version),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
 `
@@ -4448,6 +4458,7 @@ type TouchDeviceIdentityParams struct {
 	DeviceModel     *string     `json:"device_model"`
 	OsName          *string     `json:"os_name"`
 	OsVersion       *string     `json:"os_version"`
+	AppVersion      *string     `json:"app_version"`
 }
 
 // Passive-contact bump (manifest poll, telemetry batch): refresh last_seen and
@@ -4471,6 +4482,7 @@ func (q *Queries) TouchDeviceIdentity(ctx context.Context, arg TouchDeviceIdenti
 		arg.DeviceModel,
 		arg.OsName,
 		arg.OsVersion,
+		arg.AppVersion,
 	)
 	if err != nil {
 		return 0, err
@@ -4605,7 +4617,7 @@ UPDATE device_identity SET
     lng = COALESCE($7, lng),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE app_id = $1 AND eas_client_id = $2
-RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group
+RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version
 `
 
 type UpdateDeviceIdentityParams struct {
@@ -4650,6 +4662,7 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.RuntimeVersion,
 		&i.Platform,
 		&i.PublishGroup,
+		&i.AppVersion,
 	)
 	return i, err
 }

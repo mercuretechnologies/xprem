@@ -148,7 +148,8 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 	batch, err := h.clickhouse.Conn.PrepareBatch(ctx, `INSERT INTO device_health_events
 		(outbox_id, event_type, app_id, eas_client_id, update_id, previous_update_id,
 		 failure_type, fatal_error, occurred_at,
-		 branch, runtime_version, platform, os_name, os_version, device_model, country_code)`)
+		 branch, runtime_version, platform, os_name, os_version, device_model, country_code,
+		 app_version)`)
 	if err != nil {
 		return 0, fmt.Errorf("preparing health event batch: %w", err)
 	}
@@ -180,6 +181,7 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 			row.OsVersion,
 			row.DeviceModel,
 			row.CountryCode,
+			row.AppVersion,
 		); err != nil {
 			return 0, fmt.Errorf("appending health event: %w", err)
 		}

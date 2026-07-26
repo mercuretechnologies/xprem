@@ -113,6 +113,7 @@ func recordCheckIns[R any](
 			DeviceModel:     envelope.DeviceModel,
 			OSName:          envelope.OSName,
 			OSVersion:       envelope.OSVersion,
+			AppVersion:      envelope.AppVersion,
 		})
 	}
 }

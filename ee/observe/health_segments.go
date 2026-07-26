@@ -21,8 +21,10 @@ type HealthSegmentPoint struct {
 }
 
 // Dimensions a segmented health history can group by. They are read from the
-// telemetry rows, which is also their limit: a device that never sent
-// telemetry still counts, under "unknown".
+// health events themselves, where they were frozen at delivery
+// (20260725180000_health_event_dimensions.sql and its app_version follow-up),
+// so a bucket is labelled with what the device was THEN. Rows delivered before
+// those migrations carry empty strings, which read as "unknown".
 var healthSegmentDimensions = map[string]sqlFragment{
 	"deviceModel":    "device_model",
 	"osVersion":      "os_version",
@@ -53,12 +55,16 @@ const maxHealthSegments = 8
 // the plain history cannot: its snapshots are pre-aggregated per update and
 // carry nothing about the device. The raw events can, because
 // device_health_events carries the eas_client_id of every adoption and every
-// failure, and telemetry carries what that device is. This rebuilds the same
-// curves per segment, on the fly.
+// failure along with what the device was at that moment. This rebuilds the
+// same curves per segment, on the fly.
 //
 // The cost is a device-by-bucket grid, so the bucket follows the window rather
 // than the one-minute retention: an hour of a 24h window is 96 buckets, not
-// 1440, and the shape is identical at this scale.
+// 1440, and the shape is identical at this scale. The grid is also the reason
+// the population is narrowed to devices that adopted one of the requested
+// updates: a device that never ran one cannot survive the final filter anyway,
+// and building its row per bucket first is how a fleet of a million turns into
+// 181 million intermediate rows for a chart about two updates.
 func (h *HealthHistory) ReadBySegment(
 	ctx context.Context,
 	appID string,
@@ -82,11 +88,13 @@ func (h *HealthHistory) ReadBySegment(
 
 	// The dimension is an allowlisted column name, never caller input.
 	//
-	// The population is the health events, not the telemetry: a device that
-	// never sent telemetry still adopted an update, and dropping it here would
-	// silently answer for a subset of the fleet (a deployment that only has
-	// manifest check-ins would get an empty chart). Telemetry only supplies the
-	// segment, hence the LEFT JOIN and the "unknown" bucket.
+	// The segment rides on the adoption event, so the ASOF that already decides
+	// which update a device was running at a bucket decides its segment too:
+	// one source, no extra join, and the label is the device's state at that
+	// point rather than its state today. Reading it from telemetry instead
+	// meant one value per device for the whole window, which relabelled a
+	// device's entire history the moment it upgraded, and left every segment
+	// "unknown" on a deployment with no telemetry at all.
 	//
 	// Faults join on the update as well as the device. Without that, a device
 	// that crashed on an old update stays faulty for every update it runs
@@ -94,14 +102,8 @@ func (h *HealthHistory) ReadBySegment(
 	// ever emit a 'recovered' event.
 	sql := sqlf(`
 		WITH
-		  device_segment AS (
-		    SELECT eas_client_id, argMax(%s, timestamp) AS segment
-		    FROM observe_metrics
-		    WHERE app_id = ? AND timestamp >= ? AND timestamp <= ?
-		    GROUP BY eas_client_id
-		  ),
 		  adoptions AS (
-		    SELECT eas_client_id, update_id, occurred_at
+		    SELECT eas_client_id, update_id, occurred_at, %s AS segment
 		    FROM device_health_events
 		    WHERE app_id = ? AND event_type IN ('first_seen', 'switched')
 		      AND occurred_at <= ?
@@ -114,7 +116,7 @@ func (h *HealthHistory) ReadBySegment(
 		      AND occurred_at <= ?
 		  ),
 		  population AS (
-		    SELECT DISTINCT eas_client_id FROM adoptions
+		    SELECT DISTINCT eas_client_id FROM adoptions WHERE toString(update_id) IN ?
 		  ),
 		  grid AS (
 		    SELECT p.eas_client_id AS eas_client_id,
@@ -124,14 +126,14 @@ func (h *HealthHistory) ReadBySegment(
 		  ),
 		  running AS (
 		    SELECT g.bucket AS bucket, g.eas_client_id AS eas_client_id,
-		           a.update_id AS update_id
+		           a.update_id AS update_id, a.segment AS segment
 		    FROM grid g
 		    ASOF LEFT JOIN adoptions a
 		      ON g.eas_client_id = a.eas_client_id AND g.bucket >= a.occurred_at
 		  ),
 		  failing AS (
 		    SELECT r.bucket AS bucket, r.eas_client_id AS eas_client_id,
-		           r.update_id AS update_id, f.faulty AS faulty
+		           r.update_id AS update_id, r.segment AS segment, f.faulty AS faulty
 		    FROM running r
 		    ASOF LEFT JOIN faults f
 		      ON r.eas_client_id = f.eas_client_id
@@ -139,10 +141,11 @@ func (h *HealthHistory) ReadBySegment(
 		         AND r.bucket >= f.occurred_at
 		  ),
 		  segment_counts AS (
-		    SELECT run.bucket AS bucket, ifNull(seg.segment, '') AS segment,
+		    SELECT run.bucket AS bucket, run.segment AS segment,
 		           count() AS devices, countIf(run.faulty = 1) AS faulty
 		    FROM failing run
-		    LEFT JOIN device_segment seg ON seg.eas_client_id = run.eas_client_id
+		    -- The population only says a device ran a requested update at some
+		    -- point; this says it was running one at THIS bucket.
 		    WHERE toString(run.update_id) IN ?
 		    GROUP BY bucket, segment
 		  )
@@ -154,9 +157,9 @@ func (h *HealthHistory) ReadBySegment(
 		ORDER BY bucket`, column)
 
 	rows, err := h.clickhouse.Conn.Query(ctx, sql,
-		appID, from.UTC(), to.UTC(),
 		appID, to.UTC(),
 		appID, to.UTC(),
+		updateIDs,
 		from.UTC(), step, buckets,
 		updateIDs,
 		maxHealthSegments,

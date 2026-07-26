@@ -114,6 +114,7 @@ type DeviceIdentity struct {
 	RuntimeVersion  *string            `json:"runtime_version"`
 	Platform        *string            `json:"platform"`
 	PublishGroup    pgtype.UUID        `json:"publish_group"`
+	AppVersion      *string            `json:"app_version"`
 }
 
 type DeviceUpdateFailure struct {

@@ -35,13 +35,14 @@ type DeviceCheckIn struct {
 	// FatalError is the Expo-Fatal-Error header: the crash detail, sent by
 	// the client exactly once, on the first poll after the crash.
 	FatalError string
-	// Hardware and OS of the device, spelled as expo-device spells them.
-	// Telemetry-only: the manifest headers carry nothing of the sort, so
-	// these are empty on every poll and empty always means "not reported",
-	// never "changed to empty".
+	// Hardware and OS of the device, spelled as expo-device spells them, plus
+	// the store version of the binary. Telemetry-only: the manifest headers
+	// carry nothing of the sort, so these are empty on every poll and empty
+	// always means "not reported", never "changed to empty".
 	DeviceModel string
 	OSName      string
 	OSVersion   string
+	AppVersion  string
 }
 
 type ExpoProtocolHandler struct {

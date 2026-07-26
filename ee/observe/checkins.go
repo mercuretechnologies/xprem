@@ -99,22 +99,24 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn) checkInState {
 	state.failedUpdateIDs = ParseFailedUpdateIDs(checkIn.FailedUpdateIDsRaw)
 	sort.Strings(state.failedUpdateIDs)
 	state.device = identity.DeviceInfo{
-		Model:     strings.TrimSpace(checkIn.DeviceModel),
-		OSName:    strings.TrimSpace(checkIn.OSName),
-		OSVersion: strings.TrimSpace(checkIn.OSVersion),
+		Model:      strings.TrimSpace(checkIn.DeviceModel),
+		OSName:     strings.TrimSpace(checkIn.OSName),
+		OSVersion:  strings.TrimSpace(checkIn.OSVersion),
+		AppVersion: strings.TrimSpace(checkIn.AppVersion),
 	}
 	return state
 }
 
-// deviceFingerprint condenses the reported hardware, so a device that upgrades
-// its OS is written through instead of waiting for an unrelated state change.
+// deviceFingerprint condenses the reported hardware and store version, so a
+// device that upgrades its OS or takes a store release is written through
+// instead of waiting for an unrelated state change.
 // Zero info fingerprints to "", which reads as "unknown" everywhere below.
 func deviceFingerprint(device identity.DeviceInfo) string {
 	if device.IsZero() {
 		return ""
 	}
 	h := fnv.New64a()
-	for _, part := range []string{device.Model, device.OSName, device.OSVersion} {
+	for _, part := range []string{device.Model, device.OSName, device.OSVersion, device.AppVersion} {
 		_, _ = h.Write([]byte(part))
 		_, _ = h.Write([]byte{0})
 	}
