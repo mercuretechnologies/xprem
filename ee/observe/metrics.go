@@ -33,6 +33,7 @@ var (
 const (
 	reasonForgedClientID = "forged_client_id"
 	reasonTelemetry      = "telemetry_no_sink"
+	reasonOverCap        = "over_batch_cap"
 )
 
 func init() {

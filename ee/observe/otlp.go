@@ -24,9 +24,25 @@ import (
 // the device. The decoded types are neutral on purpose: the ClickHouse
 // flattener (flatten.go) extends them without another decoder.
 
+// maxRecordsPerBatch caps how many log records (or metric points) one POST can
+// turn into work. The body cap alone does not: a record is what costs a
+// database round trip (an identity transaction, a registry write, an origin
+// lookup, a health signal), and a hostile body packs them at roughly a hundred
+// bytes each, so 16MB of them is six figures of Postgres operations from a
+// single unauthenticated request.
+//
+// 10k is several times what any real device can hold: expo-observe keeps no
+// row cap of its own, but Android evicts pending records after 7 days, and a
+// heavy user generates a few hundred a day. Ingestion keeps the NEWEST ones,
+// see DecodeLogs.
+const maxRecordsPerBatch = 10_000
+
 // LogBatch is one decoded /v1/logs body.
 type LogBatch struct {
 	Resources []ResourceLogs
+	// DroppedRecords is how many records maxRecordsPerBatch cut. Reported back
+	// to the client as an OTLP partialSuccess, never as an error status.
+	DroppedRecords int
 }
 
 // ResourceLogs is one device session's worth of records: the resource
@@ -52,6 +68,8 @@ type LogRecord struct {
 // MetricBatch is one decoded /v1/metrics body.
 type MetricBatch struct {
 	Resources []ResourceMetrics
+	// DroppedRecords is how many gauge points maxRecordsPerBatch cut.
+	DroppedRecords int
 }
 
 // ResourceMetrics is one device session's worth of gauge points and the
@@ -83,18 +101,52 @@ const EASClientIDKey = "expo.eas_client.id"
 // column both forbid collapsing the two into one owner today.
 const EventNameKey = "event.name"
 
+// leadingSkip is how many records to pass over so that at most
+// maxRecordsPerBatch survive. The TAIL is what we keep: a device coming back
+// from a long offline stretch sends its backlog oldest first, the batch is
+// marked sent on the device whatever we answer, and the newest records are
+// both what the dashboards read and what the check-in reads the device's
+// current update from. Keeping the head would store ancient sessions and
+// permanently lose the recent ones.
+func leadingSkip(total int) int {
+	if total <= maxRecordsPerBatch {
+		return 0
+	}
+	return total - maxRecordsPerBatch
+}
+
 // DecodeLogs parses an OTLP/JSON logs body. An error means the body is not
-// JSON we can read at all; a readable body with zero records is normal.
+// JSON we can read at all; a readable body with zero records is normal, and a
+// body over the record cap is decoded down to its newest maxRecordsPerBatch
+// rather than rejected.
 func DecodeLogs(body []byte) (LogBatch, error) {
 	var decoded otlpLogsBody
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return LogBatch{}, fmt.Errorf("unreadable OTLP logs body: %w", err)
 	}
-	batch := LogBatch{Resources: make([]ResourceLogs, 0, len(decoded.ResourceLogs))}
+	total := 0
 	for _, resource := range decoded.ResourceLogs {
+		total += countLogRecords(resource)
+	}
+	skip := leadingSkip(total)
+
+	batch := LogBatch{Resources: make([]ResourceLogs, 0, len(decoded.ResourceLogs)), DroppedRecords: skip}
+	skipped := 0
+	for _, resource := range decoded.ResourceLogs {
+		// Resources entirely behind the cap are stepped over whole: their
+		// attribute maps are the allocation the cap exists to avoid, and
+		// building them only to drop them would hand the cost back.
+		if records := countLogRecords(resource); skipped < skip && skipped+records <= skip {
+			skipped += records
+			continue
+		}
 		entry := ResourceLogs{Attributes: kvToMap(resource.Resource.Attributes)}
 		for _, scope := range resource.ScopeLogs {
 			for _, record := range scope.LogRecords {
+				if skipped < skip {
+					skipped++
+					continue
+				}
 				bodyText, _ := record.Body.toGo().(string)
 				entry.Records = append(entry.Records, LogRecord{
 					TimeUnixNano:   record.TimeUnixNano.uint64(),
@@ -110,6 +162,14 @@ func DecodeLogs(body []byte) (LogBatch, error) {
 	return batch, nil
 }
 
+func countLogRecords(resource otlpResourceLogs) int {
+	records := 0
+	for _, scope := range resource.ScopeLogs {
+		records += len(scope.LogRecords)
+	}
+	return records
+}
+
 // DecodeMetrics parses an OTLP/JSON metrics body, same tolerance contract as
 // DecodeLogs. Only gauges are read: the SDK never emits sums or histograms,
 // and an unknown metric shape must not fail the batch.
@@ -118,8 +178,19 @@ func DecodeMetrics(body []byte) (MetricBatch, error) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return MetricBatch{}, fmt.Errorf("unreadable OTLP metrics body: %w", err)
 	}
-	batch := MetricBatch{Resources: make([]ResourceMetrics, 0, len(decoded.ResourceMetrics))}
+	total := 0
 	for _, resource := range decoded.ResourceMetrics {
+		total += countMetricPoints(resource)
+	}
+	skip := leadingSkip(total)
+
+	batch := MetricBatch{Resources: make([]ResourceMetrics, 0, len(decoded.ResourceMetrics)), DroppedRecords: skip}
+	skipped := 0
+	for _, resource := range decoded.ResourceMetrics {
+		if points := countMetricPoints(resource); skipped < skip && skipped+points <= skip {
+			skipped += points
+			continue
+		}
 		entry := ResourceMetrics{Attributes: kvToMap(resource.Resource.Attributes)}
 		for _, scope := range resource.ScopeMetrics {
 			for _, metric := range scope.Metrics {
@@ -127,6 +198,10 @@ func DecodeMetrics(body []byte) (MetricBatch, error) {
 					continue
 				}
 				for _, point := range metric.Gauge.DataPoints {
+					if skipped < skip {
+						skipped++
+						continue
+					}
 					entry.Points = append(entry.Points, MetricPoint{
 						MetricName:   metric.Name,
 						TimeUnixNano: point.TimeUnixNano.uint64(),
@@ -139,6 +214,20 @@ func DecodeMetrics(body []byte) (MetricBatch, error) {
 		batch.Resources = append(batch.Resources, entry)
 	}
 	return batch, nil
+}
+
+// Only gauge points are counted, matching what the decoder keeps: a sum or a
+// histogram the SDK never emits must not eat into the cap.
+func countMetricPoints(resource otlpResourceMetrics) int {
+	points := 0
+	for _, scope := range resource.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Gauge != nil {
+				points += len(metric.Gauge.DataPoints)
+			}
+		}
+	}
+	return points
 }
 
 type otlpLogsBody struct {

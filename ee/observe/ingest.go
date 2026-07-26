@@ -11,6 +11,7 @@ import (
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/helpers"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -135,6 +136,36 @@ func (h *IngestHandler) resolveOrigin(ctx context.Context, appID, updateID strin
 	return h.branches.UpdateOrigin(ctx, appID, updateID)
 }
 
+// The OTLP field naming the rejected count, per signal.
+const (
+	rejectedLogRecordsField = "rejectedLogRecords"
+	rejectedDataPointsField = "rejectedDataPoints"
+)
+
+// acknowledgeBatch closes an ingested batch. With nothing dropped it is the
+// plain 204. When the record cap cut records it is a 2xx carrying an OTLP
+// partialSuccess: the client marks the batch sent either way, which is what we
+// want (a non-2xx would have it re-send the same oversized body forever), and
+// a client that reads the body learns exactly how much was refused instead of
+// believing everything landed.
+func acknowledgeBatch(w http.ResponseWriter, rejectedField string, rejected int) {
+	observeBatch(resultAccepted)
+	if rejected == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"partialSuccess": map[string]any{
+			rejectedField: rejected,
+			"errorMessage": fmt.Sprintf(
+				"batch carried more than %d records; the newest %d were ingested",
+				maxRecordsPerBatch, maxRecordsPerBatch),
+		},
+	})
+}
+
 // preserveBatchOnPanic answers 503 rather than letting gorilla turn a panic
 // into a 500: 500 destroys the batch on the device, 503 preserves it.
 func preserveBatchOnPanic(w http.ResponseWriter, signal string) {
@@ -165,10 +196,13 @@ func readBatch(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	return nil, false
 }
 
-// HandleLogs ingests POST /observe/{APP_ID}/{projectId}/v1/logs. Rate
-// limiting and app-existence run in middleware ahead of this handler. The
-// pipeline: identity ops ($set/$set_once/$unset) are applied first, then the
-// telemetry records are flattened and inserted into ClickHouse, with each
+// HandleLogs ingests POST /observe/{APP_ID}/{projectId}/v1/logs. App-existence
+// runs in middleware ahead of this handler; request rate limiting does not
+// exist yet and belongs at the edge (see middleware.go), which is why the work
+// ONE request can trigger is capped here instead: maxBatchBodyBytes on the
+// wire, maxRecordsPerBatch on what the body is allowed to become.
+// The pipeline: identity ops ($set/$set_once/$unset) are applied first, then
+// the telemetry records are flattened and inserted into ClickHouse, with each
 // ingesting device registered in the universal registry (debounced).
 func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	defer preserveBatchOnPanic(w, "logs")
@@ -189,6 +223,9 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 
 	appID := mux.Vars(r)["APP_ID"]
 	remoteIP := clientIP(r)
+	// Counted before anything reads the batch: what the cap cut never becomes
+	// an identity operation, a check-in or a ClickHouse row.
+	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 
 	if h.identityService != nil {
 		requests := identityRequestsFromBatch(batch, appID, remoteIP)
@@ -254,8 +291,7 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	observeBatch(resultAccepted)
-	w.WriteHeader(http.StatusNoContent)
+	acknowledgeBatch(w, rejectedLogRecordsField, batch.DroppedRecords)
 }
 
 // JSCrashEventName is the documented log-event convention for reporting a JS
@@ -426,8 +462,7 @@ func identityRequestsFromBatch(batch LogBatch, appID, remoteIP string) []identit
 // HandleMetrics ingests POST /observe/{APP_ID}/{projectId}/v1/metrics: same
 // response contract and same pipeline as HandleLogs minus the identity split
 // (identity ops only ever arrive on /v1/logs). Without a sink it stays the
-// pre-ClickHouse acknowledge-and-drop, skipping even the decode. Rate
-// limiting runs in middleware ahead of this handler.
+// pre-ClickHouse acknowledge-and-drop, skipping even the decode.
 func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	defer preserveBatchOnPanic(w, "metrics")
 
@@ -457,6 +492,7 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	appID := mux.Vars(r)["APP_ID"]
 	remoteIP := clientIP(r)
+	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 	rows := FlattenMetrics(appID, batch, time.Now().UTC())
 	// One resolution per batch, not per row: a batch is one device's backlog,
 	// so every row shares the request IP.
@@ -478,6 +514,5 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	observeBatch(resultAccepted)
-	w.WriteHeader(http.StatusNoContent)
+	acknowledgeBatch(w, rejectedDataPointsField, batch.DroppedRecords)
 }

@@ -7,6 +7,7 @@ package observe
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -137,6 +138,32 @@ func TestHandleLogsResponseContract(t *testing.T) {
 		big := bytes.Repeat([]byte("x"), maxBatchBodyBytes+1)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, big)
 		require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	})
+
+	// Over the cap the batch is still a success: any non-2xx has the published
+	// clients re-send the same oversized body forever. partialSuccess is the
+	// protocol's way to say "kept, minus this many".
+	t.Run("over the record cap is a partial success, never a rejection", func(t *testing.T) {
+		const surplus = 4
+		sink := &capturingSink{}
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), sink, nil, nil)
+		body := logsBodyWithRecords([]string{"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}, maxRecordsPerBatch+surplus)
+
+		recorder := serveIngest(handler, http.MethodPost, logsPath, body)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		var answer struct {
+			PartialSuccess struct {
+				RejectedLogRecords int    `json:"rejectedLogRecords"`
+				ErrorMessage       string `json:"errorMessage"`
+			} `json:"partialSuccess"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &answer))
+		require.Equal(t, surplus, answer.PartialSuccess.RejectedLogRecords)
+		require.NotEmpty(t, answer.PartialSuccess.ErrorMessage)
+		// The cut happens before the pipeline, so the dropped records cost no
+		// insert, no identity transaction and no registry write.
+		require.Len(t, sink.logs, maxRecordsPerBatch)
 	})
 
 	t.Run("store failure is a retryable 503, never 500", func(t *testing.T) {
