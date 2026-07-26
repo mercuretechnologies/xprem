@@ -168,6 +168,12 @@ func parseUUIDFilters(raw []string) ([]string, bool) {
 // nothing, which reads as "no data" instead of as a rejected filter.
 func parsePlatformFilters(raw []string) ([]string, bool) {
 	values := splitFilterValues(raw)
+	// Capped like every other dimension. The values are validated against a
+	// two-entry allowlist below, but the LIST is not: repeating ?platform=ios
+	// builds an arbitrarily long IN clause out of one legal value.
+	if len(values) > maxFilterValues {
+		return nil, false
+	}
 	normalized := make([]string, 0, len(values))
 	for _, value := range values {
 		platform, ok := parsePlatform(value)

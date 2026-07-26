@@ -328,7 +328,7 @@ func (q *Queries) CountOnlineDevices(ctx context.Context, arg CountOnlineDevices
 }
 
 const countUpdateFailures = `-- name: CountUpdateFailures :one
-SELECT COUNT(*) FROM device_update_failures
+SELECT COUNT(DISTINCT eas_client_id) FROM device_update_failures
 WHERE app_id = $1 AND update_id = $2 AND resolved_at IS NULL
 `
 
@@ -338,6 +338,8 @@ type CountUpdateFailuresParams struct {
 }
 
 // Instant-T health: how many devices this update crashed on at launch.
+// DISTINCT on the device: one device can hold both a launch rollback and a
+// runtime crash for the same update, which is two rows and one device.
 func (q *Queries) CountUpdateFailures(ctx context.Context, arg CountUpdateFailuresParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countUpdateFailures, arg.AppID, arg.UpdateID)
 	var count int64
@@ -3162,6 +3164,10 @@ SELECT o.id, o.event_type, o.app_id, o.eas_client_id, o.update_id, o.previous_up
        coalesce(d.country_code, '') AS country_code
 FROM device_health_outbox o
 LEFT JOIN updates u ON u.update_uuid = o.update_id
+    AND EXISTS (
+        SELECT 1 FROM branches ub
+        WHERE ub.id = u.branch_id AND ub.app_id = o.app_id
+    )
 LEFT JOIN branches b ON b.id = u.branch_id AND b.app_id = o.app_id
 LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
 LEFT JOIN device_identity d ON d.app_id = o.app_id AND d.eas_client_id = o.eas_client_id
@@ -3195,6 +3201,17 @@ type ListDeviceHealthOutboxRow struct {
 // with them, so they are resolved here, once, on a bounded batch. The update
 // side is permanent (an update never changes branch), the device side is the
 // hardware as currently known, which is what a crash is read against.
+// The EXISTS scopes the update to the event's app, not just its uuid. update_id
+// originates from an unauthenticated header, so a device of app A can name an
+// update of app B: without it, `branch` correctly resolves to ” (that join IS
+// app-scoped) while platform and runtime_version, which hang off this join,
+// would carry B's values into A's analytics rows. Same guard the device
+// inventory carried before its dimensions moved onto device_identity.
+//
+// Read from the update rather than from `d`, which now stores the same
+// dimensions: `d` describes the update the device runs NOW, and an outbox event
+// is about the update it names, which for a rollback or a switch is a different
+// one.
 func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]ListDeviceHealthOutboxRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceHealthOutbox, limit)
 	if err != nil {
@@ -3986,14 +4003,13 @@ SELECT app_id, eas_client_id, update_id, 'runtime_issue',
        $4, $5, $5
 FROM runtime_state
 WHERE last_started_at IS NULL OR last_crashed_at >= last_started_at
-ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
     last_seen_at = GREATEST(
         device_update_failures.last_seen_at,
         EXCLUDED.last_seen_at
     ),
     resolved_at = CASE
-        WHEN device_update_failures.failure_type = 'runtime_issue'
-         AND device_update_failures.resolved_at IS NOT NULL
+        WHEN device_update_failures.resolved_at IS NOT NULL
          AND EXCLUDED.last_seen_at > device_update_failures.resolved_at
         THEN NULL
         ELSE device_update_failures.resolved_at
@@ -4015,6 +4031,9 @@ type RecordDeviceRuntimeFailureParams struct {
 // Runtime crash transition. The watermark upsert serializes concurrent
 // startup/crash delivery for this device+update; only the newest source event
 // can change current health.
+// The conflict target pins failure_type to 'runtime_issue', the literal this
+// statement inserts, so the reopen below no longer needs to check the type: it
+// cannot reach a row typed by the manifest writer.
 func (q *Queries) RecordDeviceRuntimeFailure(ctx context.Context, arg RecordDeviceRuntimeFailureParams) error {
 	_, err := q.db.Exec(ctx, recordDeviceRuntimeFailure,
 		arg.AppID,
@@ -4637,9 +4656,10 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 
 const updateFailureBreakdownByIDs = `-- name: UpdateFailureBreakdownByIDs :many
 SELECT f.update_id AS update_uuid,
-       COUNT(*) AS failure_count,
-       COUNT(*) FILTER (WHERE f.failure_type = 'runtime_issue') AS runtime_count,
-       COUNT(d.eas_client_id) AS still_on_update
+       COUNT(DISTINCT f.eas_client_id) AS failed_devices,
+       COUNT(DISTINCT f.eas_client_id) FILTER (WHERE f.failure_type = 'update_issue') AS update_devices,
+       COUNT(DISTINCT f.eas_client_id) FILTER (WHERE f.failure_type = 'runtime_issue') AS runtime_devices,
+       COUNT(DISTINCT d.eas_client_id) AS still_on_update
 FROM device_update_failures f
 LEFT JOIN device_identity d
     ON d.app_id = f.app_id
@@ -4657,10 +4677,11 @@ type UpdateFailureBreakdownByIDsParams struct {
 }
 
 type UpdateFailureBreakdownByIDsRow struct {
-	UpdateUuid    pgtype.UUID `json:"update_uuid"`
-	FailureCount  int64       `json:"failure_count"`
-	RuntimeCount  int64       `json:"runtime_count"`
-	StillOnUpdate int64       `json:"still_on_update"`
+	UpdateUuid     pgtype.UUID `json:"update_uuid"`
+	FailedDevices  int64       `json:"failed_devices"`
+	UpdateDevices  int64       `json:"update_devices"`
+	RuntimeDevices int64       `json:"runtime_devices"`
+	StillOnUpdate  int64       `json:"still_on_update"`
 }
 
 // Batch failure breakdown for a set of updates. All-time per update: an
@@ -4673,6 +4694,13 @@ type UpdateFailureBreakdownByIDsRow struct {
 // kept in the healthy numerator. A failed device that has since moved to
 // another update (or rolled back: every update_issue) leaves the overlap by
 // construction, so the join self-corrects when a device changes update.
+// Every count is DISTINCT on the device, and the two breakdowns are counted
+// independently rather than one being derived from the other. A device can hold
+// both a launch rollback and a runtime crash for the same update, which is two
+// rows and one device: counting rows would inflate the totals, and deriving
+// update_devices as failed_devices - runtime_devices would silently drop that
+// device's rollback. failed_devices is therefore the size of the failure SET
+// and may be smaller than update_devices + runtime_devices.
 func (q *Queries) UpdateFailureBreakdownByIDs(ctx context.Context, arg UpdateFailureBreakdownByIDsParams) ([]UpdateFailureBreakdownByIDsRow, error) {
 	rows, err := q.db.Query(ctx, updateFailureBreakdownByIDs, arg.AppID, arg.UpdateIds)
 	if err != nil {
@@ -4684,8 +4712,9 @@ func (q *Queries) UpdateFailureBreakdownByIDs(ctx context.Context, arg UpdateFai
 		var i UpdateFailureBreakdownByIDsRow
 		if err := rows.Scan(
 			&i.UpdateUuid,
-			&i.FailureCount,
-			&i.RuntimeCount,
+			&i.FailedDevices,
+			&i.UpdateDevices,
+			&i.RuntimeDevices,
 			&i.StillOnUpdate,
 		); err != nil {
 			return nil, err
@@ -4790,7 +4819,7 @@ JOIN branches b ON b.id = u.branch_id
 WHERE b.app_id = $1
   AND u.update_uuid = $3
   AND u.checked_at IS NOT NULL
-ON CONFLICT (app_id, eas_client_id, update_id) DO UPDATE SET
+ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
     last_seen_at = GREATEST(
         device_update_failures.last_seen_at,
         EXCLUDED.last_seen_at
@@ -4810,8 +4839,12 @@ type UpsertDeviceUpdateFailureParams struct {
 	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
 }
 
-// Records a manifest/native failure at server receipt time. fatal_error and
-// failure_type stay capture-once.
+// Records a manifest/native failure at server receipt time. fatal_error stays
+// capture-once.
+//
+// The conflict target carries failure_type (20260726140000_failure_type_in_key.sql):
+// a runtime crash on the same pair is a different row, so a launch rollback can
+// no longer land on top of one and inherit its type.
 func (q *Queries) UpsertDeviceUpdateFailure(ctx context.Context, arg UpsertDeviceUpdateFailureParams) error {
 	_, err := q.db.Exec(ctx, upsertDeviceUpdateFailure,
 		arg.AppID,

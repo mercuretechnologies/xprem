@@ -467,15 +467,20 @@ type updateHealthResponse struct {
 	// faulty. Runtime crashes stay on the update, so they are removed here.
 	SuccessfulDevices int64 `json:"successfulDevices"`
 	// FaultyDevices reported either a launch rollback or a JS runtime crash.
-	// The failure store is unique per (device, update), so a device contributes
-	// at most once even when it reports the same crash repeatedly.
+	// Counted per DEVICE, so a device contributes at most once whether it
+	// re-sends the same crash or reports both kinds for this update.
 	FaultyDevices int64 `json:"faultyDevices"`
-	// LaunchFailures is the total devices the update failed on, the sum of
-	// the two breakdowns below. Kept for API compatibility; faultyDevices is
-	// the clearer name now that JS runtime crashes also contribute.
+	// LaunchFailures is the same number as faultyDevices, kept for API
+	// compatibility; faultyDevices is the clearer name now that JS runtime
+	// crashes also contribute.
 	LaunchFailures int64 `json:"launchFailures"`
 	// UpdateIssues: crash at launch reported by the manifest error-recovery
 	// headers; the device rolled back off the update.
+	//
+	// updateIssues and runtimeIssues are NOT a partition of faultyDevices: a
+	// device that reported both kinds for this update is counted in each, so
+	// their sum can exceed faultyDevices. Use them as a breakdown by cause,
+	// never as addends.
 	UpdateIssues int64 `json:"updateIssues"`
 	// RuntimeIssues: JS crash while running the update, reported by the
 	// documented expo_open_ota_js_crash observe event; the device is
@@ -526,7 +531,9 @@ func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Req
 			continue // non-UUID input: no entry, never an error
 		}
 		entry := health[parsed.String()]
-		failures := entry.UpdateIssues + entry.RuntimeIssues
+		// The set size, not the sum of the breakdowns: a device that reported
+		// both a rollback and a JS crash for this update is in both counts.
+		failures := entry.FaultyDevices
 		successes := entry.DevicesOnUpdate - entry.FailedStillOn
 		response := updateHealthResponse{
 			DevicesOnUpdate:   entry.DevicesOnUpdate,

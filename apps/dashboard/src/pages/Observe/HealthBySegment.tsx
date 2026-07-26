@@ -79,8 +79,11 @@ export const HealthBySegment = ({
     // Only while the question stays the same. Held across a change of
     // dimension, the previous answer draws one dimension's curves under the
     // next one's legend.
+    // Index 4, not 3: the key starts with 'observe'. Comparing index 3 reads
+    // updateUUIDs, an array, which never equals a string, so the placeholder
+    // was always discarded and the chart re-skeletoned on every refetch.
     placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey?.[3] === dimension ? previous : undefined,
+      previousQuery?.queryKey?.[4] === dimension ? previous : undefined,
   });
 
   const series = useMemo(() => {

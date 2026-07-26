@@ -143,16 +143,23 @@ export const buildClusters = (
 // within a country, so two unrelated Springfields stay apart.
 export const mergePlacesByCity = (places: MapPlace[]): MapPlace[] => {
   const byCity = new Map<string, MapPlace>();
+  // The running total is not a candidate to compare against: once two centroids
+  // have merged, deviceCount holds their sum, and a later genuinely-busiest
+  // centroid would have to beat that sum to win the coordinates. Tracked apart,
+  // so the comparison stays centroid against centroid.
+  const busiest = new Map<string, number>();
   for (const place of places) {
     const key = `${place.countryCode}:${place.city}`;
     const existing = byCity.get(key);
     if (!existing) {
       byCity.set(key, { ...place });
+      busiest.set(key, place.deviceCount);
       continue;
     }
     // Keep the coordinates of the busiest centroid: it is the one a fly-to
     // should land on.
-    if (place.deviceCount > existing.deviceCount) {
+    if (place.deviceCount > (busiest.get(key) ?? 0)) {
+      busiest.set(key, place.deviceCount);
       existing.lat = place.lat;
       existing.lng = place.lng;
     }

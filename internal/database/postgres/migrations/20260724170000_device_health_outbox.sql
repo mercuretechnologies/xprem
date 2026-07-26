@@ -48,9 +48,13 @@ CREATE TRIGGER trg_device_update_state_event
 AFTER INSERT OR UPDATE OF current_update_id ON device_identity
 FOR EACH ROW EXECUTE FUNCTION enqueue_device_update_state_event();
 
--- device_update_failures is unique per (app, device, update), so AFTER INSERT
--- emits exactly one affected-device event while sticky manifest re-sends and
--- JS retries merely update last_seen_at.
+-- device_update_failures is unique per (app, device, update, failure_type), so
+-- AFTER INSERT emits one event per failure KIND while sticky manifest re-sends
+-- and JS retries merely update last_seen_at. A device that reports both kinds
+-- for one update therefore enqueues two events; they carry the same
+-- (app, device, update) and update_crashes is keyed on exactly that triple with
+-- no failure_type, so they collapse to one row on the ClickHouse side and the
+-- affected-device count stays a device count.
 -- +goose StatementBegin
 CREATE FUNCTION enqueue_device_update_failure_event() RETURNS trigger AS $$
 BEGIN

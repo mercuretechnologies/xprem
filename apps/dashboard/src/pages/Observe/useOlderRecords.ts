@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type ObserveLog, type ObserveLogsPage, type ObserveLogsQuery } from '@/lib/api';
 
 // The backwards half of the log tail. The head is a live query that keeps
@@ -25,11 +25,19 @@ export const useOlderRecords = ({
   const [hasMore, setHasMore] = useState(true);
   const [failed, setFailed] = useState(false);
 
+  // Which question the state belongs to. A page already in flight when the
+  // filters change would otherwise land on the reset state: its rows appended
+  // to the new list, and its cursor walked from there, so the reader gets the
+  // previous question's records and pages deeper into the wrong stream.
+  const generation = useRef(0);
+
   useEffect(() => {
+    generation.current += 1;
     setRecords([]);
     setCursor(null);
     setHasMore(true);
     setFailed(false);
+    setLoading(false);
   }, [signature]);
 
   const loadMore = useCallback(async () => {
@@ -39,20 +47,25 @@ export const useOlderRecords = ({
       setHasMore(false);
       return;
     }
+    const asked = generation.current;
     setLoading(true);
     try {
       const page = await api.getObserveLogs({ ...query, cursor: next });
+      if (asked !== generation.current) return;
       setRecords(current => [...current, ...page.logs]);
       setCursor(page.nextCursor ?? '');
       setHasMore(Boolean(page.nextCursor));
       setFailed(false);
     } catch {
+      if (asked !== generation.current) return;
       // Stop the scroll from asking again: the caller's effect fires on every
       // refetch, so an unhandled failure here would retry forever in silence.
       setFailed(true);
       setHasMore(false);
     } finally {
-      setLoading(false);
+      // Only the current question's request may clear the flag: a superseded
+      // one finishing late would otherwise unlock a fetch already running.
+      if (asked === generation.current) setLoading(false);
     }
   }, [cursor, hasMore, head, loading, query]);
 

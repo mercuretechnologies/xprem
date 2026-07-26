@@ -776,13 +776,20 @@ func (s *PostgresIdentityStore) ResolveRuntimeFailure(ctx context.Context, appID
 
 // UpdateHealth is one update's instant-T adoption and health, from the
 // registry alone: no ClickHouse required on the read path. DevicesOnUpdate
-// counts every device currently RUNNING the update. UpdateIssues and
-// RuntimeIssues split the devices it failed on by source (launch crash with
-// rollback vs JS crash while running); FailedStillOn is the overlap between
-// the failure set and DevicesOnUpdate (failed devices whose current update
-// is still this one), which is what keeps the two sets addable:
+// counts every device currently RUNNING the update. FaultyDevices is the size
+// of the set it failed on, and UpdateIssues / RuntimeIssues break that set down
+// by source (launch crash with rollback vs JS crash while running).
 //
-//	attempts = DevicesOnUpdate + (UpdateIssues + RuntimeIssues - FailedStillOn)
+// The breakdown is NOT a partition: one device can report both a launch
+// rollback and a JS crash for the same update, so it appears in both counts and
+// UpdateIssues + RuntimeIssues can exceed FaultyDevices. Only FaultyDevices is
+// a device count that can be added to another device count.
+//
+// FailedStillOn is the overlap between the failure set and DevicesOnUpdate
+// (failed devices whose current update is still this one), which is what keeps
+// the two sets addable:
+//
+//	attempts = DevicesOnUpdate + (FaultyDevices - FailedStillOn)
 //	healthy  = DevicesOnUpdate - FailedStillOn
 //
 // The ratio healthy/attempts is meaningful for the ACTIVE update: past
@@ -790,6 +797,7 @@ func (s *PostgresIdentityStore) ResolveRuntimeFailure(ctx context.Context, appID
 // dashboard only scores the newest one.
 type UpdateHealth struct {
 	DevicesOnUpdate int64
+	FaultyDevices   int64
 	UpdateIssues    int64
 	RuntimeIssues   int64
 	FailedStillOn   int64
@@ -832,8 +840,9 @@ func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID str
 	for _, row := range failures {
 		key := uuid.UUID(row.UpdateUuid.Bytes).String()
 		entry := health[key]
-		entry.UpdateIssues = row.FailureCount - row.RuntimeCount
-		entry.RuntimeIssues = row.RuntimeCount
+		entry.FaultyDevices = row.FailedDevices
+		entry.UpdateIssues = row.UpdateDevices
+		entry.RuntimeIssues = row.RuntimeDevices
 		entry.FailedStillOn = row.StillOnUpdate
 		health[key] = entry
 	}

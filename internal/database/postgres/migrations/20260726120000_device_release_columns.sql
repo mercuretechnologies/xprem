@@ -55,33 +55,12 @@ FROM (
 WHERE d.current_update_id = o.update_uuid
   AND d.app_id = o.app_id;
 
--- Indexes, deliberately not one per filterable column. device_identity is the
--- hottest write path of the registry: every check-in past the debounce bumps
--- last_seen_at, which is itself indexed, so no touch is ever a HOT update and
--- every index is maintained on every write. Each one added is paid on all of
--- them.
---
--- Indexed here are the two dimensions a rollout is actually watched through
--- ("how is my branch doing", "who is on the release I just shipped") plus the
--- two device columns selective enough for the planner to prefer an index:
--- 20260725100000_device_profile.sql deferred these until a query filtered on
--- them, and ListDevices, CountOnlineDevices and the map all do now.
---
--- Left unindexed on purpose: platform, os_name and runtime_version. Each holds
--- a handful of distinct values per app, so a btree lookup returns a large
--- fraction of the rows and the planner falls back to the app_id-scoped scan
--- anyway. Add one the day a profile says otherwise, not before.
-CREATE INDEX IF NOT EXISTS idx_device_identity_branch ON device_identity (app_id, branch_name);
-CREATE INDEX IF NOT EXISTS idx_device_identity_publish_group ON device_identity (app_id, publish_group);
-CREATE INDEX IF NOT EXISTS idx_device_identity_device_model ON device_identity (app_id, device_model);
-CREATE INDEX IF NOT EXISTS idx_device_identity_os_version ON device_identity (app_id, os_version);
+-- The indexes these columns need are built CONCURRENTLY in the migration that
+-- follows this one, which cannot share a transaction with the schema change
+-- above. Until it runs, a filter on the new columns falls back to the
+-- app_id-scoped scan: slower than the final state, never wrong.
 
 -- +goose Down
-
-DROP INDEX IF EXISTS idx_device_identity_os_version;
-DROP INDEX IF EXISTS idx_device_identity_device_model;
-DROP INDEX IF EXISTS idx_device_identity_publish_group;
-DROP INDEX IF EXISTS idx_device_identity_branch;
 
 ALTER TABLE device_identity DROP COLUMN IF EXISTS publish_group;
 ALTER TABLE device_identity DROP COLUMN IF EXISTS platform;

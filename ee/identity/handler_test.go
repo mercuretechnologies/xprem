@@ -340,16 +340,24 @@ func TestUpdateHealthHandler(t *testing.T) {
 	broken := "0f61f1d1-3f5f-4b6a-9a44-6e9a1c2b3d4e"
 	crashy := "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
 	untried := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	both := "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+	// FaultyDevices is the size of the failure SET, which is what the response
+	// divides by; the two breakdowns describe its causes and may overlap, so
+	// they are not summed to obtain it (see the `both` entry).
 	store.health = map[string]UpdateHealth{
-		healthy: {DevicesOnUpdate: 99, UpdateIssues: 1},
-		broken:  {DevicesOnUpdate: 0, UpdateIssues: 7},
+		healthy: {DevicesOnUpdate: 99, FaultyDevices: 1, UpdateIssues: 1},
+		broken:  {DevicesOnUpdate: 0, FaultyDevices: 7, UpdateIssues: 7},
 		// 10 devices run it; 2 JS-crashed and still run it, 1 more JS-crashed
 		// then moved on: attempts 10+3-2=11, healthy 10-2=8.
-		crashy: {DevicesOnUpdate: 10, RuntimeIssues: 3, FailedStillOn: 2},
+		crashy: {DevicesOnUpdate: 10, FaultyDevices: 3, RuntimeIssues: 3, FailedStillOn: 2},
+		// One single device reported both a launch rollback and a JS crash.
+		// Both breakdowns show 1, the set holds 1, and the percentage must be
+		// computed from the set: summing the breakdowns would invent a device.
+		both: {DevicesOnUpdate: 4, FaultyDevices: 1, UpdateIssues: 1, RuntimeIssues: 1, FailedStillOn: 1},
 	}
 	h := NewIdentityHandler(licensedService(store, nil))
 
-	rec := serve(h, http.MethodGet, appPath+"/update-health?ids="+healthy+","+broken+","+crashy+","+untried+",garbage", "")
+	rec := serve(h, http.MethodGet, appPath+"/update-health?ids="+healthy+","+broken+","+crashy+","+both+","+untried+",garbage", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var body struct {
 		Updates map[string]struct {
@@ -364,7 +372,7 @@ func TestUpdateHealthHandler(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	// Garbage id: silently absent. Every valid id gets an entry.
-	require.Len(t, body.Updates, 4)
+	require.Len(t, body.Updates, 5)
 	require.NotNil(t, body.Updates[healthy].HealthPercent)
 	require.InDelta(t, 99.0, *body.Updates[healthy].HealthPercent, 0.001)
 	require.EqualValues(t, 99, body.Updates[healthy].SuccessfulDevices)
@@ -379,6 +387,15 @@ func TestUpdateHealthHandler(t *testing.T) {
 	require.EqualValues(t, 3, body.Updates[crashy].FaultyDevices)
 	require.NotNil(t, body.Updates[crashy].HealthPercent)
 	require.InDelta(t, 100.0*8.0/11.0, *body.Updates[crashy].HealthPercent, 0.001)
+	// A device in both breakdowns is one faulty device, not two. attempts is
+	// 4+1-1=4 and healthy 4-1=3, so 75%. Summing the breakdowns would give
+	// attempts 5 and 60%, inventing a device that does not exist.
+	require.EqualValues(t, 1, body.Updates[both].UpdateIssues)
+	require.EqualValues(t, 1, body.Updates[both].RuntimeIssues)
+	require.EqualValues(t, 1, body.Updates[both].FaultyDevices)
+	require.EqualValues(t, 3, body.Updates[both].SuccessfulDevices)
+	require.NotNil(t, body.Updates[both].HealthPercent)
+	require.InDelta(t, 75.0, *body.Updates[both].HealthPercent, 0.001)
 	// Zero successes with failures is a hard 0%, the broken-update red badge.
 	require.NotNil(t, body.Updates[broken].HealthPercent)
 	require.InDelta(t, 0.0, *body.Updates[broken].HealthPercent, 0.001)

@@ -816,19 +816,29 @@ func TestRecordUpdateFailuresCaptureOnce(t *testing.T) {
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, deviceID, []string{failedUpdate}, "TypeError: boom", FailureTypeUpdate))
 	// ...sticky re-sends carry no error and must not blank it, nor duplicate.
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, deviceID, []string{failedUpdate}, "", FailureTypeUpdate))
-	// A LATER error must not overwrite the first capture, and neither must a
-	// later source overwrite the recorded type.
+	// The other source is a row of its own since failure_type joined the key
+	// (20260726140000_failure_type_in_key.sql): a runtime crash reported for the
+	// same pair must not land on the rollback's row and retype it.
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, deviceID, []string{failedUpdate}, "different error", FailureTypeRuntime))
 	// Forged ids in the list are skipped without failing.
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, deviceID, []string{"garbage", failedUpdate}, "", FailureTypeUpdate))
 
 	var rows int
-	var fatal, failureType string
 	require.NoError(t, pool.QueryRow(ctx,
-		"SELECT COUNT(*), MAX(fatal_error), MAX(failure_type) FROM device_update_failures WHERE app_id = $1 AND update_id = $2", appID, failedUpdate).Scan(&rows, &fatal, &failureType))
-	require.Equal(t, 1, rows, "one failure row per (device, update), sticky re-sends collapse")
+		"SELECT COUNT(*) FROM device_update_failures WHERE app_id = $1 AND update_id = $2", appID, failedUpdate).Scan(&rows))
+	require.Equal(t, 2, rows, "one row per (device, update, failure_type); sticky re-sends of each collapse")
+
+	// Capture-once holds within each type: the first non-empty error wins and a
+	// later re-send neither blanks nor replaces it.
+	var fatal string
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT fatal_error FROM device_update_failures WHERE app_id = $1 AND update_id = $2 AND failure_type = $3",
+		appID, failedUpdate, string(FailureTypeUpdate)).Scan(&fatal))
 	require.Equal(t, "TypeError: boom", fatal)
-	require.Equal(t, string(FailureTypeUpdate), failureType)
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT fatal_error FROM device_update_failures WHERE app_id = $1 AND update_id = $2 AND failure_type = $3",
+		appID, failedUpdate, string(FailureTypeRuntime)).Scan(&fatal))
+	require.Equal(t, "different error", fatal)
 
 	var outboxRows int
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -839,7 +849,11 @@ func TestRecordUpdateFailuresCaptureOnce(t *testing.T) {
 		  AND update_id = $3
 		  AND event_type = 'failure'`,
 		appID, deviceID, failedUpdate).Scan(&outboxRows))
-	require.Equal(t, 1, outboxRows, "replayed failure headers must emit one historical event")
+	// One per failure KIND, not per re-send: the four calls above insert two
+	// rows and re-send onto them. Both events carry the same
+	// (app, device, update), the triple update_crashes is keyed on, so they
+	// collapse to one row downstream.
+	require.Equal(t, 2, outboxRows, "replayed failure headers must emit one historical event per kind")
 }
 
 func TestRuntimeFailureRecoveryUsesEventTime(t *testing.T) {
@@ -1034,6 +1048,71 @@ func TestHealthSnapshotsKeepActiveRolloutCandidateAndControl(t *testing.T) {
 	roles := readRoles()
 	require.NotContains(t, roles, controlUUID)
 	require.Equal(t, "current", roles[candidateUUID])
+}
+
+// The two failure sources describe different events on the same (device,
+// update) pair. They shared one row until failure_type joined the key, and
+// whichever landed first owned the type: these two tests pin both orders.
+//
+// Order 1: a JS crash, then a launch rollback. The rollback must not inherit
+// 'runtime_issue', because a later successful start resolves runtime rows and
+// would erase durable evidence of a native rollback.
+func TestRuntimeCrashThenLaunchRollbackKeepBothTypes(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	updateID := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, updateID)
+	device := uuid.NewString()
+	crashedAt := time.Now().Add(-10 * time.Minute)
+
+	require.NoError(t, store.RecordRuntimeFailure(ctx, appID, device, updateID, "js boom", crashedAt))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{updateID}, "native boom", FailureTypeUpdate))
+
+	health, err := store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	entry := health[updateID]
+	require.EqualValues(t, 1, entry.UpdateIssues, "the rollback must be typed update_issue")
+	require.EqualValues(t, 1, entry.RuntimeIssues, "the JS crash must keep its own row")
+	require.EqualValues(t, 1, entry.FaultyDevices, "one device, counted once")
+
+	// A successful start resolves the runtime row and only the runtime row.
+	require.NoError(t, store.ResolveRuntimeFailure(ctx, appID, device, updateID, time.Now()))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	entry = health[updateID]
+	require.EqualValues(t, 0, entry.RuntimeIssues, "the JS crash is resolved")
+	require.EqualValues(t, 1, entry.UpdateIssues, "the rollback is durable and must survive")
+	require.EqualValues(t, 1, entry.FaultyDevices)
+}
+
+// Order 2: a launch rollback, then a JS crash. The crash must not be swallowed
+// by the update_issue row, which no successful start can ever resolve.
+func TestLaunchRollbackThenRuntimeCrashKeepBothTypes(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	updateID := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, updateID)
+	device := uuid.NewString()
+
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{updateID}, "native boom", FailureTypeUpdate))
+	require.NoError(t, store.RecordRuntimeFailure(ctx, appID, device, updateID, "js boom", time.Now().Add(-time.Minute)))
+
+	health, err := store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	entry := health[updateID]
+	require.EqualValues(t, 1, entry.RuntimeIssues, "the JS crash must be visible as a runtime issue")
+	require.EqualValues(t, 1, entry.UpdateIssues)
+	require.EqualValues(t, 1, entry.FaultyDevices, "still one device")
+
+	// And it is resolvable, which it never was while it shared the rollback's row.
+	require.NoError(t, store.ResolveRuntimeFailure(ctx, appID, device, updateID, time.Now()))
+	health, err = store.UpdateHealthByIDs(ctx, appID, []string{updateID})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, health[updateID].RuntimeIssues)
 }
 
 func TestUpdateHealthCounts(t *testing.T) {
