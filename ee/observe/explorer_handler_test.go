@@ -40,11 +40,6 @@ func (r *recordingExplorer) ReadOverview(_ context.Context, _ string, query Expl
 	return Overview{Available: true, Metrics: []MetricSeries{}, Locations: []ObserveLocation{}}, nil
 }
 
-func (r *recordingExplorer) ReadSummary(_ context.Context, _ string, query ExplorerQuery) (Summary, error) {
-	r.overviewQuery = query
-	return Summary{Available: true}, nil
-}
-
 func (r *recordingExplorer) ReadEvents(_ context.Context, _ string, query ExplorerQuery) (Events, error) {
 	r.overviewQuery = query
 	return Events{Available: true, Events: []ObserveEventSeries{}}, nil

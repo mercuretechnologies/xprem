@@ -278,7 +278,6 @@ func NewRouter(container *AppContainer) *mux.Router {
 	// the map's incremental live feed, not a listing.
 	appAuthSubrouter.HandleFunc("/observe/overview", container.ObserveExplorerHandler.GetOverviewHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/observe/check-ins", container.ObserveExplorerHandler.GetCheckInsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/summary", container.ObserveExplorerHandler.GetSummaryHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/observe/events", container.ObserveExplorerHandler.GetEventsHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/observe/logs", container.ObserveExplorerHandler.GetLogsHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/observe/breakdown", container.ObserveExplorerHandler.GetBreakdownHandler).Methods(http.MethodGet)

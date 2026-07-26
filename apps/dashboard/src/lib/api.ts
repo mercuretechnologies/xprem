@@ -475,7 +475,6 @@ export type ObserveOverview = {
   }>;
 };
 
-export type ObserveSummary = Pick<ObserveOverview, 'available' | 'summary'>;
 
 // How many devices checked in per city over one poll window. Same shape as the
 // overview's locations, so the map animates arrivals without a second geometry.
@@ -1298,12 +1297,6 @@ export class ApiClient {
       { method: 'GET' }
     );
   }
-  public async getObserveSummary(query: ObserveQuery = {}) {
-    const search = observeSearchParams(query);
-    return this.request<ObserveSummary>(`${this.appScope()}/observe/summary?${search.toString()}`, {
-      method: 'GET',
-    });
-  }
   public async getObserveEvents(query: ObserveQuery = {}) {
     const search = observeSearchParams(query);
     return this.request<ObserveEvents>(`${this.appScope()}/observe/events?${search.toString()}`, {
@@ -1373,15 +1366,6 @@ export class ApiClient {
   // Progressive rollout, control-plane only. Channel rollouts are keyed by
   // channel name (like the sibling channel routes); per-update rollouts by
   // branch + runtime version. Mutations are admin-only server-side.
-  public async getChannelRollout(channelName: string) {
-    return this.request<{ active: boolean; rollout?: ChannelRolloutRecord | null }>(
-      `${this.appScope()}/channels/${encodeURIComponent(channelName)}/rollout`,
-      {
-        method: 'GET',
-      }
-    );
-  }
-
   public async startChannelRollout(
     channelName: string,
     payload: { branchName: string; percentage: number }

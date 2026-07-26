@@ -54,7 +54,6 @@ const (
 type ExplorerReader interface {
 	ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error)
 	ReadCheckIns(ctx context.Context, appID string, query CheckInQuery) (CheckInFeed, error)
-	ReadSummary(ctx context.Context, appID string, query ExplorerQuery) (Summary, error)
 	ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error)
 	ReadLogs(ctx context.Context, appID string, query LogsQuery) (LogsPage, error)
 	ReadBreakdown(ctx context.Context, appID string, query BreakdownQuery) (Breakdown, error)
@@ -407,25 +406,6 @@ func (h *ExplorerHandler) GetCheckInsHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	handlers.RenderJSON(w, http.StatusOK, feed)
-}
-
-func (h *ExplorerHandler) GetSummaryHandler(w http.ResponseWriter, r *http.Request) {
-	query, err := h.parseBaseQuery(r, maxOverviewWindow)
-	if err != nil {
-		h.renderQueryError(w, err)
-		return
-	}
-	if h.reader == nil {
-		handlers.RenderJSON(w, http.StatusOK, Summary{Available: false})
-		return
-	}
-	summary, err := h.reader.ReadSummary(r.Context(), mux.Vars(r)["APP_ID"], query)
-	if err != nil {
-		log.Printf("observe: reading summary failed: %v", err)
-		h.renderQueryError(w, err)
-		return
-	}
-	handlers.RenderJSON(w, http.StatusOK, summary)
 }
 
 // A breakdown is the "who is this slow for" question: one metric split by one

@@ -191,10 +191,6 @@ type Overview struct {
 // to "everyone" that asking for a narrower one is the better answer.
 const observeCohortLimit = 200_000
 
-type Summary struct {
-	Available bool           `json:"available"`
-	Summary   ObserveSummary `json:"summary"`
-}
 type ObserveEventPoint struct {
 	Timestamp time.Time `json:"timestamp"`
 	Count     uint64    `json:"count"`
@@ -289,9 +285,9 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 // which case the caller answers with its own empty shape rather than asking
 // ClickHouse a question with a known answer.
 //
-// Deliberately not used by ReadOverview and ReadSummary: they read Postgres
-// between the two steps and return early when there is no ClickHouse at all, so
-// going through here would make them pay for a cohort lookup they never use.
+// Deliberately not used by ReadOverview: it reads Postgres between the two
+// steps and returns early when there is no ClickHouse at all, so going through
+// here would make it pay for a cohort lookup it never uses.
 func (e *Explorer) prepareTelemetryRead(
 	ctx context.Context,
 	appID string,
@@ -464,45 +460,13 @@ func (e *Explorer) ReadOverview(ctx context.Context, appID string, query Explore
 	return overview, nil
 }
 
-func (e *Explorer) ReadSummary(ctx context.Context, appID string, query ExplorerQuery) (Summary, error) {
-	resolvedQuery, emptyUpdateGroup, err := e.resolveUpdateGroup(ctx, appID, query)
-	if err != nil {
-		return Summary{}, err
-	}
-	query = resolvedQuery
-	if emptyUpdateGroup {
-		return Summary{Available: e.clickhouse != nil}, nil
-	}
-	activeUsers, err := e.activeUsers(ctx, appID, query)
-	if err != nil {
-		return Summary{}, err
-	}
-	summary := Summary{
-		Available: e.clickhouse != nil,
-		Summary:   ObserveSummary{Users: activeUsers},
-	}
-	if e.clickhouse == nil {
-		return summary, nil
-	}
-	queryContext, emptyCohort, err := e.cohortContext(ctx, appID, query.From, query.MetadataFilter)
-	if err != nil {
-		return Summary{}, err
-	}
-	if emptyCohort {
-		return summary, nil
-	}
-	if err := e.readSummary(
-		queryContext,
-		appID,
-		query,
-		len(query.MetadataFilter) > 0,
-		&summary.Summary,
-	); err != nil {
-		return Summary{}, err
-	}
-	return summary, nil
-}
-
+// The conditions are deliberately NOT applied here, and neither are they in
+// locations: they qualify one measurement (the state the device was in while a
+// timing was taken), and this counts devices, sessions and events across both
+// telemetry tables. observe_logs carries no such column, so narrowing the
+// metrics arm alone would answer with a number that is neither filtered nor
+// unfiltered. The summary and the map answer about the fleet; only the metric
+// series answer about measurements, and those do apply them.
 func (e *Explorer) readSummary(ctx context.Context, appID string, query ExplorerQuery, cohort bool, summary *ObserveSummary) error {
 	metricsWhere, metricsArgs := telemetryWhere("m", query, cohort)
 	logsWhere, logsArgs := telemetryWhere("l", query, cohort)
