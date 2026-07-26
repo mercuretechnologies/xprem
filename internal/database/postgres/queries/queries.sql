@@ -1467,8 +1467,24 @@ UPDATE device_identity SET
     os_name = COALESCE(sqlc.narg('os_name'), device_identity.os_name),
     os_version = COALESCE(sqlc.narg('os_version'), device_identity.os_version),
     app_version = COALESCE(sqlc.narg('app_version'), device_identity.app_version),
+    current_update_observed_at = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN device_identity.current_update_observed_at ELSE sqlc.arg('observed_at')::timestamptz END,
     last_seen_at = CURRENT_TIMESTAMP
-WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2;
+WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
+  -- An observation older than the one on file changes nothing, not even
+  -- last_seen_at: a device that took an update while offline then flushes the
+  -- telemetry it recorded BEFORE the switch races the manifest poll announcing
+  -- the new one, and whichever lands last used to win. The guard belongs in
+  -- the WHERE and not in each CASE above: PostgreSQL re-evaluates it against
+  -- the freshly written row when a concurrent UPDATE releases the row lock,
+  -- while a CTE or a self-join would still be reading the snapshot both racers
+  -- started from and would let them both through.
+  --
+  -- A check-in naming no update passes unconditionally: it says nothing about
+  -- which update runs, so it has nothing to be stale about.
+  AND (sqlc.narg('current_update_id')::uuid IS NULL
+       OR device_identity.current_update_observed_at IS NULL
+       OR sqlc.arg('observed_at')::timestamptz >= device_identity.current_update_observed_at);
 
 -- Registration upsert for the passive path: the registry is uncapped (the
 -- whole fleet is the update-health source of truth). ON CONFLICT absorbs the
@@ -1487,13 +1503,15 @@ WITH origin AS (
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version, app_version,
+    device_model, os_name, os_version, app_version, current_update_observed_at,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'),
     sqlc.narg('lng'), sqlc.narg('current_update_id'), sqlc.narg('device_model'),
     sqlc.narg('os_name'), sqlc.narg('os_version'), sqlc.narg('app_version'),
+    CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN NULL ELSE sqlc.arg('observed_at')::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
@@ -1513,7 +1531,15 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
     os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
-    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version);
+    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
+    current_update_observed_at = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.current_update_observed_at
+        ELSE EXCLUDED.current_update_observed_at END
+-- Same staleness guard as TouchDeviceIdentity, on the arm that absorbs the
+-- race between two concurrent registrations of the same device.
+WHERE EXCLUDED.current_update_id IS NULL
+   OR device_identity.current_update_observed_at IS NULL
+   OR EXCLUDED.current_update_observed_at >= device_identity.current_update_observed_at;
 
 
 -- Records a manifest/native failure at server receipt time. fatal_error stays

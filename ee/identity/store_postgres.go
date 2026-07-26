@@ -631,7 +631,7 @@ func optionalText(value string) *string {
 // (a telemetry batch from the embedded bundle) and leaves the column alone.
 // Write rate is bounded upstream by the CheckInRecorder's debounce, which
 // lets state TRANSITIONS through immediately.
-func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string, device DeviceInfo) error {
+func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, current *CurrentUpdate, device DeviceInfo) error {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
 		return err
@@ -641,13 +641,22 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		return err
 	}
 	var currentUpdate pgtype.UUID // Valid:false = NULL = keep the known value
-	if currentUpdateID != nil {
-		if currentUpdate, err = toPgUUID(*currentUpdateID); err != nil {
+	// Only read alongside a named update, and the queries ignore it otherwise;
+	// it still has to be a valid value because pgx binds every parameter.
+	observedAt := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	if current != nil {
+		if currentUpdate, err = toPgUUID(current.ID); err != nil {
 			return err
+		}
+		if !current.ObservedAt.IsZero() {
+			observedAt.Time = current.ObservedAt.UTC()
 		}
 	}
 
-	touch := pgdb.TouchDeviceIdentityParams{AppID: appUUID, EasClientID: clientUUID, CurrentUpdateID: currentUpdate}
+	touch := pgdb.TouchDeviceIdentityParams{
+		AppID: appUUID, EasClientID: clientUUID,
+		CurrentUpdateID: currentUpdate, ObservedAt: observedAt,
+	}
 	// nil, not "": the queries COALESCE on these, so an empty string would
 	// overwrite a known model with nothing on the next manifest poll.
 	touch.DeviceModel = optionalText(device.Model)
@@ -668,7 +677,10 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		return nil
 	}
 
-	register := pgdb.RegisterDeviceParams{AppID: appUUID, EasClientID: clientUUID, CurrentUpdateID: currentUpdate}
+	register := pgdb.RegisterDeviceParams{
+		AppID: appUUID, EasClientID: clientUUID,
+		CurrentUpdateID: currentUpdate, ObservedAt: observedAt,
+	}
 	register.DeviceModel = optionalText(device.Model)
 	register.OsName = optionalText(device.OSName)
 	register.OsVersion = optionalText(device.OSVersion)

@@ -97,24 +97,25 @@ type DeviceHealthOutbox struct {
 }
 
 type DeviceIdentity struct {
-	AppID           pgtype.UUID        `json:"app_id"`
-	EasClientID     pgtype.UUID        `json:"eas_client_id"`
-	Metadata        []byte             `json:"metadata"`
-	CountryCode     *string            `json:"country_code"`
-	City            *string            `json:"city"`
-	Lat             *float64           `json:"lat"`
-	Lng             *float64           `json:"lng"`
-	FirstSeenAt     pgtype.Timestamptz `json:"first_seen_at"`
-	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
-	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
-	DeviceModel     *string            `json:"device_model"`
-	OsName          *string            `json:"os_name"`
-	OsVersion       *string            `json:"os_version"`
-	BranchName      *string            `json:"branch_name"`
-	RuntimeVersion  *string            `json:"runtime_version"`
-	Platform        *string            `json:"platform"`
-	PublishGroup    pgtype.UUID        `json:"publish_group"`
-	AppVersion      *string            `json:"app_version"`
+	AppID                   pgtype.UUID        `json:"app_id"`
+	EasClientID             pgtype.UUID        `json:"eas_client_id"`
+	Metadata                []byte             `json:"metadata"`
+	CountryCode             *string            `json:"country_code"`
+	City                    *string            `json:"city"`
+	Lat                     *float64           `json:"lat"`
+	Lng                     *float64           `json:"lng"`
+	FirstSeenAt             pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt              pgtype.Timestamptz `json:"last_seen_at"`
+	CurrentUpdateID         pgtype.UUID        `json:"current_update_id"`
+	DeviceModel             *string            `json:"device_model"`
+	OsName                  *string            `json:"os_name"`
+	OsVersion               *string            `json:"os_version"`
+	BranchName              *string            `json:"branch_name"`
+	RuntimeVersion          *string            `json:"runtime_version"`
+	Platform                *string            `json:"platform"`
+	PublishGroup            pgtype.UUID        `json:"publish_group"`
+	AppVersion              *string            `json:"app_version"`
+	CurrentUpdateObservedAt pgtype.Timestamptz `json:"current_update_observed_at"`
 }
 
 type DeviceUpdateFailure struct {

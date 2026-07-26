@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -51,6 +52,12 @@ type DeviceCheckIn struct {
 	OSName      string
 	OSVersion   string
 	AppVersion  string
+	// ObservedAt is when the device was running CurrentUpdateID. Zero means
+	// "as this arrives", which is what a manifest poll means: it answers the
+	// device live. Telemetry sets it to the newest record of the batch, which
+	// may be much older, and that is the difference the registry needs to stop
+	// a late backlog from overwriting fresher news.
+	ObservedAt time.Time
 }
 
 type ExpoProtocolHandler struct {

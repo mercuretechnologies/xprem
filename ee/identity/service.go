@@ -45,7 +45,7 @@ type IdentityMutator interface {
 	// TouchDevice registers a passive check-in (manifest poll, telemetry
 	// batch): bump-or-register, uncapped, the whole fleet is the registry.
 	// currentUpdateID nil = this check-in does not know, keep the known value.
-	TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string, device DeviceInfo) error
+	TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, current *CurrentUpdate, device DeviceInfo) error
 	// RecordUpdateFailures stores failures per (device, update), fatal_error
 	// and failure_type captured once.
 	RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error
@@ -175,6 +175,20 @@ func (s *Service) UpdateHealthByIDs(ctx context.Context, appID string, updateIDs
 // dashboard, the SDK and the registry all use one vocabulary. Only telemetry
 // carries it: the manifest headers say nothing about hardware, so every field
 // is optional and an empty one means "not reported", never "changed to empty".
+// CurrentUpdate is the update a check-in reports the device is running, and
+// WHEN it saw that. The two travel together because one is worthless without
+// the other: a telemetry backlog reports an update the device may have left
+// since, and only the observation time can tell that apart from fresh news.
+type CurrentUpdate struct {
+	ID string
+	// ObservedAt is when the device was running it, not when this arrived. For
+	// telemetry it is the newest record of the batch; for a manifest poll it is
+	// the poll itself. Never in the future: the store compares it against what
+	// it already recorded, so a device with a skewed clock would otherwise
+	// freeze its own registry entry until real time caught up.
+	ObservedAt time.Time
+}
+
 type DeviceInfo struct {
 	Model     string
 	OSName    string
@@ -213,12 +227,12 @@ func (s *Service) PlaceOf(remoteIP string) Place {
 // the server registers it (metadata untouched), so device_identity is the
 // universal device registry and the identity ops only layer metadata on top.
 // The geo enrichment rides along exactly as on Apply.
-func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, remoteIP string, currentUpdateID *string, device DeviceInfo) error {
+func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, remoteIP string, current *CurrentUpdate, device DeviceInfo) error {
 	var geo *Geo
 	if s.geo != nil && remoteIP != "" {
 		geo = s.geo.Resolve(remoteIP)
 	}
-	return s.store.TouchDevice(ctx, appID, easClientID, geo, currentUpdateID, device)
+	return s.store.TouchDevice(ctx, appID, easClientID, geo, current, device)
 }
 
 // RecordUpdateFailures is the failure sink for both sources (manifest error

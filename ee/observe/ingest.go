@@ -114,6 +114,10 @@ func recordCheckIns[R any](
 			OSName:          envelope.OSName,
 			OSVersion:       envelope.OSVersion,
 			AppVersion:      envelope.AppVersion,
+			// The newest row of the batch is what this device was running when
+			// the batch was written, which for a backlog flushed after an
+			// update is older than the manifest poll racing it.
+			ObservedAt: envelope.Timestamp,
 		})
 	}
 }

@@ -78,6 +78,13 @@ type checkInState struct {
 	// "" when this check-in does not know it (embedded-bundle telemetry, no
 	// header). "" never overwrites a known value downstream.
 	currentUpdateID string
+	// observedAt is when the device was running that update. A manifest poll
+	// observes it as it answers; a telemetry batch observed it whenever its
+	// newest record was written, which can be well before it arrives. The
+	// store refuses an observation older than the one it holds, so this is
+	// what stops a backlog flushed after an update from putting the registry
+	// back on the update the device already left.
+	observedAt time.Time
 	// failedUpdateIDs is the parsed, normalized, sorted failure list; empty
 	// when the check-in carries none (which, for telemetry, means "does not
 	// know", not "no failures").
@@ -89,8 +96,15 @@ type checkInState struct {
 	device identity.DeviceInfo
 }
 
-func normalizeCheckIn(checkIn handlers.DeviceCheckIn) checkInState {
-	state := checkInState{fatalError: checkIn.FatalError}
+func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInState {
+	state := checkInState{fatalError: checkIn.FatalError, observedAt: checkIn.ObservedAt}
+	// Never in the future. Telemetry timestamps are client-supplied and only
+	// clamped to a day of skew, and one device with a fast clock would
+	// otherwise record an observation no later check-in could beat, freezing
+	// its own registry entry until real time caught up.
+	if state.observedAt.IsZero() || state.observedAt.After(now) {
+		state.observedAt = now
+	}
 	if parsed, err := uuid.Parse(checkIn.CurrentUpdateID); err == nil {
 		if normalized := parsed.String(); normalized != ZeroUpdateID {
 			state.currentUpdateID = normalized
@@ -191,7 +205,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 		}
 		return
 	}
-	state := normalizeCheckIn(checkIn)
+	state := normalizeCheckIn(checkIn, time.Now().UTC())
 	key := checkInCacheKey(checkIn.AppID, checkIn.EASClientID)
 	cached := r.cache.Get(key)
 
@@ -273,9 +287,9 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 		r.cache.Delete(stash)
 	}
 
-	var currentUpdate *string
+	var currentUpdate *identity.CurrentUpdate
 	if state.currentUpdateID != "" {
-		currentUpdate = &state.currentUpdateID
+		currentUpdate = &identity.CurrentUpdate{ID: state.currentUpdateID, ObservedAt: state.observedAt}
 	}
 	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, checkIn.RemoteIP, currentUpdate, state.device)
 }

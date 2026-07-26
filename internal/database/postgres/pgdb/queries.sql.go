@@ -1220,7 +1220,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 }
 
 const getDeviceIdentity = `-- name: GetDeviceIdentity :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 `
 
@@ -1251,12 +1251,13 @@ func (q *Queries) GetDeviceIdentity(ctx context.Context, arg GetDeviceIdentityPa
 		&i.Platform,
 		&i.PublishGroup,
 		&i.AppVersion,
+		&i.CurrentUpdateObservedAt,
 	)
 	return i, err
 }
 
 const getDeviceIdentityForUpdate = `-- name: GetDeviceIdentityForUpdate :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 FOR UPDATE
 `
@@ -1288,6 +1289,7 @@ func (q *Queries) GetDeviceIdentityForUpdate(ctx context.Context, arg GetDeviceI
 		&i.Platform,
 		&i.PublishGroup,
 		&i.AppVersion,
+		&i.CurrentUpdateObservedAt,
 	)
 	return i, err
 }
@@ -3255,7 +3257,7 @@ func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]Li
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version
+SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version, d.current_update_observed_at
 FROM device_identity d
 WHERE d.app_id = $1
   AND (coalesce(cardinality($2::jsonb[]), 0) = 0 OR d.metadata @> ANY($2::jsonb[]))
@@ -3358,6 +3360,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 			&i.Platform,
 			&i.PublishGroup,
 			&i.AppVersion,
+			&i.CurrentUpdateObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4065,13 +4068,15 @@ WITH origin AS (
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version, app_version,
+    device_model, os_name, os_version, app_version, current_update_observed_at,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8,
     $9, $10, $11,
+    CASE WHEN $7::uuid IS NULL
+        THEN NULL ELSE $12::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
@@ -4089,21 +4094,28 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
     os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
-    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version)
+    app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
+    current_update_observed_at = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.current_update_observed_at
+        ELSE EXCLUDED.current_update_observed_at END
+WHERE EXCLUDED.current_update_id IS NULL
+   OR device_identity.current_update_observed_at IS NULL
+   OR EXCLUDED.current_update_observed_at >= device_identity.current_update_observed_at
 `
 
 type RegisterDeviceParams struct {
-	AppID           pgtype.UUID `json:"app_id"`
-	EasClientID     pgtype.UUID `json:"eas_client_id"`
-	CountryCode     *string     `json:"country_code"`
-	City            *string     `json:"city"`
-	Lat             *float64    `json:"lat"`
-	Lng             *float64    `json:"lng"`
-	CurrentUpdateID pgtype.UUID `json:"current_update_id"`
-	DeviceModel     *string     `json:"device_model"`
-	OsName          *string     `json:"os_name"`
-	OsVersion       *string     `json:"os_version"`
-	AppVersion      *string     `json:"app_version"`
+	AppID           pgtype.UUID        `json:"app_id"`
+	EasClientID     pgtype.UUID        `json:"eas_client_id"`
+	CountryCode     *string            `json:"country_code"`
+	City            *string            `json:"city"`
+	Lat             *float64           `json:"lat"`
+	Lng             *float64           `json:"lng"`
+	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
+	DeviceModel     *string            `json:"device_model"`
+	OsName          *string            `json:"os_name"`
+	OsVersion       *string            `json:"os_version"`
+	AppVersion      *string            `json:"app_version"`
+	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
 }
 
 // Registration upsert for the passive path: the registry is uncapped (the
@@ -4111,6 +4123,8 @@ type RegisterDeviceParams struct {
 // race with a concurrent registration of the same device.
 // Same rule as TouchDeviceIdentity on the conflict arm: the release columns
 // follow current_update_id, and only when this registration names one.
+// Same staleness guard as TouchDeviceIdentity, on the arm that absorbs the
+// race between two concurrent registrations of the same device.
 func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) (int64, error) {
 	result, err := q.db.Exec(ctx, registerDevice,
 		arg.AppID,
@@ -4124,6 +4138,7 @@ func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) 
 		arg.OsName,
 		arg.OsVersion,
 		arg.AppVersion,
+		arg.ObservedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -4443,22 +4458,39 @@ UPDATE device_identity SET
     os_name = COALESCE($9, device_identity.os_name),
     os_version = COALESCE($10, device_identity.os_version),
     app_version = COALESCE($11, device_identity.app_version),
+    current_update_observed_at = CASE WHEN $7::uuid IS NULL
+        THEN device_identity.current_update_observed_at ELSE $12::timestamptz END,
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
+  -- An observation older than the one on file changes nothing, not even
+  -- last_seen_at: a device that took an update while offline then flushes the
+  -- telemetry it recorded BEFORE the switch races the manifest poll announcing
+  -- the new one, and whichever lands last used to win. The guard belongs in
+  -- the WHERE and not in each CASE above: PostgreSQL re-evaluates it against
+  -- the freshly written row when a concurrent UPDATE releases the row lock,
+  -- while a CTE or a self-join would still be reading the snapshot both racers
+  -- started from and would let them both through.
+  --
+  -- A check-in naming no update passes unconditionally: it says nothing about
+  -- which update runs, so it has nothing to be stale about.
+  AND ($7::uuid IS NULL
+       OR device_identity.current_update_observed_at IS NULL
+       OR $12::timestamptz >= device_identity.current_update_observed_at)
 `
 
 type TouchDeviceIdentityParams struct {
-	AppID           pgtype.UUID `json:"app_id"`
-	EasClientID     pgtype.UUID `json:"eas_client_id"`
-	CountryCode     *string     `json:"country_code"`
-	City            *string     `json:"city"`
-	Lat             *float64    `json:"lat"`
-	Lng             *float64    `json:"lng"`
-	CurrentUpdateID pgtype.UUID `json:"current_update_id"`
-	DeviceModel     *string     `json:"device_model"`
-	OsName          *string     `json:"os_name"`
-	OsVersion       *string     `json:"os_version"`
-	AppVersion      *string     `json:"app_version"`
+	AppID           pgtype.UUID        `json:"app_id"`
+	EasClientID     pgtype.UUID        `json:"eas_client_id"`
+	CountryCode     *string            `json:"country_code"`
+	City            *string            `json:"city"`
+	Lat             *float64           `json:"lat"`
+	Lng             *float64           `json:"lng"`
+	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
+	DeviceModel     *string            `json:"device_model"`
+	OsName          *string            `json:"os_name"`
+	OsVersion       *string            `json:"os_version"`
+	AppVersion      *string            `json:"app_version"`
+	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
 }
 
 // Passive-contact bump (manifest poll, telemetry batch): refresh last_seen and
@@ -4483,6 +4515,7 @@ func (q *Queries) TouchDeviceIdentity(ctx context.Context, arg TouchDeviceIdenti
 		arg.OsName,
 		arg.OsVersion,
 		arg.AppVersion,
+		arg.ObservedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -4617,7 +4650,7 @@ UPDATE device_identity SET
     lng = COALESCE($7, lng),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE app_id = $1 AND eas_client_id = $2
-RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version
+RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at
 `
 
 type UpdateDeviceIdentityParams struct {
@@ -4663,6 +4696,7 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.Platform,
 		&i.PublishGroup,
 		&i.AppVersion,
+		&i.CurrentUpdateObservedAt,
 	)
 	return i, err
 }

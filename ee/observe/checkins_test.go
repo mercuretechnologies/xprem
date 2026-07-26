@@ -29,20 +29,20 @@ type fakeTouchStore struct {
 	calls        atomic.Int32
 
 	mu             sync.Mutex
-	lastCurrent    *string
+	lastCurrent    *identity.CurrentUpdate
 	lastDevice     identity.DeviceInfo
 	failedRecorded [][]string
 	lastFatal      string
 	lastType       identity.FailureType
 }
 
-func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *identity.Geo, currentUpdateID *string, device identity.DeviceInfo) error {
+func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *identity.Geo, current *identity.CurrentUpdate, device identity.DeviceInfo) error {
 	f.calls.Add(1)
 	if f.failing.Load() {
 		return errors.New("connection refused")
 	}
 	f.mu.Lock()
-	f.lastCurrent = currentUpdateID
+	f.lastCurrent = current
 	f.lastDevice = device
 	f.mu.Unlock()
 	return nil
@@ -100,7 +100,7 @@ func TestRecordDebouncesSteadyState(t *testing.T) {
 	waitRecorded(t, localCache, 1, store)
 	store.mu.Lock()
 	require.NotNil(t, store.lastCurrent)
-	assert.Equal(t, testUpdateA, *store.lastCurrent)
+	assert.Equal(t, testUpdateA, store.lastCurrent.ID)
 	store.mu.Unlock()
 
 	// ...and the SAME state within the TTL is debounced.
@@ -124,7 +124,7 @@ func TestRecordStateTransitionBustsDebounce(t *testing.T) {
 	require.Eventually(t, func() bool { return store.calls.Load() == 2 }, 2*time.Second, 10*time.Millisecond)
 	store.mu.Lock()
 	require.NotNil(t, store.lastCurrent)
-	assert.Equal(t, testUpdateB, *store.lastCurrent)
+	assert.Equal(t, testUpdateB, store.lastCurrent.ID)
 	store.mu.Unlock()
 }
 
@@ -358,7 +358,7 @@ func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 	require.Eventually(t, func() bool {
 		store.mu.Lock()
 		defer store.mu.Unlock()
-		return store.lastCurrent != nil && *store.lastCurrent == testUpdateB
+		return store.lastCurrent != nil && store.lastCurrent.ID == testUpdateB
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.EqualValues(t, 1, store.calls.Load(), "one check-in per device per batch")
 }
