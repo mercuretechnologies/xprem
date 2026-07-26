@@ -37,10 +37,17 @@ func IsNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }
 
+// IsForeignKeyViolation covers both ways a foreign key can refuse a write.
+// They are different SQLSTATEs and the distinction is easy to miss: pointing
+// at a row that does not exist raises foreign_key_violation, while deleting a
+// row something still points at raises restrict_violation when the constraint
+// is ON DELETE RESTRICT. Checking only the first turns "this role is still
+// assigned" into an opaque 500.
 func IsForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23503" // "foreign_key_violation"
+		return pgErr.Code == "23503" || // "foreign_key_violation"
+			pgErr.Code == "23001" // "restrict_violation"
 	}
 	return false
 }

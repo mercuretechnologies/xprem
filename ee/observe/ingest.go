@@ -21,7 +21,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// observeResult labels the batches_total counter; see metrics.go.
+// The values of the result label on observe_batches_total; see metrics.go.
 const (
 	resultAccepted    = "accepted"
 	resultBadRequest  = "bad_request"
@@ -29,13 +29,13 @@ const (
 	resultUnavailable = "unavailable"
 )
 
-// maxLogsBodyBytes caps a /v1/logs body. The SDK sends its whole pending
+// maxBatchBodyBytes caps an ingestion body, logs and metrics alike. The SDK sends its whole pending
 // backlog uncompressed in one POST with no client-side cap; a realistic batch
 // is hundreds of KB, 16MB covers a device coming back from a long offline
 // stretch. Beyond it we answer 413: the SDK treats it as a permanent failure
 // and drops the batch, which is the point: a 5xx would make the device
 // re-send the same oversized poison pill forever.
-const maxLogsBodyBytes = 16 << 20
+const maxBatchBodyBytes = 16 << 20
 
 // identityApplyTimeout keeps a stalled store operation from tying up an
 // ingestion request indefinitely. Each coalesced operation gets its own bound.
@@ -81,35 +81,88 @@ func NewIngestHandler(identityService *identity.Service, telemetry TelemetrySink
 // adoption state fresh. Per device, the NEWEST row wins: a backlog flush
 // leads with pre-update sessions carrying the OLD update id, and taking the
 // first row would regress the recorded current right after a release.
-func recordCheckIns[R any](ctx context.Context, checkIns *CheckInRecorder, appID string, remoteIP string, rows []R, clientID func(R) string, updateID func(R) string, timestamp func(R) time.Time) {
+// One accessor, not four: everything a check-in reads lives on the envelope
+// both row types embed, so the caller only has to say where that envelope is.
+func recordCheckIns[R any](
+	ctx context.Context,
+	checkIns *CheckInRecorder,
+	appID string,
+	remoteIP string,
+	rows []R,
+	envelopeOf func(R) Envelope,
+) {
 	if checkIns == nil || len(rows) == 0 {
 		return
 	}
 	newest := make(map[string]int, 1)
 	for i, row := range rows {
-		device := clientID(row)
-		best, seen := newest[device]
-		if !seen || timestamp(row).After(timestamp(rows[best])) {
-			newest[device] = i
+		envelope := envelopeOf(row)
+		best, seen := newest[envelope.EASClientID]
+		if !seen || envelope.Timestamp.After(envelopeOf(rows[best]).Timestamp) {
+			newest[envelope.EASClientID] = i
 		}
 	}
 	for device, i := range newest {
+		envelope := envelopeOf(rows[i])
 		checkIns.Record(ctx, handlers.DeviceCheckIn{
 			AppID:           appID,
 			EASClientID:     device,
 			RemoteIP:        remoteIP,
-			CurrentUpdateID: updateID(rows[i]),
+			CurrentUpdateID: envelope.UpdateID,
+			DeviceModel:     envelope.DeviceModel,
+			OSName:          envelope.OSName,
+			OSVersion:       envelope.OSVersion,
 		})
 	}
 }
 
-// resolveBranch fills MetricRow/LogRow.Branch; the resolver caches, so the
-// per-row call is a map hit for every row after the first of an update.
-func (h *IngestHandler) resolveBranch(ctx context.Context, appID, updateID string) string {
-	if h.branches == nil {
-		return ""
+// clientIP renders the request's client address, "" when it cannot be trusted
+// or parsed. Geo resolution and the registry both key on it.
+func clientIP(r *http.Request) string {
+	if ip := helpers.ClientIP(r); ip.IsValid() {
+		return ip.String()
 	}
-	return h.branches.BranchName(ctx, appID, updateID)
+	return ""
+}
+
+// resolveOrigin fills MetricRow/LogRow.Branch and .UpdateGroupID; the resolver
+// caches, so the per-row call is a map hit for every row after the first of an
+// update.
+func (h *IngestHandler) resolveOrigin(ctx context.Context, appID, updateID string) (string, string) {
+	if h.branches == nil {
+		return "", ""
+	}
+	return h.branches.UpdateOrigin(ctx, appID, updateID)
+}
+
+// preserveBatchOnPanic answers 503 rather than letting gorilla turn a panic
+// into a 500: 500 destroys the batch on the device, 503 preserves it.
+func preserveBatchOnPanic(w http.ResponseWriter, signal string) {
+	if rec := recover(); rec != nil {
+		log.Printf("observe: recovered panic in %s ingestion: %v", signal, rec)
+		observeBatch(resultUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+}
+
+// readBatch reads the body under the size ceiling and translates a failure into
+// the status the SDK reads. ok=false means the response is already written and
+// the caller has nothing left to do.
+func readBatch(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBatchBodyBytes))
+	if err == nil {
+		return body, true
+	}
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		observeBatch(resultTooLarge)
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		return nil, false
+	}
+	// The body could not be read off the wire: transient, preserve.
+	observeBatch(resultUnavailable)
+	w.WriteHeader(http.StatusServiceUnavailable)
+	return nil, false
 }
 
 // HandleLogs ingests POST /observe/{APP_ID}/{projectId}/v1/logs. Rate
@@ -118,27 +171,10 @@ func (h *IngestHandler) resolveBranch(ctx context.Context, appID, updateID strin
 // telemetry records are flattened and inserted into ClickHouse, with each
 // ingesting device registered in the universal registry (debounced).
 func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
-	// A panic must not turn into gorilla's 500: 500 destroys the batch on the
-	// device, 503 preserves it for a retry.
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.Printf("observe: recovered panic in logs ingestion: %v", rec)
-			observeBatch(resultUnavailable)
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-	}()
+	defer preserveBatchOnPanic(w, "logs")
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLogsBodyBytes))
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			observeBatch(resultTooLarge)
-			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			return
-		}
-		// The body could not be read off the wire: transient, preserve.
-		observeBatch(resultUnavailable)
-		w.WriteHeader(http.StatusServiceUnavailable)
+	body, ok := readBatch(w, r)
+	if !ok {
 		return
 	}
 
@@ -152,12 +188,9 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appID := mux.Vars(r)["APP_ID"]
+	remoteIP := clientIP(r)
 
 	if h.identityService != nil {
-		remoteIP := ""
-		if clientIP := helpers.ClientIP(r); clientIP.IsValid() {
-			remoteIP = clientIP.String()
-		}
 		requests := identityRequestsFromBatch(batch, appID, remoteIP)
 		for _, req := range identity.CoalesceRequests(requests) {
 			applyContext, cancelApply := context.WithTimeout(r.Context(), identityApplyTimeout)
@@ -195,22 +228,22 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	// Check-ins ride every log batch, sink or not: a no-ClickHouse deployment
 	// still keeps its registry (and update health) fresh from telemetry.
-	{
-		remoteIP := ""
-		if clientIP := helpers.ClientIP(r); clientIP.IsValid() {
-			remoteIP = clientIP.String()
+	// The geo lookup only feeds the telemetry rows: check-ins resolve the place
+	// themselves from the same IP. No sink, nothing to enrich.
+	if h.telemetry != nil {
+		place := h.identityService.PlaceOf(remoteIP)
+		for i := range rows {
+			rows[i].CountryCode, rows[i].Lat, rows[i].Lng = place.CountryCode, place.Lat, place.Lng
 		}
-		recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
-			func(row LogRow) string { return row.EASClientID },
-			func(row LogRow) string { return row.UpdateID },
-			func(row LogRow) time.Time { return row.Timestamp })
 	}
+	recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
+		func(row LogRow) Envelope { return row.Envelope })
 	if h.telemetry == nil {
 		observeRecordsDropped(reasonTelemetry, len(rows))
 	} else {
 		if len(rows) > 0 {
 			for i := range rows {
-				rows[i].Branch = h.resolveBranch(r.Context(), appID, rows[i].UpdateID)
+				rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
 			}
 			if err := h.telemetry.InsertLogs(r.Context(), rows); err != nil {
 				log.Printf("observe: clickhouse logs insert failed: %v", err)
@@ -396,13 +429,7 @@ func identityRequestsFromBatch(batch LogBatch, appID, remoteIP string) []identit
 // pre-ClickHouse acknowledge-and-drop, skipping even the decode. Rate
 // limiting runs in middleware ahead of this handler.
 func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.Printf("observe: recovered panic in metrics ingestion: %v", rec)
-			observeBatch(resultUnavailable)
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
-	}()
+	defer preserveBatchOnPanic(w, "metrics")
 
 	if h.telemetry == nil {
 		// Drain within the same cap so keep-alive connections stay reusable.
@@ -410,22 +437,14 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		// every expo-updates device polls the manifest anyway (the seam
 		// registers it there), so decoding metrics just to register would be
 		// pure cost for a deployment that dropped the data.
-		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, maxLogsBodyBytes))
+		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, maxBatchBodyBytes))
 		observeBatch(resultAccepted)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLogsBodyBytes))
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			observeBatch(resultTooLarge)
-			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			return
-		}
-		observeBatch(resultUnavailable)
-		w.WriteHeader(http.StatusServiceUnavailable)
+	body, ok := readBatch(w, r)
+	if !ok {
 		return
 	}
 
@@ -437,18 +456,19 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appID := mux.Vars(r)["APP_ID"]
-	remoteIP := ""
-	if clientIP := helpers.ClientIP(r); clientIP.IsValid() {
-		remoteIP = clientIP.String()
-	}
+	remoteIP := clientIP(r)
 	rows := FlattenMetrics(appID, batch, time.Now().UTC())
+	// One resolution per batch, not per row: a batch is one device's backlog,
+	// so every row shares the request IP.
+	place := h.identityService.PlaceOf(remoteIP)
+	for i := range rows {
+		rows[i].CountryCode, rows[i].Lat, rows[i].Lng = place.CountryCode, place.Lat, place.Lng
+	}
 	recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
-		func(row MetricRow) string { return row.EASClientID },
-		func(row MetricRow) string { return row.UpdateID },
-		func(row MetricRow) time.Time { return row.Timestamp })
+		func(row MetricRow) Envelope { return row.Envelope })
 	if len(rows) > 0 {
 		for i := range rows {
-			rows[i].Branch = h.resolveBranch(r.Context(), appID, rows[i].UpdateID)
+			rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
 		}
 		if err := h.telemetry.InsertMetrics(r.Context(), rows); err != nil {
 			log.Printf("observe: clickhouse metrics insert failed: %v", err)

@@ -107,6 +107,13 @@ type DeviceIdentity struct {
 	FirstSeenAt     pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
 	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
+	DeviceModel     *string            `json:"device_model"`
+	OsName          *string            `json:"os_name"`
+	OsVersion       *string            `json:"os_version"`
+	BranchName      *string            `json:"branch_name"`
+	RuntimeVersion  *string            `json:"runtime_version"`
+	Platform        *string            `json:"platform"`
+	PublishGroup    pgtype.UUID        `json:"publish_group"`
 }
 
 type DeviceUpdateFailure struct {

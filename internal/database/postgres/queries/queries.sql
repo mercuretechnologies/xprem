@@ -1160,7 +1160,6 @@ WHERE app_id = $1 AND key = $2;
 -- purpose: FOR UPDATE cannot lock a row that does not exist yet, so two
 -- concurrent first identifies of the same install would both merge against
 -- an empty map and one would silently win. Insert-then-lock serializes them.
--- Idempotent device-row creation inside mutate's transaction.
 -- name: EnsureDeviceIdentity :exec
 INSERT INTO device_identity (app_id, eas_client_id)
 VALUES ($1, $2)
@@ -1175,6 +1174,9 @@ FOR UPDATE;
 SELECT * FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2;
 
+-- The merge write of an identity op. Same COALESCE rule as TouchDeviceIdentity:
+-- a NULL geo argument means "this operation did not resolve one", and must
+-- leave whatever an earlier batch established rather than blank it.
 -- name: UpdateDeviceIdentity :one
 UPDATE device_identity SET
     metadata = $3,
@@ -1186,6 +1188,12 @@ UPDATE device_identity SET
 WHERE app_id = $1 AND eas_client_id = $2
 RETURNING *;
 
+-- Per-value device counts, kept in step with the merges that produce them and
+-- read back by autocomplete. The decrement floors at zero instead of deleting
+-- the row, because the delete would have to run inside the same lock ordering
+-- as the merge to be safe, and a row at zero is harmless: the third statement
+-- sweeps it afterwards, outside the hot path. A count that drifted below zero
+-- would be unrecoverable, one that lingers at zero is not.
 -- name: IncrementIdentityValueStat :exec
 INSERT INTO identity_value_stats (app_id, key, value, device_count)
 VALUES ($1, $2, $3, 1)
@@ -1224,29 +1232,189 @@ WHERE app_id = $1 AND key = $2
 ORDER BY device_count DESC, value ASC
 LIMIT sqlc.arg(max_results)::INT;
 
--- Device inventory for the dashboard: newest-seen first, keyset-paginated on
--- (last_seen_at DESC, eas_client_id DESC) so deep pages stay cheap. The
--- optional jsonb filter (metadata @> $filter, served by the GIN index) powers
--- "devices for a userId / tenant". Fetch one extra row to detect the next page.
--- name: ListDevices :many
-SELECT * FROM device_identity
+-- The current Identity cohort is projected into ClickHouse queries as an
+-- external table. The JSONB containment predicate is served by the metadata
+-- GIN index and keeps mutable identity data out of the analytics store.
+--
+-- One containment document per requested value, so "plan is pro or
+-- enterprise" is a single index scan: GIN honours @> ANY(array).
+--
+-- Bounded, because the whole result is materialized in memory and then copied
+-- onto the wire as an external table, on every Observe request. A broad
+-- filter over a large fleet is otherwise millions of UUIDs per request. The
+-- caller fetches one extra row to tell "exactly at the cap" from "truncated"
+-- and says so in the response rather than silently answering for a subset.
+-- name: ListObserveCohortDeviceIDs :many
+SELECT eas_client_id FROM device_identity
 WHERE app_id = $1
-  AND (sqlc.narg('filter')::jsonb IS NULL OR metadata @> sqlc.narg('filter')::jsonb)
-  AND (
-    sqlc.narg('before_last_seen')::timestamptz IS NULL
-    OR last_seen_at < sqlc.narg('before_last_seen')::timestamptz
-    OR (last_seen_at = sqlc.narg('before_last_seen')::timestamptz
-        AND eas_client_id < sqlc.narg('before_client_id')::uuid)
-  )
+  AND last_seen_at >= sqlc.arg(active_since)::timestamptz
+  AND metadata @> ANY(sqlc.arg(filters)::jsonb[])
 ORDER BY last_seen_at DESC, eas_client_id DESC
 LIMIT sqlc.arg('lim')::int;
 
--- The observe flattener denormalizes the branch onto every ClickHouse row.
--- Resolved from the update uuid (permanent: an update never changes branch),
--- NEVER from the channel (a channel can be re-pointed over time). Cached
--- in-process by the caller, so this runs once per distinct update.
--- name: GetBranchNameByUpdateUUID :one
-SELECT b.name
+-- City centroids are intentionally grouped before crossing the API boundary:
+-- GeoLite2 coordinates identify a city, not an exact device position.
+--
+-- Two callers, one shape. With the period as active_since this is the map's
+-- static layer ("installs per city"); with the last few seconds it is the
+-- map's live feed ("check-ins per city since the last poll"). Aggregating is
+-- what keeps the live feed affordable: the row count is bounded by geography,
+-- so a 5M device fleet costs the same payload as a 5k one, and the LIMIT
+-- degrades by dropping the quietest cities rather than by growing.
+--
+-- The same FILTER predicates as ListDevices, deliberately: the map is a view of
+-- the inventory, so narrowing the page has to narrow the map too. A globe that
+-- keeps showing the whole fleet while the tables next to it show a branch is a
+-- globe that lies. Only the window differs: here last_seen_at bounds the
+-- period, there the keyset bounds the page.
+--
+-- This used to be two queries. The release dimensions lived on the update, so
+-- filtering on one meant three joins, and the planner cannot skip a join it
+-- might need: carrying them unconditionally cost 4x (330ms -> 1.4s) on the
+-- query that runs on every page load, filtered or not. The workaround was a
+-- join-free twin picked at runtime. Now that the dimensions sit on the device
+-- there is one query again, and it is the cheap one in every case.
+-- name: ListObserveLocations :many
+SELECT d.country_code, d.city, d.lat, d.lng, COUNT(*) AS device_count
+FROM device_identity d
+WHERE d.app_id = $1
+  AND d.last_seen_at >= sqlc.arg(active_since)::timestamptz
+  AND d.lat IS NOT NULL
+  AND d.lng IS NOT NULL
+  AND (coalesce(cardinality(sqlc.arg('filters')::jsonb[]), 0) = 0 OR d.metadata @> ANY(sqlc.arg('filters')::jsonb[]))
+  AND (coalesce(cardinality(sqlc.arg('eas_client_id')::uuid[]), 0) = 0 OR d.eas_client_id = ANY(sqlc.arg('eas_client_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('current_update_id')::uuid[]), 0) = 0 OR d.current_update_id = ANY(sqlc.arg('current_update_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('publish_group')::uuid[]), 0) = 0 OR d.publish_group = ANY(sqlc.arg('publish_group')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('device_model')::text[]), 0) = 0 OR d.device_model = ANY(sqlc.arg('device_model')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_name')::text[]), 0) = 0 OR d.os_name = ANY(sqlc.arg('os_name')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_version')::text[]), 0) = 0 OR d.os_version = ANY(sqlc.arg('os_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('country_code')::text[]), 0) = 0 OR d.country_code = ANY(sqlc.arg('country_code')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('branch')::text[]), 0) = 0 OR d.branch_name = ANY(sqlc.arg('branch')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('runtime_version')::text[]), 0) = 0 OR d.runtime_version = ANY(sqlc.arg('runtime_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('platform')::text[]), 0) = 0 OR d.platform = ANY(sqlc.arg('platform')::text[]))
+GROUP BY d.country_code, d.city, d.lat, d.lng
+ORDER BY device_count DESC, d.country_code ASC NULLS LAST, d.city ASC NULLS LAST
+LIMIT 500;
+
+-- Real-time active installs for Observe. Unlike telemetry aggregates this
+-- stays available when ClickHouse is disabled.
+--
+-- Same filter predicates as ListObserveLocations, for the same reason: this
+-- number sits next to the map and the tables on one filtered page. Counting the
+-- whole fleet while the page is narrowed to a branch is the same lie the map
+-- would tell.
+-- name: CountObserveActiveDevices :one
+SELECT COUNT(*)
+FROM device_identity d
+WHERE d.app_id = $1
+  AND d.last_seen_at >= sqlc.arg(active_since)::timestamptz
+  AND (coalesce(cardinality(sqlc.arg('filters')::jsonb[]), 0) = 0 OR d.metadata @> ANY(sqlc.arg('filters')::jsonb[]))
+  AND (coalesce(cardinality(sqlc.arg('eas_client_id')::uuid[]), 0) = 0 OR d.eas_client_id = ANY(sqlc.arg('eas_client_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('current_update_id')::uuid[]), 0) = 0 OR d.current_update_id = ANY(sqlc.arg('current_update_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('publish_group')::uuid[]), 0) = 0 OR d.publish_group = ANY(sqlc.arg('publish_group')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('device_model')::text[]), 0) = 0 OR d.device_model = ANY(sqlc.arg('device_model')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_name')::text[]), 0) = 0 OR d.os_name = ANY(sqlc.arg('os_name')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_version')::text[]), 0) = 0 OR d.os_version = ANY(sqlc.arg('os_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('country_code')::text[]), 0) = 0 OR d.country_code = ANY(sqlc.arg('country_code')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('branch')::text[]), 0) = 0 OR d.branch_name = ANY(sqlc.arg('branch')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('runtime_version')::text[]), 0) = 0 OR d.runtime_version = ANY(sqlc.arg('runtime_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('platform')::text[]), 0) = 0 OR d.platform = ANY(sqlc.arg('platform')::text[]));
+
+-- Resolve an EAS publish group to the concrete update UUIDs stored on
+-- telemetry rows. A publish group can contain one update per platform.
+-- name: ListObserveUpdateUUIDsByPublishGroup :many
+SELECT u.update_uuid
+FROM updates u
+JOIN branches b ON b.id = u.branch_id
+WHERE b.app_id = $1
+  AND u.publish_group = $2
+  AND u.update_uuid IS NOT NULL
+  AND u.checked_at IS NOT NULL
+ORDER BY u.id;
+
+-- Device inventory for the dashboard, with the release dimensions of whatever
+-- update each device currently runs: newest-seen first, keyset-paginated on
+-- (last_seen_at DESC, eas_client_id DESC) so deep pages stay cheap. The
+-- optional jsonb filters (metadata @> ANY, served by the GIN index) power
+-- "devices for a userId / tenant". Fetch one extra row to detect the next page.
+--
+-- branch, runtime version, platform and publish group are properties of the
+-- update and never change, so they are stored on the device at check-in rather
+-- than joined back here (20260726120000_device_release_columns.sql). The
+-- app-scoping guard that used to live in this query, as an EXISTS on the
+-- updates join, moved to the write with them: a device of app A claiming an
+-- update of app B resolves to nothing there and reads NULL here.
+--
+-- NULL, deliberately: a device on the embedded bundle, or on an update this
+-- server does not know, still appears in the unfiltered inventory. Filtering on
+-- a release dimension does exclude it, which is the honest answer to "show me
+-- devices on branch X".
+-- name: ListDevices :many
+SELECT d.*
+FROM device_identity d
+WHERE d.app_id = $1
+  AND (coalesce(cardinality(sqlc.arg('filters')::jsonb[]), 0) = 0 OR d.metadata @> ANY(sqlc.arg('filters')::jsonb[]))
+  AND (coalesce(cardinality(sqlc.arg('eas_client_id')::uuid[]), 0) = 0 OR d.eas_client_id = ANY(sqlc.arg('eas_client_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('current_update_id')::uuid[]), 0) = 0 OR d.current_update_id = ANY(sqlc.arg('current_update_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('publish_group')::uuid[]), 0) = 0 OR d.publish_group = ANY(sqlc.arg('publish_group')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('device_model')::text[]), 0) = 0 OR d.device_model = ANY(sqlc.arg('device_model')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_name')::text[]), 0) = 0 OR d.os_name = ANY(sqlc.arg('os_name')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_version')::text[]), 0) = 0 OR d.os_version = ANY(sqlc.arg('os_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('country_code')::text[]), 0) = 0 OR d.country_code = ANY(sqlc.arg('country_code')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('branch')::text[]), 0) = 0 OR d.branch_name = ANY(sqlc.arg('branch')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('runtime_version')::text[]), 0) = 0 OR d.runtime_version = ANY(sqlc.arg('runtime_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('platform')::text[]), 0) = 0 OR d.platform = ANY(sqlc.arg('platform')::text[]))
+  AND (
+    sqlc.narg('before_last_seen')::timestamptz IS NULL
+    OR d.last_seen_at < sqlc.narg('before_last_seen')::timestamptz
+    OR (d.last_seen_at = sqlc.narg('before_last_seen')::timestamptz
+        AND d.eas_client_id < sqlc.narg('before_client_id')::uuid)
+  )
+ORDER BY d.last_seen_at DESC, d.eas_client_id DESC
+LIMIT sqlc.arg('lim')::int;
+
+-- Devices that pinged in the last N minutes, whatever the ping: a manifest
+-- poll, a metrics batch or a log batch all bump last_seen_at, so this is
+-- "currently live", not "currently sending telemetry". Served by
+-- idx_device_identity_last_seen. The check-in debounce means last_seen_at is
+-- accurate to within a minute, which is invisible at a 20 minute window.
+--
+-- Filtered on the same dimensions as ListDevices, so the count sits next to a
+-- filtered inventory without contradicting it, and now by the same means: every
+-- dimension is a plain predicate on device_identity.
+--
+-- This query used to reach the release dimensions through a subquery over
+-- updates, hashed once, because the three-way join ListDevices carried was
+-- unaffordable on a whole-fleet count. Measured then on 2.4M online devices,
+-- 20 minute window: 586 ms unfiltered and 1 025 ms with a branch filter using
+-- the joins, against 45 ms and 112 ms using the subquery. With the dimensions
+-- stored on the device the subquery is gone too, along with the two traps it
+-- carried (the leading cardinality check that kept "no release filter" from
+-- meaning "only updates I know", and the ban on correlating it to the outer
+-- row, which cost 9 seconds when someone tried).
+-- name: CountOnlineDevices :one
+SELECT count(*)
+FROM device_identity d
+WHERE d.app_id = $1
+  AND d.last_seen_at > sqlc.arg('since')::timestamptz
+  AND (coalesce(cardinality(sqlc.arg('filters')::jsonb[]), 0) = 0 OR d.metadata @> ANY(sqlc.arg('filters')::jsonb[]))
+  AND (coalesce(cardinality(sqlc.arg('eas_client_id')::uuid[]), 0) = 0 OR d.eas_client_id = ANY(sqlc.arg('eas_client_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('current_update_id')::uuid[]), 0) = 0 OR d.current_update_id = ANY(sqlc.arg('current_update_id')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('publish_group')::uuid[]), 0) = 0 OR d.publish_group = ANY(sqlc.arg('publish_group')::uuid[]))
+  AND (coalesce(cardinality(sqlc.arg('device_model')::text[]), 0) = 0 OR d.device_model = ANY(sqlc.arg('device_model')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_name')::text[]), 0) = 0 OR d.os_name = ANY(sqlc.arg('os_name')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('os_version')::text[]), 0) = 0 OR d.os_version = ANY(sqlc.arg('os_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('country_code')::text[]), 0) = 0 OR d.country_code = ANY(sqlc.arg('country_code')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('branch')::text[]), 0) = 0 OR d.branch_name = ANY(sqlc.arg('branch')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('runtime_version')::text[]), 0) = 0 OR d.runtime_version = ANY(sqlc.arg('runtime_version')::text[]))
+  AND (coalesce(cardinality(sqlc.arg('platform')::text[]), 0) = 0 OR d.platform = ANY(sqlc.arg('platform')::text[]));
+
+-- Same lookup, one row: the flattener needs both the branch and the publish
+-- group of an update, and one round trip beats two. publish_group is NULL for
+-- updates from older CLIs and for rollback markers, which is why the caller
+-- treats it as optional rather than as a missing row.
+-- name: GetUpdateOriginByUUID :one
+SELECT b.name AS branch_name, u.publish_group
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 WHERE b.app_id = $1 AND u.update_uuid = $2
@@ -1255,25 +1423,95 @@ LIMIT 1;
 -- Passive-contact bump (manifest poll, telemetry batch): refresh last_seen and
 -- opportunistically enrich geo, never touching metadata. 1 row = known device;
 -- 0 = brand new, the caller registers it.
+--
+-- The release dimensions are resolved here rather than joined at read time
+-- (see 20260726120000_device_release_columns.sql). The CTE is the app-scoping
+-- guard the reads used to carry as an EXISTS: it joins branches on the caller's
+-- app id, so an update belonging to another app resolves to no row and the
+-- columns land NULL, exactly as the old LEFT JOIN produced.
 -- name: TouchDeviceIdentity :execrows
+WITH origin AS (
+    SELECT b.name AS branch_name,
+           rv.version AS runtime_version,
+           u.platform,
+           u.publish_group
+    FROM updates u
+    INNER JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
+    LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
+    WHERE u.update_uuid = sqlc.narg('current_update_id')::uuid
+    LIMIT 1
+)
 UPDATE device_identity SET
-    country_code = COALESCE(sqlc.narg('country_code'), country_code),
-    city = COALESCE(sqlc.narg('city'), city),
-    lat = COALESCE(sqlc.narg('lat'), lat),
-    lng = COALESCE(sqlc.narg('lng'), lng),
-    current_update_id = COALESCE(sqlc.narg('current_update_id'), current_update_id),
+    country_code = COALESCE(sqlc.narg('country_code'), device_identity.country_code),
+    city = COALESCE(sqlc.narg('city'), device_identity.city),
+    lat = COALESCE(sqlc.narg('lat'), device_identity.lat),
+    lng = COALESCE(sqlc.narg('lng'), device_identity.lng),
+    current_update_id = COALESCE(sqlc.narg('current_update_id'), device_identity.current_update_id),
+    -- Rewritten only when this check-in names an update, so a manifest poll
+    -- that carries no header keeps what the last one established, and an update
+    -- deleted since then keeps describing the device instead of blanking it.
+    -- When it does name one, the resolution stands whatever it returns: a
+    -- forged or unknown id becomes NULL rather than leaving the row claiming a
+    -- branch it no longer runs.
+    branch_name = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN device_identity.branch_name ELSE (SELECT o.branch_name FROM origin o) END,
+    runtime_version = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN device_identity.runtime_version ELSE (SELECT o.runtime_version FROM origin o) END,
+    platform = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN device_identity.platform ELSE (SELECT o.platform FROM origin o) END,
+    publish_group = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN device_identity.publish_group ELSE (SELECT o.publish_group FROM origin o) END,
+    -- Only telemetry knows the hardware; a manifest poll passes NULL here and
+    -- must never blank what a previous batch established.
+    device_model = COALESCE(sqlc.narg('device_model'), device_identity.device_model),
+    os_name = COALESCE(sqlc.narg('os_name'), device_identity.os_name),
+    os_version = COALESCE(sqlc.narg('os_version'), device_identity.os_version),
     last_seen_at = CURRENT_TIMESTAMP
-WHERE app_id = $1 AND eas_client_id = $2;
+WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2;
 
 -- Registration upsert for the passive path: the registry is uncapped (the
 -- whole fleet is the update-health source of truth). ON CONFLICT absorbs the
 -- race with a concurrent registration of the same device.
 -- name: RegisterDevice :execrows
-INSERT INTO device_identity (app_id, eas_client_id, country_code, city, lat, lng, current_update_id)
-VALUES ($1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'), sqlc.narg('lng'), sqlc.narg('current_update_id'))
+WITH origin AS (
+    SELECT b.name AS branch_name,
+           rv.version AS runtime_version,
+           u.platform,
+           u.publish_group
+    FROM updates u
+    INNER JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
+    LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
+    WHERE u.update_uuid = sqlc.narg('current_update_id')::uuid
+    LIMIT 1
+)
+INSERT INTO device_identity (
+    app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
+    device_model, os_name, os_version,
+    branch_name, runtime_version, platform, publish_group
+)
+VALUES (
+    $1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'),
+    sqlc.narg('lng'), sqlc.narg('current_update_id'), sqlc.narg('device_model'),
+    sqlc.narg('os_name'), sqlc.narg('os_version'),
+    (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
+    (SELECT platform FROM origin), (SELECT publish_group FROM origin)
+)
+-- Same rule as TouchDeviceIdentity on the conflict arm: the release columns
+-- follow current_update_id, and only when this registration names one.
 ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     last_seen_at = CURRENT_TIMESTAMP,
-    current_update_id = COALESCE(EXCLUDED.current_update_id, device_identity.current_update_id);
+    current_update_id = COALESCE(EXCLUDED.current_update_id, device_identity.current_update_id),
+    branch_name = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.branch_name ELSE EXCLUDED.branch_name END,
+    runtime_version = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.runtime_version ELSE EXCLUDED.runtime_version END,
+    platform = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.platform ELSE EXCLUDED.platform END,
+    publish_group = CASE WHEN EXCLUDED.current_update_id IS NULL
+        THEN device_identity.publish_group ELSE EXCLUDED.publish_group END,
+    device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
+    os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
+    os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version);
 
 
 -- Records a manifest/native failure at server receipt time. fatal_error and
@@ -1433,13 +1671,28 @@ GROUP BY f.update_id;
 
 -- Durable ClickHouse delivery queue. The worker reads through a transaction;
 -- SKIP LOCKED lets several API replicas drain disjoint batches safely.
+-- The outbox carries ids; the analytical store wants the dimensions that go
+-- with them, so they are resolved here, once, on a bounded batch. The update
+-- side is permanent (an update never changes branch), the device side is the
+-- hardware as currently known, which is what a crash is read against.
 -- name: ListDeviceHealthOutbox :many
-SELECT id, event_type, app_id, eas_client_id, update_id, previous_update_id,
-       failure_type, fatal_error, occurred_at
-FROM device_health_outbox
-ORDER BY id
+SELECT o.id, o.event_type, o.app_id, o.eas_client_id, o.update_id, o.previous_update_id,
+       o.failure_type, o.fatal_error, o.occurred_at,
+       coalesce(b.name, '') AS branch,
+       coalesce(rv.version, '') AS runtime_version,
+       coalesce(u.platform, '') AS platform,
+       coalesce(d.os_name, '') AS os_name,
+       coalesce(d.os_version, '') AS os_version,
+       coalesce(d.device_model, '') AS device_model,
+       coalesce(d.country_code, '') AS country_code
+FROM device_health_outbox o
+LEFT JOIN updates u ON u.update_uuid = o.update_id
+LEFT JOIN branches b ON b.id = u.branch_id AND b.app_id = o.app_id
+LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
+LEFT JOIN device_identity d ON d.app_id = o.app_id AND d.eas_client_id = o.eas_client_id
+ORDER BY o.id
 LIMIT $1
-FOR UPDATE SKIP LOCKED;
+FOR UPDATE OF o SKIP LOCKED;
 
 -- name: DeleteDeviceHealthOutbox :exec
 DELETE FROM device_health_outbox
@@ -1451,10 +1704,26 @@ WHERE id = ANY(sqlc.arg('ids')::bigint[]);
 -- name: DiscardDeviceHealthOutbox :exec
 DELETE FROM device_health_outbox;
 
--- Absolute current health for every update whose score is meaningful now:
--- the newest checked update of each branch/runtime/platform, plus the control
--- still serving an active rollout's out-of-bucket cohort. The ClickHouse
--- worker samples these rows into one-minute buckets.
+-- Absolute current health for every update the fleet is on. Three kinds of
+-- row, and they answer different questions:
+--
+--   current/candidate  the newest checked update of each branch/runtime/
+--                      platform, and control, the update an active rollout
+--                      runs against. Their health score is what you watch
+--                      during a release.
+--   legacy             every other update devices are still running. Its
+--                      health is settled, but "how many are stuck on the
+--                      version from three months ago" is a question an OTA
+--                      operator has to be able to answer, and it can only be
+--                      answered if the series was recorded while it was true.
+--
+-- The legacy arm is bounded by where the fleet actually sits, not by how much
+-- has ever been published: an app with a thousand updates has devices on a
+-- handful of them. Adoption is counted once for every update in a single
+-- grouped pass over (app_id, current_update_id), which is indexed, rather
+-- than once per update.
+--
+-- The ClickHouse worker samples these rows into one-minute buckets.
 -- name: ListCurrentUpdateHealthSnapshots :many
 WITH latest AS (
     SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
@@ -1470,7 +1739,13 @@ WITH latest AS (
     WHERE u.checked_at IS NOT NULL
     ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
 ),
-relevant AS (
+adoption AS (
+    SELECT app_id, current_update_id AS update_uuid, COUNT(*) AS devices_on_update
+    FROM device_identity
+    WHERE current_update_id IS NOT NULL
+    GROUP BY app_id, current_update_id
+),
+tracked AS (
     SELECT app_id,
            update_uuid,
            CASE WHEN rollout_percentage IS NULL THEN 'current' ELSE 'candidate' END::text AS role
@@ -1486,6 +1761,26 @@ relevant AS (
      AND control.id = l.control_update_id
     WHERE l.rollout_percentage IS NOT NULL
       AND control.update_uuid IS NOT NULL
+),
+relevant AS (
+    SELECT * FROM tracked
+
+    UNION ALL
+
+    -- Restricted to updates this server published: a device reporting an id
+    -- nobody knows must not mint a series for an update that does not exist.
+    SELECT a.app_id, a.update_uuid, 'legacy'::text AS role
+    FROM adoption a
+    WHERE NOT EXISTS (
+        SELECT 1 FROM tracked t
+        WHERE t.app_id = a.app_id AND t.update_uuid = a.update_uuid
+    )
+      AND EXISTS (
+        SELECT 1
+        FROM updates u
+        JOIN branches b ON b.id = u.branch_id
+        WHERE b.app_id = a.app_id AND u.update_uuid = a.update_uuid
+    )
 )
 SELECT r.app_id,
        r.update_uuid,
@@ -1496,12 +1791,7 @@ SELECT r.app_id,
        COALESCE(failures.update_issues, 0)::bigint AS update_issues,
        COALESCE(failures.runtime_issues, 0)::bigint AS runtime_issues
 FROM relevant r
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS devices_on_update
-    FROM device_identity d
-    WHERE d.app_id = r.app_id
-      AND d.current_update_id = r.update_uuid
-) adoption ON TRUE
+LEFT JOIN adoption ON adoption.app_id = r.app_id AND adoption.update_uuid = r.update_uuid
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS faulty_devices,
            COUNT(*) FILTER (WHERE f.failure_type = 'update_issue') AS update_issues,

@@ -6,6 +6,7 @@ package observe
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -25,7 +26,21 @@ type HealthHistoryReader interface {
 		updateIDs []string,
 		from, to time.Time,
 	) (map[string][]HealthHistoryPoint, error)
+	// ReadBySegment answers the same question split by a device dimension,
+	// rebuilt from the raw events because the snapshots are pre-aggregated per
+	// update and carry nothing about the device.
+	ReadBySegment(
+		ctx context.Context,
+		appID string,
+		updateIDs []string,
+		dimension string,
+		from, to time.Time,
+	) (map[string][]HealthSegmentPoint, error)
 }
+
+// Same ceiling as the explorer's overview window: past it the chart is one
+// pixel per day and the query is a table scan.
+const maxHealthHistoryWindow = 90 * 24 * time.Hour
 
 // HealthHistoryHandler exposes ClickHouse history without making ClickHouse a
 // requirement for the dashboard. Deployments without it return available=false
@@ -65,15 +80,58 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 		handlers.RenderError(w, http.StatusBadRequest, "'from' must be an RFC3339 timestamp.")
 		return
 	}
-	if !from.Before(to) {
-		handlers.RenderError(w, http.StatusBadRequest, "'from' must be earlier than 'to'.")
+	// Bounded like the explorer's windows are. A split rebuilds a
+	// device-by-bucket grid from raw events, so an unbounded 'from' is a full
+	// scan of the telemetry table joined against the whole event history.
+	if !from.Before(to) || to.Sub(from) > maxHealthHistoryWindow {
+		handlers.RenderError(
+			w,
+			http.StatusBadRequest,
+			"'from' must be earlier than 'to', and within 90 days of it.",
+		)
 		return
 	}
 
+	dimension := strings.TrimSpace(r.URL.Query().Get("dimension"))
+	if dimension != "" && !IsHealthSegmentDimension(dimension) {
+		handlers.RenderError(w, http.StatusBadRequest, "'dimension' cannot split health history.")
+		return
+	}
+
+	// Unavailable still answers in the shape that was asked for: a caller that
+	// requested a split reads `segments`, and finding the key missing entirely
+	// is a different failure from finding it empty.
 	if h.reader == nil {
+		if dimension != "" {
+			handlers.RenderJSON(w, http.StatusOK, map[string]any{
+				"available": false,
+				"dimension": dimension,
+				"segments":  map[string][]HealthSegmentPoint{},
+			})
+			return
+		}
 		handlers.RenderJSON(w, http.StatusOK, map[string]any{
 			"available": false,
 			"updates":   map[string][]HealthHistoryPoint{},
+		})
+		return
+	}
+
+	// Split requested: the response keys become segment values instead of
+	// update ids, and the caller knows which it asked for.
+	if dimension != "" {
+		segments, err := h.reader.ReadBySegment(
+			r.Context(), mux.Vars(r)["APP_ID"], updateIDs, dimension, from, to,
+		)
+		if err != nil {
+			log.Printf("observe: reading segmented health history failed: %v", err)
+			handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
+			return
+		}
+		handlers.RenderJSON(w, http.StatusOK, map[string]any{
+			"available": true,
+			"dimension": dimension,
+			"segments":  TrimSegments(segments, maxHealthSegments),
 		})
 		return
 	}

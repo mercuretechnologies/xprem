@@ -19,6 +19,7 @@ import { api } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
+import { observeNavigation } from '@/pages/Observe/navigation';
 import {
   CommandDialog,
   CommandEmpty,
@@ -62,6 +63,15 @@ export const CommandPalette = ({
     ? [
         ...(CONTROL_PLANE_ENABLED
           ? [{ label: 'Updates', path: '/updates', icon: HardDriveDownload }]
+          : []),
+        // Every Observe page is its own destination, so each is reachable
+        // directly: "logs" or "releases" is what people type, not "observe".
+        ...(CONTROL_PLANE_ENABLED
+          ? observeNavigation.map(page => ({
+              label: `Observe · ${page.label}`,
+              path: `/observe/${page.value}`,
+              icon: page.icon,
+            }))
           : []),
         { label: 'Channels', path: '/channels', icon: Box },
         { label: 'Branches', path: '/branches', icon: GitBranch },

@@ -83,6 +83,10 @@ type checkInState struct {
 	// know", not "no failures").
 	failedUpdateIDs []string
 	fatalError      string
+	// device is the reported hardware and OS, zero when this check-in does
+	// not know it (every manifest poll). Like the other components, unknown
+	// never overwrites and never busts the debounce.
+	device identity.DeviceInfo
 }
 
 func normalizeCheckIn(checkIn handlers.DeviceCheckIn) checkInState {
@@ -94,7 +98,27 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn) checkInState {
 	}
 	state.failedUpdateIDs = ParseFailedUpdateIDs(checkIn.FailedUpdateIDsRaw)
 	sort.Strings(state.failedUpdateIDs)
+	state.device = identity.DeviceInfo{
+		Model:     strings.TrimSpace(checkIn.DeviceModel),
+		OSName:    strings.TrimSpace(checkIn.OSName),
+		OSVersion: strings.TrimSpace(checkIn.OSVersion),
+	}
 	return state
+}
+
+// deviceFingerprint condenses the reported hardware, so a device that upgrades
+// its OS is written through instead of waiting for an unrelated state change.
+// Zero info fingerprints to "", which reads as "unknown" everywhere below.
+func deviceFingerprint(device identity.DeviceInfo) string {
+	if device.IsZero() {
+		return ""
+	}
+	h := fnv.New64a()
+	for _, part := range []string{device.Model, device.OSName, device.OSVersion} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return "d" + strconv.FormatUint(h.Sum64(), 36)
 }
 
 // failedFingerprint condenses the normalized failure list; FNV-1a like the
@@ -110,19 +134,26 @@ func failedFingerprint(ids []string) string {
 }
 
 // cachedCheckInValue encodes the last recorded state: current uuid (may be
-// empty) and failure fingerprint, parseable so later check-ins compare
-// component-wise.
-func cachedCheckInValue(currentUpdateID string, failedFP string) string {
-	return "f:" + currentUpdateID + ":" + failedFP
+// empty), failure fingerprint and hardware fingerprint, parseable so later
+// check-ins compare component-wise.
+func cachedCheckInValue(currentUpdateID string, failedFP string, deviceFP string) string {
+	return "f:" + currentUpdateID + ":" + failedFP + ":" + deviceFP
 }
 
-func parseCachedCheckIn(value string) (currentUpdateID string, failedFP string, ok bool) {
+// Values written before the hardware component existed have two fields; they
+// parse with an unknown device fingerprint, so the next telemetry batch writes
+// the hardware through instead of the entry looking already up to date.
+func parseCachedCheckIn(value string) (currentUpdateID string, failedFP string, deviceFP string, ok bool) {
 	rest, found := strings.CutPrefix(value, "f:")
 	if !found {
-		return "", "", false
+		return "", "", "", false
 	}
-	currentUpdateID, failedFP, ok = strings.Cut(rest, ":")
-	return currentUpdateID, failedFP, ok
+	currentUpdateID, rest, ok = strings.Cut(rest, ":")
+	if !ok {
+		return "", "", "", false
+	}
+	failedFP, deviceFP, _ = strings.Cut(rest, ":")
+	return currentUpdateID, failedFP, deviceFP, true
 }
 
 // touchTimeout bounds the background registration a check-in triggers.
@@ -158,16 +189,19 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	}
 
 	needsWrite := cached == "" || cached == checkInErrorCacheValue || state.fatalError != ""
-	cachedCurrent, cachedFailedFP := "", ""
+	cachedCurrent, cachedFailedFP, cachedDeviceFP := "", "", ""
+	stateDeviceFP := deviceFingerprint(state.device)
 	if !needsWrite {
 		var parsed bool
-		cachedCurrent, cachedFailedFP, parsed = parseCachedCheckIn(cached)
+		cachedCurrent, cachedFailedFP, cachedDeviceFP, parsed = parseCachedCheckIn(cached)
 		switch {
 		case !parsed:
 			needsWrite = true
 		case state.currentUpdateID != "" && state.currentUpdateID != cachedCurrent:
 			needsWrite = true
 		case len(state.failedUpdateIDs) > 0 && failedFingerprint(state.failedUpdateIDs) != cachedFailedFP:
+			needsWrite = true
+		case stateDeviceFP != "" && stateDeviceFP != cachedDeviceFP:
 			needsWrite = true
 		}
 	}
@@ -195,7 +229,11 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 		if len(state.failedUpdateIDs) > 0 || newFailedFP == "" {
 			newFailedFP = failedFingerprint(state.failedUpdateIDs)
 		}
-		_ = r.cache.Set(key, cachedCheckInValue(newCurrent, newFailedFP), &ttl)
+		newDeviceFP := stateDeviceFP
+		if newDeviceFP == "" {
+			newDeviceFP = cachedDeviceFP
+		}
+		_ = r.cache.Set(key, cachedCheckInValue(newCurrent, newFailedFP, newDeviceFP), &ttl)
 	}()
 }
 
@@ -225,7 +263,7 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 	if state.currentUpdateID != "" {
 		currentUpdate = &state.currentUpdateID
 	}
-	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, checkIn.RemoteIP, currentUpdate)
+	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, checkIn.RemoteIP, currentUpdate, state.device)
 }
 
 const maxFailedUpdateIDsPerCheckIn = 5

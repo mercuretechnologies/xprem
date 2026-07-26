@@ -15,49 +15,62 @@ import (
 
 func TestBranchResolverCachesPositiveAndNegative(t *testing.T) {
 	calls := 0
-	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, updateUUID string) (string, error) {
+	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, updateUUID string) (string, string, error) {
 		calls++
 		if updateUUID == "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10" {
-			return "main", nil
+			return "main", "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", nil
 		}
-		return "", nil // unknown update: permanent absence
+		return "", "", nil // unknown update: permanent absence
 	})
 	ctx := context.Background()
 
-	assert.Equal(t, "main", resolver.BranchName(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10"))
-	assert.Equal(t, "main", resolver.BranchName(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10"))
+	branch, group := resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
+	assert.Equal(t, "main", branch)
+	assert.Equal(t, "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", group)
+	// Both come from one row and neither can change, so one entry caches both.
+	branch, group = resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
+	assert.Equal(t, "main", branch)
+	assert.Equal(t, "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", group)
 	assert.Equal(t, 1, calls, "positive result cached after the first lookup")
 
-	assert.Equal(t, "", resolver.BranchName(ctx, "app-1", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))
-	assert.Equal(t, "", resolver.BranchName(ctx, "app-1", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))
+	branch, group = resolver.UpdateOrigin(ctx, "app-1", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+	assert.Empty(t, branch)
+	assert.Empty(t, group)
+	_, _ = resolver.UpdateOrigin(ctx, "app-1", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
 	assert.Equal(t, 2, calls, "negative result cached too: update ids are never recycled")
 }
 
 func TestBranchResolverDoesNotCacheTransientErrors(t *testing.T) {
 	calls := 0
 	broken := true
-	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, _ string) (string, error) {
+	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, _ string) (string, string, error) {
 		calls++
 		if broken {
-			return "", errors.New("connection refused")
+			return "", "", errors.New("connection refused")
 		}
-		return "main", nil
+		return "main", "", nil
 	})
 	ctx := context.Background()
 
 	// While the database is down the batch lands with an empty branch...
-	assert.Equal(t, "", resolver.BranchName(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10"))
+	branch, _ := resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
+	assert.Empty(t, branch)
 	// ...and recovery is picked up by the next batch, not poisoned by a cache.
 	broken = false
-	assert.Equal(t, "main", resolver.BranchName(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10"))
+	branch, _ = resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
+	assert.Equal(t, "main", branch)
 	assert.Equal(t, 2, calls)
 }
 
 func TestBranchResolverShortCircuitsEmbeddedBundle(t *testing.T) {
-	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, _ string) (string, error) {
+	resolver := NewBranchResolver(cache.NewLocalCache(), func(_ context.Context, _, _ string) (string, string, error) {
 		t.Fatal("the zero update id must never reach the lookup")
-		return "", nil
+		return "", "", nil
 	})
-	assert.Equal(t, "", resolver.BranchName(context.Background(), "app-1", ZeroUpdateID))
-	assert.Equal(t, "", resolver.BranchName(context.Background(), "app-1", ""))
+	branch, group := resolver.UpdateOrigin(context.Background(), "app-1", ZeroUpdateID)
+	assert.Empty(t, branch)
+	assert.Empty(t, group)
+	branch, group = resolver.UpdateOrigin(context.Background(), "app-1", "")
+	assert.Empty(t, branch)
+	assert.Empty(t, group)
 }

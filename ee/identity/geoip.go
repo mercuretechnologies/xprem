@@ -16,7 +16,7 @@ import (
 // GeoResolver turns a request IP into an optional Geo enrichment. Resolvers
 // must be nil-tolerant on the value they return: no resolution is a normal
 // outcome (private IP, unknown range, no database configured), never an error
-// worth failing an identify over.
+// worth failing an operation over.
 type GeoResolver interface {
 	Resolve(ip string) *Geo
 }

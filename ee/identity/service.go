@@ -7,7 +7,10 @@ package identity
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
+
+	"expo-open-ota/ee/licensing"
 )
 
 // Op is one identity operation as carried on the wire (the log event name).
@@ -39,10 +42,10 @@ type IdentityMutator interface {
 	ApplySet(ctx context.Context, appID string, easClientID string, raw map[string]any, geo *Geo) (ApplyResult, error)
 	ApplySetOnce(ctx context.Context, appID string, easClientID string, raw map[string]any, geo *Geo) (ApplyResult, error)
 	ApplyUnset(ctx context.Context, appID string, easClientID string, keys []string, geo *Geo) (ApplyResult, error)
-	// TouchDevice registers a passive contact (manifest poll, telemetry
+	// TouchDevice registers a passive check-in (manifest poll, telemetry
 	// batch): bump-or-register, uncapped, the whole fleet is the registry.
-	// currentUpdateID nil = this contact does not know, keep the known value.
-	TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string) error
+	// currentUpdateID nil = this check-in does not know, keep the known value.
+	TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string, device DeviceInfo) error
 	// RecordUpdateFailures stores failures per (device, update), fatal_error
 	// and failure_type captured once.
 	RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error
@@ -78,8 +81,9 @@ type Store interface {
 	UpsertSchemaKey(ctx context.Context, appID string, spec KeySpec) (KeySpec, error)
 	DeleteSchemaKey(ctx context.Context, appID string, key string) (bool, error)
 	SearchMetadataValues(ctx context.Context, appID string, key string, search string, limit int) ([]ValueCount, error)
-	ListDevices(ctx context.Context, appID string, filter *MetadataFilter, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error)
+	ListDevices(ctx context.Context, appID string, query DeviceQuery, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error)
 	GetDevice(ctx context.Context, appID string, easClientID string) (*Device, error)
+	CountOnlineDevices(ctx context.Context, appID string, since time.Time, query DeviceQuery) (int64, error)
 	UpdateHealthByIDs(ctx context.Context, appID string, updateIDs []string) (map[string]UpdateHealth, error)
 }
 
@@ -89,12 +93,27 @@ type Store interface {
 type Service struct {
 	store Store
 	geo   GeoResolver
+	// licenseValid is the live licensing state; a field so same-package tests
+	// can pin it without minting signed keys.
+	licenseValid func() bool
 }
 
 // NewService builds the identity service. geo may be nil: identity works
-// without a GeoLite2 database, devices simply stay unlocated.
+// without a GeoLite2 database, devices simply stay unlocated. The license gate
+// defaults to licensing.IsEnterprise and is imported directly ON PURPOSE: it
+// must live in EE code so bypassing it means editing an EE-licensed file (a
+// license violation), not swapping a func passed in from the MIT composition
+// root (which anyone may legally replace with `func() bool { return true }`).
 func NewService(store Store, geo GeoResolver) *Service {
-	return &Service{store: store, geo: geo}
+	return &Service{store: store, geo: geo, licenseValid: licensing.IsEnterprise}
+}
+
+// Enabled reports whether custom attributes are being collected right now.
+// The device registry itself is community: what an Enterprise license buys is
+// the operator-defined metadata on top of it, so only the allowlist and the
+// values attached through it answer to this.
+func (s *Service) Enabled() bool {
+	return s.store != nil && s.licenseValid()
 }
 
 // Dashboard read/CRUD surface: thin delegations, the store owns semantics.
@@ -103,7 +122,14 @@ func (s *Service) GetSchema(ctx context.Context, appID string) (Schema, error) {
 	return s.store.GetSchema(ctx, appID)
 }
 
+// Declaring a key is what turns the feature on for an app, so it is the write
+// the license gates. Deleting one stays open below: an operator whose license
+// lapsed must be able to stop using the feature, and refusing the cleanup path
+// would only strand rows nobody can reach.
 func (s *Service) UpsertSchemaKey(ctx context.Context, appID string, spec KeySpec) (KeySpec, error) {
+	if !s.Enabled() {
+		return KeySpec{}, ErrRequiresValidLicense
+	}
 	return s.store.UpsertSchemaKey(ctx, appID, spec)
 }
 
@@ -115,12 +141,27 @@ func (s *Service) SearchMetadataValues(ctx context.Context, appID string, key st
 	return s.store.SearchMetadataValues(ctx, appID, key, search, limit)
 }
 
-func (s *Service) ListDevices(ctx context.Context, appID string, filter *MetadataFilter, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
-	return s.store.ListDevices(ctx, appID, filter, limit, cursor)
+func (s *Service) ListDevices(ctx context.Context, appID string, query DeviceQuery, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
+	return s.store.ListDevices(ctx, appID, query, limit, cursor)
 }
 
 func (s *Service) GetDevice(ctx context.Context, appID string, easClientID string) (*Device, error) {
 	return s.store.GetDevice(ctx, appID, easClientID)
+}
+
+// CountOnlineDevices counts devices seen within the window, whatever contacted
+// the server: a manifest poll counts exactly as much as a telemetry batch, so
+// this works on a fleet with no expo-observe at all. The query narrows it on
+// the same dimensions as ListDevices, so the count can sit next to a filtered
+// view without contradicting it.
+func (s *Service) CountOnlineDevices(ctx context.Context, appID string, window time.Duration, query DeviceQuery) (int64, error) {
+	if window <= 0 {
+		window = DefaultOnlineWindow
+	}
+	if window > MaxOnlineWindow {
+		window = MaxOnlineWindow
+	}
+	return s.store.CountOnlineDevices(ctx, appID, time.Now().UTC().Add(-window), query)
 }
 
 // UpdateHealthByIDs serves the dashboard's update-health display: MAU and
@@ -129,16 +170,52 @@ func (s *Service) UpdateHealthByIDs(ctx context.Context, appID string, updateIDs
 	return s.store.UpdateHealthByIDs(ctx, appID, updateIDs)
 }
 
-// TouchDevice is Apply's passive sibling: every contact a device makes with
+// DeviceInfo is the hardware and OS a device reports, named after the fields
+// expo-device exposes to app authors (modelName, osName, osVersion) so the
+// dashboard, the SDK and the registry all use one vocabulary. Only telemetry
+// carries it: the manifest headers say nothing about hardware, so every field
+// is optional and an empty one means "not reported", never "changed to empty".
+type DeviceInfo struct {
+	Model     string
+	OSName    string
+	OSVersion string
+}
+
+func (d DeviceInfo) IsZero() bool {
+	return d.Model == "" && d.OSName == "" && d.OSVersion == ""
+}
+
+// PlaceOf resolves the country and the city centroid of a request IP.
+// Telemetry ingestion denormalizes both onto every row, and the resolver is
+// optional: without a GeoLite2 database this returns a zero Place, which every
+// consumer reads as "not resolved" rather than as a location. The two travel
+// together because they come from one lookup, and separately because GeoLite2
+// routinely places an address block in a country without placing it in a city.
+func (s *Service) PlaceOf(remoteIP string) Place {
+	if s == nil || s.geo == nil || remoteIP == "" {
+		return Place{}
+	}
+	geo := s.geo.Resolve(remoteIP)
+	if geo == nil {
+		return Place{}
+	}
+	place := Place{Lat: geo.Lat, Lng: geo.Lng}
+	if geo.CountryCode != nil {
+		place.CountryCode = *geo.CountryCode
+	}
+	return place
+}
+
+// TouchDevice is Apply's passive sibling: every check-in a device makes with
 // the server registers it (metadata untouched), so device_identity is the
 // universal device registry and the identity ops only layer metadata on top.
 // The geo enrichment rides along exactly as on Apply.
-func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, remoteIP string, currentUpdateID *string) error {
+func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, remoteIP string, currentUpdateID *string, device DeviceInfo) error {
 	var geo *Geo
 	if s.geo != nil && remoteIP != "" {
 		geo = s.geo.Resolve(remoteIP)
 	}
-	return s.store.TouchDevice(ctx, appID, easClientID, geo, currentUpdateID)
+	return s.store.TouchDevice(ctx, appID, easClientID, geo, currentUpdateID, device)
 }
 
 // RecordUpdateFailures is the failure sink for both sources (manifest error
@@ -178,13 +255,23 @@ func (s *Service) Apply(ctx context.Context, req Request) (ApplyResult, error) {
 		geo = s.geo.Resolve(req.RemoteIP)
 	}
 
+	// Without a license the attributes are dropped, but the device is still
+	// registered: the registry (and the geo behind it) is community, and a
+	// device that identifies itself must not go missing from it. $unset stays
+	// whole for the same reason it bypasses the allowlist: it is the path that
+	// removes data, never the one that collects it.
+	attributes := req.Attributes
+	if !s.Enabled() {
+		attributes = nil
+	}
+
 	var result ApplyResult
 	var err error
 	switch req.Op {
 	case OpSet:
-		result, err = s.store.ApplySet(ctx, req.AppID, req.EASClientID, req.Attributes, geo)
+		result, err = s.store.ApplySet(ctx, req.AppID, req.EASClientID, attributes, geo)
 	case OpSetOnce:
-		result, err = s.store.ApplySetOnce(ctx, req.AppID, req.EASClientID, req.Attributes, geo)
+		result, err = s.store.ApplySetOnce(ctx, req.AppID, req.EASClientID, attributes, geo)
 	case OpUnset:
 		result, err = s.store.ApplyUnset(ctx, req.AppID, req.EASClientID, req.UnsetKeys, geo)
 	default:
@@ -193,6 +280,18 @@ func (s *Service) Apply(ctx context.Context, req Request) (ApplyResult, error) {
 		err = fmt.Errorf("unknown identity op %q", req.Op)
 		observeApply(req.AppID, Op("unknown"), err, 0, time.Since(start))
 		return ApplyResult{}, err
+	}
+
+	// The store saw no attributes to drop, so the gate reports its own: a
+	// counter reading zero here would hide the reason nothing is collected.
+	// Only the writing ops: $unset never stores attributes, so listing its
+	// payload as dropped would count a loss that never happened.
+	writes := req.Op == OpSet || req.Op == OpSetOnce
+	if writes && attributes == nil && len(req.Attributes) > 0 && err == nil {
+		for key := range req.Attributes {
+			result.DroppedKeys = append(result.DroppedKeys, key)
+		}
+		sort.Strings(result.DroppedKeys)
 	}
 
 	observeApply(req.AppID, req.Op, err, len(result.DroppedKeys), time.Since(start))

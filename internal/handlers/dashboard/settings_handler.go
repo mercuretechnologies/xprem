@@ -9,6 +9,7 @@ import (
 	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/providers/expo"
 	"expo-open-ota/internal/services"
+	"expo-open-ota/internal/version"
 	"net/http"
 )
 
@@ -33,6 +34,7 @@ func NewSettingsHandler(appService *services.AppService, ssoEnabled func(context
 
 type SettingsEnv struct {
 	BASE_URL                   string `json:"BASE_URL"`
+	SERVER_VERSION             string `json:"SERVER_VERSION"`
 	CONTROL_PLANE_ENABLED      bool   `json:"CONTROL_PLANE_ENABLED"`
 	CACHE_MODE                 string `json:"CACHE_MODE"`
 	REDIS_HOST                 string `json:"REDIS_HOST"`
@@ -123,6 +125,7 @@ func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	marshaledResponse, _ := json.Marshal(SettingsEnv{
 		BASE_URL:                               config.GetEnv("BASE_URL"),
+		SERVER_VERSION:                         version.Version,
 		CONTROL_PLANE_ENABLED:                  config.IsDBMode(),
 		CACHE_MODE:                             config.GetEnv("CACHE_MODE"),
 		REDIS_HOST:                             config.GetEnv("REDIS_HOST"),

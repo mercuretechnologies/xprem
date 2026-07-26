@@ -1,8 +1,10 @@
 -- +goose Up
 
 -- The Observe fact tables. Two sources feed them:
---   Source A: the expo-observe SDK (56+) POSTing OTLP JSON to
+--   Source A: the expo-observe SDK (55+) POSTing OTLP JSON to
 --             /observe/{APP_ID}/{projectId}/v1/metrics and /v1/logs.
+--             SDK 55 sends startup/update metrics only; logs, JS errors,
+--             navigation and the richer update dimensions require SDK 56.
 --   Source B: headers every expo-updates client already sends on /manifest
 --             (Expo-Current-Update-ID, Expo-Recent-Failed-Update-IDs,
 --             Expo-Fatal-Error), which carry adoption and launch-crash

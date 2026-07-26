@@ -134,7 +134,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 
 	t.Run("oversized body is a permanent 413", func(t *testing.T) {
 		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), nil, nil, nil)
-		big := bytes.Repeat([]byte("x"), maxLogsBodyBytes+1)
+		big := bytes.Repeat([]byte("x"), maxBatchBodyBytes+1)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, big)
 		require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
 	})
@@ -170,10 +170,6 @@ func TestHandleLogsResponseContract(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, recorder.Code)
 		require.True(t, mutator.hadDeadline, "each identity apply must have a request-scoped deadline")
 		require.Len(t, mutator.sets, 1)
-		require.Equal(t, "user_42", mutator.sets[0]["userId"])
-		// The envelope attributes were stripped before the store.
-		require.NotContains(t, mutator.sets[0], "event.name")
-		require.NotContains(t, mutator.sets[0], "session.id")
 
 		recorder = serveIngest(handler, http.MethodPost, logsPath, []byte(iosLogsFixture))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
@@ -379,12 +375,14 @@ func TestIngestEndToEnd(t *testing.T) {
 	recorder := serveIngest(handler, http.MethodPost, path, []byte(androidLogsFixture))
 	require.Equal(t, http.StatusNoContent, recorder.Code)
 
+	// No license is active in a plain test run, which is exactly the community
+	// deployment: the device is registered by its identify, and none of the
+	// custom attributes it carried are stored. The licensed write is covered by
+	// the identity store tests, where the gate can be pinned open.
 	device, err := identityStore.GetDevice(context.Background(), appID, "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d")
 	require.NoError(t, err)
-	require.NotNil(t, device)
-	require.Equal(t, "user_42", device.Metadata["userId"])
-	require.Equal(t, float64(12), device.Metadata["seats"])
-	require.Equal(t, true, device.Metadata["isInternal"])
+	require.NotNil(t, device, "the registry is community: an identify still registers the device")
+	require.Empty(t, device.Metadata)
 }
 
 func TestIdentityRequestsFromBatch(t *testing.T) {
@@ -410,4 +408,74 @@ func TestIdentityRequestsFromBatch(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, identityRequestsFromBatch(b, "app-1", ""))
 	})
+}
+
+// A sink that records what it was handed AND checks the row against the column
+// list the driver would bind it to. The round-trip tests that would catch a
+// type mismatch need a live ClickHouse and skip by default, so the shape of a
+// row has to be asserted somewhere that always runs.
+type capturingSink struct {
+	metrics []MetricRow
+	logs    []LogRow
+}
+
+func (s *capturingSink) InsertMetrics(_ context.Context, rows []MetricRow) error {
+	s.metrics = append(s.metrics, rows...)
+	return nil
+}
+
+func (s *capturingSink) InsertLogs(_ context.Context, rows []LogRow) error {
+	s.logs = append(s.logs, rows...)
+	return nil
+}
+
+// The geo enrichment is written onto the rows by the handler, not by the
+// flattener, so nothing in the flattener tests covers it.
+func TestHandleLogsEnrichesRowsWithPlace(t *testing.T) {
+	sink := &capturingSink{}
+	handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), sink, nil, nil)
+	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(androidLogsFixture))
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.NotEmpty(t, sink.logs)
+
+	for _, row := range sink.logs {
+		// No GeoLite2 database in a unit test, so the resolver answers "not
+		// resolved". Nil is the value that must reach the column: a zero
+		// coordinate would place every device in the Gulf of Guinea.
+		require.Empty(t, row.CountryCode)
+		require.Nil(t, row.Lat)
+		require.Nil(t, row.Lng)
+	}
+}
+
+// Resource attributes are unauthenticated client input and end up both in
+// LowCardinality columns and in the Postgres registry, so their length is
+// bounded before either sees them.
+func TestFlattenBoundsHostileResourceAttributes(t *testing.T) {
+	huge := strings.Repeat("A", maxResourceValueRunes*4)
+	envelope := newEnvelope(testAppID, map[string]any{
+		deviceModelKey:    huge,
+		osNameKey:         huge,
+		osVersionKey:      huge,
+		appVersionKey:     huge,
+		appBuildNumberKey: huge,
+		easBuildIDKey:     huge,
+		environmentKey:    huge,
+	})
+
+	for name, value := range map[string]string{
+		"deviceModel":    envelope.DeviceModel,
+		"osName":         envelope.OSName,
+		"osVersion":      envelope.OSVersion,
+		"appVersion":     envelope.AppVersion,
+		"appBuildNumber": envelope.AppBuildNumber,
+		"easBuildID":     envelope.EASBuildID,
+		"environment":    envelope.Environment,
+	} {
+		require.Len(t, []rune(value), maxResourceValueRunes, name)
+	}
+
+	// A real value is far below the bound and must come through untouched.
+	short := newEnvelope(testAppID, map[string]any{deviceModelKey: "SM-A546B"})
+	require.Equal(t, "SM-A546B", short.DeviceModel)
 }

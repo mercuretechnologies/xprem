@@ -35,6 +35,13 @@ type DeviceCheckIn struct {
 	// FatalError is the Expo-Fatal-Error header: the crash detail, sent by
 	// the client exactly once, on the first poll after the crash.
 	FatalError string
+	// Hardware and OS of the device, spelled as expo-device spells them.
+	// Telemetry-only: the manifest headers carry nothing of the sort, so
+	// these are empty on every poll and empty always means "not reported",
+	// never "changed to empty".
+	DeviceModel string
+	OSName      string
+	OSVersion   string
 }
 
 type ExpoProtocolHandler struct {
@@ -59,7 +66,7 @@ func (h *ExpoProtocolHandler) SetOnDeviceCheckIn(fn func(ctx context.Context, ch
 
 // resolveAppID returns the app a manifest or asset request targets. The
 // expo-app-id header wins when present. When it is absent the caller is a v1
-// client that cannot send it, so we fall back to the deploy's legacy app —
+// client that cannot send it, so we fall back to the deploy's legacy app:
 // see config.LegacyFallbackAppId, which returns "" when there is none and
 // leaves the request to be rejected.
 func resolveAppID(r *http.Request) string {

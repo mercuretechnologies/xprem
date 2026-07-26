@@ -30,18 +30,20 @@ type fakeTouchStore struct {
 
 	mu             sync.Mutex
 	lastCurrent    *string
+	lastDevice     identity.DeviceInfo
 	failedRecorded [][]string
 	lastFatal      string
 	lastType       identity.FailureType
 }
 
-func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *identity.Geo, currentUpdateID *string) error {
+func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *identity.Geo, currentUpdateID *string, device identity.DeviceInfo) error {
 	f.calls.Add(1)
 	if f.failing.Load() {
 		return errors.New("connection refused")
 	}
 	f.mu.Lock()
 	f.lastCurrent = currentUpdateID
+	f.lastDevice = device
 	f.mu.Unlock()
 	return nil
 }
@@ -294,18 +296,89 @@ func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 	// check-in must carry B, not regress to A.
 	now := time.Now()
 	rows := []LogRow{
-		{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: now.Add(-2 * time.Hour)},
-		{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: now.Add(-1 * time.Hour)},
-		{EASClientID: testDeviceID, UpdateID: testUpdateB, Timestamp: now},
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: now.Add(-2 * time.Hour)}},
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: now.Add(-1 * time.Hour)}},
+		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateB, Timestamp: now}},
 	}
 	recordCheckIns(ctx, recorder, testAppID, "", rows,
-		func(row LogRow) string { return row.EASClientID },
-		func(row LogRow) string { return row.UpdateID },
-		func(row LogRow) time.Time { return row.Timestamp })
+		func(row LogRow) Envelope { return row.Envelope })
 	require.Eventually(t, func() bool {
 		store.mu.Lock()
 		defer store.mu.Unlock()
 		return store.lastCurrent != nil && *store.lastCurrent == testUpdateB
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.EqualValues(t, 1, store.calls.Load(), "one check-in per device per batch")
+}
+
+// Hardware reaches the registry only through telemetry, so the recorder has to
+// carry it and, above all, must not let the manifest polls that follow blank
+// it out or re-trigger a write on every poll.
+func TestRecordCarriesReportedHardware(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	ctx := context.Background()
+
+	recorder.Record(ctx, handlers.DeviceCheckIn{
+		AppID:           testAppID,
+		EASClientID:     testDeviceID,
+		CurrentUpdateID: testUpdateA,
+		DeviceModel:     "iPhone18,2",
+		OSName:          "iOS",
+		OSVersion:       "26.1",
+	})
+	waitRecorded(t, localCache, 1, store)
+	store.mu.Lock()
+	assert.Equal(t, identity.DeviceInfo{Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1"}, store.lastDevice)
+	store.mu.Unlock()
+
+	// A manifest poll knows no hardware. Unknown is not a state: it neither
+	// writes again nor reports empty hardware downstream.
+	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
+	time.Sleep(50 * time.Millisecond)
+	assert.EqualValues(t, 1, store.calls.Load())
+}
+
+func TestRecordWritesThroughHardwareChange(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	ctx := context.Background()
+
+	base := handlers.DeviceCheckIn{
+		AppID:           testAppID,
+		EASClientID:     testDeviceID,
+		CurrentUpdateID: testUpdateA,
+		DeviceModel:     "iPhone18,2",
+		OSName:          "iOS",
+		OSVersion:       "26.1",
+	}
+	recorder.Record(ctx, base)
+	waitRecorded(t, localCache, 1, store)
+
+	// The user took the OS update: nothing else changed, and it still has to
+	// be recorded rather than wait for an unrelated transition.
+	upgraded := base
+	upgraded.OSVersion = "26.2"
+	recorder.Record(ctx, upgraded)
+	require.Eventually(t, func() bool { return store.calls.Load() == 2 }, 2*time.Second, 10*time.Millisecond)
+	store.mu.Lock()
+	assert.Equal(t, "26.2", store.lastDevice.OSVersion)
+	store.mu.Unlock()
+}
+
+// Cache entries written before the hardware component existed have two fields.
+// They must parse, and must not be mistaken for "hardware already recorded".
+func TestParseCachedCheckInAcceptsLegacyValue(t *testing.T) {
+	current, failedFP, deviceFP, ok := parseCachedCheckIn("f:" + testUpdateA + ":fabc")
+	require.True(t, ok)
+	assert.Equal(t, testUpdateA, current)
+	assert.Equal(t, "fabc", failedFP)
+	assert.Empty(t, deviceFP)
+
+	current, failedFP, deviceFP, ok = parseCachedCheckIn(cachedCheckInValue(testUpdateA, "fabc", "d42"))
+	require.True(t, ok)
+	assert.Equal(t, testUpdateA, current)
+	assert.Equal(t, "fabc", failedFP)
+	assert.Equal(t, "d42", deviceFP)
 }

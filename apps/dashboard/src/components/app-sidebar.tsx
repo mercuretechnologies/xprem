@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
   BadgeCheck,
   Box,
+  ChevronDown,
+  ChartNoAxesCombined,
   CircleUser,
   Fingerprint,
   ScrollText,
@@ -30,6 +32,7 @@ import { CreateAppModal } from '@/components/app-creation-modal';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
 import { EnterpriseBadge } from '@/ee/components/EnterpriseBadge';
+import { observeNavigation } from '@/pages/Observe/navigation';
 import { ThemePreference, useTheme } from '@/lib/theme';
 
 const NavLink = ({
@@ -85,9 +88,92 @@ const PendingUsersBadge = ({ count }: { count: number }) => (
   </span>
 );
 
+// Observe is a set of pages, not one page: each answers a different question
+// and people go straight to the one they need. They are sub-entries here
+// rather than tabs inside the page so the destination is visible before you
+// arrive, and so the page keeps its full height for the data.
+const ObserveNav = ({ onNavigate }: { onNavigate?: () => void }) => {
+  const { pathname, search } = useLocation();
+  const navigationId = useId();
+  const isActive = pathname === '/observe' || pathname.startsWith('/observe/');
+  const [isOpen, setIsOpen] = useState(isActive);
+  useEffect(() => {
+    if (isActive) setIsOpen(true);
+  }, [isActive]);
+
+  // Filters, period and live state all live in the query string. Carrying it
+  // across sub-pages is the whole point: you narrow to a branch once, then
+  // walk performance, events and logs on that same slice.
+  const carried = isActive ? search : '';
+
+  return (
+    <div>
+      <div
+        className={clsx(
+          'flex items-center rounded-md border border-transparent pr-1 transition-all duration-150 motion-reduce:transition-none',
+          isActive
+            ? 'border-primary/20 bg-primary/10 text-foreground'
+            : 'text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground'
+        )}>
+        <Link
+          to={`/observe/overview${carried}`}
+          onClick={() => onNavigate?.()}
+          className={clsx(
+            'flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-sm',
+            isActive && 'font-medium'
+          )}>
+          <ChartNoAxesCombined className="h-4 w-4" strokeWidth={1.75} />
+          <span>Observe</span>
+        </Link>
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          aria-controls={navigationId}
+          aria-label={isOpen ? 'Collapse Observe' : 'Expand Observe'}
+          onClick={() => setIsOpen(open => !open)}
+          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+          <ChevronDown
+            className={clsx(
+              'h-3.5 w-3.5 transition-transform duration-150 motion-reduce:transition-none',
+              isOpen && 'rotate-180'
+            )}
+          />
+        </button>
+      </div>
+
+      {isOpen && (
+        <div id={navigationId} className="ml-4 mt-0.5 space-y-0.5 border-l border-border/70 pl-2">
+          {observeNavigation.map(page => {
+            const to = `/observe/${page.value}`;
+            const active = pathname === to;
+            return (
+              <Link
+                key={page.value}
+                to={`${to}${carried}`}
+                onClick={() => onNavigate?.()}
+                title={page.question}
+                className={clsx(
+                  'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors',
+                  active
+                    ? 'bg-accent font-medium text-foreground'
+                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+                )}>
+                <page.icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                <span>{page.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
   <p className="px-3 pb-1.5 pt-5 text-xs font-medium text-muted-foreground">{children}</p>
 );
+
+const accessSecurityPaths = ['/users', '/roles', '/sso', '/audit-logs'];
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -140,10 +226,22 @@ export function AppSidebar({
   onNavigate?: () => void;
   onOpenCommandPalette?: () => void;
 } = {}) {
-  const { CONTROL_PLANE_ENABLED } = useSettings();
+  const { CONTROL_PLANE_ENABLED, SERVER_VERSION } = useSettings();
   const { isAdmin } = useCurrentUser();
+  const { pathname } = useLocation();
   const { apps, selectedAppId, setSelectedAppId, refreshApps, isLoading } = useSelectedApp();
+  const accessSecurityNavigationId = useId();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const isAccessSecurityActive = accessSecurityPaths.some(
+    path => pathname === path || pathname.startsWith(`${path}/`)
+  );
+  const [isAccessSecurityOpen, setIsAccessSecurityOpen] = useState(isAccessSecurityActive);
+
+  useEffect(() => {
+    if (isAccessSecurityActive) {
+      setIsAccessSecurityOpen(true);
+    }
+  }, [isAccessSecurityActive]);
 
   // Same query key as the Users page, so react-query serves both from one
   // request and approving an account refreshes the badge on its own.
@@ -152,7 +250,18 @@ export function AppSidebar({
     queryFn: () => api.getUsers(),
     enabled: CONTROL_PLANE_ENABLED && isAdmin,
   });
+  const licenseQuery = useQuery({
+    queryKey: ['license'],
+    queryFn: () => api.getLicense(),
+    enabled: CONTROL_PLANE_ENABLED,
+  });
   const pendingUsersCount = (usersQuery.data ?? []).filter(user => !user.enabled).length;
+  // Anything other than a confirmed valid license shows the badges, including
+  // while the query is still in flight or after it failed. Testing for an
+  // explicit `false` made them appear a beat late on a community deployment,
+  // and vanish entirely when /license was unreachable: a community user would
+  // see Roles, SSO and Audit log with nothing saying they are Enterprise.
+  const showEnterpriseNavBadges = licenseQuery.data?.valid !== true;
   const commandPaletteShortcut =
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
       ? '⌘ K'
@@ -182,8 +291,6 @@ export function AppSidebar({
             />
           </span>
         </div>
-
-        <EnterpriseBadge />
 
         <div className="px-3 pt-3">
           {/* Always rendered, even with a single app: the selector is what tells
@@ -235,6 +342,7 @@ export function AppSidebar({
                     Updates
                   </NavLink>
                 )}
+                {CONTROL_PLANE_ENABLED && <ObserveNav onNavigate={onNavigate} />}
                 <NavLink to="/channels" icon={Box} onNavigate={onNavigate}>
                   Channels
                 </NavLink>
@@ -273,55 +381,86 @@ export function AppSidebar({
           {/* Who signs in and how: accounts on one side, SSO on the other.
               Both are control-plane, admin-managed concerns. */}
           {CONTROL_PLANE_ENABLED && isAdmin && (
-            <>
-              <SectionLabel>Access & Security</SectionLabel>
-              <div className="space-y-0.5">
-                <NavLink
-                  to="/users"
-                  icon={Users}
-                  onNavigate={onNavigate}
-                  badge={
-                    pendingUsersCount > 0 ? (
-                      <PendingUsersBadge count={pendingUsersCount} />
-                    ) : undefined
-                  }>
-                  Users
-                </NavLink>
-                <NavLink
-                  to="/roles"
-                  icon={ShieldCheck}
-                  badge={<EnterpriseNavBadge />}
-                  onNavigate={onNavigate}>
-                  Roles
-                </NavLink>
-                <NavLink
-                  to="/sso"
-                  icon={Fingerprint}
-                  badge={<EnterpriseNavBadge />}
-                  onNavigate={onNavigate}>
-                  SSO
-                </NavLink>
-                <NavLink
-                  to="/audit-logs"
-                  icon={ScrollText}
-                  badge={<EnterpriseNavBadge />}
-                  onNavigate={onNavigate}>
-                  Audit log
-                </NavLink>
-              </div>
-            </>
+            <div>
+              <button
+                type="button"
+                aria-expanded={isAccessSecurityOpen}
+                aria-controls={accessSecurityNavigationId}
+                onClick={() => setIsAccessSecurityOpen(open => !open)}
+                className={clsx(
+                  'flex w-full items-center px-3 pb-1.5 pt-5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  isAccessSecurityActive
+                    ? 'text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}>
+                <span>Access &amp; Security</span>
+                <ChevronDown
+                  className={clsx(
+                    'ml-auto h-3.5 w-3.5 transition-transform duration-150 motion-reduce:transition-none',
+                    isAccessSecurityOpen && 'rotate-180'
+                  )}
+                />
+              </button>
+
+              {isAccessSecurityOpen && (
+                <div
+                  id={accessSecurityNavigationId}
+                  className="ml-2 space-y-0.5 border-l border-border/70 pl-2">
+                  <NavLink
+                    to="/users"
+                    icon={Users}
+                    onNavigate={onNavigate}
+                    badge={
+                      pendingUsersCount > 0 ? (
+                        <PendingUsersBadge count={pendingUsersCount} />
+                      ) : undefined
+                    }>
+                    Users
+                  </NavLink>
+                  <NavLink
+                    to="/roles"
+                    icon={ShieldCheck}
+                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                    onNavigate={onNavigate}>
+                    Roles
+                  </NavLink>
+                  <NavLink
+                    to="/sso"
+                    icon={Fingerprint}
+                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                    onNavigate={onNavigate}>
+                    SSO
+                  </NavLink>
+                  <NavLink
+                    to="/audit-logs"
+                    icon={ScrollText}
+                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                    onNavigate={onNavigate}>
+                    Audit log
+                  </NavLink>
+                </div>
+              )}
+            </div>
           )}
         </nav>
 
-        <div className="flex items-center gap-2 border-t border-border/80 p-3">
-          <Link
-            to="/logout"
-            onClick={onNavigate}
-            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-transparent px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-accent/70 hover:text-foreground">
-            <LogOut className="h-4 w-4" strokeWidth={1.75} />
-            <span>Log out</span>
-          </Link>
-          <ThemeSwitcher />
+        <div className="border-t border-border/80">
+          <EnterpriseBadge />
+
+          <div className="flex items-center gap-2 p-3">
+            <Link
+              to="/logout"
+              onClick={onNavigate}
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-transparent px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:border-border hover:bg-accent/70 hover:text-foreground">
+              <LogOut className="h-4 w-4" strokeWidth={1.75} />
+              <span>Log out</span>
+            </Link>
+            <ThemeSwitcher />
+          </div>
+
+          <p className="px-3 pb-3 text-center font-mono text-[10px] text-muted-foreground/70">
+            Server {SERVER_VERSION}
+          </p>
         </div>
       </aside>
 

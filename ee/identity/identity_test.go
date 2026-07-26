@@ -124,3 +124,69 @@ func TestRenderValue(t *testing.T) {
 	require.Equal(t, "42", RenderValue(float64(42)))
 	require.Equal(t, "42.5", RenderValue(42.5))
 }
+
+// Containment says AND inside one document and OR across the array, so a
+// conjunction of two keys with several values each is their cross-product.
+func TestMetadataFiltersContainmentDocs(t *testing.T) {
+	docs, err := MetadataFilters{
+		{Key: "plan", Values: []any{"pro", "enterprise"}},
+		{Key: "tenant", Values: []any{"globex"}},
+	}.ContainmentDocs()
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		`{"plan":"pro","tenant":"globex"}`,
+		`{"plan":"enterprise","tenant":"globex"}`,
+	}, asStrings(docs))
+
+	// No filter at all asks nothing of the registry.
+	none, err := MetadataFilters{}.ContainmentDocs()
+	require.NoError(t, err)
+	require.Nil(t, none)
+
+	// The product is what costs, so it is what the cap counts.
+	wide := MetadataFilters{
+		{Key: "plan", Values: make([]any, 12)},
+		{Key: "tenant", Values: make([]any, 12)},
+	}
+	_, err = wide.ContainmentDocs()
+	require.ErrorIs(t, err, ErrTooManyCombinations)
+}
+
+func asStrings(docs [][]byte) []string {
+	out := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		out = append(out, string(doc))
+	}
+	return out
+}
+
+// Repeating a key widens it; naming another narrows further.
+func TestParseFilterPairs(t *testing.T) {
+	schema := Schema{
+		"plan":   {Key: "plan", Type: ValueTypeString, MaxLength: 256},
+		"level":  {Key: "level", Type: ValueTypeNumber, MaxLength: 256},
+		"canary": {Key: "canary", Type: ValueTypeBoolean, MaxLength: 256},
+	}
+
+	filters, err := ParseFilterPairs(schema, []string{"plan:pro", "level:2", "plan:enterprise"})
+	require.NoError(t, err)
+	require.Equal(t, MetadataFilters{
+		{Key: "plan", Values: []any{"pro", "enterprise"}},
+		{Key: "level", Values: []any{float64(2)}},
+	}, filters)
+
+	// A value carries the type its key declares, never the text it arrived as.
+	typed, err := ParseFilterPairs(schema, []string{"canary:true"})
+	require.NoError(t, err)
+	require.Equal(t, MetadataFilters{{Key: "canary", Values: []any{true}}}, typed)
+
+	// A value may contain colons; only the first one splits the pair.
+	urls, err := ParseFilterPairs(schema, []string{"plan:https://example.com"})
+	require.NoError(t, err)
+	require.Equal(t, MetadataFilters{{Key: "plan", Values: []any{"https://example.com"}}}, urls)
+
+	for _, bad := range []string{"plan", "plan:", ":pro", "nothing:x", "level:perhaps"} {
+		_, err := ParseFilterPairs(schema, []string{bad})
+		require.ErrorIs(t, err, ErrInvalidFilterPair, bad)
+	}
+}

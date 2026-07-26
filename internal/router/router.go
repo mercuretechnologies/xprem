@@ -261,6 +261,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 	appAuthSubrouter.Handle("/identity/schema/{KEY}", requirePermission(rbac.PermIdentityManage)(http.HandlerFunc(container.IdentityHandler.DeleteSchemaKeyHandler))).Methods(http.MethodDelete)
 	appAuthSubrouter.HandleFunc("/identity/values", container.IdentityHandler.SearchValuesHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/identity/devices", container.IdentityHandler.ListDevicesHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/identity/online", container.IdentityHandler.OnlineDevicesHandler).Methods(http.MethodGet)
 	appAuthSubrouter.HandleFunc("/identity/devices/{EAS_CLIENT_ID}", container.IdentityHandler.GetDeviceHandler).Methods(http.MethodGet)
 	// Instant-T adoption and launch health per update, straight from the
 	// device registry (Postgres only, works without ClickHouse): feeds the
@@ -269,6 +270,18 @@ func NewRouter(container *AppContainer) *mux.Router {
 	// Historical series is projected into ClickHouse. The endpoint stays
 	// present without ClickHouse and reports available=false so the dashboard
 	// can hide the graph while instant-T health keeps working.
-	appAuthSubrouter.HandleFunc("/observe/update-health/history", container.ObserveHealthHandler.GetUpdateHealthHistoryHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/update-health/history", container.ObserveHealthHistoryHandler.GetUpdateHealthHistoryHandler).Methods(http.MethodGet)
+	// The Observe explorer, all read-only and all open to any viewer of the app,
+	// like the other listings above: they aggregate telemetry, they never name a
+	// user. Each one degrades to available=false inside the handler when
+	// ClickHouse is absent rather than disappearing from the API. check-ins is
+	// the map's incremental live feed, not a listing.
+	appAuthSubrouter.HandleFunc("/observe/overview", container.ObserveExplorerHandler.GetOverviewHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/check-ins", container.ObserveExplorerHandler.GetCheckInsHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/summary", container.ObserveExplorerHandler.GetSummaryHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/events", container.ObserveExplorerHandler.GetEventsHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/logs", container.ObserveExplorerHandler.GetLogsHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/breakdown", container.ObserveExplorerHandler.GetBreakdownHandler).Methods(http.MethodGet)
+	appAuthSubrouter.HandleFunc("/observe/conditions", container.ObserveExplorerHandler.GetConditionsHandler).Methods(http.MethodGet)
 	return r
 }

@@ -3,13 +3,16 @@
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
 // Package identity maps expo-eas-client install UUIDs to operator-defined
-// metadata (userId, tenant, ...), fed by `identify` log events on the observe
-// ingestion route. The dashboard "Identity" section declares which metadata
-// keys are accepted and with which type; everything else coming from the wire
-// is dropped, so hostile payloads are bounded by construction.
+// metadata (userId, tenant, ...), fed by the $set / $set_once / $unset log
+// events on the observe ingestion route. The dashboard "Identity" section
+// declares which metadata keys are accepted and with which type; everything
+// else coming from the wire is dropped, so hostile payloads are bounded by
+// construction.
 //
-// The package is EE-licensed but NOT license-gated: the feature works on
-// community deployments too.
+// The package is EE-licensed AND license-gated: without a valid license the
+// device registry keeps working (it is what update health is built on) but
+// operator-defined attributes are not stored, and the ops report back which
+// keys they dropped.
 package identity
 
 import (
@@ -19,6 +22,7 @@ import (
 	"math"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -26,6 +30,11 @@ import (
 // ErrTooManySchemaKeys is returned when declaring a new allowlist key would
 // exceed MaxSchemaKeys. The dashboard surfaces it as a 409.
 var ErrTooManySchemaKeys = errors.New("identity schema key limit reached")
+
+// ErrRequiresValidLicense is returned when declaring an attribute without a
+// valid enterprise license. The device registry stays community; the
+// operator-defined metadata on top of it is what the license buys.
+var ErrRequiresValidLicense = errors.New("custom attributes require an active enterprise license")
 
 type ValueType string
 
@@ -43,7 +52,7 @@ const (
 	MaxLengthCeiling = 1024
 	// MaxSchemaKeys caps the allowlist size. Every declared key multiplies the
 	// worst-case device row that the unauthenticated wire can fill, so the
-	// operator-side bound keeps hostile identifies at ~tens of KB per row
+	// operator-side bound keeps hostile payloads at ~tens of KB per row
 	// instead of megabytes.
 	MaxSchemaKeys = 100
 )
@@ -79,7 +88,7 @@ func ValidateKeySpec(spec KeySpec) error {
 
 // Sanitize filters raw wire metadata down to the allowlist. A value survives
 // only when its key is declared and its JSON type matches the declared type;
-// violations drop the single entry, never the whole identify. Oversized
+// violations drop the single entry, never the whole operation. Oversized
 // strings are dropped rather than truncated (a truncated userId would corrupt
 // the mapping silently). The dropped keys come back for counters and logs.
 //
@@ -129,6 +138,71 @@ func coerceValue(spec KeySpec, value any) (any, bool) {
 		return b, true
 	}
 	return nil, false
+}
+
+// ParseFilterValue turns the text a filter travels as (a URL parameter) into
+// the value its declared type is stored as. Metadata lives in JSONB and is
+// matched by containment, which is type-aware: a boolean stored as `true` is
+// not found by `"true"`, so the schema is what decides how to read the text.
+func ParseFilterValue(spec KeySpec, raw string) (any, bool) {
+	switch spec.Type {
+	case ValueTypeString:
+		return coerceValue(spec, raw)
+	case ValueTypeNumber:
+		number, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return nil, false
+		}
+		return coerceValue(spec, number)
+	case ValueTypeBoolean:
+		boolean, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, false
+		}
+		return coerceValue(spec, boolean)
+	}
+	return nil, false
+}
+
+// ErrInvalidFilterPair reports a pair that is not `key:value`, names a key the
+// schema does not declare, or carries a value that key's type cannot hold.
+var ErrInvalidFilterPair = errors.New("invalid attribute filter")
+
+// ParseFilterPairs reads the `key:value` pairs a filter travels as. Pairs
+// repeat, and repeating a key adds a value to it rather than replacing it, so
+// `plan:pro`, `plan:enterprise`, `tenant:globex` reads as "plan is pro or
+// enterprise, and tenant is globex".
+//
+// Keys never contain a colon (keyPattern forbids it), so the first one splits
+// the pair and values keep theirs.
+func ParseFilterPairs(schema Schema, pairs []string) (MetadataFilters, error) {
+	filters := MetadataFilters{}
+	index := map[string]int{}
+	for _, pair := range pairs {
+		key, raw, found := strings.Cut(strings.TrimSpace(pair), ":")
+		if !found || key == "" || raw == "" {
+			return nil, ErrInvalidFilterPair
+		}
+		spec, declared := schema[key]
+		if !declared {
+			return nil, ErrInvalidFilterPair
+		}
+		value, ok := ParseFilterValue(spec, raw)
+		if !ok {
+			return nil, ErrInvalidFilterPair
+		}
+		at, seen := index[key]
+		if !seen {
+			index[key] = len(filters)
+			filters = append(filters, MetadataFilter{Key: key})
+			at = index[key]
+		}
+		filters[at].Values = append(filters[at].Values, value)
+	}
+	if len(filters) == 0 {
+		return nil, nil
+	}
+	return filters, nil
 }
 
 func toFloat(value any) (float64, bool) {
@@ -183,8 +257,22 @@ type Device struct {
 	City        *string
 	Lat         *float64
 	Lng         *float64
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
+	// Hardware and OS as last reported by telemetry. nil means the device has
+	// never sent any: the manifest path carries no such headers, so a fleet
+	// without expo-observe reports nothing here.
+	DeviceModel *string
+	OSName      *string
+	OSVersion   *string
+	// The update the device is running, and the release dimensions derived
+	// from it. Branch, RuntimeVersion and Platform are nil when the update is
+	// unknown to this server: the embedded bundle reports its own id, which
+	// matches no published update.
+	CurrentUpdateID *string
+	Branch          *string
+	RuntimeVersion  *string
+	Platform        *string
+	FirstSeenAt     time.Time
+	LastSeenAt      time.Time
 }
 
 // DeviceCursor is the keyset position for paginating the device inventory:
@@ -195,15 +283,118 @@ type DeviceCursor struct {
 }
 
 // MetadataFilter narrows the device inventory to installs whose metadata
-// contains an exact key/value. String values only for now (userId, tenant,
-// plan, the dominant filter targets); typed number/bool filtering is not
-// wired into the dashboard yet.
+// contains the key with one of the given values. Values carry the declared
+// type (string, float64 or bool), not the text they arrived as: metadata is
+// matched by JSONB containment, which never matches `true` against `"true"`.
+// ParseFilterValue is what turns one into the other.
+//
+// One entry is one key, and any of its values matches: "plan is pro or
+// enterprise" is the comparison people actually ask for.
 type MetadataFilter struct {
-	Key   string
-	Value string
+	Key    string
+	Values []any
+}
+
+// MetadataFilters is a conjunction: a device matches when every key matches one
+// of its values. "plan is pro or enterprise, and tenant is globex" narrows the
+// two the way a reader expects, and each key can still be compared over
+// several values.
+type MetadataFilters []MetadataFilter
+
+// A containment document spells one complete combination, so the count is the
+// product of the value counts. Beyond this the question is better asked as
+// fewer values than as thousands of index probes.
+const MaxContainmentDocs = 128
+
+// ErrTooManyCombinations reports a filter whose keys and values multiply out
+// past MaxContainmentDocs.
+var ErrTooManyCombinations = errors.New("too many attribute combinations")
+
+// ContainmentDocs renders the conjunction as the set of JSONB documents that
+// `metadata @> ANY(...)` accepts. Containment of `{"plan":"pro","tenant":"globex"}`
+// already means "plan is pro AND tenant is globex", so the AND lives inside
+// each document and the OR is the array: one document per combination.
+func (f MetadataFilters) ContainmentDocs() ([][]byte, error) {
+	if len(f) == 0 {
+		return nil, nil
+	}
+	combinations := 1
+	for _, entry := range f {
+		if len(entry.Values) == 0 {
+			return nil, nil
+		}
+		combinations *= len(entry.Values)
+		if combinations > MaxContainmentDocs {
+			return nil, ErrTooManyCombinations
+		}
+	}
+
+	// Grown one key at a time: each existing combination is extended with every
+	// value of the next key.
+	combos := []map[string]any{{}}
+	for _, entry := range f {
+		next := make([]map[string]any, 0, len(combos)*len(entry.Values))
+		for _, combo := range combos {
+			for _, value := range entry.Values {
+				grown := make(map[string]any, len(combo)+1)
+				for key, existing := range combo {
+					grown[key] = existing
+				}
+				grown[entry.Key] = value
+				next = append(next, grown)
+			}
+		}
+		combos = next
+	}
+
+	docs := make([][]byte, 0, len(combos))
+	for _, combo := range combos {
+		doc, err := json.Marshal(combo)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
+// DeviceQuery narrows the device inventory. Every field is optional and an
+// empty one means "do not filter". The release dimensions (branch, runtime,
+// platform) are matched against the update each device is currently running,
+// so a device on the embedded bundle matches none of them.
+//
+// Channel, app version, build number, EAS build id and environment are
+// deliberately absent: the registry never learns them. They live only in
+// telemetry resource attributes, and inventing a column for them here would
+// mean a value that is right for SDK users and silently wrong for everyone
+// else.
+type DeviceQuery struct {
+	Metadata MetadataFilters
+	// Every dimension is a set, like the telemetry filters: empty means "do
+	// not filter", several values compare populations side by side.
+	EASClientIDs     []string
+	CurrentUpdateIDs []string
+	// The publish a device's update belongs to. A device stores the update it
+	// runs, never the publish it came from, so this is matched through that
+	// update rather than on the device itself.
+	UpdateGroupIDs  []string
+	Branches        []string
+	RuntimeVersions []string
+	Platforms       []string
+	DeviceModels    []string
+	OSNames         []string
+	OSVersions      []string
+	CountryCodes    []string
 }
 
 const (
+	// OnlineWindow is what "online" means here: a device that pinged the
+	// server, by any route, within this window. Long enough to survive the
+	// check-in debounce and a backgrounded app, short enough that the number
+	// still reads as "right now".
+	DefaultOnlineWindow = 20 * time.Minute
+	MaxOnlineWindow     = 24 * time.Hour
+
 	// DefaultDevicesPageSize and MaxDevicesPageSize bound the inventory page.
 	DefaultDevicesPageSize = 50
 	MaxDevicesPageSize     = 200
@@ -221,13 +412,22 @@ type Geo struct {
 	Lng         *float64
 }
 
+// Place is what telemetry ingestion keeps of a Geo: the country it filters on
+// and the coordinates it stores for later. The city name is deliberately left
+// behind, since nothing downstream groups or filters on it.
+type Place struct {
+	CountryCode string
+	Lat         *float64
+	Lng         *float64
+}
+
 // ValueCount is one autocomplete suggestion for a metadata key.
 type ValueCount struct {
 	Value       string `json:"value"`
 	DeviceCount int64  `json:"deviceCount"`
 }
 
-// ApplyResult reports what an identify did: the device after merge, and which
+// ApplyResult reports what an operation did: the device after merge, and which
 // incoming keys were rejected by the allowlist.
 type ApplyResult struct {
 	Device      Device

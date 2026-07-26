@@ -45,6 +45,9 @@ func TestFlattenMetricsIOS(t *testing.T) {
 	// device.model.identifier wins over device.model.name.
 	assert.Equal(t, "iPhone17,3", tti.DeviceModel)
 	assert.Equal(t, "1.4.0", tti.AppVersion)
+	assert.Equal(t, "421", tti.AppBuildNumber)
+	assert.Equal(t, "7F2C1D3E-8B4A-4C5D-9E6F-0A1B2C3D4E5F", tti.EASBuildID)
+	assert.Equal(t, "production", tti.Environment)
 	assert.Equal(t, "57.0.7", tti.SDKVersion)
 	assert.Equal(t, "expo.app_startup.tti", tti.MetricName)
 	assert.InDelta(t, 1.842, tti.Value, 0.0001)

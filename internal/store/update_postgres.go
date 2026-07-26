@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -590,24 +591,25 @@ func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, 
 	}, nil
 }
 
-// GetBranchNameByUpdateUUID resolves the branch an update belongs to from the
-// uuid clients report on the wire (observe telemetry enrichment). Postgres-only
-// on purpose, NOT part of services.UpdateRepository: the bucket store has no
-// consumer for it and the shared interface should not grow a method one
-// implementation would stub. ("", nil) means "no such update", which is data
-// (permanent, cacheable); an error is transient database trouble.
-func (s *PostgresUpdateStore) GetBranchNameByUpdateUUID(ctx context.Context, appID string, updateUUID string) (string, error) {
-	// ToPgUUID turns a malformed id into a NULL param, which matches no row:
-	// malformed input answers ("", nil), the permanent kind of absence.
-	name, err := s.engine.GetBranchNameByUpdateUUID(ctx, pgdb.GetBranchNameByUpdateUUIDParams{
+// GetUpdateOriginByUUID resolves both dimensions the observe flattener
+// denormalizes onto every row: the branch of an update and the publish it came
+// from. Both are permanent properties of the update, so one cached lookup
+// covers the batch. An empty group is data, not an error: older CLIs and
+// rollback markers have none.
+func (s *PostgresUpdateStore) GetUpdateOriginByUUID(ctx context.Context, appID string, updateUUID string) (string, string, error) {
+	row, err := s.engine.GetUpdateOriginByUUID(ctx, pgdb.GetUpdateOriginByUUIDParams{
 		AppID:      ToPgUUID(appID),
 		UpdateUuid: ToPgUUID(updateUUID),
 	})
 	if err != nil {
 		if database.IsNoRows(err) {
-			return "", nil
+			return "", "", nil
 		}
-		return "", err
+		return "", "", err
 	}
-	return name, nil
+	group := ""
+	if row.PublishGroup.Valid {
+		group = uuid.UUID(row.PublishGroup.Bytes).String()
+	}
+	return row.BranchName, group, nil
 }

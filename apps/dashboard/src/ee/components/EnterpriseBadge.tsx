@@ -27,7 +27,7 @@ export const EnterpriseBadge = () => {
   }
 
   return (
-    <div className="mx-5 mt-2 flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.07] px-2.5 py-1.5 shadow-card">
+    <div className="mx-3 mt-3 flex items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.07] px-2.5 py-1.5 shadow-card">
       <BadgeCheck
         className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300"
         strokeWidth={2}

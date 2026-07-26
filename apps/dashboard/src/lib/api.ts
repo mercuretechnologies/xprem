@@ -225,7 +225,10 @@ export type UpdateHealthRecord = {
 export type UpdateHealthHistoryPoint = {
   timestamp: string;
   capturedAt: string;
-  role: 'current' | 'candidate' | 'control';
+  // 'legacy' is an update the fleet is still on but that no longer heads its
+  // branch: its health is settled, its adoption is the answer to "who is
+  // stuck on the old version".
+  role: 'current' | 'candidate' | 'control' | 'legacy';
   devicesOnUpdate: number;
   successfulDevices: number;
   faultyDevices: number;
@@ -234,9 +237,306 @@ export type UpdateHealthHistoryPoint = {
   healthPercent: number | null;
 };
 
+// Same curves, split by a device dimension. Keys are segment values instead
+// of update ids, rebuilt from the raw health events since the snapshots are
+// pre-aggregated per update.
+export type UpdateHealthSegmentPoint = {
+  timestamp: string;
+  devicesOnUpdate: number;
+  successfulDevices: number;
+  faultyDevices: number;
+  healthPercent: number | null;
+};
+
+export type UpdateHealthSegmentsResponse = {
+  available: boolean;
+  dimension: string;
+  segments: Record<string, UpdateHealthSegmentPoint[]>;
+};
+
 export type UpdateHealthHistoryResponse = {
   available: boolean;
   updates: Record<string, UpdateHealthHistoryPoint[]>;
+};
+
+export type IdentityValueType = 'string' | 'number' | 'boolean';
+
+export type IdentitySchemaKey = {
+  key: string;
+  type: IdentityValueType;
+  maxLength: number;
+};
+
+export type IdentityValueSuggestion = {
+  value: string;
+  deviceCount: number;
+};
+
+// Every dimension is a list: one value filters, several compare. Sent as
+// repeated query parameters rather than a separated string, because an Apple
+// hardware identifier carries a comma of its own ("iPhone18,2").
+export type ObserveQuery = {
+  from?: string;
+  to?: string;
+  platform?: Array<'ios' | 'android'>;
+  updateId?: string[];
+  updateGroupId?: string[];
+  branch?: string[];
+  runtimeVersion?: string[];
+  channel?: string[];
+  easClientId?: string[];
+  appVersion?: string[];
+  appBuildNumber?: string[];
+  easBuildId?: string[];
+  environment?: string[];
+  // Hardware and OS, straight from the telemetry resource attributes. They are
+  // what turns "the app is slow" into "the app is slow on old Android phones".
+  osName?: string[];
+  osVersion?: string[];
+  deviceModel?: string[];
+  // Country frozen on the row at ingestion, not the device's current country.
+  countryCode?: string[];
+  // Identity attributes as `key:value` pairs. Repeating a key widens it
+  // ("plan is pro or enterprise"), naming another key narrows further ("and
+  // tenant is globex").
+  attr?: string[];
+  // The state the device reported for a measurement, read from the params its
+  // client attached. Honored by the timing reads only: nothing else holds them.
+  // The values are the segment names the split produced, bucket labels
+  // included, so a row of a breakdown filters on exactly what it displayed.
+  thermalState?: string[];
+  lowPowerMode?: string[];
+  networkType?: string[];
+  frozenFrames?: string[];
+  networkBytes?: string[];
+};
+
+// What the Postgres device registry can be asked. Narrower than ObserveQuery
+// on purpose: the build dimensions and the channel exist in telemetry only, and
+// there is no time range because the registry answers on its own window.
+export type IdentityDeviceQuery = Pick<
+  ObserveQuery,
+  | 'platform'
+  | 'branch'
+  | 'runtimeVersion'
+  | 'updateId'
+  | 'updateGroupId'
+  | 'easClientId'
+  | 'osName'
+  | 'osVersion'
+  | 'deviceModel'
+  | 'countryCode'
+  | 'attr'
+>;
+
+// Query parameters for an ObserveQuery: scalars are set, lists are appended
+// once per value.
+export const observeSearchParams = (query: ObserveQuery): URLSearchParams => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) if (entry) search.append(key, String(entry));
+    } else if (value) {
+      search.set(key, String(value));
+    }
+  }
+  return search;
+};
+
+// A registered device. Hardware and OS are absent until the device sends
+// telemetry; branch, runtime and platform are joined from the update it runs,
+// so they are absent for the embedded bundle.
+export type IdentityDevice = {
+  easClientId: string;
+  metadata: Record<string, unknown>;
+  countryCode?: string;
+  city?: string;
+  // City centroid, absent whenever GeoLite2 resolved a country but not a city.
+  lat?: number;
+  lng?: number;
+  deviceModel?: string;
+  osName?: string;
+  osVersion?: string;
+  currentUpdateId?: string;
+  branch?: string;
+  runtimeVersion?: string;
+  platform?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+};
+
+export type IdentityDevicePage = {
+  devices: IdentityDevice[];
+  nextCursor?: string | null;
+};
+
+// One row of "who is this metric slow for". `values` are the raw column values
+// and double as the filters to drill in with; `contexts` qualify them when they
+// mean nothing alone (an OS version without its OS name).
+export type ObserveBreakdownSegment = {
+  // One value per requested dimension, in order. Kept apart from any display
+  // label so drilling in never means parsing a label back into filters.
+  values: string[];
+  contexts?: string[];
+  devices: number;
+  samples: number;
+  p50: number;
+  p90: number;
+  points?: Array<{ timestamp: string; value: number }>;
+};
+
+export type ObserveBreakdownDimension =
+  | 'deviceModel'
+  | 'osVersion'
+  | 'osName'
+  | 'appVersion'
+  | 'appBuildNumber'
+  | 'updateGroup'
+  | 'route'
+  | 'country'
+  | 'branch'
+  | 'runtimeVersion'
+  | 'channel'
+  | 'environment'
+  | 'platform'
+  // The conditions the device was in, read from the params the client attaches
+  // to a timing. Present on the interactive timings only.
+  | 'thermalState'
+  | 'networkType'
+  | 'lowPowerMode'
+  | 'frozenFrames'
+  | 'networkBytes';
+
+export type ObserveConditionDefinition = {
+  name: ObserveBreakdownDimension;
+  values: string[];
+  // Read off the session rather than off the measurement, so every timing can
+  // be split and filtered by it instead of only the one that reports it.
+  sessionScoped?: boolean;
+};
+
+export type ObserveBreakdown = {
+  available: boolean;
+  metric: string;
+  dimensions: ObserveBreakdownDimension[];
+  segments: ObserveBreakdownSegment[];
+  // Same metric, same filters, no grouping: the baseline each segment is read
+  // against.
+  overall: ObserveBreakdownSegment;
+};
+
+export type ObserveMetric = {
+  id: string;
+  name: string;
+  label: string;
+  // One sentence on what the timing measures, served with the definition so
+  // the dashboard does not restate what a client decides.
+  description?: string;
+  unit: string;
+  category: 'startup' | 'updates' | 'navigation' | 'custom';
+  minimumSdk: number;
+  stats: {
+    count: number;
+    median: number;
+    avg: number;
+    min: number;
+    max: number;
+    p90: number;
+    p99: number;
+    devices: number;
+    // Whether any sample carried the state the device was in. Only the timings
+    // measured while the app runs do, so this is what tells a condition split
+    // which cards it can answer for, instead of asking each of them.
+    reportsConditions?: boolean;
+  };
+  points: Array<{ timestamp: string; value: number }>;
+};
+
+export type ObserveOverview = {
+  available: boolean;
+  summary: {
+    users: number;
+    releases: number;
+    builds: number;
+    updates: number;
+    sessions: number;
+    events: number;
+    platforms: string[];
+  };
+  metrics: ObserveMetric[];
+  locations: Array<{
+    countryCode: string;
+    city: string;
+    lat: number;
+    lng: number;
+    deviceCount: number;
+  }>;
+};
+
+export type ObserveSummary = Pick<ObserveOverview, 'available' | 'summary'>;
+
+// How many devices checked in per city over one poll window. Same shape as the
+// overview's locations, so the map animates arrivals without a second geometry.
+export type ObserveCheckInFeed = {
+  cities: ObserveOverview['locations'];
+  cursor: string;
+  windowSeconds: number;
+  truncated: boolean;
+};
+
+export type ObserveEvent = {
+  name: string;
+  count: number;
+  users: number;
+  sessions: number;
+  points: Array<{ timestamp: string; count: number }>;
+};
+
+export type ObserveEvents = {
+  available: boolean;
+  events: ObserveEvent[];
+};
+
+export type ObserveLog = {
+  eventKey: string;
+  timestamp: string;
+  easClientId: string;
+  updateId: string;
+  branch: string;
+  channel: string;
+  runtimeVersion: string;
+  platform: string;
+  sessionId: string;
+  eventName: string;
+  severityNumber: number;
+  severityText: string;
+  isFatal: boolean;
+  body: string;
+  attributes: string;
+  osName: string;
+  osVersion: string;
+  deviceModel: string;
+  countryCode: string;
+  appVersion: string;
+  appBuildNumber: string;
+  easBuildId: string;
+  environment: string;
+  sdkVersion: string;
+};
+
+export type ObserveLogsPage = {
+  available: boolean;
+  logs: ObserveLog[];
+  nextCursor?: string;
+};
+
+export type ObserveLogsQuery = ObserveQuery & {
+  severity?: 'debug' | 'info' | 'warn' | 'error' | 'fatal' | '';
+  search?: string;
+  // Exact names, unlike `search` which also reads bodies and attributes.
+  eventName?: string[];
+  cursor?: string;
+  limit?: number;
 };
 
 export type UpdateDetailsRecord = {
@@ -373,6 +673,7 @@ export type SaveSsoSettingsPayload = {
 // the raw env-var spellings on purpose; the server is the source of truth.
 export type ServerSettings = {
   BASE_URL: string;
+  SERVER_VERSION: string;
   CONTROL_PLANE_ENABLED: boolean;
   CACHE_MODE: string;
   REDIS_HOST: string;
@@ -922,6 +1223,23 @@ export class ApiClient {
       }
     );
   }
+  // Same route as getUpdateHealthHistory below, not a copy-paste slip: passing
+  // `dimension` is what switches the server from one series per update to one
+  // per segment value, so the two shapes are two readings of one endpoint.
+  public async getUpdateHealthSegments(
+    updateUUIDs: string[],
+    dimension: string,
+    from?: string,
+    to?: string
+  ) {
+    const search = new URLSearchParams({ ids: updateUUIDs.join(','), dimension });
+    if (from) search.set('from', from);
+    if (to) search.set('to', to);
+    return this.request<UpdateHealthSegmentsResponse>(
+      `${this.appScope()}/observe/update-health/history?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
   public async getUpdateHealthHistory(updateUUIDs: string[], from?: string, to?: string) {
     const search = new URLSearchParams({ ids: updateUUIDs.join(',') });
     if (from) search.set('from', from);
@@ -931,6 +1249,118 @@ export class ApiClient {
       {
         method: 'GET',
       }
+    );
+  }
+  public async getIdentitySchema() {
+    return this.request<{ keys: IdentitySchemaKey[] }>(`${this.appScope()}/identity/schema`, {
+      method: 'GET',
+    });
+  }
+  public async saveIdentitySchemaKey(key: string, spec: Omit<IdentitySchemaKey, 'key'>) {
+    return this.request<IdentitySchemaKey>(
+      `${this.appScope()}/identity/schema/${encodeURIComponent(key)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(spec),
+      }
+    );
+  }
+  public async deleteIdentitySchemaKey(key: string) {
+    return this.request<void>(`${this.appScope()}/identity/schema/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+    });
+  }
+  public async searchIdentityValues(key: string, search = '') {
+    const query = new URLSearchParams({ key, search, limit: '50' });
+    return this.request<{ values: IdentityValueSuggestion[] }>(
+      `${this.appScope()}/identity/values?${query.toString()}`,
+      { method: 'GET' }
+    );
+  }
+  public async getObserveOverview(query: ObserveQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveOverview>(
+      `${this.appScope()}/observe/overview?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
+  // The live feed behind the map. `since` is the cursor the server handed back
+  // last time, never a locally computed timestamp: the browser clock has no
+  // say in where the window starts.
+  public async getObserveCheckIns(since: string | undefined, query: ObserveQuery = {}) {
+    const search = observeSearchParams(query);
+    if (since) search.set('since', since);
+    return this.request<ObserveCheckInFeed>(
+      `${this.appScope()}/observe/check-ins?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
+  public async getObserveSummary(query: ObserveQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveSummary>(`${this.appScope()}/observe/summary?${search.toString()}`, {
+      method: 'GET',
+    });
+  }
+  public async getObserveEvents(query: ObserveQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveEvents>(`${this.appScope()}/observe/events?${search.toString()}`, {
+      method: 'GET',
+    });
+  }
+  public async getObserveLogs(query: ObserveLogsQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveLogsPage>(`${this.appScope()}/observe/logs?${search.toString()}`, {
+      method: 'GET',
+    });
+  }
+  public async getIdentityDevices(query: IdentityDeviceQuery = {}, cursor?: string, limit = 50) {
+    const search = observeSearchParams(query);
+    if (cursor) search.set('cursor', cursor);
+    search.set('limit', String(limit));
+    return this.request<IdentityDevicePage>(
+      `${this.appScope()}/identity/devices?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
+  // Takes the same filters as the inventory above, and no window: the registry
+  // answers on its own presence window, which is what "online" means here.
+  public async getOnlineDevices(query: IdentityDeviceQuery = {}, minutes?: number) {
+    const search = observeSearchParams(query);
+    if (minutes) search.set('minutes', String(minutes));
+    return this.request<{ online: number; windowMinutes: number }>(
+      `${this.appScope()}/identity/online?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
+  // The conditions a timing can be filtered on, and the values each takes. The
+  // ranges are cut server-side, so they are read from there rather than
+  // restated: a bucket renamed in Go would otherwise leave the picker offering
+  // a range no query can match.
+  public async getObserveConditions() {
+    return this.request<ObserveConditionDefinition[]>(`${this.appScope()}/observe/conditions`, {
+      method: 'GET',
+    });
+  }
+
+  public async getObserveBreakdown(
+    metric: string,
+    dimensions: ObserveBreakdownDimension[],
+    query: ObserveQuery = {},
+    options: { limit?: number; points?: boolean } = {}
+  ) {
+    // Same encoding as every other Observe call: one parameter per value. The
+    // server refuses to split on commas (a device model is `iPhone18,2`), so
+    // collapsing a list into one comma-joined value here is either a 400 or a
+    // search for a branch literally named "main,staging".
+    const search = observeSearchParams(query);
+    search.set('metric', metric);
+    search.set('dimension', dimensions.join(','));
+    if (options.limit) search.set('limit', String(options.limit));
+    if (options.points) search.set('points', '1');
+    return this.request<ObserveBreakdown>(
+      `${this.appScope()}/observe/breakdown?${search.toString()}`,
+      { method: 'GET' }
     );
   }
   public async getUpdateDetails(branch: string, runtimeVersion: string, updateId: string) {

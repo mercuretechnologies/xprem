@@ -26,55 +26,63 @@ import (
 // still land somewhere queryable.
 const ZeroUpdateID = "00000000-0000-0000-0000-000000000000"
 
-// MetricRow mirrors the observe_metrics table.
-type MetricRow struct {
-	AppID          string
-	EASClientID    string
-	UpdateID       string
+// Envelope is the context every telemetry row carries whatever the signal is:
+// which install, which release, which device, when. Shared by both row types
+// rather than repeated in each, because it is what the check-in recorder, the
+// geo enrichment and the origin resolver all read, and because a field added to
+// one and forgotten in the other is the failure this prevents.
+type Envelope struct {
+	AppID       string
+	EASClientID string
+	UpdateID    string
+	// UpdateGroupID is the publish an update came from, resolved from Postgres
+	// at ingestion. Empty for updates published before the CLI minted groups,
+	// and for rollback markers.
+	UpdateGroupID  string
 	Branch         string
 	Channel        string
 	RuntimeVersion string
 	Platform       string
 	SessionID      string
-	MetricName     string
-	Value          float64
-	RouteName      string
-	CustomParams   string
+	OSName         string
+	OSVersion      string
+	DeviceModel    string
+	// CountryCode and the coordinates are resolved from the request IP at
+	// ingestion, not carried by the payload: the SDK never sends a location.
+	// The coordinates are the GeoLite2 city centroid, nil when the block
+	// resolved to a country but no finer, and nothing reads them yet.
+	CountryCode    string
+	Lat            *float64
+	Lng            *float64
+	AppVersion     string
+	AppBuildNumber string
+	EASBuildID     string
+	Environment    string
+	SDKVersion     string
+	Timestamp      time.Time
 	// Attributes carries the leftover point attributes as sorted JSON:
-	// setGlobalAttributes merges arbitrary user keys into every metric.
+	// setGlobalAttributes merges arbitrary user keys into every row.
 	Attributes  string
-	OSName      string
-	OSVersion   string
-	DeviceModel string
-	AppVersion  string
-	SDKVersion  string
-	Timestamp   time.Time
 	ContentHash uint64
+}
+
+// MetricRow mirrors the observe_metrics table.
+type MetricRow struct {
+	Envelope
+	MetricName   string
+	Value        float64
+	RouteName    string
+	CustomParams string
 }
 
 // LogRow mirrors the observe_logs table.
 type LogRow struct {
-	AppID          string
-	EASClientID    string
-	UpdateID       string
-	Branch         string
-	Channel        string
-	RuntimeVersion string
-	Platform       string
-	SessionID      string
+	Envelope
 	EventName      string
 	SeverityNumber uint8
 	SeverityText   string
 	IsFatal        bool
 	Body           string
-	Attributes     string
-	OSName         string
-	OSVersion      string
-	DeviceModel    string
-	AppVersion     string
-	SDKVersion     string
-	Timestamp      time.Time
-	ContentHash    uint64
 }
 
 // Wire attribute keys (resource level unless noted).
@@ -88,6 +96,9 @@ const (
 	deviceModelKey    = "device.model.identifier"
 	deviceModelAltKey = "device.model.name"
 	appVersionKey     = "service.version"
+	appBuildNumberKey = "expo.app.build_number"
+	easBuildIDKey     = "expo.eas_build.id"
+	environmentKey    = "expo.environment"
 	sdkVersionKey     = "telemetry.sdk.version"
 	sdkLanguageKey    = "telemetry.sdk.language"
 	sessionIDKey      = "session.id" // record/point level
@@ -118,38 +129,48 @@ func clampTimestamp(nano uint64, now time.Time) time.Time {
 	return ts
 }
 
-// resourceInfo is the per-session context shared by every row of a resource
-// block, extracted once.
-type resourceInfo struct {
-	easClientID    string
-	updateID       string
-	channel        string
-	runtimeVersion string
-	platform       string
-	osName         string
-	osVersion      string
-	deviceModel    string
-	appVersion     string
-	sdkVersion     string
+// maxResourceValueRunes bounds the resource attributes that become dimensions.
+// Every one of them is client-supplied and unauthenticated, and they land in
+// LowCardinality columns (whose dictionary grows per part) and, for the
+// hardware trio, in TEXT columns of the device registry. A device that varies
+// one of these per batch would otherwise inflate both without limit. The
+// identity metadata path already bounds its values for exactly this reason; a
+// real model name or app version is far below this.
+const maxResourceValueRunes = 128
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
-func newResourceInfo(attrs map[string]any) resourceInfo {
+// newEnvelope reads the half of the envelope a whole resource block shares,
+// once per block. The per-row half (session, timestamp, attributes, hash) is
+// filled by the flatteners below, and the geo and origin half by the ingest
+// handler, which is why those fields are absent here rather than zeroed.
+func newEnvelope(appID string, attrs map[string]any) Envelope {
 	str := func(key string) string {
 		s, _ := attrs[key].(string)
-		return s
+		return truncateRunes(s, maxResourceValueRunes)
 	}
 	osName := str(osNameKey)
-	return resourceInfo{
-		easClientID:    str(EASClientIDKey),
-		updateID:       normalizeUpdateID(firstNonEmpty(str(updateIDKey), str(legacyUpdateIDKey))),
-		channel:        str(channelKey),
-		runtimeVersion: str(runtimeVersionKey),
-		platform:       normalizePlatform(osName, str(sdkLanguageKey)),
-		osName:         osName,
-		osVersion:      str(osVersionKey),
-		deviceModel:    firstNonEmpty(str(deviceModelKey), str(deviceModelAltKey)),
-		appVersion:     str(appVersionKey),
-		sdkVersion:     str(sdkVersionKey),
+	return Envelope{
+		AppID:          appID,
+		EASClientID:    str(EASClientIDKey),
+		UpdateID:       normalizeUpdateID(firstNonEmpty(str(updateIDKey), str(legacyUpdateIDKey))),
+		Channel:        str(channelKey),
+		RuntimeVersion: str(runtimeVersionKey),
+		Platform:       normalizePlatform(osName, str(sdkLanguageKey)),
+		OSName:         osName,
+		OSVersion:      str(osVersionKey),
+		DeviceModel:    firstNonEmpty(str(deviceModelKey), str(deviceModelAltKey)),
+		AppVersion:     str(appVersionKey),
+		AppBuildNumber: str(appBuildNumberKey),
+		EASBuildID:     str(easBuildIDKey),
+		Environment:    str(environmentKey),
+		SDKVersion:     str(sdkVersionKey),
 	}
 }
 
@@ -221,8 +242,8 @@ func firstNonEmpty(values ...string) string {
 func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow {
 	var rows []MetricRow
 	for _, resource := range batch.Resources {
-		info := newResourceInfo(resource.Attributes)
-		if _, err := uuid.Parse(info.easClientID); err != nil {
+		resourceEnvelope := newEnvelope(appID, resource.Attributes)
+		if _, err := uuid.Parse(resourceEnvelope.EASClientID); err != nil {
 			observeRecordsDropped(reasonForgedClientID, len(resource.Points))
 			continue
 		}
@@ -231,35 +252,25 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 				s, _ := point.Attributes[key].(string)
 				return s
 			}
+			envelope := resourceEnvelope
 			// A point-level expo.update_id overrides the resource's: on
 			// expo.updates.download_time it names the update that was just
 			// DOWNLOADED, not the one running, and that is the update the
 			// metric is about.
-			updateID := info.updateID
 			if pointUpdate := str(pointUpdateIDKey); pointUpdate != "" {
 				if parsed, err := uuid.Parse(pointUpdate); err == nil {
-					updateID = parsed.String()
+					envelope.UpdateID = parsed.String()
 				}
 			}
+			envelope.SessionID = normalizeSessionID(str(sessionIDKey))
+			envelope.Attributes = marshalAttributes(point.Attributes, metricEnvelopeKeys)
+			envelope.Timestamp = clampTimestamp(point.TimeUnixNano, now)
 			row := MetricRow{
-				AppID:          appID,
-				EASClientID:    info.easClientID,
-				UpdateID:       updateID,
-				Channel:        info.channel,
-				RuntimeVersion: info.runtimeVersion,
-				Platform:       info.platform,
-				SessionID:      normalizeSessionID(str(sessionIDKey)),
-				MetricName:     point.MetricName,
-				Value:          point.Value,
-				RouteName:      str(routeNameKey),
-				CustomParams:   str(customParamsKey),
-				Attributes:     marshalAttributes(point.Attributes, metricEnvelopeKeys),
-				OSName:         info.osName,
-				OSVersion:      info.osVersion,
-				DeviceModel:    info.deviceModel,
-				AppVersion:     info.appVersion,
-				SDKVersion:     info.sdkVersion,
-				Timestamp:      clampTimestamp(point.TimeUnixNano, now),
+				Envelope:     envelope,
+				MetricName:   point.MetricName,
+				Value:        point.Value,
+				RouteName:    str(routeNameKey),
+				CustomParams: str(customParamsKey),
 			}
 			// The raw nano (not the clamped time) goes into the hash so a
 			// retried batch hashes identically whenever it re-arrives.
@@ -282,8 +293,8 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 	var rows []LogRow
 	for _, resource := range batch.Resources {
-		info := newResourceInfo(resource.Attributes)
-		if _, err := uuid.Parse(info.easClientID); err != nil {
+		resourceEnvelope := newEnvelope(appID, resource.Attributes)
+		if _, err := uuid.Parse(resourceEnvelope.EASClientID); err != nil {
 			continue
 		}
 		for _, record := range resource.Records {
@@ -296,26 +307,17 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 				s, _ := record.Attributes[key].(string)
 				return s
 			}
+			envelope := resourceEnvelope
+			envelope.SessionID = normalizeSessionID(str(sessionIDKey))
+			envelope.Attributes = marshalAttributes(record.Attributes, logEnvelopeKeys)
+			envelope.Timestamp = clampTimestamp(record.TimeUnixNano, now)
 			row := LogRow{
-				AppID:          appID,
-				EASClientID:    info.easClientID,
-				UpdateID:       info.updateID,
-				Channel:        info.channel,
-				RuntimeVersion: info.runtimeVersion,
-				Platform:       info.platform,
-				SessionID:      normalizeSessionID(str(sessionIDKey)),
+				Envelope:       envelope,
 				EventName:      eventName,
 				SeverityNumber: record.SeverityNumber,
 				SeverityText:   record.SeverityText,
 				IsFatal:        isFatal,
 				Body:           record.Body,
-				Attributes:     marshalAttributes(record.Attributes, logEnvelopeKeys),
-				OSName:         info.osName,
-				OSVersion:      info.osVersion,
-				DeviceModel:    info.deviceModel,
-				AppVersion:     info.appVersion,
-				SDKVersion:     info.sdkVersion,
-				Timestamp:      clampTimestamp(record.TimeUnixNano, now),
 			}
 			row.ContentHash = contentHash(
 				row.SessionID, row.EventName,

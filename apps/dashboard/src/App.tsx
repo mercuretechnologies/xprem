@@ -1,7 +1,7 @@
 import { Layout } from '@/containers/Layout';
 import { Navigate, Route, Routes, useNavigate } from 'react-router';
 import { isAuthenticated } from '@/lib/auth.ts';
-import { useEffect, ReactNode } from 'react';
+import { lazy, ReactNode, Suspense, useEffect } from 'react';
 import { Login } from '@/pages/Login';
 import { Toaster } from '@/components/ui/toaster.tsx';
 import { Updates } from '@/pages/Updates';
@@ -21,8 +21,11 @@ import { SettingsProvider } from '@/lib/SettingsContext';
 import { CurrentUserProvider } from '@/lib/CurrentUserContext';
 import { PermissionsProvider } from '@/ee/lib/PermissionsContext';
 import { RequiresApp } from '@/components/RequiresApp';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Branches } from '@/pages/Branches';
 import { useSettings } from '@/lib/SettingsContext';
+
+const Observe = lazy(() => import('@/pages/Observe').then(module => ({ default: module.Observe })));
 
 function withLayout(children: ReactNode) {
   return <Layout>{children}</Layout>;
@@ -46,6 +49,29 @@ const RequiresControlPlane = ({ children }: { children: ReactNode }) => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   return CONTROL_PLANE_ENABLED ? <>{children}</> : <Navigate to="/branches" replace />;
 };
+
+// Observe is a set of pages behind one sub-navigation, so the same element
+// serves both routes: /observe only exists to catch the bare URL and redirect
+// to the default page. Control-plane only like the update feed, because every
+// view reads the device registry, which is a database table.
+//
+// The only code-split route: it carries the world map and its basemap, which
+// nothing else needs. The boundary is what makes that safe, since a deploy
+// under an open tab makes the chunk 404 on the next click.
+const observeRoute = withLayout(
+  withApp(
+    <RequiresControlPlane>
+      <RouteErrorBoundary>
+        <Suspense
+          fallback={
+            <div className="h-[70vh] animate-pulse rounded-xl border bg-primary/10 motion-reduce:animate-none" />
+          }>
+          <Observe />
+        </Suspense>
+      </RouteErrorBoundary>
+    </RequiresControlPlane>
+  )
+);
 
 export const App = () => {
   const isLoggedIn = isAuthenticated();
@@ -97,6 +123,8 @@ export const App = () => {
                             )
                           )}
                         />
+                        <Route path="/observe" element={observeRoute} />
+                        <Route path="/observe/:page" element={observeRoute} />
                         <Route path="/app-info" element={withLayout(withApp(<AppInfo />))} />
                         <Route path="/tokens" element={withLayout(withApp(<ApiTokens />))} />
                         <Route path="/users" element={withLayout(<Users />)} />

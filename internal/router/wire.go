@@ -25,32 +25,33 @@ import (
 )
 
 type AppContainer struct {
-	AuthHandler              *dashhandlers.AuthHandler
-	DashboardAuthService     *services.DashboardAuthService
-	CliAuthService           *services.CliAuthService
-	ApiKeyHandler            *dashhandlers.ApiKeyHandler
-	ApiKeyRestrictionHandler *apikeyrestrictions.ApiKeyRestrictionHandler
-	AppHandler               *dashhandlers.AppHandler
-	AppRepo                  services.AppRepository
-	BranchHandler            *dashhandlers.BranchHandler
-	ChannelHandler           *dashhandlers.ChannelHandler
-	ExpoProtocolHandler      *handlers.ExpoProtocolHandler
-	LicenseHandler           *licensing.LicenseHandler
-	RBACHandler              *rbac.RBACHandler
-	RBACService              *rbac.RBACService
-	RollbackHandler          *handlers.RollbackHandler
-	RolloutHandler           *dashhandlers.RolloutHandler
-	SettingsHandler          *dashhandlers.SettingsHandler
-	SSOHandler               *sso.SSOHandler
-	UpdateHandler            *dashhandlers.UpdateHandler
-	UploadHandler            *handlers.UploadHandler
-	RepublishHandler         *handlers.RepublishHandler
-	UsersHandler             *dashhandlers.UsersHandler
-	AuditHandler             *audit.AuditHandler
-	UserRepo                 services.UserRepository
-	ObserveIngestHandler     *observe.IngestHandler
-	ObserveHealthHandler     *observe.HealthHistoryHandler
-	IdentityHandler          *identity.IdentityHandler
+	AuthHandler                 *dashhandlers.AuthHandler
+	DashboardAuthService        *services.DashboardAuthService
+	CliAuthService              *services.CliAuthService
+	ApiKeyHandler               *dashhandlers.ApiKeyHandler
+	ApiKeyRestrictionHandler    *apikeyrestrictions.ApiKeyRestrictionHandler
+	AppHandler                  *dashhandlers.AppHandler
+	AppRepo                     services.AppRepository
+	BranchHandler               *dashhandlers.BranchHandler
+	ChannelHandler              *dashhandlers.ChannelHandler
+	ExpoProtocolHandler         *handlers.ExpoProtocolHandler
+	LicenseHandler              *licensing.LicenseHandler
+	RBACHandler                 *rbac.RBACHandler
+	RBACService                 *rbac.RBACService
+	RollbackHandler             *handlers.RollbackHandler
+	RolloutHandler              *dashhandlers.RolloutHandler
+	SettingsHandler             *dashhandlers.SettingsHandler
+	SSOHandler                  *sso.SSOHandler
+	UpdateHandler               *dashhandlers.UpdateHandler
+	UploadHandler               *handlers.UploadHandler
+	RepublishHandler            *handlers.RepublishHandler
+	UsersHandler                *dashhandlers.UsersHandler
+	AuditHandler                *audit.AuditHandler
+	UserRepo                    services.UserRepository
+	ObserveIngestHandler        *observe.IngestHandler
+	ObserveHealthHistoryHandler *observe.HealthHistoryHandler
+	ObserveExplorerHandler      *observe.ExplorerHandler
+	IdentityHandler             *identity.IdentityHandler
 }
 
 // logLegacyAppIdFallback states, once at boot, which app receives manifest and
@@ -110,11 +111,22 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// Historical health is optional and ClickHouse-backed. Its handler is
 	// always wired so no-ClickHouse deployments can report available=false.
 	var healthHistory *observe.HealthHistory
+	var explorer *observe.Explorer
 	// Records device check-ins into the universal registry, debounced; nil
 	// only in stateless mode, where polls and ingestion are side-effect free.
 	var checkInRecorder *observe.CheckInRecorder
 
 	cleanup := func() {}
+	// Releases stack: the last resource opened is the first one closed. Written
+	// as a helper because chaining it by hand once per resource is how the
+	// order silently drifts.
+	addCleanup := func(release func()) {
+		previous := cleanup
+		cleanup = func() {
+			release()
+			previous()
+		}
+	}
 	dbUrl := config.GetDBURL()
 
 	resolvedBucket := bucket.GetBucket()
@@ -163,11 +175,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				log.Fatalf("🚨 [IDENTITY] %v", err)
 			}
 			geoResolver = resolver
-			prevCleanup := cleanup
-			cleanup = func() {
-				resolver.Close()
-				prevCleanup()
-			}
+			addCleanup(resolver.Close)
 		}
 		// The device registry (ee/identity) is Postgres-only and runs in
 		// EVERY DB-mode deployment: it powers the identity dashboard AND the
@@ -175,6 +183,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		// work with no ClickHouse and no observe SDK.
 		identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine), geoResolver)
 		checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
+		// nil when ClickHouse is absent: the explorer then reduces to its
+		// Postgres half rather than disappearing.
+		var observeClickHouse *clickhouse.Engine
 
 		// ClickHouse gates ONLY the telemetry pipeline (the metrics/logs
 		// fact tables). A configured-but-broken URL fails the boot loudly
@@ -184,33 +195,21 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			if err != nil {
 				log.Fatalf("🚨 [CLICKHOUSE] %v", err)
 			}
-			prevCleanup := cleanup
-			cleanup = func() {
-				chEngine.Close()
-				prevCleanup()
-			}
+			addCleanup(chEngine.Close)
 			clickhouse.RunDBMigrations(chUrl, dbUrl)
 			telemetrySink = observe.NewClickHouseTelemetrySink(chEngine)
-			branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateStore.GetBranchNameByUpdateUUID)
+			branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateStore.GetUpdateOriginByUUID)
 			healthHistory = observe.NewHealthHistory(dbEngine, chEngine)
-			stopHealthHistory := healthHistory.Start(ctx)
-			cleanupWithClickHouse := cleanup
-			cleanup = func() {
-				stopHealthHistory()
-				cleanupWithClickHouse()
-			}
+			observeClickHouse = chEngine
+			addCleanup(healthHistory.Start(ctx))
 		} else {
 			// Not a Fatal: deployments without ClickHouse keep booting, the
 			// registry and update health work regardless; only the
 			// metrics/logs ingestion is off.
 			log.Println("⚙️  [OBSERVE] CLICKHOUSE_URL is not set; telemetry ingestion (metrics/logs) stays disabled")
-			stopHealthOutboxDiscarder := observe.StartHealthOutboxDiscarder(ctx, dbEngine)
-			cleanupWithPostgres := cleanup
-			cleanup = func() {
-				stopHealthOutboxDiscarder()
-				cleanupWithPostgres()
-			}
+			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		}
+		explorer = observe.NewExplorer(dbEngine, observeClickHouse)
 	} else {
 		log.Println("⚙️  [STATELESS] Initializing Stateless Mode (Flat-Env Mode)...")
 		if err := config.LoadAppsFromFlatEnv(); err != nil {
@@ -288,32 +287,33 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
 	container := &AppContainer{
-		AuthHandler:              dashhandlers.NewAuthHandler(dashboardAuthService),
-		DashboardAuthService:     dashboardAuthService,
-		CliAuthService:           cliAuthService,
-		ApiKeyHandler:            dashhandlers.NewApiKeyHandler(cliAuthService),
-		ApiKeyRestrictionHandler: apikeyrestrictions.NewApiKeyRestrictionHandler(apiKeyRestrictionService),
-		AppHandler:               dashhandlers.NewAppHandler(appService, visibleApps),
-		AppRepo:                  appRepo,
-		BranchHandler:            dashhandlers.NewBranchHandler(branchService),
-		ChannelHandler:           dashhandlers.NewChannelHandler(channelService),
-		ExpoProtocolHandler:      handlers.NewExpoProtocolHandler(expoProtocolService),
-		LicenseHandler:           licensing.NewLicenseHandler(licenseService),
-		AuditHandler:             audit.NewAuditHandler(auditService),
-		RBACHandler:              rbac.NewRBACHandler(rbacService),
-		RBACService:              rbacService,
-		RepublishHandler:         handlers.NewRepublishHandler(cliAuthService, deploymentService),
-		RollbackHandler:          handlers.NewRollbackHandler(cliAuthService, deploymentService),
-		RolloutHandler:           dashhandlers.NewRolloutHandler(rolloutService, updateService),
-		SettingsHandler:          dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
-		SSOHandler:               sso.NewSSOHandler(ssoService),
-		UpdateHandler:            dashhandlers.NewUpdateHandler(updateService),
-		UploadHandler:            handlers.NewUploadHandler(cliAuthService, deploymentService),
-		UsersHandler:             dashhandlers.NewUsersHandler(userService),
-		UserRepo:                 userRepo,
-		ObserveIngestHandler:     observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
-		ObserveHealthHandler:     observe.NewHealthHistoryHandler(healthHistory),
-		IdentityHandler:          identity.NewIdentityHandler(identityService),
+		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService),
+		DashboardAuthService:        dashboardAuthService,
+		CliAuthService:              cliAuthService,
+		ApiKeyHandler:               dashhandlers.NewApiKeyHandler(cliAuthService),
+		ApiKeyRestrictionHandler:    apikeyrestrictions.NewApiKeyRestrictionHandler(apiKeyRestrictionService),
+		AppHandler:                  dashhandlers.NewAppHandler(appService, visibleApps),
+		AppRepo:                     appRepo,
+		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
+		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
+		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
+		LicenseHandler:              licensing.NewLicenseHandler(licenseService),
+		AuditHandler:                audit.NewAuditHandler(auditService),
+		RBACHandler:                 rbac.NewRBACHandler(rbacService),
+		RBACService:                 rbacService,
+		RepublishHandler:            handlers.NewRepublishHandler(cliAuthService, deploymentService),
+		RollbackHandler:             handlers.NewRollbackHandler(cliAuthService, deploymentService),
+		RolloutHandler:              dashhandlers.NewRolloutHandler(rolloutService, updateService),
+		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
+		SSOHandler:                  sso.NewSSOHandler(ssoService),
+		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService),
+		UploadHandler:               handlers.NewUploadHandler(cliAuthService, deploymentService),
+		UsersHandler:                dashhandlers.NewUsersHandler(userService),
+		UserRepo:                    userRepo,
+		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
+		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory),
+		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
+		IdentityHandler:             identity.NewIdentityHandler(identityService),
 	}
 
 	// Every manifest poll registers the polling device in the universal

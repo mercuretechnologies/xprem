@@ -6,20 +6,23 @@ package observe
 
 import (
 	"context"
+	"strings"
+
 	"expo-open-ota/internal/cache"
 )
 
-// BranchResolver names the branch an update belongs to, "" when unknown.
+// BranchResolver names the branch an update belongs to and the publish it came
+// from, "" for either when unknown.
 type BranchResolver interface {
-	BranchName(ctx context.Context, appID string, updateID string) string
+	UpdateOrigin(ctx context.Context, appID string, updateID string) (branch string, updateGroupID string)
 }
 
 // BranchLookup is the data access this package deliberately does not own:
 // updates and branches are community-core tables, their SQL lives in
 // internal/store. wire hands the Postgres update store's method value in
-// (store.PostgresUpdateStore.GetBranchNameByUpdateUUID). ("", nil) means "no
+// (store.PostgresUpdateStore.GetUpdateOriginByUUID). ("", "", nil) means "no
 // such update", permanent and cacheable; an error is transient trouble.
-type BranchLookup func(ctx context.Context, appID string, updateUUID string) (string, error)
+type BranchLookup func(ctx context.Context, appID string, updateUUID string) (branch string, updateGroupID string, err error)
 
 // branchCacheTTLSeconds is not about freshness: the update->branch mapping is
 // permanent. It bounds growth (a device spamming forged update ids must not
@@ -49,36 +52,46 @@ func NewBranchResolver(c cache.Cache, lookup BranchLookup) *CachingBranchResolve
 	return &CachingBranchResolver{cache: c, lookup: lookup}
 }
 
+// The key namespace carries the value format. It moved from "observe:branch:"
+// when the publish group joined the branch in one entry: during a rolling
+// deploy the two versions share the cache, and an old replica reading a new
+// entry would take "main\x00<uuid>" for a branch name and write that into an
+// append-only table. Different namespace, so each version only ever reads what
+// it wrote, at the cost of one re-lookup per live update on the changeover.
 func branchCacheKey(appID, updateID string) string {
-	return "observe:branch:" + appID + ":" + updateID
+	return "observe:origin:" + appID + ":" + updateID
 }
 
-func (r *CachingBranchResolver) BranchName(ctx context.Context, appID string, updateID string) string {
+// Both values live in one cache entry, separated by a NUL: they come from one
+// row and neither can change, so caching them apart would double the lookups
+// for nothing.
+func (r *CachingBranchResolver) UpdateOrigin(ctx context.Context, appID string, updateID string) (string, string) {
 	if updateID == "" || updateID == ZeroUpdateID {
-		return ""
+		return "", ""
 	}
 	key := branchCacheKey(appID, updateID)
 	if cached := r.cache.Get(key); cached != "" {
 		if cached == branchUnknownCacheValue {
-			return ""
+			return "", ""
 		}
-		return cached[len(branchKnownValuePrefix):]
+		branch, group, _ := strings.Cut(cached[len(branchKnownValuePrefix):], "\x00")
+		return branch, group
 	}
 
-	name, err := r.lookup(ctx, appID, updateID)
+	name, group, err := r.lookup(ctx, appID, updateID)
 	if err != nil {
 		// Transient database trouble: stay uncached so a later batch
 		// retries, and let this batch land with an empty branch rather than
 		// fail ingestion over an enrichment.
-		return ""
+		return "", ""
 	}
 
 	value := branchUnknownCacheValue
 	if name != "" {
-		value = branchKnownValuePrefix + name
+		value = branchKnownValuePrefix + name + "\x00" + group
 	}
 	ttl := branchCacheTTLSeconds
 	// Best-effort: a failed Set only costs a re-lookup on the next batch.
 	_ = r.cache.Set(key, value, &ttl)
-	return name
+	return name, group
 }

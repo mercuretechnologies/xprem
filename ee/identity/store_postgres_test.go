@@ -87,6 +87,31 @@ func seedPublishedUpdate(t *testing.T, pool *pgxpool.Pool, appID, updateID strin
 	})
 }
 
+// Same fixture as seedPublishedUpdate, with an explicit publish group and a
+// row id of its own so several updates can coexist.
+func seedGroupedUpdate(t *testing.T, pool *pgxpool.Pool, appID, updateID, publishGroup string, rowID int64) {
+	t.Helper()
+	ctx := context.Background()
+	suffix := updateID[:8]
+	var branchID, runtimeVersionID int64
+	require.NoError(t, pool.QueryRow(ctx,
+		"INSERT INTO branches (app_id, name) VALUES ($1, $2) RETURNING id",
+		appID, "group-"+suffix).Scan(&branchID))
+	require.NoError(t, pool.QueryRow(ctx,
+		"INSERT INTO runtime_versions (app_id, version) VALUES ($1, $2) RETURNING id",
+		appID, "group-"+suffix).Scan(&runtimeVersionID))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO updates
+			(id, update_uuid, branch_id, runtime_version_id, update_type, commit_hash, platform, checked_at, publish_group)
+		VALUES ($5, $1, $2, $3, 0, 'group-test', 'android', CURRENT_TIMESTAMP, $4)`,
+		updateID, branchID, runtimeVersionID, publishGroup, rowID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM branches WHERE id = $1", branchID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM runtime_versions WHERE id = $1", runtimeVersionID)
+	})
+}
+
 func declareKey(t *testing.T, store *PostgresIdentityStore, appID, key string, valueType ValueType) {
 	t.Helper()
 	_, err := store.UpsertSchemaKey(context.Background(), appID, KeySpec{Key: key, Type: valueType, MaxLength: DefaultMaxLength})
@@ -532,7 +557,7 @@ func TestListDevicesPaginationAndFilter(t *testing.T) {
 	var seen []string
 	var cursor *DeviceCursor
 	for {
-		devices, next, err := store.ListDevices(ctx, appID, nil, 2, cursor)
+		devices, next, err := store.ListDevices(ctx, appID, DeviceQuery{}, 2, cursor)
 		require.NoError(t, err)
 		for _, d := range devices {
 			seen = append(seen, d.EASClientID)
@@ -550,7 +575,7 @@ func TestListDevicesPaginationAndFilter(t *testing.T) {
 	require.Len(t, uniqueStrings(seen), 5)
 
 	// Filter to tenant=globex (devices 1 and 3): 2 of them.
-	filtered, next, err := store.ListDevices(ctx, appID, &MetadataFilter{Key: "tenant", Value: "globex"}, 10, nil)
+	filtered, next, err := store.ListDevices(ctx, appID, DeviceQuery{Metadata: MetadataFilters{{Key: "tenant", Values: []any{"globex"}}}}, 10, nil)
 	require.NoError(t, err)
 	require.Nil(t, next)
 	require.Len(t, filtered, 2)
@@ -559,9 +584,49 @@ func TestListDevicesPaginationAndFilter(t *testing.T) {
 	}
 
 	// A filter matching nothing returns an empty page.
-	none, _, err := store.ListDevices(ctx, appID, &MetadataFilter{Key: "tenant", Value: "nope"}, 10, nil)
+	none, _, err := store.ListDevices(ctx, appID, DeviceQuery{Metadata: MetadataFilters{{Key: "tenant", Values: []any{"nope"}}}}, 10, nil)
 	require.NoError(t, err)
 	require.Empty(t, none)
+}
+
+// Containment against JSONB is type-aware, so a boolean or a number has to
+// reach the store as one: filtering `canary` with the string "true" matches a
+// row stored as `true` in no database.
+func TestListDevicesFilterOnTypedValues(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	declareKey(t, store, appID, "canary", ValueTypeBoolean)
+	declareKey(t, store, appID, "planLevel", ValueTypeNumber)
+
+	for i := 0; i < 4; i++ {
+		_, err := store.ApplySet(ctx, appID, uuid.NewString(), map[string]any{
+			"canary":    i%2 == 1,
+			"planLevel": float64(i),
+		}, nil)
+		require.NoError(t, err)
+	}
+
+	canaries, _, err := store.ListDevices(ctx, appID, DeviceQuery{Metadata: MetadataFilters{{Key: "canary", Values: []any{true}}}}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, canaries, 2)
+
+	level, _, err := store.ListDevices(ctx, appID, DeviceQuery{Metadata: MetadataFilters{{Key: "planLevel", Values: []any{float64(2)}}}}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, level, 1)
+
+	// Several values on one key is a union, which is how a comparison across
+	// two plans reaches the store.
+	levels, _, err := store.ListDevices(ctx, appID, DeviceQuery{
+		Metadata: MetadataFilters{{Key: "planLevel", Values: []any{float64(2), float64(3)}}},
+	}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, levels, 2)
+
+	// The same filter spelled as text, which is what the bug was.
+	asText, _, err := store.ListDevices(ctx, appID, DeviceQuery{Metadata: MetadataFilters{{Key: "canary", Values: []any{"true"}}}}, 10, nil)
+	require.NoError(t, err)
+	require.Empty(t, asText)
 }
 
 // When many devices share the exact same last_seen_at (the likely case: a
@@ -585,7 +650,7 @@ func TestListDevicesKeysetUnderTies(t *testing.T) {
 	var seen []string
 	var cursor *DeviceCursor
 	for {
-		devices, next, err := store.ListDevices(ctx, appID, nil, 2, cursor)
+		devices, next, err := store.ListDevices(ctx, appID, DeviceQuery{}, 2, cursor)
 		require.NoError(t, err)
 		for _, d := range devices {
 			seen = append(seen, d.EASClientID)
@@ -620,13 +685,13 @@ func TestTouchDeviceRegistersAndBumps(t *testing.T) {
 
 	// First contact registers the device; the registry is uncapped.
 	deviceID := uuid.NewString()
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 	created, err := store.GetDevice(ctx, appID, deviceID)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 
 	// A later contact bumps last_seen, never touching metadata.
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 	bumped, err := store.GetDevice(ctx, appID, deviceID)
 	require.NoError(t, err)
 	require.NotNil(t, bumped)
@@ -641,10 +706,10 @@ func TestTouchDeviceGeoCoalesce(t *testing.T) {
 
 	deviceID := uuid.NewString()
 	country := "FR"
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, &Geo{CountryCode: &country}, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, &Geo{CountryCode: &country}, nil, DeviceInfo{}))
 
 	// A later contact resolving no geo must not erase the known one.
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 	device, err := store.GetDevice(ctx, appID, deviceID)
 	require.NoError(t, err)
 	require.NotNil(t, device)
@@ -666,7 +731,7 @@ func TestTouchDeviceConcurrentSameDevice(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+			require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 		}()
 	}
 	wg.Wait()
@@ -685,7 +750,7 @@ func TestTouchDeviceTracksCurrentUpdate(t *testing.T) {
 	updateA, updateB := uuid.NewString(), uuid.NewString()
 
 	// Registration carries the running update.
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateA))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateA, DeviceInfo{}))
 	var current *string
 	readCurrent := func() *string {
 		t.Helper()
@@ -699,13 +764,13 @@ func TestTouchDeviceTracksCurrentUpdate(t *testing.T) {
 	require.Equal(t, updateA, *current)
 
 	// A contact that does not know (nil) keeps the known value.
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 	current = readCurrent()
 	require.NotNil(t, current)
 	require.Equal(t, updateA, *current)
 
 	// A transition overwrites it.
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateB))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateB, DeviceInfo{}))
 	current = readCurrent()
 	require.NotNil(t, current)
 	require.Equal(t, updateB, *current)
@@ -745,7 +810,7 @@ func TestRecordUpdateFailuresCaptureOnce(t *testing.T) {
 	failedUpdate := uuid.NewString()
 	seedPublishedUpdate(t, pool, appID, failedUpdate)
 
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
 
 	// The crash poll captures the fatal error...
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, deviceID, []string{failedUpdate}, "TypeError: boom", FailureTypeUpdate))
@@ -784,7 +849,7 @@ func TestRuntimeFailureRecoveryUsesEventTime(t *testing.T) {
 	deviceID := uuid.NewString()
 	updateID := uuid.NewString()
 	seedPublishedUpdate(t, pool, appID, updateID)
-	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateID))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &updateID, DeviceInfo{}))
 
 	crashedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Millisecond)
 	require.NoError(t, store.RecordRuntimeFailure(
@@ -925,8 +990,8 @@ func TestHealthSnapshotsKeepActiveRolloutCandidateAndControl(t *testing.T) {
 		branchID)
 	require.NoError(t, err)
 
-	require.NoError(t, store.TouchDevice(ctx, appID, uuid.NewString(), nil, &controlUUID))
-	require.NoError(t, store.TouchDevice(ctx, appID, uuid.NewString(), nil, &candidateUUID))
+	require.NoError(t, store.TouchDevice(ctx, appID, uuid.NewString(), nil, &controlUUID, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, uuid.NewString(), nil, &candidateUUID, DeviceInfo{}))
 
 	readRoles := func() map[string]string {
 		t.Helper()
@@ -936,7 +1001,7 @@ func TestHealthSnapshotsKeepActiveRolloutCandidateAndControl(t *testing.T) {
 		for _, row := range rows {
 			if uuid.UUID(row.AppID.Bytes).String() == appID {
 				roles[uuid.UUID(row.UpdateUuid.Bytes).String()] = row.Role
-				require.EqualValues(t, 1, row.DevicesOnUpdate)
+				require.Positive(t, row.DevicesOnUpdate)
 			}
 		}
 		return roles
@@ -946,13 +1011,29 @@ func TestHealthSnapshotsKeepActiveRolloutCandidateAndControl(t *testing.T) {
 		controlUUID:   "control",
 	}, readRoles())
 
-	// Once the rollout finishes, only its newest update remains relevant.
+	// Once the rollout finishes the control stops being watched as a control,
+	// but a device is still on it: "how many are stuck on the old one" is only
+	// answerable if the series keeps being recorded, so it becomes legacy
+	// rather than disappearing.
 	_, err = pool.Exec(ctx, `
 		UPDATE updates
 		SET rollout_percentage = NULL
 		WHERE branch_id = $1 AND id = 2`, branchID)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{candidateUUID: "current"}, readRoles())
+	require.Equal(t, map[string]string{
+		candidateUUID: "current",
+		controlUUID:   "legacy",
+	}, readRoles())
+
+	// An update nobody runs any more earns no row: the series is bounded by
+	// where the fleet sits, not by everything ever published.
+	_, err = pool.Exec(ctx,
+		"UPDATE device_identity SET current_update_id = $1 WHERE app_id = $2 AND current_update_id = $3",
+		candidateUUID, appID, controlUUID)
+	require.NoError(t, err)
+	roles := readRoles()
+	require.NotContains(t, roles, controlUUID)
+	require.Equal(t, "current", roles[candidateUUID])
 }
 
 func TestUpdateHealthCounts(t *testing.T) {
@@ -964,10 +1045,10 @@ func TestUpdateHealthCounts(t *testing.T) {
 
 	// 2 devices on A, 1 on B, 1 on the embedded bundle; B crashed on one.
 	d1, d2, d3, d4 := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	require.NoError(t, store.TouchDevice(ctx, appID, d1, nil, &updateA))
-	require.NoError(t, store.TouchDevice(ctx, appID, d2, nil, &updateA))
-	require.NoError(t, store.TouchDevice(ctx, appID, d3, nil, &updateB))
-	require.NoError(t, store.TouchDevice(ctx, appID, d4, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, d1, nil, &updateA, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d2, nil, &updateA, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d3, nil, &updateB, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d4, nil, nil, DeviceInfo{}))
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, d4, []string{updateB}, "crashed at launch", FailureTypeUpdate))
 
 	appUUID, err := toPgUUID(appID)
@@ -1000,26 +1081,26 @@ func TestUpdateHealthByIDs(t *testing.T) {
 	// 2 devices running A this month, 1 running B; B also crashed at launch
 	// on d4 (rolled back, current unknown).
 	d1, d2, d3, d4 := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-	require.NoError(t, store.TouchDevice(ctx, appID, d1, nil, &updateA))
-	require.NoError(t, store.TouchDevice(ctx, appID, d2, nil, &updateA))
-	require.NoError(t, store.TouchDevice(ctx, appID, d3, nil, &updateB))
-	require.NoError(t, store.TouchDevice(ctx, appID, d4, nil, nil))
+	require.NoError(t, store.TouchDevice(ctx, appID, d1, nil, &updateA, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d2, nil, &updateA, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d3, nil, &updateB, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, d4, nil, nil, DeviceInfo{}))
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, d4, []string{updateB}, "boom", FailureTypeUpdate))
 
 	// JS crashes on B: d5 crashed and still runs it (the usual runtime_issue
 	// shape), d6 crashed then moved on to A (the mismatch case the overlap
 	// join must self-correct).
 	d5, d6 := uuid.NewString(), uuid.NewString()
-	require.NoError(t, store.TouchDevice(ctx, appID, d5, nil, &updateB))
+	require.NoError(t, store.TouchDevice(ctx, appID, d5, nil, &updateB, DeviceInfo{}))
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, d5, []string{updateB}, "TypeError: boom", FailureTypeRuntime))
-	require.NoError(t, store.TouchDevice(ctx, appID, d6, nil, &updateB))
+	require.NoError(t, store.TouchDevice(ctx, appID, d6, nil, &updateB, DeviceInfo{}))
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, d6, []string{updateB}, "", FailureTypeRuntime))
-	require.NoError(t, store.TouchDevice(ctx, appID, d6, nil, &updateA))
+	require.NoError(t, store.TouchDevice(ctx, appID, d6, nil, &updateA, DeviceInfo{}))
 
 	// Adoption is the TOTAL population on the update: a device last seen a
 	// month ago still runs it and still counts.
 	dOld := uuid.NewString()
-	require.NoError(t, store.TouchDevice(ctx, appID, dOld, nil, &updateA))
+	require.NoError(t, store.TouchDevice(ctx, appID, dOld, nil, &updateA, DeviceInfo{}))
 	_, err := pool.Exec(ctx,
 		"UPDATE device_identity SET last_seen_at = date_trunc('month', CURRENT_TIMESTAMP) - INTERVAL '1 day' WHERE app_id = $1 AND eas_client_id = $2",
 		appID, dOld)
@@ -1036,4 +1117,282 @@ func TestUpdateHealthByIDs(t *testing.T) {
 	require.EqualValues(t, 1, health[updateB].FailedStillOn, "d5 overlaps; d4 rolled back, d6 moved on")
 	// An update nothing attempted has no entry: zero-valued on read.
 	require.Zero(t, health[updateGhost])
+}
+
+// Hardware reaches the registry through telemetry only, so the column has to
+// survive every manifest poll that follows, and an OS upgrade has to land.
+func TestTouchDeviceHardwareCoalesce(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	deviceID := uuid.NewString()
+	reported := DeviceInfo{Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1"}
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, reported))
+
+	registered, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.NotNil(t, registered.DeviceModel)
+	require.Equal(t, "iPhone18,2", *registered.DeviceModel)
+	require.Equal(t, "iOS", *registered.OSName)
+	require.Equal(t, "26.1", *registered.OSVersion)
+
+	// A manifest poll knows no hardware and must leave it untouched.
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
+	kept, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.NotNil(t, kept.DeviceModel)
+	require.Equal(t, "iPhone18,2", *kept.DeviceModel)
+	require.Equal(t, "26.1", *kept.OSVersion)
+
+	// A real OS upgrade does land.
+	upgraded := reported
+	upgraded.OSVersion = "26.2"
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, upgraded))
+	after, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.Equal(t, "26.2", *after.OSVersion)
+}
+
+// The same must hold on the registration arm, where the row does not exist yet
+// and the upsert's ON CONFLICT is what writes.
+func TestRegisterDeviceKeepsHardwareOnConflict(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	deviceID := uuid.NewString()
+	// First contact ever carries no hardware (a manifest poll), so the row is
+	// created empty and the first telemetry batch has to fill it.
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, DeviceInfo{
+		Model: "SM-A536B", OSName: "Android", OSVersion: "14",
+	}))
+
+	device, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.NotNil(t, device.DeviceModel)
+	require.Equal(t, "SM-A536B", *device.DeviceModel)
+	require.Equal(t, "Android", *device.OSName)
+}
+
+// The inventory joins the release dimensions from the update each device runs,
+// rather than storing them: an update never changes branch, so there is
+// nothing to keep in sync. The join must be LEFT, or every device on the
+// embedded bundle would vanish from the unfiltered list.
+// A publish produces one update per platform, and a device only ever stores
+// the update it runs. "Devices on this update group" therefore has to reach
+// them through their update, which is what the join is for.
+func TestListDevicesFiltersOnUpdateGroup(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	iosUpdate, androidUpdate, otherUpdate := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	group, otherGroup := uuid.NewString(), uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, iosUpdate)
+	seedGroupedUpdate(t, pool, appID, androidUpdate, group, 2)
+	seedGroupedUpdate(t, pool, appID, otherUpdate, otherGroup, 3)
+	_, err := pool.Exec(ctx, "UPDATE updates SET publish_group = $1 WHERE update_uuid = $2", group, iosUpdate)
+	require.NoError(t, err)
+
+	onIOS, onAndroid, elsewhere := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, onIOS, nil, &iosUpdate, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, onAndroid, nil, &androidUpdate, DeviceInfo{}))
+	require.NoError(t, store.TouchDevice(ctx, appID, elsewhere, nil, &otherUpdate, DeviceInfo{}))
+
+	// Both halves of the publish, and nothing from the other one.
+	devices, _, err := store.ListDevices(ctx, appID, DeviceQuery{UpdateGroupIDs: []string{group}}, 10, nil)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{onIOS, onAndroid}, clientIDs(devices))
+
+	// Several groups compare populations, like every other dimension.
+	both, _, err := store.ListDevices(ctx, appID, DeviceQuery{
+		UpdateGroupIDs: []string{group, otherGroup},
+	}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, both, 3)
+}
+
+func clientIDs(devices []Device) []string {
+	out := make([]string, 0, len(devices))
+	for _, device := range devices {
+		out = append(out, device.EASClientID)
+	}
+	return out
+}
+
+func TestListDevicesJoinsReleaseDimensions(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	updateID := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, updateID)
+	branch := "health-" + updateID[:8]
+
+	onUpdate := uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, onUpdate, nil, &updateID, DeviceInfo{
+		Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1",
+	}))
+	// A device on the embedded bundle reports an id no published update
+	// matches, so it joins to nothing.
+	embedded := uuid.NewString()
+	embeddedUpdate := uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, embedded, nil, &embeddedUpdate, DeviceInfo{}))
+
+	all, _, err := store.ListDevices(ctx, appID, DeviceQuery{}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, all, 2, "an unknown update must not drop a device from the inventory")
+
+	byBranch, _, err := store.ListDevices(ctx, appID, DeviceQuery{Branches: []string{branch}}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, byBranch, 1)
+	require.Equal(t, onUpdate, byBranch[0].EASClientID)
+	require.NotNil(t, byBranch[0].Branch)
+	require.Equal(t, branch, *byBranch[0].Branch)
+	require.NotNil(t, byBranch[0].Platform)
+	require.Equal(t, "ios", *byBranch[0].Platform)
+	require.NotNil(t, byBranch[0].CurrentUpdateID)
+	require.Equal(t, updateID, *byBranch[0].CurrentUpdateID)
+
+	// Hardware filters hit the registry columns directly.
+	byModel, _, err := store.ListDevices(ctx, appID, DeviceQuery{DeviceModels: []string{"iPhone18,2"}}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, byModel, 1)
+	require.Equal(t, onUpdate, byModel[0].EASClientID)
+
+	byOS, _, err := store.ListDevices(ctx, appID, DeviceQuery{OSNames: []string{"iOS"}, OSVersions: []string{"26.1"}}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, byOS, 1)
+
+	// The embedded-bundle device is listed, with no release dimensions to
+	// report. Looked up by id: the page is ordered by last_seen, not by
+	// insertion.
+	var embeddedRow *Device
+	for i := range all {
+		if all[i].EASClientID == embedded {
+			embeddedRow = &all[i]
+		}
+	}
+	require.NotNil(t, embeddedRow)
+	require.Nil(t, embeddedRow.Branch)
+	require.Nil(t, embeddedRow.RuntimeVersion)
+	require.Nil(t, embeddedRow.Platform)
+}
+
+// The online count sits next to filtered figures, so it narrows on the same
+// dimensions as the inventory. Two things it must not do: drop a device the
+// registry knows nothing more about, and treat "no release filter" as "every
+// update of the app", which is the same thing said the other way round.
+func TestCountOnlineDevicesFilters(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	first, second := uuid.NewString(), uuid.NewString()
+	group := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, first)
+	seedGroupedUpdate(t, pool, appID, second, group, 2)
+	firstBranch, secondBranch := "health-"+first[:8], "group-"+second[:8]
+
+	onFirst, onSecond, embedded := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, onFirst, nil, &first, DeviceInfo{Model: "iPhone18,2"}))
+	require.NoError(t, store.TouchDevice(ctx, appID, onSecond, nil, &second, DeviceInfo{Model: "SM-A546B"}))
+	// Reports an update no publish matches, so it joins to nothing.
+	unknownUpdate := uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, embedded, nil, &unknownUpdate, DeviceInfo{}))
+
+	since := time.Now().UTC().Add(-DefaultOnlineWindow)
+	all, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, all, "a device on an unknown update must still count as online")
+
+	byBranch, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{Branches: []string{firstBranch}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, byBranch)
+
+	bothBranches, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{
+		Branches: []string{firstBranch, secondBranch},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, bothBranches)
+
+	// The other arms of the same subquery: seedPublishedUpdate is ios, the
+	// grouped one android.
+	byPlatform, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{Platforms: []string{"android"}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, byPlatform)
+
+	byGroup, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{UpdateGroupIDs: []string{group}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, byGroup)
+
+	// A branch nobody runs is zero, not the whole fleet: the release filter
+	// resolving to nothing must not read as "no release filter".
+	none, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{Branches: []string{"no-such-branch"}})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, none)
+
+	// Filters combine, they do not widen: this device is on the first branch,
+	// so asking for it on the second one's model is zero.
+	crossed, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{
+		Branches:     []string{firstBranch},
+		DeviceModels: []string{"SM-A546B"},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, crossed)
+
+	byModel, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{DeviceModels: []string{"SM-A546B"}})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, byModel)
+
+	// The window still cuts first: a device that went quiet is out whatever the
+	// filters say.
+	_, err = pool.Exec(ctx,
+		"UPDATE device_identity SET last_seen_at = now() - interval '2 hours' WHERE app_id = $1 AND eas_client_id = $2",
+		appID, onFirst)
+	require.NoError(t, err)
+	stale, err := store.CountOnlineDevices(ctx, appID, since, DeviceQuery{Branches: []string{firstBranch}})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, stale)
+}
+
+// Several values per filter is what makes a comparison possible: two branches
+// side by side rather than one query each.
+func TestListDevicesAcceptsSeveralValues(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	first := uuid.NewString()
+	second := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, first)
+	seedPublishedUpdate(t, pool, appID, second)
+
+	onFirst := uuid.NewString()
+	onSecond := uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, onFirst, nil, &first, DeviceInfo{Model: "iPhone18,2"}))
+	require.NoError(t, store.TouchDevice(ctx, appID, onSecond, nil, &second, DeviceInfo{Model: "SM-A546B"}))
+
+	both, _, err := store.ListDevices(ctx, appID, DeviceQuery{
+		Branches: []string{"health-" + first[:8], "health-" + second[:8]},
+	}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, both, 2)
+
+	// A model identifier carries a comma, and the array predicate treats it as
+	// one value rather than two.
+	models, _, err := store.ListDevices(ctx, appID, DeviceQuery{
+		DeviceModels: []string{"iPhone18,2", "SM-A546B"},
+	}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, models, 2)
+
+	single, _, err := store.ListDevices(ctx, appID, DeviceQuery{
+		DeviceModels: []string{"iPhone18,2"},
+	}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, single, 1)
+	require.Equal(t, onFirst, single[0].EASClientID)
 }

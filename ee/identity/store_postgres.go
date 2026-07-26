@@ -48,6 +48,16 @@ func schemaFromRows(rows []pgdb.IdentitySchema) Schema {
 	return schema
 }
 
+// optionalUUID renders an unset uuid column as nil rather than the zero uuid,
+// which downstream would read as a real update id.
+func optionalUUID(value pgtype.UUID) *string {
+	if !value.Valid {
+		return nil
+	}
+	rendered := uuid.UUID(value.Bytes).String()
+	return &rendered
+}
+
 func deviceFromRow(row pgdb.DeviceIdentity) (Device, error) {
 	metadata := map[string]any{}
 	if len(row.Metadata) > 0 {
@@ -56,15 +66,25 @@ func deviceFromRow(row pgdb.DeviceIdentity) (Device, error) {
 		}
 	}
 	return Device{
-		AppID:       uuid.UUID(row.AppID.Bytes).String(),
-		EASClientID: uuid.UUID(row.EasClientID.Bytes).String(),
-		Metadata:    metadata,
-		CountryCode: row.CountryCode,
-		City:        row.City,
-		Lat:         row.Lat,
-		Lng:         row.Lng,
-		FirstSeenAt: row.FirstSeenAt.Time,
-		LastSeenAt:  row.LastSeenAt.Time,
+		AppID:           uuid.UUID(row.AppID.Bytes).String(),
+		EASClientID:     uuid.UUID(row.EasClientID.Bytes).String(),
+		Metadata:        metadata,
+		CountryCode:     row.CountryCode,
+		City:            row.City,
+		Lat:             row.Lat,
+		Lng:             row.Lng,
+		DeviceModel:     row.DeviceModel,
+		OSName:          row.OsName,
+		OSVersion:       row.OsVersion,
+		CurrentUpdateID: optionalUUID(row.CurrentUpdateID),
+		// Recorded at check-in from the update the device reported, so every
+		// read of a device carries them, not just the inventory listing that
+		// used to join for them.
+		Branch:         row.BranchName,
+		RuntimeVersion: row.RuntimeVersion,
+		Platform:       row.Platform,
+		FirstSeenAt:    row.FirstSeenAt.Time,
+		LastSeenAt:     row.LastSeenAt.Time,
 	}, nil
 }
 
@@ -372,11 +392,49 @@ func (s *PostgresIdentityStore) GetDevice(ctx context.Context, appID string, eas
 	return &device, nil
 }
 
+// The fields of a DeviceQuery that need converting before they can be handed
+// to a query. The plain []string dimensions travel as they are, so they stay
+// at the call site rather than being copied through here.
+type convertedDeviceFilters struct {
+	metadata      [][]byte
+	clientIDs     []pgtype.UUID
+	updateIDs     []pgtype.UUID
+	publishGroups []pgtype.UUID
+}
+
+// Shared by the inventory page and the online count, which filter on exactly
+// the same dimensions: converting them in one place is what keeps the two
+// numbers answering the same question.
+func deviceFilterParams(query DeviceQuery) (convertedDeviceFilters, error) {
+	docs, err := query.Metadata.ContainmentDocs()
+	if err != nil {
+		return convertedDeviceFilters{}, fmt.Errorf("marshalling device filter: %w", err)
+	}
+	clientIDs, err := toPgUUIDs(query.EASClientIDs)
+	if err != nil {
+		return convertedDeviceFilters{}, err
+	}
+	updateIDs, err := toPgUUIDs(query.CurrentUpdateIDs)
+	if err != nil {
+		return convertedDeviceFilters{}, err
+	}
+	publishGroups, err := toPgUUIDs(query.UpdateGroupIDs)
+	if err != nil {
+		return convertedDeviceFilters{}, err
+	}
+	return convertedDeviceFilters{
+		metadata:      docs,
+		clientIDs:     clientIDs,
+		updateIDs:     updateIDs,
+		publishGroups: publishGroups,
+	}, nil
+}
+
 // ListDevices returns one page of the device inventory, newest-seen first,
 // keyset-paginated. A nil cursor starts at the first page; the returned cursor
 // is nil on the last page. An optional filter narrows to installs whose
 // metadata contains the key/value (served by the GIN index).
-func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, filter *MetadataFilter, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
+func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, query DeviceQuery, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
 		return nil, nil, err
@@ -388,17 +446,25 @@ func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, f
 		limit = MaxDevicesPageSize
 	}
 
+	filters, err := deviceFilterParams(query)
+	if err != nil {
+		return nil, nil, err
+	}
 	params := pgdb.ListDevicesParams{
 		AppID: appUUID,
 		// One extra row detects whether a next page exists.
-		Lim: int32(limit + 1),
-	}
-	if filter != nil {
-		filterJSON, err := json.Marshal(map[string]string{filter.Key: filter.Value})
-		if err != nil {
-			return nil, nil, fmt.Errorf("marshalling device filter: %w", err)
-		}
-		params.Filter = filterJSON
+		Lim:             int32(limit + 1),
+		Filters:         filters.metadata,
+		EasClientID:     filters.clientIDs,
+		CurrentUpdateID: filters.updateIDs,
+		PublishGroup:    filters.publishGroups,
+		Branch:          query.Branches,
+		RuntimeVersion:  query.RuntimeVersions,
+		Platform:        query.Platforms,
+		DeviceModel:     query.DeviceModels,
+		OsName:          query.OSNames,
+		OsVersion:       query.OSVersions,
+		CountryCode:     query.CountryCodes,
 	}
 	if cursor != nil {
 		params.BeforeLastSeen = pgtype.Timestamptz{Time: cursor.LastSeenAt, Valid: true}
@@ -432,6 +498,36 @@ func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, f
 		devices = append(devices, device)
 	}
 	return devices, next, nil
+}
+
+func (s *PostgresIdentityStore) CountOnlineDevices(ctx context.Context, appID string, since time.Time, query DeviceQuery) (int64, error) {
+	appUUID, err := toPgUUID(appID)
+	if err != nil {
+		return 0, err
+	}
+	filters, err := deviceFilterParams(query)
+	if err != nil {
+		return 0, err
+	}
+	count, err := s.engine.Queries.CountOnlineDevices(ctx, pgdb.CountOnlineDevicesParams{
+		AppID:           appUUID,
+		Since:           pgtype.Timestamptz{Time: since, Valid: true},
+		Filters:         filters.metadata,
+		EasClientID:     filters.clientIDs,
+		CurrentUpdateID: filters.updateIDs,
+		PublishGroup:    filters.publishGroups,
+		Branch:          query.Branches,
+		RuntimeVersion:  query.RuntimeVersions,
+		Platform:        query.Platforms,
+		DeviceModel:     query.DeviceModels,
+		OsName:          query.OSNames,
+		OsVersion:       query.OSVersions,
+		CountryCode:     query.CountryCodes,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("counting online devices: %w", err)
+	}
+	return count, nil
 }
 
 // SearchMetadataValues is the autocomplete behind searchMetadata: top values
@@ -481,16 +577,61 @@ func (s *PostgresIdentityStore) SearchMetadataValues(ctx context.Context, appID 
 	return values, nil
 }
 
-// TouchDevice is the universal device registration: EVERY contact (manifest
+// toPgUUIDs keeps the array predicates typed: an unparseable id is the
+// caller's mistake, not an empty result set.
+func toPgUUIDs(values []string) ([]pgtype.UUID, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	parsed := make([]pgtype.UUID, 0, len(values))
+	for _, value := range values {
+		id, err := toPgUUID(value)
+		if err != nil {
+			return nil, err
+		}
+		parsed = append(parsed, id)
+	}
+	return parsed, nil
+}
+
+// maxHardwareTextRunes bounds the hardware strings before they reach the
+// registry. Model, OS name and OS version are unauthenticated client input on
+// both paths that write them (telemetry resource attributes and the manifest
+// check-in), the columns are unbounded TEXT, and the check-in debounce keys on
+// their fingerprint: an oversized value both fattens the row and makes every
+// batch look like a change worth writing. Metadata values are bounded for the
+// same reason, see Schema.Sanitize.
+const maxHardwareTextRunes = 128
+
+// boundHardwareText caps a hardware string at maxHardwareTextRunes.
+func boundHardwareText(value string) string {
+	if runes := []rune(value); len(runes) > maxHardwareTextRunes {
+		return string(runes[:maxHardwareTextRunes])
+	}
+	return value
+}
+
+// optionalText maps "not reported" onto SQL NULL. The registry columns are
+// COALESCE-written, so an empty string would blank a known value instead of
+// leaving it alone.
+func optionalText(value string) *string {
+	if value == "" {
+		return nil
+	}
+	bounded := boundHardwareText(value)
+	return &bounded
+}
+
+// TouchDevice is the universal device registration: EVERY check-in (manifest
 // poll, metrics batch, logs batch) lands here, identity ops only add the
 // metadata on top. The registry is UNCAPPED: the whole fleet is the
 // update-health source of truth, so a known device gets its last_seen bumped
 // (geo and current update opportunistically refreshed) and an unknown one is
-// simply registered. currentUpdateID nil means "this contact does not know"
+// simply registered. currentUpdateID nil means "this check-in does not know"
 // (a telemetry batch from the embedded bundle) and leaves the column alone.
-// Write rate is bounded upstream by the contact recorder's debounce, which
+// Write rate is bounded upstream by the CheckInRecorder's debounce, which
 // lets state TRANSITIONS through immediately.
-func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string) error {
+func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, currentUpdateID *string, device DeviceInfo) error {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
 		return err
@@ -507,6 +648,11 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	}
 
 	touch := pgdb.TouchDeviceIdentityParams{AppID: appUUID, EasClientID: clientUUID, CurrentUpdateID: currentUpdate}
+	// nil, not "": the queries COALESCE on these, so an empty string would
+	// overwrite a known model with nothing on the next manifest poll.
+	touch.DeviceModel = optionalText(device.Model)
+	touch.OsName = optionalText(device.OSName)
+	touch.OsVersion = optionalText(device.OSVersion)
 	if geo != nil {
 		touch.CountryCode = geo.CountryCode
 		touch.City = geo.City
@@ -522,6 +668,9 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	}
 
 	register := pgdb.RegisterDeviceParams{AppID: appUUID, EasClientID: clientUUID, CurrentUpdateID: currentUpdate}
+	register.DeviceModel = optionalText(device.Model)
+	register.OsName = optionalText(device.OSName)
+	register.OsVersion = optionalText(device.OSVersion)
 	if geo != nil {
 		register.CountryCode = geo.CountryCode
 		register.City = geo.City

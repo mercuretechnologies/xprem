@@ -2,8 +2,14 @@ import { useMemo, useState } from 'react';
 import type { ComponentType, SVGProps } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, AlertTriangle, Users } from 'lucide-react';
-import { TimeSeriesChart, TimeSeriesDefinition } from '@/components/charts/TimeSeriesChart';
+import {
+  TimeSeriesAnnotation,
+  TimeSeriesChart,
+  TimeSeriesChartProps,
+  TimeSeriesDefinition,
+} from '@/components/charts/TimeSeriesChart';
 import { Skeleton } from '@/components/ui/skeleton';
+import { HealthRankTable } from '@/components/HealthRankTable';
 import { api, UpdateHealthHistoryPoint } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { cn } from '@/lib/utils';
@@ -11,6 +17,11 @@ import { cn } from '@/lib/utils';
 export type HealthHistorySeries = {
   key: string;
   label: string;
+  // Optional context for the ranked table; the chart keeps the short label so
+  // its tooltip stays readable.
+  detail?: string;
+  // The heading these rows sit under in the table, when they have one.
+  group?: string;
   updateUUIDs: string[];
   color: string;
 };
@@ -41,10 +52,44 @@ const metricOptions: MetricOption[] = [
   {
     key: 'faults',
     label: 'Faults',
-    description: 'Unique faulty devices, stacked by root cause',
+    description: 'Unique faulty devices, by root cause',
     icon: AlertTriangle,
   },
 ];
+
+// Snapshots are retained per minute. Plotted as-is over a day that is 1440
+// points per series, which draws as a comb rather than a trend, and any minute
+// without a snapshot dips to zero as though the fleet had vanished. Health and
+// adoption are states, not counters: within a bucket the last known value is
+// the truth, so resampling both smooths the line and removes the false zeros.
+const RESAMPLE_TARGET_POINTS = 140;
+
+const resampleInterval = (points: AggregatedPoint[]): number => {
+  if (points.length < 2) return 0;
+  const first = new Date(points[0].timestamp).getTime();
+  const last = new Date(points[points.length - 1].timestamp).getTime();
+  const span = last - first;
+  if (span <= 0) return 0;
+  const target = span / RESAMPLE_TARGET_POINTS;
+  // Round up to a boundary a human reads on an axis.
+  const steps = [60_000, 300_000, 900_000, 1_800_000, 3_600_000, 10_800_000, 21_600_000];
+  return steps.find(step => step >= target) ?? steps[steps.length - 1];
+};
+
+// Keeps the last snapshot of each bucket: a state, sampled.
+const resample = (points: AggregatedPoint[]): AggregatedPoint[] => {
+  const interval = resampleInterval(points);
+  if (interval <= 60_000) return points;
+  const byBucket = new Map<number, AggregatedPoint>();
+  for (const point of points) {
+    const bucket = Math.floor(new Date(point.timestamp).getTime() / interval) * interval;
+    const current = byBucket.get(bucket);
+    if (!current || point.timestamp > current.timestamp) {
+      byBucket.set(bucket, { ...point, timestamp: new Date(bucket).toISOString() });
+    }
+  }
+  return Array.from(byBucket.values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+};
 
 const aggregateSeries = (
   updateUUIDs: string[],
@@ -66,15 +111,15 @@ const aggregateSeries = (
       }
     }
   }
-  return Array.from(byTimestamp.values())
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    .map(point => {
-      const attempts = point.successfulDevices + point.faultyDevices;
-      return {
-        ...point,
-        healthPercent: attempts > 0 ? (100 * point.successfulDevices) / attempts : null,
-      };
-    });
+  return resample(
+    Array.from(byTimestamp.values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+  ).map(point => {
+    const attempts = point.successfulDevices + point.faultyDevices;
+    return {
+      ...point,
+      healthPercent: attempts > 0 ? (100 * point.successfulDevices) / attempts : null,
+    };
+  });
 };
 
 const toTimeSeries = (
@@ -155,13 +200,27 @@ export const UpdateHealthHistory = ({
   series,
   from,
   live = false,
+  annotations = [],
+  annotationNoun,
+  renderAnnotationDetails,
+  breakdownLabel,
+  onBreakdownSelect,
 }: {
   series: HealthHistorySeries[];
   from?: string;
   live?: boolean;
+  annotations?: TimeSeriesAnnotation[];
+  annotationNoun?: string;
+  renderAnnotationDetails?: TimeSeriesChartProps['renderAnnotationDetails'];
+  // Names what one curve is ("Update group"), which is also what turns the
+  // compact legend into the ranked table. A page showing a single update has
+  // nothing to rank, so it leaves this unset and keeps the legend.
+  breakdownLabel?: string;
+  onBreakdownSelect?: (key: string) => void;
 }) => {
   const { selectedAppId } = useSelectedApp();
   const [metric, setMetric] = useState<Metric>('health');
+  const [highlighted, setHighlighted] = useState<string | null>(null);
   const updateUUIDs = useMemo(
     () => Array.from(new Set(series.flatMap(item => item.updateUUIDs))),
     [series]
@@ -189,6 +248,29 @@ export const UpdateHealthHistory = ({
     [aggregated]
   );
   const faults = useMemo(() => faultSeries(aggregated), [aggregated]);
+  // The counts behind each curve, taken from its newest bucket: the same three
+  // figures the device dimensions get, so a split by update group reads like a
+  // split by OS version. A group with no bucket in the window has no curve
+  // either, so it gets no row.
+  const ranked = useMemo(
+    () =>
+      aggregated
+        .filter(item => item.points.length > 0)
+        .map(item => {
+          const latest = item.points[item.points.length - 1];
+          return {
+            key: item.key,
+            label: item.label,
+            detail: item.detail,
+            group: item.group,
+            color: item.color,
+            devices: latest?.devicesOnUpdate ?? 0,
+            faulty: latest?.faultyDevices ?? 0,
+            health: latest?.healthPercent ?? null,
+          };
+        }),
+    [aggregated]
+  );
   const allPoints = aggregated.flatMap(item => item.points);
   const hasPoints = allPoints.length > 0;
   const timestamps = allPoints.map(point => point.timestamp).sort();
@@ -202,6 +284,7 @@ export const UpdateHealthHistory = ({
   const selectedOption = metricOptions.find(option => option.key === metric) ?? metricOptions[0];
   const chartSeries =
     metric === 'health' ? healthSeries : metric === 'adoption' ? adoptionSeries : faults;
+  const visibleChartSeries = chartSeries.filter(item => item.points.length > 0);
   const formatValue =
     metric === 'health'
       ? (value: number) => `${value.toFixed(1)}%`
@@ -269,13 +352,26 @@ export const UpdateHealthHistory = ({
         <div className="space-y-2.5 px-3 pb-2 pt-3">
           <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-1">
             <p className="text-[11px] text-muted-foreground">{selectedOption.description}</p>
-            <SeriesLegend series={chartSeries} formatValue={formatValue} />
+            <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+              {annotations.length > 0 && (
+                <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="h-2 w-2 rounded-full bg-primary" />
+                  {annotations.length} update{annotations.length === 1 ? '' : 's'}
+                </span>
+              )}
+              {!breakdownLabel && (
+                <SeriesLegend series={visibleChartSeries} formatValue={formatValue} />
+              )}
+            </div>
           </div>
           <TimeSeriesChart
             key={metric}
             ariaLabel={`${selectedOption.label} over time`}
-            series={chartSeries}
-            mode={metric === 'faults' ? 'stacked' : 'line'}
+            series={visibleChartSeries}
+            annotations={annotations}
+            annotationNoun={annotationNoun}
+            renderAnnotationDetails={renderAnnotationDetails}
+            highlightedKey={highlighted}
             maximum={metric === 'health' ? 100 : undefined}
             formatValue={formatValue}
             formatAxisValue={
@@ -285,6 +381,15 @@ export const UpdateHealthHistory = ({
             }
           />
         </div>
+
+        {breakdownLabel && (
+          <HealthRankTable
+            dimensionLabel={breakdownLabel}
+            rows={ranked}
+            onSelect={onBreakdownSelect}
+            onHover={setHighlighted}
+          />
+        )}
       </div>
     </section>
   );
