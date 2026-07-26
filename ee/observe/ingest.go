@@ -42,6 +42,14 @@ const maxBatchBodyBytes = 16 << 20
 // ingestion request indefinitely. Each coalesced operation gets its own bound.
 const identityApplyTimeout = 5 * time.Second
 
+// telemetryInsertTimeout bounds the ClickHouse write, which was the one store
+// call on this path running on the bare request context: a degraded ClickHouse
+// held the goroutine and its connection for as long as the client was willing
+// to wait, while the SDK behind it retried into the same wall. Longer than the
+// identity bound because this writes a whole batch rather than one operation.
+// Expiring answers 503, which is the arm that keeps the batch on the device.
+const telemetryInsertTimeout = 15 * time.Second
+
 // IngestHandler owns the expo-observe ingestion routes. The response contract
 // is dictated by the SDK's classification and every arm of it either destroys
 // or preserves data on the device:
@@ -296,7 +304,10 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 			for i := range rows {
 				rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
 			}
-			if err := h.telemetry.InsertLogs(r.Context(), rows); err != nil {
+			insertContext, cancelInsert := context.WithTimeout(r.Context(), telemetryInsertTimeout)
+			err := h.telemetry.InsertLogs(insertContext, rows)
+			cancelInsert()
+			if err != nil {
 				log.Printf("observe: clickhouse logs insert failed: %v", err)
 				observeBatch(resultUnavailable)
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -520,7 +531,10 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		for i := range rows {
 			rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
 		}
-		if err := h.telemetry.InsertMetrics(r.Context(), rows); err != nil {
+		insertContext, cancelInsert := context.WithTimeout(r.Context(), telemetryInsertTimeout)
+		err := h.telemetry.InsertMetrics(insertContext, rows)
+		cancelInsert()
+		if err != nil {
 			log.Printf("observe: clickhouse metrics insert failed: %v", err)
 			observeBatch(resultUnavailable)
 			w.WriteHeader(http.StatusServiceUnavailable)

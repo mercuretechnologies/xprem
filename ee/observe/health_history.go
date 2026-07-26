@@ -23,6 +23,14 @@ const (
 	healthOutboxInterval   = time.Second
 	healthSnapshotInterval = time.Minute
 	healthDiscardInterval  = time.Minute
+	// Floor between two change-driven snapshots. The outbox drains every
+	// second and any drain that delivered something asks for a fresh
+	// projection, so on a fleet that is never quiet the full-fleet aggregate
+	// over PostgreSQL ran up to sixty times a minute to rewrite a bucket that
+	// is truncated to the minute anyway. Ten seconds keeps a release visible
+	// almost immediately while costing six aggregates a minute instead of
+	// sixty; the minute heartbeat below is unaffected, it is the repair path.
+	healthSnapshotFloor = 10 * time.Second
 )
 
 // HealthHistory projects PostgreSQL's durable health outbox and instant-T
@@ -91,19 +99,24 @@ func (h *HealthHistory) run(ctx context.Context) {
 
 	h.drainOutbox(ctx)
 	h.captureSnapshots(ctx)
+	lastCapture := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-outboxTicker.C:
-			if h.drainOutbox(ctx) {
-				// Health changed: refresh the current minute immediately.
-				// ClickHouse keeps one logical point per minute via argMax.
+			// Health changed: refresh the current minute, but no more often
+			// than the floor. ClickHouse keeps one logical point per minute
+			// via argMax, so anything faster rewrites the same bucket at the
+			// price of another full-fleet read.
+			if h.drainOutbox(ctx) && time.Since(lastCapture) >= healthSnapshotFloor {
 				h.captureSnapshots(ctx)
+				lastCapture = time.Now()
 			}
 		case <-snapshotTicker.C:
 			// Heartbeat repairs a missed trigger and records quiet periods.
 			h.captureSnapshots(ctx)
+			lastCapture = time.Now()
 		}
 	}
 }

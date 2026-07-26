@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
+package observe
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"expo-open-ota/internal/database"
+	"expo-open-ota/internal/database/clickhouse"
+	"expo-open-ota/internal/database/postgres"
+	"expo-open-ota/internal/database/postgres/pgdb"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
+)
+
+// The points read is bounded to the series the caller kept, and the predicate
+// carries a bound argument. Both halves need a real server to be worth
+// anything: a misplaced argument would either error or quietly answer for the
+// wrong window, and no unit test can tell the difference.
+func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
+	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
+	pgURL := os.Getenv("TEST_DATABASE_URL")
+	if chURL == "" || pgURL == "" {
+		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping metric points test")
+	}
+	postgres.RunDBMigrations(pgURL)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, pgURL)
+	require.NoError(t, err)
+	defer pool.Close()
+	chEngine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer chEngine.Close()
+
+	appID := uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Minute)
+	sink := NewClickHouseTelemetrySink(chEngine)
+	row := func(name string, value float64) MetricRow {
+		return MetricRow{
+			Envelope: Envelope{
+				AppID:         appID,
+				EASClientID:   uuid.NewString(),
+				SessionID:     uuid.NewString(),
+				UpdateID:      ZeroUpdateID,
+				UpdateGroupID: ZeroUpdateID,
+				Timestamp:     now.Add(-time.Minute),
+				ContentHash:   uint64(len(name)) + uint64(value*1000),
+			},
+			MetricName: name,
+			Value:      value,
+		}
+	}
+	require.NoError(t, sink.InsertMetrics(ctx, []MetricRow{
+		row("expo.app_startup.cold_launch_time", 1.5),
+		row("expo.navigation.cold_ttr", 9.5),
+	}))
+
+	explorer := NewExplorer(&database.Engine{Queries: pgdb.New(pool), DB: pool}, chEngine)
+	points, err := explorer.readMetricPoints(ctx, appID, ExplorerQuery{
+		From:   now.Add(-time.Hour),
+		To:     now.Add(time.Minute),
+		Bucket: time.Minute,
+	}, false, []string{"expo.app_startup.cold_launch_time"})
+	require.NoError(t, err)
+
+	// The kept series comes back with its real value, which is what proves the
+	// bound arguments still line up with their placeholders.
+	require.Len(t, points, 1)
+	require.Contains(t, points, "expo.app_startup.cold_launch_time")
+	require.Len(t, points["expo.app_startup.cold_launch_time"], 1)
+	require.InDelta(t, 1.5, points["expo.app_startup.cold_launch_time"][0].Value, 0.0001)
+	// The one the caller dropped is not read at all.
+	require.NotContains(t, points, "expo.navigation.cold_ttr")
+
+	// Keeping nothing asks nothing.
+	empty, err := explorer.readMetricPoints(ctx, appID, ExplorerQuery{
+		From: now.Add(-time.Hour), To: now.Add(time.Minute), Bucket: time.Minute,
+	}, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}

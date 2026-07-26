@@ -449,7 +449,14 @@ func (e *Explorer) ReadOverview(ctx context.Context, appID string, query Explore
 	if err != nil {
 		return Overview{}, err
 	}
-	points, err := e.readMetricPoints(queryContext, appID, query, cohort)
+	// Only the series that will be read: readMetricStats keeps the hundred
+	// busiest names, and without this the points query aggregated every bucket
+	// of every other name for nothing.
+	names := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		names = append(names, metric.Name)
+	}
+	points, err := e.readMetricPoints(queryContext, appID, query, cohort, names)
 	if err != nil {
 		return Overview{}, err
 	}
@@ -615,16 +622,24 @@ func definitionOrder(name string) int {
 	return len(observedMetricDefinitions)
 }
 
+// names bounds the read to the series the caller will actually plot; empty
+// means it kept none, and there is nothing to ask.
 func (e *Explorer) readMetricPoints(
 	ctx context.Context,
 	appID string,
 	query ExplorerQuery,
 	cohort bool,
+	names []string,
 ) (map[string][]ObserveMetricPoint, error) {
+	if len(names) == 0 {
+		return map[string][]ObserveMetricPoint{}, nil
+	}
 	where, args := telemetryWhere("m", query, cohort)
 	conditionWhere, conditionArgs := conditionsWhere(query.Conditions)
 	where += conditionWhere
 	args = append(args, conditionArgs...)
+	where += " AND m.metric_name IN ?"
+	args = append(args, names)
 	source, sourceArgs := metricsSource(appID, query, "")
 	sql := sqlf(`
 		SELECT metric_name,
