@@ -133,9 +133,25 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		RecentFailedUpdateIDs: r.Header.Get("Expo-Recent-Failed-Update-Ids"),
 	}
 
-	// Every poll is a device check-in: the registry (when wired) sees it
-	// before the manifest resolution, whose outcome is irrelevant to "this
-	// device exists and is alive". The check-in carries the update-health
+	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
+	if err != nil {
+		var svcErr *services.ExpoProtocolError
+		if errors.As(err, &svcErr) {
+			http.Error(w, svcErr.Message, svcErr.StatusCode)
+			return
+		}
+		http.Error(w, "Internal operational error", http.StatusInternalServerError)
+		return
+	}
+
+	// A poll becomes a device check-in only once it has resolved: a request we
+	// answer with an error is not evidence that a device exists, and the
+	// registry is a durable table reachable from an unauthenticated endpoint.
+	// Resolving first means an unknown app id or a channel that maps to no
+	// branch is rejected without leaving a row behind. A resolution that found
+	// no update still checks in: the app, the channel and the branch were all
+	// real, and a device out of a rollout bucket or ahead of every published
+	// update is as alive as any other. The check-in carries the update-health
 	// signals the same headers already delivered.
 	if h.onDeviceCheckIn != nil && params.ClientID != "" {
 		remoteIP := ""
@@ -150,17 +166,6 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 			FailedUpdateIDsRaw: params.RecentFailedUpdateIDs,
 			FatalError:         params.ExpoFatalError,
 		})
-	}
-
-	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
-	if err != nil {
-		var svcErr *services.ExpoProtocolError
-		if errors.As(err, &svcErr) {
-			http.Error(w, svcErr.Message, svcErr.StatusCode)
-			return
-		}
-		http.Error(w, "Internal operational error", http.StatusInternalServerError)
-		return
 	}
 
 	if result.Update == nil {

@@ -6,6 +6,7 @@ import (
 	"expo-open-ota/config"
 	"expo-open-ota/internal/bucket"
 	cache2 "expo-open-ota/internal/cache"
+	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/update"
@@ -220,6 +221,7 @@ func TestManifestMissingAppIdHeaderRejectedWhenFallbackSkipped(t *testing.T) {
 
 	assert.Equal(t, 400, w.Code, "Missing expo-app-id must 400 once the fallback is opted out of")
 }
+
 // The control-plane shape — no EXPO_APP_ID, so no legacy app to fall back to —
 // is not reachable from here: a stateless container refuses to boot without
 // EXPO_APP_ID (wire.go log.Fatals on it), and a DB-mode container needs a
@@ -836,4 +838,111 @@ func TestPreWarmManifestCache(t *testing.T) {
 	// Verify manifest cache was populated
 	manifestKey := update.ComputeUpdateManifestCacheKey("test-app-id", "branch-1", "1", cachedUpdate.UpdateId, "android")
 	assert.NotEqual(t, "", cache.Get(manifestKey), "manifest cache should be populated after prewarm")
+}
+
+// checkInRequest builds a poll carrying the headers a real client sends,
+// including the device id and the update-health headers a check-in would
+// record.
+func checkInRequest(channelName string, runtimeVersion string) *http.Request {
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "ios")
+	r.Header.Add("expo-runtime-version", runtimeVersion)
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-expect-signature", "true")
+	r.Header.Add("expo-channel-name", channelName)
+	r.Header.Add("expo-app-id", "test-app-id")
+	r.Header.Add("EAS-Client-ID", "d8a43b52-9b1b-4b6a-9e57-52a2ce271244")
+	r.Header.Add("expo-current-update-id", "2fc0ffee-0000-4000-8000-00000000cafe")
+	r.Header.Add("Expo-Recent-Failed-Update-Ids", `"3fc0ffee-0000-4000-8000-00000000cafe"`)
+	return r
+}
+
+// serveWithCheckInRecorder serves one manifest request through a handler whose
+// check-in seam records instead of writing, and returns what the registry
+// would have been asked to store.
+func serveWithCheckInRecorder(r *http.Request) (*httptest.ResponseRecorder, []handlers.DeviceCheckIn) {
+	var recorded []handlers.DeviceCheckIn
+	handler := testContainer().ExpoProtocolHandler
+	handler.SetOnDeviceCheckIn(func(_ context.Context, checkIn handlers.DeviceCheckIn) {
+		recorded = append(recorded, checkIn)
+	})
+	w := httptest.NewRecorder()
+	handler.HandleManifest(w, r)
+	return w, recorded
+}
+
+// The device registry is a durable table written from an unauthenticated
+// endpoint, so a poll must only count as a check-in once the request has
+// resolved. A rejected poll is not evidence that a device exists, and letting
+// it register would make the table grow on requests the server itself refuses
+// to answer.
+func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+
+	t.Run("a channel that maps to no branch registers nothing", func(t *testing.T) {
+		httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+			func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("operationName") == "FetchExpoChannelMapping" {
+					return MockExpoChannelMapping(nil, map[string]interface{}{
+						"id":   "bad_channel_id",
+						"name": "bad_channel",
+						"branchMapping": StringifyBranchMapping(map[string]interface{}{
+							"version": 0,
+							"data":    []map[string]interface{}{},
+						}),
+					})
+				}
+				return MockExpoAccountResponse(map[string]interface{}{
+					"id": "test_id", "username": "test_username", "email": "test_email",
+				})
+			})
+
+		w, recorded := serveWithCheckInRecorder(checkInRequest("bad_channel", "1"))
+		assert.Equal(t, 404, w.Code)
+		assert.Empty(t, recorded, "a poll the server rejects must leave no device behind")
+	})
+
+	t.Run("an unknown app id registers nothing", func(t *testing.T) {
+		mockWorkingExpoResponse("staging")
+		r := checkInRequest("staging", "1")
+		r.Header.Set("expo-app-id", "no-such-app")
+
+		w, recorded := serveWithCheckInRecorder(r)
+		assert.Equal(t, 404, w.Code)
+		assert.Empty(t, recorded)
+	})
+
+	// Resolving to no update is a legitimate outcome, not a rejection: the app,
+	// the channel and the branch were all real. A device ahead of every
+	// published update, or out of a rollout bucket, is as alive as any other
+	// and must keep its place in the registry.
+	t.Run("a poll that resolves to no update still checks in", func(t *testing.T) {
+		mockWorkingExpoResponse("staging")
+
+		w, recorded := serveWithCheckInRecorder(checkInRequest("staging", "nop"))
+		assert.Equal(t, 200, w.Code)
+		assert.Len(t, recorded, 1)
+		assert.Equal(t, "test-app-id", recorded[0].AppID)
+		assert.Equal(t, "d8a43b52-9b1b-4b6a-9e57-52a2ce271244", recorded[0].EASClientID)
+		// The health signals the same headers carried must survive the move.
+		assert.Equal(t, "2fc0ffee-0000-4000-8000-00000000cafe", recorded[0].CurrentUpdateID)
+		assert.Equal(t, `"3fc0ffee-0000-4000-8000-00000000cafe"`, recorded[0].FailedUpdateIDsRaw)
+	})
+
+	t.Run("a served update checks in", func(t *testing.T) {
+		mockWorkingExpoResponse("staging")
+		r := checkInRequest("staging", "1")
+		// The fixture publishes runtime 1 for android only, so this is the
+		// subtest that actually walks the served-manifest branch.
+		r.Header.Set("expo-platform", "android")
+
+		w, recorded := serveWithCheckInRecorder(r)
+		assert.Equal(t, 200, w.Code)
+		parts, err := ParseMultipartMixedResponse(w.Header().Get("Content-Type"), w.Body.Bytes())
+		assert.NoError(t, err)
+		assert.Len(t, parts, 1)
+		assert.Equal(t, "manifest", parts[0].Name, "this poll must be answered with an update, not a directive")
+		assert.Len(t, recorded, 1)
+	})
 }
