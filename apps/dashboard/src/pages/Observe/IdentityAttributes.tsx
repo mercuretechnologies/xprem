@@ -119,7 +119,23 @@ export const IdentityAttributes = () => {
               </div>
             ))}
 
-          {!schemaQuery.isLoading && keys.length === 0 && (
+          {/* A failed read has no keys either, so it would otherwise fall into
+              the empty state and claim the allowlist is empty. Someone acting
+              on that would start declaring keys that already exist. */}
+          {schemaQuery.isError && (
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl border bg-secondary text-muted-foreground">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <h3 className="mt-4 text-sm font-medium">Could not load Identity attributes</h3>
+              <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                The server did not answer, so the declared keys are unknown. This is not the same
+                as an empty allowlist.
+              </p>
+            </div>
+          )}
+
+          {!schemaQuery.isLoading && !schemaQuery.isError && keys.length === 0 && (
             <div className="flex flex-col items-center px-6 py-16 text-center">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl border bg-secondary text-muted-foreground">
                 <KeyRound className="h-5 w-5" />

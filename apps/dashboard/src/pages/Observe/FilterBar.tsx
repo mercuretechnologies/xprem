@@ -60,15 +60,19 @@ export const FilterBar = ({
     setDimensions,
   } = filters;
 
-  // Chips arrive one per value, in descriptor order, so every value of a
-  // filter is already adjacent: collapsing them keeps the label written once.
-  // Grouped on the label too, since every identity attribute shares one filter
-  // key and "plan" must not swallow the values of "tenant".
+  // Collapsed so the label is written once, whatever the chip order. Grouped on
+  // the label too, since every identity attribute shares one filter key and
+  // "plan" must not swallow the values of "tenant".
+  //
+  // By lookup rather than by adjacency: attribute pairs are appended to
+  // state.attributes in toggle order, so plan, tenant, plan is an ordinary
+  // sequence. Merging only neighbours would emit that as two "plan" groups,
+  // which renders the label twice under one duplicated React key.
   const chipGroups = chips.reduce<
     Array<{ key: FilterKey; label: string; applied: boolean; values: typeof chips }>
   >((groups, chip) => {
-    const last = groups[groups.length - 1];
-    if (last?.key === chip.key && last.label === chip.label) last.values.push(chip);
+    const existing = groups.find(group => group.key === chip.key && group.label === chip.label);
+    if (existing) existing.values.push(chip);
     else groups.push({ key: chip.key, label: chip.label, applied: chip.applied, values: [chip] });
     return groups;
   }, []);

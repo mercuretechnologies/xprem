@@ -31,18 +31,21 @@ const StatTile = ({
 }: {
   icon: typeof Activity;
   label: string;
-  value: number;
+  // null when the figure could not be read. Rendered as "n/a", never as 0: a
+  // zero here reads as a measurement, and "no devices online" is a very
+  // different statement from "we could not ask".
+  value: number | null;
   hint: string;
 }) => (
   <div
     className="rounded-xl border bg-card p-4 shadow-card"
-    title={`${exact.format(value)} ${label.toLowerCase()}`}>
+    title={value == null ? `${label.toLowerCase()} unavailable` : `${exact.format(value)} ${label.toLowerCase()}`}>
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <Icon className="h-3.5 w-3.5 text-primary" />
       {label}
     </div>
     <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
-      {compact.format(value)}
+      {value == null ? 'n/a' : compact.format(value)}
     </div>
     <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{hint}</p>
   </div>
@@ -105,11 +108,13 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
           <StatTile
             icon={Radio}
             label="Online now"
-            value={onlineQuery.data?.online ?? 0}
+            value={onlineQuery.isError ? null : (onlineQuery.data?.online ?? 0)}
             hint={
-              filters.registryHonorsAll
-                ? `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes, any route`
-                : `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes. Build and channel filters do not narrow this one.`
+              onlineQuery.isError
+                ? 'The device registry did not answer, so this count is unknown.'
+                : filters.registryHonorsAll
+                  ? `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes, any route`
+                  : `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes. Build and channel filters do not narrow this one.`
             }
           />
           {/* "Devices", not "users": expo-observe identifies an install, and

@@ -15,9 +15,18 @@ const Snippet = ({ label, value }: { label: string; value: string }) => {
           size="sm"
           className="h-6 px-2 text-[11px]"
           onClick={() => {
-            void navigator.clipboard.writeText(value);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1_500);
+            // navigator.clipboard is undefined on insecure origins, which is
+            // exactly where this page lives: a self-hosted dashboard reached
+            // over plain HTTP. Unguarded it threw a TypeError, and a rejected
+            // writeText went unhandled while the label still flipped to
+            // "Copied". Only a resolved write says it copied.
+            void navigator.clipboard
+              ?.writeText(value)
+              .then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1_500);
+              })
+              .catch(() => setCopied(false));
           }}>
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? 'Copied' : 'Copy'}
