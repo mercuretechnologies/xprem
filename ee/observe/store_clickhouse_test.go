@@ -7,7 +7,6 @@ package observe
 import (
 	"context"
 	"expo-open-ota/internal/database/clickhouse"
-	"os"
 	"testing"
 	"time"
 
@@ -21,11 +20,7 @@ import (
 // advisory lock) to run. A random app id isolates each run, so no cleanup:
 // ClickHouse deletes are async mutations, not something a test should wait on.
 func TestClickHouseTelemetrySinkRoundTrip(t *testing.T) {
-	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if chURL == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping sink test")
-	}
+	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 
 	ctx := context.Background()
@@ -92,11 +87,7 @@ func TestClickHouseTelemetrySinkRoundTrip(t *testing.T) {
 }
 
 func TestHealthHistoryRoundTripUsesLatestSnapshotInMinute(t *testing.T) {
-	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if chURL == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping health history test")
-	}
+	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 
 	ctx := context.Background()

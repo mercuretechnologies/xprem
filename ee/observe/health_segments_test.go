@@ -6,7 +6,6 @@ package observe
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -55,11 +54,7 @@ func pointAt(t *testing.T, points []HealthSegmentPoint, at time.Time) *HealthSeg
 // its new label the day it upgraded, which is precisely backwards for a chart
 // whose job is to show when things changed.
 func TestReadBySegmentLabelsBucketsWithTheirOwnState(t *testing.T) {
-	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if chURL == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping segmented history test")
-	}
+	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 
 	ctx := context.Background()

@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -350,9 +351,13 @@ func DecodeLogCursor(raw string) (*LogCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	var eventKey uint64
-	if _, err := fmt.Sscan(parts[1], &eventKey); err != nil {
-		return nil, err
+	// ParseUint and not Sscan: Sscan stops at the first byte it cannot use and
+	// reports success on what it read, so "42junk" decodes to 42 and "0x10" to
+	// 16. A corrupted cursor would then page from a position nobody asked for
+	// instead of being refused.
+	eventKey, err := strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor key: %w", err)
 	}
 	return &LogCursor{Timestamp: timestamp, EventKey: eventKey}, nil
 }

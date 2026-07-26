@@ -6,7 +6,6 @@ package observe
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -25,11 +24,7 @@ import (
 // anything: a misplaced argument would either error or quietly answer for the
 // wrong window, and no unit test can tell the difference.
 func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
-	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if chURL == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping metric points test")
-	}
+	chURL, pgURL := requireLiveStores(t)
 	postgres.RunDBMigrations(pgURL)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 

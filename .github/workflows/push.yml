@@ -73,6 +73,12 @@ jobs:
     # UPDATEs and their behavior under concurrency. They skip themselves when
     # TEST_DATABASE_URL is unset, so without this service they never ran here and the
     # job went green having executed none of them.
+    #
+    # ClickHouse is here for the same reason and covers what no fake can either:
+    # the embedded migrations applying twice, every analytical column matching what
+    # the flattener binds to it, and the ASOF-joined health queries. Its own
+    # migrations take a PostgreSQL advisory lock, so it needs both services. The
+    # tests now FAIL rather than skip when CI is set, so a green job means they ran.
     services:
       postgres:
         image: postgres:16-alpine
@@ -88,8 +94,24 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.3
+        env:
+          CLICKHOUSE_DB: eoota_test
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: clickhouse
+        ports:
+          - 9000:9000
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/eoota_test?sslmode=disable
+      TEST_CLICKHOUSE_URL: clickhouse://default:clickhouse@localhost:9000/eoota_test
       TEST_AZURE_BLOB_ENDPOINT: http://localhost:10000/devstoreaccount1
 
     steps:

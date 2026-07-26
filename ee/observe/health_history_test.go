@@ -6,7 +6,6 @@ package observe
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -70,11 +69,7 @@ func TestAppendSnapshotMapsAndClampsDatabaseValues(t *testing.T) {
 // trigger included, because the trigger and the resolving query are the two
 // halves that have to agree.
 func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
-	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if chURL == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping outbox delivery test")
-	}
+	chURL, pgURL := requireLiveStores(t)
 	postgres.RunDBMigrations(pgURL)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 

@@ -6,6 +6,7 @@ package observe
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -193,6 +194,26 @@ func TestLogCursorRoundTrip(t *testing.T) {
 	decoded, err := DecodeLogCursor(EncodeLogCursor(cursor))
 	require.NoError(t, err)
 	require.Equal(t, cursor, *decoded)
+}
+
+// A cursor is server-issued, so anything that does not decode exactly is
+// corruption or a hand-crafted value. Reading what parses and ignoring the rest
+// would page from a position nobody asked for, silently: the previous decoder
+// took "42junk" for 42 and "0x10" for 16.
+func TestLogCursorRefusesAnythingButAnExactKey(t *testing.T) {
+	timestamp := time.Date(2026, 7, 24, 10, 0, 0, 123, time.UTC).Format(time.RFC3339Nano)
+	for _, key := range []string{"42junk", "0x10", " 42", "42 99", "", "-1", "4.2"} {
+		encoded := base64.RawURLEncoding.EncodeToString([]byte(timestamp + "|" + key))
+		decoded, err := DecodeLogCursor(encoded)
+		require.Error(t, err, "key %q", key)
+		require.Nil(t, decoded, "key %q", key)
+	}
+
+	// The shape the server itself mints still decodes.
+	valid := base64.RawURLEncoding.EncodeToString([]byte(timestamp + "|42"))
+	decoded, err := DecodeLogCursor(valid)
+	require.NoError(t, err)
+	require.EqualValues(t, 42, decoded.EventKey)
 }
 
 func TestExplorerHandlerParsesHardwareDimensions(t *testing.T) {

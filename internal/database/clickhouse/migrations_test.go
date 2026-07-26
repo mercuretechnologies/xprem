@@ -21,11 +21,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.RunSerialized(m)) }
 // after the leader must no-op), checks the fact tables exist and the
 // Postgres-migrated Source B tables are gone.
 func TestRunDBMigrations(t *testing.T) {
-	dsn := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping ClickHouse migration test")
-	}
+	dsn, pgURL := requireLiveStores(t)
 
 	RunDBMigrations(dsn, pgURL)
 	RunDBMigrations(dsn, pgURL)
@@ -67,11 +63,7 @@ func TestRunDBMigrations(t *testing.T) {
 // log.Fatalf's on migration errors, so a racing failure kills the test
 // binary loudly.
 func TestConcurrentMigratorsApplyOnce(t *testing.T) {
-	dsn := os.Getenv("TEST_CLICKHOUSE_URL")
-	pgURL := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" || pgURL == "" {
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; skipping ClickHouse migration test")
-	}
+	dsn, pgURL := requireLiveStores(t)
 
 	ctx := context.Background()
 	engine, err := NewClickHouseEngine(ctx, dsn)
@@ -107,4 +99,21 @@ func TestConcurrentMigratorsApplyOnce(t *testing.T) {
 		"SELECT count() FROM goose_db_version WHERE version_id = 20260723000000 AND is_applied = 1",
 	).Scan(&versionRows))
 	require.EqualValues(t, 1, versionRows, "migration must be recorded exactly once")
+}
+
+// requireLiveStores hands back the two store URLs, or stops the test. It SKIPS
+// on a developer machine and FAILS in CI: a store test that skips is a green
+// job having exercised none of the schema and none of the SQL it exists to
+// cover, which is exactly how a renamed column or a broken migration ships.
+// Same guard the identity store tests carry.
+func requireLiveStores(t *testing.T) (clickhouseURL, postgresURL string) {
+	t.Helper()
+	clickhouseURL, postgresURL = os.Getenv("TEST_CLICKHOUSE_URL"), os.Getenv("TEST_DATABASE_URL")
+	if clickhouseURL == "" || postgresURL == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL must both be set in CI: these tests cover schema and queries no unit test can reach")
+		}
+		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; start a Postgres and a ClickHouse and set them to run the store tests")
+	}
+	return clickhouseURL, postgresURL
 }
