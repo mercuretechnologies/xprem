@@ -1222,7 +1222,7 @@ func clientIDs(devices []Device) []string {
 	return out
 }
 
-func TestListDevicesJoinsReleaseDimensions(t *testing.T) {
+func TestListDevicesReportsReleaseDimensions(t *testing.T) {
 	store, pool := setupIdentityStore(t)
 	appID := seedApp(t, pool)
 	ctx := context.Background()
@@ -1236,7 +1236,7 @@ func TestListDevicesJoinsReleaseDimensions(t *testing.T) {
 		Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1",
 	}))
 	// A device on the embedded bundle reports an id no published update
-	// matches, so it joins to nothing.
+	// matches, so the resolution stores nothing.
 	embedded := uuid.NewString()
 	embeddedUpdate := uuid.NewString()
 	require.NoError(t, store.TouchDevice(ctx, appID, embedded, nil, &embeddedUpdate, DeviceInfo{}))
@@ -1279,6 +1279,46 @@ func TestListDevicesJoinsReleaseDimensions(t *testing.T) {
 	require.Nil(t, embeddedRow.Branch)
 	require.Nil(t, embeddedRow.RuntimeVersion)
 	require.Nil(t, embeddedRow.Platform)
+}
+
+// current_update_id arrives on the unauthenticated wire, so a device of one app
+// can name an update of another. The release dimensions are resolved once at
+// check-in, scoped to the app, which is where that claim has to be refused: a
+// leak here would put another app's branch, runtime and platform in this app's
+// inventory, and make its releases filterable from the outside.
+func TestDeviceReleaseDimensionsRefuseAnotherAppsUpdate(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	otherAppID := seedApp(t, pool)
+	ctx := context.Background()
+
+	foreignUpdate := uuid.NewString()
+	seedPublishedUpdate(t, pool, otherAppID, foreignUpdate)
+	foreignBranch := "health-" + foreignUpdate[:8]
+
+	claimant := uuid.NewString()
+	require.NoError(t, store.TouchDevice(ctx, appID, claimant, nil, &foreignUpdate, DeviceInfo{}))
+
+	// The device is still registered: an unattributable update is not a reason
+	// to lose the install.
+	all, _, err := store.ListDevices(ctx, appID, DeviceQuery{}, 10, nil)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	require.Equal(t, claimant, all[0].EASClientID)
+	require.Nil(t, all[0].Branch, "another app's branch must not reach this inventory")
+	require.Nil(t, all[0].RuntimeVersion)
+	require.Nil(t, all[0].Platform)
+
+	// And the other app's release is not filterable from here.
+	byForeign, _, err := store.ListDevices(ctx, appID, DeviceQuery{Branches: []string{foreignBranch}}, 10, nil)
+	require.NoError(t, err)
+	require.Empty(t, byForeign)
+
+	count, err := store.CountOnlineDevices(ctx, appID, time.Now().Add(-time.Hour), DeviceQuery{
+		Branches: []string{foreignBranch},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, count)
 }
 
 // The online count sits next to filtered figures, so it narrows on the same
