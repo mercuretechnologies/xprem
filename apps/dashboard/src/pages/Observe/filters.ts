@@ -428,21 +428,23 @@ export const useObserveFilters = (scopes: FilterScope[]) => {
     [write]
   );
 
-  // Dimensions are not filters: they do not narrow anything, they split what
+  // The dimension is not a filter: it does not narrow anything, it splits what
   // is already selected into overlaid series. Same URL, separate parameter.
-  const dimensions = useMemo(() => {
+  //
+  // Exactly one, or none. Splitting on two at once multiplies the series into a
+  // chart nobody can read, and it answers a question nobody asked: narrowing to
+  // one device model and then splitting by OS version says the same thing, one
+  // legible chart at a time. Old links carrying a comma-separated list keep
+  // working, on their first dimension.
+  const dimension = useMemo(() => {
     const raw = searchParams.get('by') ?? '';
-    return raw
-      .split(',')
-      .map(entry => entry.trim())
-      .filter(Boolean)
-      .slice(0, 3);
+    return raw.split(',')[0]?.trim() || '';
   }, [searchParams]);
 
-  const setDimensions = useCallback(
-    (next: string[]) => {
+  const setDimension = useCallback(
+    (next: string) => {
       write(params => {
-        if (next.length > 0) params.set('by', next.slice(0, 3).join(','));
+        if (next) params.set('by', next);
         else params.delete('by');
       });
     },
@@ -532,8 +534,8 @@ export const useObserveFilters = (scopes: FilterScope[]) => {
     live,
     setLive,
     applies,
-    dimensions,
-    setDimensions,
+    dimension,
+    setDimension,
   };
 };
 

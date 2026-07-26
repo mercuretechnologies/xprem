@@ -7,6 +7,7 @@ package observe
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -46,9 +47,13 @@ func IsHealthSegmentDimension(name string) bool {
 // outage. Buckets are capped, and the caller's window does the rest.
 const maxHealthSegmentBuckets = 180
 
-// The chart tells eight colours apart; past that a split stops informing. It
-// is the LIMIT the query itself applies, so the trimming never has to happen
-// on rows already pulled across the wire.
+// The chart tells eight colours apart; past that a split stops informing.
+// Applied by TrimSegments on the rows already read, deliberately NOT as a
+// LIMIT in the query: selecting the top segments in SQL means a second
+// reference to the aggregate, and ClickHouse substitutes a CTE rather than
+// materializing it, so the whole grid and both ASOF joins were computed twice
+// (measured: six scans of device_health_events instead of three, and eighteen
+// times the memory) to trim a result the caller was trimming anyway.
 const maxHealthSegments = 8
 
 // ReadBySegment answers "is this update failing on old Android phones", which
@@ -151,9 +156,6 @@ func (h *HealthHistory) ReadBySegment(
 		  )
 		SELECT bucket, segment, devices, faulty
 		FROM segment_counts
-		WHERE segment IN (
-		  SELECT segment FROM segment_counts GROUP BY segment ORDER BY max(devices) DESC LIMIT ?
-		)
 		ORDER BY bucket`, column)
 
 	rows, err := h.clickhouse.Conn.Query(ctx, sql,
@@ -162,7 +164,6 @@ func (h *HealthHistory) ReadBySegment(
 		updateIDs,
 		from.UTC(), step, buckets,
 		updateIDs,
-		maxHealthSegments,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("reading segmented health history: %w", err)
@@ -203,12 +204,21 @@ func (h *HealthHistory) ReadBySegment(
 	return bySegment, nil
 }
 
-// unknownSegment is what a device with no telemetry lands under: the registry
-// knows it exists and what it runs, never what it is.
+// unknownSegment is what an event carrying no value for the dimension lands
+// under. Two causes, and the label must not pick one: the registry never
+// learned the value (a device that sends no telemetry reports no hardware), or
+// the event predates the migration that added the column, since neither
+// 20260725180000_health_event_dimensions.sql nor its app_version follow-up
+// backfilled. The second dominates right after an upgrade and fades as the
+// window stops reaching back past it.
 const unknownSegment = "unknown"
 
 // TrimSegments keeps the most populated segments. Everything else is noise on
-// a chart that can only tell eight colours apart.
+// a chart that can only tell eight colours apart. This is the only place the
+// cut happens, so ties break on the segment name: ranking off a map alone
+// would let two equally populated segments swap places between refreshes, and
+// a series appearing and disappearing on a chart nobody touched reads as data
+// moving.
 func TrimSegments(bySegment map[string][]HealthSegmentPoint, limit int) map[string][]HealthSegmentPoint {
 	if len(bySegment) <= limit {
 		return bySegment
@@ -227,11 +237,12 @@ func TrimSegments(bySegment map[string][]HealthSegmentPoint, limit int) map[stri
 		}
 		order = append(order, ranked{segment: segment, devices: peak})
 	}
-	for i := 1; i < len(order); i++ {
-		for j := i; j > 0 && order[j].devices > order[j-1].devices; j-- {
-			order[j], order[j-1] = order[j-1], order[j]
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].devices != order[j].devices {
+			return order[i].devices > order[j].devices
 		}
-	}
+		return order[i].segment < order[j].segment
+	})
 	trimmed := make(map[string][]HealthSegmentPoint, limit)
 	for _, entry := range order[:limit] {
 		trimmed[entry.segment] = bySegment[entry.segment]

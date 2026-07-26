@@ -35,6 +35,14 @@ type DeviceCheckIn struct {
 	// FatalError is the Expo-Fatal-Error header: the crash detail, sent by
 	// the client exactly once, on the first poll after the crash.
 	FatalError string
+	// Rejected marks a poll the server answered with an error. Such a poll is
+	// no evidence that a device exists and must leave nothing durable behind,
+	// so the recorder keeps only the crash detail, in memory, to re-attach to
+	// the next poll that does resolve. Only set on a poll carrying one: every
+	// other signal a check-in holds survives on its own (the failed-id header
+	// is sticky, the device re-registers on its next poll), while the crash
+	// detail is sent once and is gone if this request drops it.
+	Rejected bool
 	// Hardware and OS of the device, spelled as expo-device spells them, plus
 	// the store version of the binary. Telemetry-only: the manifest headers
 	// carry nothing of the sort, so these are empty on every poll and empty
@@ -75,6 +83,23 @@ func resolveAppID(r *http.Request) string {
 		return appId
 	}
 	return config.LegacyFallbackAppId()
+}
+
+// reportRejectedCrash hands the one-shot crash detail of a refused poll to the
+// registry seam, and only that: no remote address, so nothing resolves a place
+// for a device we are not registering. A poll carrying no crash detail is not
+// reported at all, which keeps a refused request exactly as free of side
+// effects as it was.
+func (h *ExpoProtocolHandler) reportRejectedCrash(r *http.Request, appId string, params services.ManifestRequestParams) {
+	if h.onDeviceCheckIn == nil || params.ClientID == "" || params.ExpoFatalError == "" {
+		return
+	}
+	h.onDeviceCheckIn(r.Context(), DeviceCheckIn{
+		AppID:       appId,
+		EASClientID: params.ClientID,
+		FatalError:  params.ExpoFatalError,
+		Rejected:    true,
+	})
 }
 
 func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +161,14 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 
 	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
 	if err != nil {
+		// The crash detail is the one thing this poll carries that no later
+		// poll can. The client sends it once, and the resolution failures that
+		// land here are transient (a channel mapping the control plane could
+		// not read) and correlated with the very incident the detail
+		// documents. So it is handed over even though the poll is refused,
+		// marked rejected: the recorder holds it in memory and re-attaches it
+		// to the next poll that resolves, writing nothing durable now.
+		h.reportRejectedCrash(r, appId, params)
 		var svcErr *services.ExpoProtocolError
 		if errors.As(err, &svcErr) {
 			http.Error(w, svcErr.Message, svcErr.StatusCode)

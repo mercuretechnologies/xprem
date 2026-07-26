@@ -120,36 +120,22 @@ export const isDimension = (value: string): value is ObserveBreakdownDimension =
 export const dimensionSpec = (value: ObserveBreakdownDimension) =>
   dimensionCatalog.find(entry => entry.value === value) ?? dimensionCatalog[0];
 
-// A composite segment reads as its parts joined: "iPhone 17 Pro · France".
+// How a segment reads to a human, given the dimension it groups on.
 export const segmentLabel = (
-  dimensions: ObserveBreakdownDimension[],
-  values: string[],
-  contexts?: string[],
+  dimension: ObserveBreakdownDimension,
+  value: string,
+  context?: string,
   // Names the raw value cannot produce on its own. A breakdown row carries an
   // update id and nothing else, while the publish it belongs to has a message
   // the caller already loaded.
   names?: Map<string, string>
-) =>
-  dimensions
-    .map(
-      (dimension, index) =>
-        names?.get(values[index] ?? '') ??
-        dimensionSpec(dimension).labelFor(values[index] ?? '', contexts?.[index])
-    )
-    .join(' · ');
+) => names?.get(value) ?? dimensionSpec(dimension).labelFor(value, context);
 
 export const segmentFilters = (
-  dimensions: ObserveBreakdownDimension[],
-  values: string[],
-  contexts?: string[]
-) =>
-  dimensions.reduce<Partial<Record<FilterKey, string>>>(
-    (filters, dimension, index) => ({
-      ...filters,
-      ...dimensionSpec(dimension).filtersFor(values[index] ?? '', contexts?.[index]),
-    }),
-    {}
-  );
+  dimension: ObserveBreakdownDimension,
+  value: string,
+  context?: string
+): Partial<Record<FilterKey, string>> => dimensionSpec(dimension).filtersFor(value, context);
 
 // Distinct enough to tell eight overlaid series apart, and readable on both
 // the light and the dark surface.

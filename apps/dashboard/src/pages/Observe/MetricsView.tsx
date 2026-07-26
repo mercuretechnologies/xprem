@@ -56,14 +56,6 @@ const INLINE_SEGMENTS = 6;
 // same reason EventsView keeps its own template in one place.
 const segmentGrid = 'grid-cols-[minmax(0,1fr)_62px_70px_70px_86px_20px]';
 
-// Whether a cached breakdown was grouped the same way as the one being asked
-// for now. Reads the dimensions back off the query key, which is the only
-// place that says what a cached answer was an answer to.
-const sameDimensions = (cached: unknown, current: ObserveBreakdownDimension[]) =>
-  Array.isArray(cached) &&
-  cached.length === current.length &&
-  cached.every((value, index) => value === current[index]);
-
 const useUpdateGroups = (filters: ObserveFilters) => {
   const { query } = filters;
   const updatesQuery = useQuery({
@@ -142,8 +134,8 @@ type RankedSegment = {
   // The heading this row sits under, when the dimension has one. Only the
   // release dimensions do: a device model belongs to no branch.
   group?: string;
-  values: string[];
-  contexts?: string[];
+  value: string;
+  context?: string;
   devices: number;
   p50: number;
   p90: number;
@@ -237,7 +229,7 @@ const SegmentRow = ({
 const MetricSection = ({
   metric,
   filters,
-  dimensions,
+  dimension,
   annotations,
   renderAnnotationDetails,
   updateTitles,
@@ -246,7 +238,7 @@ const MetricSection = ({
 }: {
   metric: ObserveMetric;
   filters: ObserveFilters;
-  dimensions: ObserveBreakdownDimension[];
+  dimension: ObserveBreakdownDimension | undefined;
   annotations: Array<{ key: string; label: string; timestamp: Date }>;
   renderAnnotationDetails: TimeSeriesChartProps['renderAnnotationDetails'];
   // Publish messages, keyed by the ids a breakdown row carries.
@@ -259,11 +251,12 @@ const MetricSection = ({
   const [showAll, setShowAll] = useState(false);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const breakdownQuery = useQuery({
-    queryKey: ['observe', 'breakdown', api.getAppId(), metric.id, dimensions, filters.query],
-    queryFn: () => api.getObserveBreakdown(metric.id, dimensions, filters.query, { points: true }),
+    queryKey: ['observe', 'breakdown', api.getAppId(), metric.id, dimension, filters.query],
+    queryFn: () =>
+      api.getObserveBreakdown(metric.id, dimension!, filters.query, { points: true }),
     // No condition gate here: the view no longer renders a card that cannot
     // answer the current split, so a card that exists is one worth asking.
-    enabled: dimensions.length > 0,
+    enabled: dimension != null,
     refetchInterval: liveInterval(filters.live, filters.periodSpec),
     // Keeping the previous answer on screen while the next one loads is what
     // stops the page blinking on every filter change. But only while it still
@@ -271,7 +264,7 @@ const MetricSection = ({
     // screens under a heading that reads Network, and a card whose split has
     // no answer would keep the rows of the one before it forever.
     placeholderData: (previous, previousQuery) =>
-      sameDimensions(previousQuery?.queryKey?.[4], dimensions) ? previous : undefined,
+      previousQuery?.queryKey?.[4] === dimension ? previous : undefined,
   });
 
   const baseline = breakdownQuery.data?.overall;
@@ -283,15 +276,15 @@ const MetricSection = ({
         .map(segment => {
           const ranked = segment.devices >= MIN_DEVICES_TO_RANK;
           return {
-            id: [...segment.values, ...(segment.contexts ?? [])].join('\u0000'),
-            values: segment.values,
-            contexts: segment.contexts,
+            id: `${segment.value}\u0000${segment.context ?? ''}`,
+            value: segment.value,
+            context: segment.context,
             devices: segment.devices,
             p50: segment.p50,
             p90: segment.p90,
             points: segment.points,
-            label: segmentLabel(dimensions, segment.values, segment.contexts, updateTitles),
-            group: segment.values.map(value => branchOfUpdate.get(value)).find(Boolean),
+            label: segmentLabel(dimension!, segment.value, segment.context, updateTitles),
+            group: branchOfUpdate.get(segment.value),
             ranked,
             change: ranked ? relativeChange(segment.p50, baselineP50) : null,
             impact: ranked ? segment.devices * Math.max(0, segment.p50 - baselineP50) : -1,
@@ -307,7 +300,7 @@ const MetricSection = ({
     [
       baselineP50,
       breakdownQuery.data?.segments,
-      dimensions,
+      dimension,
       branchOfUpdate,
       updateTitles,
       branchReach,
@@ -315,7 +308,7 @@ const MetricSection = ({
   );
 
   const series = useMemo(() => {
-    if (dimensions.length > 0) {
+    if (dimension) {
       return segments
         .filter(segment => segment.ranked)
         .slice(0, INLINE_SEGMENTS)
@@ -348,18 +341,18 @@ const MetricSection = ({
         ),
       },
     ];
-  }, [dimensions.length, metric, segments]);
+  }, [dimension, metric, segments]);
 
   const colorOf = (id: string, index: number) =>
     index < INLINE_SEGMENTS && series.some(entry => entry.key === id)
       ? seriesColors[index % seriesColors.length]
       : undefined;
 
-  // A split whose dimensions carry no drill-in filter (Screen) is not
+  // A split whose dimension carries no drill-in filter (Screen) is not
   // selectable: applying it would set nothing and, in the dialog, closing on
   // top of that would look like it had.
   const filtersOf = (segment: RankedSegment) =>
-    segmentFilters(dimensions, segment.values, segment.contexts);
+    dimension ? segmentFilters(dimension, segment.value, segment.context) : {};
   const selectable = segments.length > 0 && Object.keys(filtersOf(segments[0])).length > 0;
   const applySegment = (segment: RankedSegment) => {
     filters.setFilters(filtersOf(segment));
@@ -448,11 +441,11 @@ const MetricSection = ({
         )}
       </div>
 
-      {dimensions.length > 0 && segments.length > 0 && (
+      {dimension && segments.length > 0 && (
         <>
           <div
             className={`grid ${segmentGrid} border-y bg-muted/20 px-5 py-1.5 text-[11px] text-muted-foreground`}>
-            <span>{dimensions.map(value => dimensionSpec(value).label).join(' · ')}</span>
+            <span>{dimensionSpec(dimension).label}</span>
             <span className="text-right">Devices</span>
             <span className="text-right">p50</span>
             <span className="text-right">p90</span>
@@ -494,8 +487,7 @@ const MetricSection = ({
             <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>
-                  {metric.label} by{' '}
-                  {dimensions.map(value => dimensionSpec(value).label.toLowerCase()).join(' and ')}
+                  {metric.label} by {dimensionSpec(dimension).label.toLowerCase()}
                 </DialogTitle>
               </DialogHeader>
               <div
@@ -568,13 +560,12 @@ const PublishedHere = ({
 
 export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
   const updateGroups = useUpdateGroups(filters);
-  // Memoized because it is a dependency of every MetricSection's own memos: a
-  // new array on each render undoes the sorting and series work of all six
-  // sections below.
-  const dimensions = useMemo(
-    () => filters.dimensions.filter(isDimension) as ObserveBreakdownDimension[],
-    [filters.dimensions]
-  );
+  // undefined when nothing is split, or when the URL names something this
+  // build does not know: a stale link must land on the unsplit view rather
+  // than on a request the server refuses.
+  const dimension = isDimension(filters.dimension)
+    ? (filters.dimension as ObserveBreakdownDimension)
+    : undefined;
 
   const overviewQuery = useQuery({
     queryKey: ['observe', 'overview', api.getAppId(), filters.query],
@@ -593,11 +584,10 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     queryFn: () => api.getObserveConditions(),
     staleTime: Infinity,
   });
-  const splitsOnMeasuredCondition = dimensions.some(
-    dimension =>
-      dimensionSpec(dimension).condition &&
-      !conditionsQuery.data?.find(entry => entry.name === dimension)?.sessionScoped
-  );
+  const splitsOnMeasuredCondition =
+    dimension != null &&
+    dimensionSpec(dimension).condition &&
+    !conditionsQuery.data?.find(entry => entry.name === dimension)?.sessionScoped;
   const reported = useMemo(
     () =>
       (overview?.metrics ?? []).filter(
@@ -629,19 +619,16 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
   // and the platform, and nothing about the hardware. So the split drives this
   // chart for the dimensions the snapshots actually hold, and says so for the
   // rest rather than silently ignoring the choice.
-  // Update group stays client-side: it slices the update ids we already ask
-  // for. Everything else is a device dimension the server rebuilds from the
-  // raw events.
-  const groupingSplit = dimensions.includes('updateGroup') ? 'updateGroup' : undefined;
-  const segmentSplit = dimensions.find(dimension =>
-    (['deviceModel', 'osVersion', 'country', 'appVersion', 'platform'] as string[]).includes(
-      dimension
-    )
-  );
+  // Update group needs nothing here: the per-group curves are what this chart
+  // draws by default, so splitting by it is already the unsplit view.
+  const segmentSplit = (
+    ['deviceModel', 'osVersion', 'country', 'appVersion', 'platform'] as string[]
+  ).includes(dimension ?? '')
+    ? (dimension as ObserveBreakdownDimension)
+    : undefined;
   // Screen is the one split the health events cannot follow: a route belongs to
   // a navigation timing, and an adoption or a launch failure has none.
-  const unsupportedSplit =
-    !groupingSplit && !segmentSplit && dimensions.includes('route') ? 'route' : undefined;
+  const unsupportedSplit = dimension === 'route' ? 'route' : undefined;
 
   const healthSeries = useMemo(() => {
     if (!scoped) return [];
@@ -820,7 +807,7 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
               key={metric.id}
               metric={metric}
               filters={filters}
-              dimensions={dimensions}
+              dimension={dimension}
               annotations={updateGroupMarkers}
               renderAnnotationDetails={renderMarkedGroups}
               updateTitles={updateNames}

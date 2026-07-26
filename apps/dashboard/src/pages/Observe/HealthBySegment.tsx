@@ -44,10 +44,13 @@ const metricOptions: Array<{
 // Segment values are raw column values, so they read like the rest of the page:
 // a board name becomes a phone, an OS version gets its OS. One catalogue
 // decides that, the same one the breakdown tables use. 'unknown' is the only
-// value it cannot name: the query puts it there for a device with no telemetry
-// at all, so no dimension owns it.
+// value it cannot name: it means the adoption event carried nothing for this
+// dimension, which happens both for a device that never reported the value and
+// for an event recorded before the column existed. "No telemetry" named only
+// the first cause, and states it as a fact about devices that are in fact
+// reporting, so the label says what is true of both: nothing was recorded.
 const segmentLabelFor = (dimension: ObserveBreakdownDimension, value: string) =>
-  value === 'unknown' ? 'No telemetry' : dimensionSpec(dimension).labelFor(value);
+  value === 'unknown' ? 'Not recorded' : dimensionSpec(dimension).labelFor(value);
 
 export const HealthBySegment = ({
   filters,

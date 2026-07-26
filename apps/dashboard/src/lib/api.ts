@@ -374,10 +374,12 @@ export type IdentityDevicePage = {
 // and double as the filters to drill in with; `contexts` qualify them when they
 // mean nothing alone (an OS version without its OS name).
 export type ObserveBreakdownSegment = {
-  // One value per requested dimension, in order. Kept apart from any display
+  // The raw column value this segment groups on, kept apart from any display
   // label so drilling in never means parsing a label back into filters.
-  values: string[];
-  contexts?: string[];
+  value: string;
+  // Qualifies the value where it means nothing alone: an OS version of "18.6"
+  // only reads next to its OS name.
+  context?: string;
   devices: number;
   samples: number;
   p50: number;
@@ -418,7 +420,7 @@ export type ObserveConditionDefinition = {
 export type ObserveBreakdown = {
   available: boolean;
   metric: string;
-  dimensions: ObserveBreakdownDimension[];
+  dimension: ObserveBreakdownDimension;
   segments: ObserveBreakdownSegment[];
   // Same metric, same filters, no grouping: the baseline each segment is read
   // against.
@@ -1345,17 +1347,13 @@ export class ApiClient {
 
   public async getObserveBreakdown(
     metric: string,
-    dimensions: ObserveBreakdownDimension[],
+    dimension: ObserveBreakdownDimension,
     query: ObserveQuery = {},
     options: { limit?: number; points?: boolean } = {}
   ) {
-    // Same encoding as every other Observe call: one parameter per value. The
-    // server refuses to split on commas (a device model is `iPhone18,2`), so
-    // collapsing a list into one comma-joined value here is either a 400 or a
-    // search for a branch literally named "main,staging".
     const search = observeSearchParams(query);
     search.set('metric', metric);
-    search.set('dimension', dimensions.join(','));
+    search.set('dimension', dimension);
     if (options.limit) search.set('limit', String(options.limit));
     if (options.points) search.set('points', '1');
     return this.request<ObserveBreakdown>(

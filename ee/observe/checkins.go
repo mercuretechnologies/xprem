@@ -179,6 +179,18 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	if _, err := uuid.Parse(checkIn.EASClientID); err != nil {
 		return
 	}
+	// A refused poll leaves nothing durable. Its crash detail is stashed, which
+	// is where an unsaved one already waits (see record below), so the next
+	// poll that does resolve writes it onto the failure it belongs to. Nothing
+	// else of a refused poll is worth keeping: every other signal survives on
+	// its own.
+	if checkIn.Rejected {
+		if checkIn.FatalError != "" {
+			ttl := fatalStashTTLSeconds
+			_ = r.cache.Set(fatalStashKey(checkIn.AppID, checkIn.EASClientID), checkIn.FatalError, &ttl)
+		}
+		return
+	}
 	state := normalizeCheckIn(checkIn)
 	key := checkInCacheKey(checkIn.AppID, checkIn.EASClientID)
 	cached := r.cache.Get(key)

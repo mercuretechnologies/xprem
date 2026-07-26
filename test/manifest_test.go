@@ -880,6 +880,27 @@ func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
 
+	// The one exception, and it writes nothing durable: the crash detail is
+	// sent by the client exactly once, and the failures that land here are
+	// transient and correlated with the incident it documents. The recorder
+	// holds it in memory for the next poll that resolves.
+	t.Run("a refused poll still hands over its one-shot crash detail", func(t *testing.T) {
+		mockWorkingExpoResponse("staging")
+		r := checkInRequest("staging", "1")
+		r.Header.Set("expo-app-id", "no-such-app")
+		r.Header.Set("expo-fatal-error", "TypeError: undefined is not a function")
+
+		w, recorded := serveWithCheckInRecorder(r)
+		assert.Equal(t, 404, w.Code)
+		assert.Len(t, recorded, 1)
+		assert.True(t, recorded[0].Rejected, "the recorder must know this poll was refused")
+		assert.Equal(t, "TypeError: undefined is not a function", recorded[0].FatalError)
+		// Nothing else travels: no address to resolve a place from, for a
+		// device that is not being registered.
+		assert.Equal(t, "", recorded[0].RemoteIP)
+		assert.Equal(t, "", recorded[0].CurrentUpdateID)
+	})
+
 	t.Run("a channel that maps to no branch registers nothing", func(t *testing.T) {
 		httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 			func(req *http.Request) (*http.Response, error) {

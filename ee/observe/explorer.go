@@ -580,7 +580,7 @@ func (e *Explorer) readMetricStats(ctx context.Context, appID string, query Expl
 	conditionWhere, conditionArgs := conditionsWhere(query.Conditions)
 	where += conditionWhere
 	args = append(args, conditionArgs...)
-	source, sourceArgs := metricsSource(appID, query, nil)
+	source, sourceArgs := metricsSource(appID, query, "")
 	// uniq, not uniqExact: this is the "N devices" of a caption, and an exact
 	// distinct count over millions of rows costs more than the rest of the
 	// query put together for a figure nobody reconciles to the unit.
@@ -661,7 +661,7 @@ func (e *Explorer) readMetricPoints(
 	conditionWhere, conditionArgs := conditionsWhere(query.Conditions)
 	where += conditionWhere
 	args = append(args, conditionArgs...)
-	source, sourceArgs := metricsSource(appID, query, nil)
+	source, sourceArgs := metricsSource(appID, query, "")
 	sql := sqlf(`
 		SELECT metric_name,
 		       toStartOfInterval(timestamp, toIntervalSecond(?)) AS bucket,

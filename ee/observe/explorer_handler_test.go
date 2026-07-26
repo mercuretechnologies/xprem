@@ -275,9 +275,10 @@ func TestExplorerBreakdownRequiresMetric(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
-// Several dimensions overlay as one composite grouping, and an unknown one
-// anywhere in the list fails the whole request rather than being dropped.
-func TestExplorerBreakdownAcceptsSeveralDimensions(t *testing.T) {
+// A breakdown groups on exactly one dimension. Links minted when it took a
+// list still resolve, on their leading dimension, rather than 400-ing a
+// bookmark; an unknown name is still refused outright.
+func TestExplorerBreakdownTakesOneDimension(t *testing.T) {
 	reader := &recordingExplorer{}
 	recorder := serveExplorer(
 		NewExplorerHandler(reader, nil),
@@ -285,20 +286,20 @@ func TestExplorerBreakdownAcceptsSeveralDimensions(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, []string{"deviceModel", "country"}, reader.breakdownQuery.Dimensions)
+	require.Equal(t, "deviceModel", reader.breakdownQuery.Dimension)
 	require.True(t, reader.breakdownQuery.WithPoints)
 
 	rejected := serveExplorer(
 		NewExplorerHandler(&recordingExplorer{}, nil),
-		"/observe/breakdown?metric=cold-launch&dimension=deviceModel,nope",
+		"/observe/breakdown?metric=cold-launch&dimension=nope",
 	)
 	require.Equal(t, http.StatusBadRequest, rejected.Code)
 
-	tooMany := serveExplorer(
+	missing := serveExplorer(
 		NewExplorerHandler(&recordingExplorer{}, nil),
-		"/observe/breakdown?metric=cold-launch&dimension=deviceModel,country,osVersion,branch",
+		"/observe/breakdown?metric=cold-launch",
 	)
-	require.Equal(t, http.StatusBadRequest, tooMany.Code)
+	require.Equal(t, http.StatusBadRequest, missing.Code)
 }
 
 func TestExplorerBreakdownPassesDimensionThrough(t *testing.T) {
@@ -310,7 +311,7 @@ func TestExplorerBreakdownPassesDimensionThrough(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "cold-launch", reader.breakdownQuery.Metric)
-	require.Equal(t, []string{"deviceModel"}, reader.breakdownQuery.Dimensions)
+	require.Equal(t, "deviceModel", reader.breakdownQuery.Dimension)
 	require.Equal(t, 10, reader.breakdownQuery.Limit)
 }
 
@@ -625,5 +626,10 @@ func TestExplorerBreakdownStubCarriesABaseline(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	overall, ok := response["overall"].(map[string]any)
 	require.True(t, ok, "overall must be an object")
-	require.NotNil(t, overall["values"], "values must be a list, never null")
+	// The baseline reads like any other segment, so a caller compares against
+	// it without a special case. A scalar value is why it no longer needs a
+	// hand-built empty list to avoid a null.
+	require.Equal(t, "", overall["value"])
+	require.EqualValues(t, 0, overall["devices"])
+	require.NotNil(t, response["segments"], "segments must be a list, never null")
 }

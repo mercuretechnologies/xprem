@@ -286,6 +286,59 @@ func TestRecordFatalStashSurvivesFailuresOutage(t *testing.T) {
 	assert.Equal(t, "", localCache.Get(fatalStashKey(testAppID, testDeviceID)), "stash consumed on success")
 }
 
+// A poll the server refused is not evidence that a device exists, so it writes
+// nothing durable. But the crash detail it carries is sent exactly once, and a
+// refusal here is transient and correlated with the very incident that detail
+// documents: it goes to the stash, and the next poll that resolves attaches it
+// to the failure it belongs to.
+func TestRecordRejectedPollStashesOnlyTheCrashDetail(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	ctx := context.Background()
+
+	rejected := checkInWith(testUpdateA, `"`+testUpdateB+`"`, "FATAL BOOM")
+	rejected.Rejected = true
+	recorder.Record(ctx, rejected)
+
+	require.Equal(t, "FATAL BOOM", localCache.Get(fatalStashKey(testAppID, testDeviceID)))
+	assert.Equal(t, "", localCache.Get(checkInCacheKey(testAppID, testDeviceID)),
+		"a refused poll must not arm the debounce either")
+	// Nothing durable: no registration, no failure row, not even a background
+	// attempt. Give the goroutine a chance to exist before asserting it does not.
+	time.Sleep(50 * time.Millisecond)
+	assert.Zero(t, store.calls.Load(), "a refused poll must not register the device")
+	store.mu.Lock()
+	assert.Empty(t, store.failedRecorded, "a refused poll must not record failures")
+	store.mu.Unlock()
+
+	// The next poll that resolves carries the sticky failed id and no detail,
+	// and picks the stash up.
+	recorder.Record(ctx, checkInWith(testUpdateA, `"`+testUpdateB+`"`, ""))
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.failedRecorded) == 1 && store.lastFatal == "FATAL BOOM"
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "", localCache.Get(fatalStashKey(testAppID, testDeviceID)), "stash consumed on success")
+}
+
+// Without a crash detail a refused poll is pure noise, and reporting it would
+// hand the registry a device the server just refused to answer.
+func TestRecordRejectedPollWithoutCrashDetailIsIgnored(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+
+	rejected := checkInWith(testUpdateA, `"`+testUpdateB+`"`, "")
+	rejected.Rejected = true
+	recorder.Record(context.Background(), rejected)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Zero(t, store.calls.Load())
+	assert.Equal(t, "", localCache.Get(fatalStashKey(testAppID, testDeviceID)))
+}
+
 func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()

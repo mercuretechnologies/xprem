@@ -10,7 +10,6 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -19,19 +18,18 @@ import (
 // number of devices behind them, so a segment can be ranked by how many people
 // it hurts rather than alphabetically.
 type BreakdownSegment struct {
-	// Values holds one raw column value per requested dimension, in the order
-	// they were requested. They double as the filters to apply when drilling
-	// into the segment, which is why they stay apart instead of being joined
-	// into a display label the dashboard would have to parse back.
-	Values []string `json:"values"`
-	// Contexts qualifies each value when it means nothing alone: an OS version
-	// of "18.6" is only readable next to its OS name. Empty string for every
-	// dimension that needs no qualifier.
-	Contexts []string `json:"contexts,omitempty"`
-	Devices  uint64   `json:"devices"`
-	Samples  uint64   `json:"samples"`
-	P50      float64  `json:"p50"`
-	P90      float64  `json:"p90"`
+	// Value is the raw column value this segment groups on. It doubles as the
+	// filter to apply when drilling into the segment, which is why it stays raw
+	// instead of being a display label the dashboard would have to parse back.
+	Value string `json:"value"`
+	// Context qualifies the value when it means nothing alone: an OS version of
+	// "18.6" is only readable next to its OS name. Empty for every dimension
+	// that needs no qualifier.
+	Context string  `json:"context,omitempty"`
+	Devices uint64  `json:"devices"`
+	Samples uint64  `json:"samples"`
+	P50     float64 `json:"p50"`
+	P90     float64 `json:"p90"`
 	// Points is the median over time for this segment, present only when the
 	// caller asked for series: it costs a second query, and the ranking alone
 	// is what most callers want.
@@ -39,10 +37,10 @@ type BreakdownSegment struct {
 }
 
 type Breakdown struct {
-	Available  bool               `json:"available"`
-	Metric     string             `json:"metric"`
-	Dimensions []string           `json:"dimensions"`
-	Segments   []BreakdownSegment `json:"segments"`
+	Available bool               `json:"available"`
+	Metric    string             `json:"metric"`
+	Dimension string             `json:"dimension"`
+	Segments  []BreakdownSegment `json:"segments"`
 	// Overall is the same metric over the same filters with no grouping, so
 	// each segment can be read as a deviation from the app's own baseline
 	// instead of an absolute number nobody has a feel for.
@@ -54,9 +52,14 @@ type BreakdownQuery struct {
 	// Metric is a definition ID from observedMetricDefinitions, resolved to a
 	// metric_name before it ever reaches SQL.
 	Metric string
-	// Dimensions groups by a composite key, in order. Empty is rejected.
-	Dimensions []string
-	Limit      int
+	// Dimension is the single column the segments group on. Empty is rejected.
+	//
+	// One, deliberately not a list: two dimensions at once multiply into a
+	// chart that cannot be read, and they answer a question that is better
+	// asked as two. Narrow to one device model with a filter, then split by OS
+	// version.
+	Dimension string
+	Limit     int
 	// WithPoints fills Segment.Points with a median-per-bucket series.
 	WithPoints bool
 }
@@ -180,11 +183,8 @@ const (
 // interactive timing to get it. LEFT, so a session that never became
 // interactive still contributes its rows: they land with an empty network and
 // the split drops them, which beats dropping the whole session silently.
-func metricsSource(appID string, query ExplorerQuery, dimensions []string) (sqlFragment, []any) {
-	scoped := false
-	for _, name := range dimensions {
-		scoped = scoped || breakdownDimensions[name].session
-	}
+func metricsSource(appID string, query ExplorerQuery, dimension string) (sqlFragment, []any) {
+	scoped := breakdownDimensions[dimension].session
 	for name, values := range query.Conditions {
 		scoped = scoped || (len(values) > 0 && breakdownDimensions[name].session)
 	}
@@ -310,9 +310,6 @@ const (
 	// Overlaying more than this many series turns a chart into a hairball, so
 	// the points query stops there even when more segments are ranked.
 	maxBreakdownSeries = 8
-	// Grouping on more than three columns produces a combinatorial explosion
-	// of near-empty segments long before it produces an insight.
-	maxBreakdownDimensions = 3
 	// Below this, a segment's median is noise rather than a measurement: one
 	// unlucky device would otherwise out-rank a regression hitting hundreds.
 	// The dashboard applies the same floor, so both agree on what is worth
@@ -349,26 +346,21 @@ func plottableSegments(segments []BreakdownSegment, baselineP50 float64) []Break
 // itself, and the qualifier that makes it readable on its own (” when the
 // value needs none). Kept together because every use reads them in lockstep.
 type breakdownGrouping struct {
-	columns  []sqlFragment
-	contexts []sqlFragment
+	column  sqlFragment
+	context sqlFragment
 }
 
-// groupingSQL builds the positional aliases (s0, c0, s1, c1...) shared by both
-// queries below, so the scan order always matches the requested dimension
-// order whatever the underlying columns are. `selected` is wrapped in any()
-// because the inner query collapses duplicate data points rather than grouping
-// on the dimensions themselves: every row behind one deduplication key carries
-// the same values, so any() of them is that value.
+// groupingSQL builds the aliases shared by both queries below, so the scan
+// order never has to be inferred from the underlying columns. `selected` is
+// wrapped in any() because the inner query collapses duplicate data points
+// rather than grouping on the dimension itself: every row behind one
+// deduplication key carries the same value, so any() of them is that value.
 func groupingSQL(grouping breakdownGrouping) (selected, aliases []sqlFragment) {
-	for i := range grouping.columns {
-		selected = append(selected,
-			sqlFragment(fmt.Sprintf("any(%s) AS s%d", grouping.columns[i], i)),
-			sqlFragment(fmt.Sprintf("any(%s) AS c%d", grouping.contexts[i], i)),
-		)
-		aliases = append(aliases,
-			sqlFragment(fmt.Sprintf("s%d", i)), sqlFragment(fmt.Sprintf("c%d", i)))
-	}
-	return selected, aliases
+	return []sqlFragment{
+			sqlFragment(sqlf("any(%s) AS s0", grouping.column)),
+			sqlFragment(sqlf("any(%s) AS c0", grouping.context)),
+		},
+		[]sqlFragment{"s0", "c0"}
 }
 
 // dedupKey is the deduplication the rest of the explorer uses, as one key: a
@@ -388,34 +380,25 @@ func (e *Explorer) ReadBreakdown(
 	appID string,
 	query BreakdownQuery,
 ) (Breakdown, error) {
-	if len(query.Dimensions) == 0 || len(query.Dimensions) > maxBreakdownDimensions {
+	dimension, found := breakdownDimensions[query.Dimension]
+	if query.Dimension == "" || !found {
 		return Breakdown{}, errInvalidObserveFilter
 	}
-	grouping := breakdownGrouping{
-		columns:  make([]sqlFragment, 0, len(query.Dimensions)),
-		contexts: make([]sqlFragment, 0, len(query.Dimensions)),
-	}
-	// The expressions whose dimension only exists where the client attached
-	// params, collected to narrow the read to those data points below.
-	var conditions []sqlFragment
+	var grouping breakdownGrouping
+	// Set when the dimension only exists where the client attached params, so
+	// the read can be narrowed to those data points below.
+	var condition sqlFragment
 	rowScopedSplit := false
-	for _, name := range query.Dimensions {
-		dimension, found := breakdownDimensions[name]
-		if !found {
-			return Breakdown{}, errInvalidObserveFilter
-		}
-		if dimension.expr != "" {
-			grouping.columns = append(grouping.columns, dimension.expr)
-			conditions = append(conditions, dimension.expr)
-			rowScopedSplit = rowScopedSplit || !dimension.session
-		} else {
-			grouping.columns = append(grouping.columns, "m."+dimension.column)
-		}
-		if dimension.context != "" {
-			grouping.contexts = append(grouping.contexts, "m."+dimension.context)
-		} else {
-			grouping.contexts = append(grouping.contexts, "''")
-		}
+	if dimension.expr != "" {
+		grouping.column = dimension.expr
+		condition = dimension.expr
+		rowScopedSplit = !dimension.session
+	} else {
+		grouping.column = "m." + dimension.column
+	}
+	grouping.context = "''"
+	if dimension.context != "" {
+		grouping.context = "m." + dimension.context
 	}
 	metricName, found := metricNameForID(query.Metric)
 	if !found {
@@ -427,10 +410,10 @@ func (e *Explorer) ReadBreakdown(
 	}
 
 	breakdown := Breakdown{
-		Available:  e.clickhouse != nil,
-		Metric:     query.Metric,
-		Dimensions: query.Dimensions,
-		Segments:   []BreakdownSegment{},
+		Available: e.clickhouse != nil,
+		Metric:    query.Metric,
+		Dimension: query.Dimension,
+		Segments:  []BreakdownSegment{},
 	}
 	if e.clickhouse == nil {
 		return breakdown, nil
@@ -458,10 +441,10 @@ func (e *Explorer) ReadBreakdown(
 		// reason skipped when the split reads the session instead of the row.
 		where += " AND m.custom_params != ''"
 	}
-	for _, condition := range conditions {
+	if condition != "" {
 		where += " AND " + condition + " != ''"
 	}
-	source, sourceArgs := metricsSource(appID, query.ExplorerQuery, query.Dimensions)
+	source, sourceArgs := metricsSource(appID, query.ExplorerQuery, query.Dimension)
 	selected, aliases := groupingSQL(grouping)
 
 	// uniq, not uniqExact: this is the "N devices" of a table cell, and an exact
@@ -497,16 +480,9 @@ func (e *Explorer) ReadBreakdown(
 	}
 	defer rows.Close()
 	for rows.Next() {
-		segment := BreakdownSegment{
-			Values:   make([]string, len(grouping.columns)),
-			Contexts: make([]string, len(grouping.columns)),
-		}
-		targets := make([]any, 0, 2*len(grouping.columns)+4)
-		for i := range grouping.columns {
-			targets = append(targets, &segment.Values[i], &segment.Contexts[i])
-		}
-		targets = append(targets, &segment.Devices, &segment.Samples, &segment.P50, &segment.P90)
-		if err := rows.Scan(targets...); err != nil {
+		var segment BreakdownSegment
+		if err := rows.Scan(&segment.Value, &segment.Context,
+			&segment.Devices, &segment.Samples, &segment.P50, &segment.P90); err != nil {
 			return Breakdown{}, err
 		}
 		segment.P50, segment.P90 = finite(segment.P50), finite(segment.P90)
@@ -574,19 +550,14 @@ func (e *Explorer) readBreakdownPoints(
 		return nil
 	}
 
-	tupleColumns := make([]sqlFragment, 0, 2*len(grouping.columns))
-	for i := range grouping.columns {
-		tupleColumns = append(tupleColumns, grouping.columns[i], grouping.contexts[i])
-	}
+	// The value and its context travel as a pair: an OS version alone matches
+	// the same string under another OS name.
+	tupleColumns := []sqlFragment{grouping.column, grouping.context}
 	placeholders := make([]sqlFragment, 0, len(plotted))
-	tupleArgs := make([]any, 0, len(plotted)*len(tupleColumns))
+	tupleArgs := make([]any, 0, len(plotted)*2)
 	for _, segment := range plotted {
-		marks := make([]string, 0, len(tupleColumns))
-		for i := range grouping.columns {
-			marks = append(marks, "?", "?")
-			tupleArgs = append(tupleArgs, segment.Values[i], segment.Contexts[i])
-		}
-		placeholders = append(placeholders, sqlFragment("("+strings.Join(marks, ",")+")"))
+		placeholders = append(placeholders, "(?,?)")
+		tupleArgs = append(tupleArgs, segment.Value, segment.Context)
 	}
 	selected, aliases := groupingSQL(grouping)
 
@@ -625,22 +596,16 @@ func (e *Explorer) readBreakdownPoints(
 
 	index := make(map[string]int, len(segments))
 	for i := range segments {
-		index[segmentKey(segments[i].Values, segments[i].Contexts)] = i
+		index[segmentKey(segments[i].Value, segments[i].Context)] = i
 	}
 	for rows.Next() {
-		values := make([]string, len(grouping.columns))
-		contexts := make([]string, len(grouping.columns))
+		var value, context string
 		var point ObserveMetricPoint
-		targets := make([]any, 0, 2*len(grouping.columns)+2)
-		for i := range grouping.columns {
-			targets = append(targets, &values[i], &contexts[i])
-		}
-		targets = append(targets, &point.Timestamp, &point.Value)
-		if err := rows.Scan(targets...); err != nil {
+		if err := rows.Scan(&value, &context, &point.Timestamp, &point.Value); err != nil {
 			return err
 		}
 		point.Value = finite(point.Value)
-		if i, found := index[segmentKey(values, contexts)]; found {
+		if i, found := index[segmentKey(value, context)]; found {
 			segments[i].Points = append(segments[i].Points, point)
 		}
 	}
@@ -659,15 +624,8 @@ func finite(value float64) float64 {
 	return value
 }
 
-// segmentKey joins a segment's values with a separator no column value can
-// contain, so two segments never collide in the lookup above.
-func segmentKey(values []string, contexts []string) string {
-	parts := make([]string, 0, len(values)*2)
-	for i := range values {
-		parts = append(parts, values[i])
-		if i < len(contexts) {
-			parts = append(parts, contexts[i])
-		}
-	}
-	return strings.Join(parts, "\x00")
+// segmentKey joins a segment's value and context with a separator no column
+// value can contain, so two segments never collide in the lookup above.
+func segmentKey(value, context string) string {
+	return value + "\x00" + context
 }

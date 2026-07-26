@@ -238,4 +238,19 @@ func TestTrimSegmentsKeepsTheBusiest(t *testing.T) {
 	// Nothing to trim leaves the map alone, identity included.
 	small := map[string][]HealthSegmentPoint{"only": {{DevicesOnUpdate: 5}}}
 	require.Equal(t, small, TrimSegments(small, 8))
+
+	// Ties break on the name, not on map order: this is the only cut now that
+	// the query no longer applies a LIMIT, and a series that comes and goes
+	// between two refreshes of an untouched chart reads as data moving.
+	tied := map[string][]HealthSegmentPoint{
+		"18.0": {{DevicesOnUpdate: 10}},
+		"17.4": {{DevicesOnUpdate: 10}},
+		"17.1": {{DevicesOnUpdate: 10}},
+	}
+	for range 20 {
+		kept := TrimSegments(tied, 2)
+		require.Len(t, kept, 2)
+		require.Contains(t, kept, "17.1")
+		require.Contains(t, kept, "17.4")
+	}
 }

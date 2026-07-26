@@ -56,8 +56,8 @@ export const FilterBar = ({
     live,
     setLive,
     applies,
-    dimensions,
-    setDimensions,
+    dimension,
+    setDimension,
   } = filters;
 
   // Collapsed so the label is written once, whatever the chip order. Grouped on
@@ -453,34 +453,24 @@ export const FilterBar = ({
             Split charts by
           </span>
           {dimensionCatalog.map((entry, index) => {
-            const selected = dimensions.includes(entry.value);
-            const full = dimensions.length >= 3 && !selected;
+            const selected = dimension === entry.value;
             const chip = (
               <button
                 key={entry.value}
                 type="button"
-                disabled={full}
                 aria-pressed={selected}
                 title={
-                  full
-                    ? 'Three dimensions at once is already a lot of curves'
-                    : entry.condition
-                      ? `Compare the timings measured under each ${entry.label.toLowerCase()}`
-                      : `Overlay one series per ${entry.label.toLowerCase()}`
+                  entry.condition
+                    ? `Compare the timings measured under each ${entry.label.toLowerCase()}`
+                    : `Overlay one series per ${entry.label.toLowerCase()}`
                 }
-                onClick={() =>
-                  setDimensions(
-                    selected
-                      ? dimensions.filter(value => value !== entry.value)
-                      : [...dimensions, entry.value]
-                  )
-                }
+                // One at a time: picking another replaces it, picking the
+                // current one clears the split.
+                onClick={() => setDimension(selected ? '' : entry.value)}
                 className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition ${
                   selected
                     ? 'border-primary/30 bg-primary/[0.09] font-medium text-foreground'
-                    : full
-                      ? 'border-dashed border-border text-muted-foreground/50'
-                      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                    : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
                 }`}>
                 {selected && <Check className="h-3 w-3" />}
                 {entry.label}
@@ -501,10 +491,10 @@ export const FilterBar = ({
               </Fragment>
             );
           })}
-          {dimensions.length > 0 && (
+          {dimension !== '' && (
             <button
               type="button"
-              onClick={() => setDimensions([])}
+              onClick={() => setDimension('')}
               className="ml-1 text-[11px] text-muted-foreground hover:text-foreground">
               Clear
             </button>

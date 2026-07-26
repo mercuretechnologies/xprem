@@ -438,22 +438,16 @@ func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Req
 		h.renderQueryError(w, err)
 		return
 	}
-	// Comma-separated: overlaying "device and country" is one grouping, not
-	// two requests the dashboard would have to stitch back together.
-	dimensions := []string{}
-	for _, name := range strings.Split(r.URL.Query().Get("dimension"), ",") {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		if !IsBreakdownDimension(name) {
-			handlers.RenderError(w, http.StatusBadRequest, "'dimension' is not a known Observe dimension.")
-			return
-		}
-		dimensions = append(dimensions, name)
+	// One dimension, and the leading one wins when an old link still carries a
+	// comma-separated list: a split on two columns at once produces a chart
+	// nobody can read, and the same investigation is one filter plus one split.
+	dimension := strings.TrimSpace(strings.Split(r.URL.Query().Get("dimension"), ",")[0])
+	if dimension == "" {
+		handlers.RenderError(w, http.StatusBadRequest, "'dimension' is required.")
+		return
 	}
-	if len(dimensions) == 0 || len(dimensions) > maxBreakdownDimensions {
-		handlers.RenderError(w, http.StatusBadRequest, "'dimension' must name between one and three dimensions.")
+	if !IsBreakdownDimension(dimension) {
+		handlers.RenderError(w, http.StatusBadRequest, "'dimension' is not a known Observe dimension.")
 		return
 	}
 	metric := r.URL.Query().Get("metric")
@@ -471,20 +465,17 @@ func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Req
 	}
 	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, Breakdown{
-			Available:  false,
-			Metric:     metric,
-			Dimensions: dimensions,
-			Segments:   []BreakdownSegment{},
-			// Same shape as a real answer, so a caller can read the baseline
-			// without checking Available first.
-			Overall: BreakdownSegment{Values: []string{}},
+			Available: false,
+			Metric:    metric,
+			Dimension: dimension,
+			Segments:  []BreakdownSegment{},
 		})
 		return
 	}
 	breakdown, err := h.reader.ReadBreakdown(r.Context(), mux.Vars(r)["APP_ID"], BreakdownQuery{
 		ExplorerQuery: base,
 		Metric:        metric,
-		Dimensions:    dimensions,
+		Dimension:     dimension,
 		Limit:         limit,
 		WithPoints:    r.URL.Query().Get("points") == "1",
 	})
