@@ -306,25 +306,39 @@ WHERE b.app_id = $1
 ORDER BY u.id;
 
 -- name: GetPublishGroupsPage :many
--- Page logical publishes rather than update rows. page_groups applies the
--- limit before joining members back in, so every returned group is complete.
-WITH grouped AS (
-  SELECT u.publish_group, u.branch_id, u.runtime_version_id, MAX(u.id)::BIGINT AS newest_id
-  FROM updates u
-  JOIN branches b ON u.branch_id = b.id
-  JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+-- Page the newest checked row from each logical publish. Applying the cursor
+-- before the member join keeps subsequent pages bounded without splitting or
+-- repeating a publish group.
+WITH target AS MATERIALIZED (
+  SELECT b.id AS branch_id, rv.id AS runtime_version_id
+  FROM branches b
+  JOIN runtime_versions rv ON rv.app_id = b.app_id
   WHERE b.app_id = sqlc.arg('app_id')
     AND b.name = sqlc.arg('branch_name')
     AND rv.version = sqlc.arg('runtime_version')
-    AND u.publish_group IS NOT NULL
-    AND u.checked_at IS NOT NULL
-  GROUP BY u.publish_group, u.branch_id, u.runtime_version_id
 ), page_groups AS (
-  SELECT publish_group, branch_id, runtime_version_id, newest_id
-  FROM grouped
-  WHERE (sqlc.narg('before_id')::BIGINT IS NULL OR newest_id < sqlc.narg('before_id'))
-  ORDER BY newest_id DESC
-  LIMIT sqlc.arg('row_limit')
+  SELECT candidate.*
+  FROM target t
+  CROSS JOIN LATERAL (
+    SELECT u.publish_group, u.branch_id, u.runtime_version_id, u.id AS newest_id
+    FROM updates u
+    WHERE u.branch_id = t.branch_id
+      AND u.runtime_version_id = t.runtime_version_id
+      AND (sqlc.narg('before_id')::BIGINT IS NULL OR u.id < sqlc.narg('before_id'))
+      AND u.publish_group IS NOT NULL
+      AND u.checked_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM updates newer
+        WHERE newer.branch_id = u.branch_id
+          AND newer.runtime_version_id = u.runtime_version_id
+          AND newer.publish_group = u.publish_group
+          AND newer.checked_at IS NOT NULL
+          AND newer.id > u.id
+      )
+    ORDER BY u.id DESC
+    LIMIT sqlc.arg('row_limit')
+  ) candidate
 )
 SELECT pg.publish_group, pg.newest_id, u.id, u.created_at, u.platform,
        u.commit_hash, u.message
