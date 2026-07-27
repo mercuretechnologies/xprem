@@ -62,9 +62,12 @@ const (
 // dimension is. Writes grow with updates that still carry devices times the
 // cardinality of the dimension, which an operator bounds with a TTL on this
 // table rather than with a cut nobody can undo.
-func (h *HealthHistory) captureSegmentSnapshots(ctx context.Context) {
+// captureSegmentSnapshotsAt reports whether the bucket was written whole. The
+// caller keeps a bucket that was not and redoes it, because a half-written one
+// is indistinguishable from a fleet that shrank.
+func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket time.Time) bool {
 	if h.clickhouse == nil {
-		return
+		return true
 	}
 	// One replica at a time, for the same reason the unsplit snapshot elects
 	// one: the numbers are a property of the fleet, not of the replica that
@@ -73,19 +76,23 @@ func (h *HealthHistory) captureSegmentSnapshots(ctx context.Context) {
 	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, segmentSnapshotAdvisoryLockID, "health segment snapshot")
 	if err != nil {
 		log.Printf("observe: taking the segment snapshot lock failed: %v", err)
-		return
+		return false
 	}
+	// Another replica owns this bucket. Nothing to redo: it is being written,
+	// or it already was.
 	if !locked {
-		return
+		return true
 	}
 	defer release()
 
 	ctx, cancel := context.WithTimeout(ctx, segmentCaptureTimeout)
 	defer cancel()
 
-	if err := h.captureSegmentBucket(ctx, time.Now().UTC().Truncate(healthSegmentBucket)); err != nil {
+	if err := h.captureSegmentBucket(ctx, bucket); err != nil {
 		log.Printf("observe: capturing segmented health failed: %v", err)
+		return false
 	}
+	return true
 }
 
 // captureSegmentBucket counts one bucket. Split out from the caller above so

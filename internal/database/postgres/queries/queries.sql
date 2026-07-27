@@ -1805,7 +1805,15 @@ WHERE failure.app_id = $1
        AND failed.runtime_version_id = running.runtime_version_id
        AND failed.platform = running.platform
        AND failed.id < running.id)
-      OR (failed.id = running.id
+      -- Compared on the uuid, not on the id. updates.id is
+      -- milliseconds*10 + a platform digit and the primary key is
+      -- (branch_id, id), so ids are unique per BRANCH: two branches of one app
+      -- published in the same millisecond for the same platform, which is what
+      -- a CI job releasing main and staging together does, carry the same id.
+      -- Matching on it would have closed a failure on one branch's update
+      -- because the device runs the other's. The arm above is safe from this
+      -- because it pins the whole lineage.
+      OR (failed.update_uuid = running.update_uuid
           AND failure.failure_type = 'update_issue'
           AND failure.last_seen_at < sqlc.arg(observed_at))
      );
