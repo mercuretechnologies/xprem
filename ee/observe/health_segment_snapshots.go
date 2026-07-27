@@ -200,11 +200,26 @@ func (h *HealthHistory) readSegmentSnapshots(
 		         bucket, update_id, segment,
 		         argMax(devices_on_update, captured_at) AS devices,
 		         argMax(faulty_devices, captured_at) AS faulty
-		  FROM update_health_segment_snapshots
-		  WHERE app_id = ? AND dimension = ? AND toString(update_id) IN ?
-		    -- One capture interval of reach behind the window: the sample that
-		    -- answers its opening instant was taken before it.
-		    AND bucket >= ? AND bucket <= ?
+		  FROM (
+		    -- A bucket is read from ONE capture, its newest. Buckets are written
+		    -- more than once on purpose, and a rewrite can overwrite a cell but
+		    -- never remove one: a segment that emptied between two captures
+		    -- simply has no row in the second, so its stale count from the first
+		    -- would survive and be summed alongside the segment its devices
+		    -- moved to. Late-arriving events make that ordinary rather than
+		    -- exotic, since an adoption is dated when the device moved and can
+		    -- reach ClickHouse well after the bucket it belongs to.
+		    --
+		    -- Sound because one capture is one INSERT and now64() is folded once
+		    -- per query, so every row it writes carries the same captured_at.
+		    SELECT *, max(captured_at) OVER (PARTITION BY bucket) AS newest
+		    FROM update_health_segment_snapshots
+		    WHERE app_id = ? AND dimension = ? AND toString(update_id) IN ?
+		      -- One capture interval of reach behind the window: the sample that
+		      -- answers its opening instant was taken before it.
+		      AND bucket >= ? AND bucket <= ?
+		  )
+		  WHERE captured_at = newest
 		  GROUP BY t, bucket, update_id, segment
 		)
 		-- One capture answers each drawn point, and the same one for every

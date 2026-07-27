@@ -398,3 +398,52 @@ func TestOneCaptureAnswersEachDrawnPointAcrossUpdates(t *testing.T) {
 			"summing two updates read at different instants counts the movers twice")
 	}
 }
+
+// A bucket gets captured more than once on purpose, and a rewrite can overwrite
+// a cell but never remove one. So a segment that empties between two captures
+// has no row in the second, and its stale count from the first would survive
+// and be summed next to the segment its devices moved to. Late-arriving events
+// make this ordinary: an adoption is dated when the device moved, and can reach
+// ClickHouse well after the bucket it belongs to.
+func TestARecaptureDoesNotLeaveAStaleCellBehind(t *testing.T) {
+	engine, ctx := newSegmentFixture(t)
+	appID := uuid.NewString()
+	from, to := uuid.NewString(), uuid.NewString()
+	at := time.Now().UTC().Truncate(healthSegmentBucket)
+
+	devices := make([]string, 6)
+	events := []healthEvent{}
+	for i := range devices {
+		devices[i] = uuid.NewString()
+		events = append(events, healthEvent{
+			id: uint64(i + 1), eventType: "first_seen", device: devices[i],
+			update: from, osVersion: "17", occurredAt: at.Add(-2 * time.Minute),
+		})
+	}
+	insertHealthEvents(t, engine, appID, events)
+	require.NoError(t, history(engine).captureSegmentBucket(ctx, at))
+
+	// The switch really happened before the bucket; it only reaches ClickHouse
+	// afterwards, which is exactly what an outbox lag or an offline device
+	// flushing a backlog produces.
+	late := []healthEvent{}
+	for i, device := range devices {
+		late = append(late, healthEvent{
+			id: uint64(100 + i), eventType: "switched", device: device,
+			update: to, osVersion: "17", occurredAt: at.Add(-time.Minute),
+		})
+	}
+	insertHealthEvents(t, engine, appID, late)
+	require.NoError(t, history(engine).captureSegmentBucket(ctx, at))
+
+	points, err := history(engine).readSegmentSnapshots(ctx, appID, []string{from, to}, "osVersion",
+		at, at.Add(healthSegmentBucket), int64(healthSegmentBucket.Seconds()))
+	require.NoError(t, err)
+	require.NotEmpty(t, points["17"])
+	for _, point := range points["17"] {
+		require.Equal(t, uint64(len(devices)), point.DevicesOnUpdate,
+			"the emptied update must not keep its count alongside the one that took its devices")
+	}
+}
+
+func history(engine *clickhouse.Engine) *HealthHistory { return NewHealthHistory(nil, engine) }
