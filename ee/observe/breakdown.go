@@ -383,8 +383,9 @@ func (e *Explorer) ReadBreakdown(
 	query BreakdownQuery,
 ) (Breakdown, error) {
 	return cachedRead(
+		ctx,
 		readCacheKey("breakdown", appID, query),
-		func() (Breakdown, error) { return e.readBreakdown(ctx, appID, query) })
+		func(ctx context.Context) (Breakdown, error) { return e.readBreakdown(ctx, appID, query) })
 }
 
 func (e *Explorer) readBreakdown(

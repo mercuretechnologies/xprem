@@ -152,8 +152,9 @@ func (e *Explorer) cachedLocations(
 	}
 
 	return cachedRead(
+		ctx,
 		readCacheKey("map", params),
-		func() ([]ObserveLocation, error) { return e.runLocations(ctx, params) })
+		func(ctx context.Context) ([]ObserveLocation, error) { return e.runLocations(ctx, params) })
 }
 
 func (e *Explorer) runLocations(

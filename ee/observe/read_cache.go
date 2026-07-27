@@ -5,15 +5,22 @@
 package observe
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"expo-open-ota/internal/cache"
 
 	"golang.org/x/sync/singleflight"
 )
+
+// How long a collapsed computation may run once it no longer belongs to any one
+// request. Matches the per-request bound the handlers apply, so nothing gains
+// time by being shared.
+const readComputeTimeout = 30 * time.Second
 
 // readCacheTTLSeconds is how long one answer is reused. Five seconds is the
 // poll cadence of the tightest period the dashboard offers ("last hour"), so a
@@ -40,7 +47,7 @@ const readCacheTTLSeconds = 5
 // Deliberately NOT applied to the log tail or the check-in feed: both are
 // cursor-paginated, so two viewers never share a key, and a tail that lags is
 // a tail that reads as broken.
-func cachedRead[T any](key string, compute func() (T, error)) (T, error) {
+func cachedRead[T any](ctx context.Context, key string, compute func(context.Context) (T, error)) (T, error) {
 	store := cache.GetCache()
 	if payload := store.Get(key); payload != "" {
 		var cached T
@@ -61,7 +68,14 @@ func cachedRead[T any](key string, compute func() (T, error)) (T, error) {
 	// Per process, not per cluster: replicas still compute once each. That is
 	// the shape of the problem worth solving here, since the tabs that
 	// synchronise are the ones behind a single connection.
+	// The shared computation does NOT run on the leader's request context. Only
+	// one caller's closure executes, so its cancellation would have reached
+	// everyone waiting on it: one viewer closing a tab turned every other
+	// viewer's chart into a 500, which is worse than the duplicated work this
+	// collapse exists to avoid. Detached and separately bounded instead.
 	fresh, err, _ := readFlight.Do(key, func() (any, error) {
+		computeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readComputeTimeout)
+		defer cancel()
 		// Re-read first: a caller that queued behind the leader wants the
 		// answer it just wrote, not another aggregation of the same rows.
 		if payload := store.Get(key); payload != "" {
@@ -70,7 +84,7 @@ func cachedRead[T any](key string, compute func() (T, error)) (T, error) {
 				return cached, nil
 			}
 		}
-		computed, err := compute()
+		computed, err := compute(computeCtx)
 		if err != nil {
 			return computed, err
 		}

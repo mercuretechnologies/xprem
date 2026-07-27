@@ -408,8 +408,9 @@ func emptyMetricSeries() []MetricSeries {
 
 func (e *Explorer) ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error) {
 	return cachedRead(
+		ctx,
 		readCacheKey("overview", appID, query),
-		func() (Overview, error) { return e.readOverview(ctx, appID, query) })
+		func(ctx context.Context) (Overview, error) { return e.readOverview(ctx, appID, query) })
 }
 
 func (e *Explorer) readOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error) {
@@ -686,8 +687,9 @@ func (e *Explorer) readMetricPoints(
 
 func (e *Explorer) ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error) {
 	return cachedRead(
+		ctx,
 		readCacheKey("events", appID, query),
-		func() (Events, error) { return e.readEvents(ctx, appID, query) })
+		func(ctx context.Context) (Events, error) { return e.readEvents(ctx, appID, query) })
 }
 
 func (e *Explorer) readEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error) {

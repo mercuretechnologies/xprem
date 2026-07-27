@@ -349,3 +349,52 @@ func TestPrecountedSegmentsAgreeWhenTheWindowStartsOffTheCaptureGrid(t *testing.
 		})
 	}
 }
+
+// A coarse window holds several captures per drawn point, and every series has
+// to be read from the SAME one. Taking each series' own latest sample inside
+// the bucket instead summed figures measured at different instants: an update
+// losing devices mid-bucket kept its earlier, larger count while the update
+// receiving them contributed its later one, and the total ran above the fleet.
+//
+// Every window above six hours is exposed, which is where the equivalence tests
+// above are blind: they use windows whose step equals the capture interval, so
+// each group holds exactly one sample and the two readings cannot differ.
+func TestOneCaptureAnswersEachDrawnPointAcrossUpdates(t *testing.T) {
+	engine, ctx := newSegmentFixture(t)
+	appID := uuid.NewString()
+	from, to := uuid.NewString(), uuid.NewString()
+	start := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+
+	// Ten devices on the first update, all of them moving to the second one
+	// between two captures inside the same fifteen-minute bucket.
+	devices := make([]string, 10)
+	events := []healthEvent{}
+	for i := range devices {
+		devices[i] = uuid.NewString()
+		events = append(events, healthEvent{
+			id: uint64(i + 1), eventType: "first_seen", device: devices[i],
+			update: from, osVersion: "17", occurredAt: start.Add(-time.Minute),
+		})
+		events = append(events, healthEvent{
+			id: uint64(100 + i), eventType: "switched", device: devices[i],
+			update: to, osVersion: "17", occurredAt: start.Add(6 * time.Minute),
+		})
+	}
+	insertHealthEvents(t, engine, appID, events)
+
+	history := NewHealthHistory(nil, engine)
+	// Captures at 0, 5 and 10 minutes: the fleet is on `from` at the first and
+	// on `to` at the other two.
+	for i := 0; i < 3; i++ {
+		require.NoError(t, history.captureSegmentBucket(ctx, start.Add(time.Duration(i)*healthSegmentBucket)))
+	}
+
+	points, err := history.readSegmentSnapshots(ctx, appID, []string{from, to}, "osVersion",
+		start, start.Add(15*time.Minute), int64((15 * time.Minute).Seconds()))
+	require.NoError(t, err)
+	require.NotEmpty(t, points["17"])
+	for _, point := range points["17"] {
+		require.LessOrEqual(t, point.DevicesOnUpdate, uint64(len(devices)),
+			"summing two updates read at different instants counts the movers twice")
+	}
+}

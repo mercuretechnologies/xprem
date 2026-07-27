@@ -1637,22 +1637,6 @@ ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
         device_update_failures.last_seen_at,
         EXCLUDED.last_seen_at
     ),
-    -- A fault reported after this row was closed re-opens it, mirroring what
-    -- RecordDeviceRuntimeFailure already does for the other kind. It used to be
-    -- unreachable, because nothing ever closed an update_issue; now that moving
-    -- onto a later release does, a device that goes forward once and later
-    -- fails this update again would otherwise have stayed closed for good and
-    -- been invisible in every faulty count.
-    --
-    -- Strictly after, so the sticky re-send of an id the device already
-    -- reported does not undo its own resolution: expo-updates keeps listing a
-    -- failed update for a while, and those repeats carry no new information.
-    resolved_at = CASE
-        WHEN device_update_failures.resolved_at IS NOT NULL
-         AND EXCLUDED.last_seen_at > device_update_failures.resolved_at
-        THEN NULL
-        ELSE device_update_failures.resolved_at
-    END,
     fatal_error = CASE
         WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
         ELSE device_update_failures.fatal_error
@@ -1749,6 +1733,43 @@ ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
 -- AFTER the request timestamp the resolution compares against. The comparison
 -- was therefore false forever, for exactly the devices the rule exists to
 -- clear.
+-- The way back. ResolveDeviceUpdateFailures below closes a failure when the
+-- device moves onto a later release; this re-opens one when the device is back
+-- at or behind the update it had failed, and has reported failing it again
+-- since it was closed. Without it, closing was a one-way door: a device that
+-- went forward once and later hit the same broken update again stayed counted
+-- as healthy for good.
+--
+-- Deliberately NOT done in UpsertDeviceUpdateFailure's ON CONFLICT arm, where
+-- it would look natural. expo-updates keeps listing a failed id in
+-- Expo-Recent-Failed-Update-IDs long after the fact, so every repeat would
+-- re-open the row and the resolution running later in the same check-in would
+-- close it again: two outbox events per device per debounce window, for a state
+-- that never actually changed. Here the direction is known, so a device sitting
+-- on a newer release repeating an old id changes nothing.
+-- name: ReopenDeviceUpdateFailures :execrows
+UPDATE device_update_failures failure
+SET resolved_at = NULL
+FROM updates running
+JOIN branches running_branch ON running_branch.id = running.branch_id,
+     updates failed
+WHERE failure.app_id = $1
+  AND failure.eas_client_id = $2
+  AND failure.failure_type = 'update_issue'
+  AND failure.resolved_at IS NOT NULL
+  -- Reported again since it was closed, which is the only evidence that the
+  -- device met the failure a second time rather than merely remembering it.
+  AND failure.last_seen_at > failure.resolved_at
+  AND running_branch.app_id = $1
+  AND running.update_uuid = $3
+  AND running.checked_at IS NOT NULL
+  AND failed.update_uuid = failure.update_id
+  AND failed.branch_id = running.branch_id
+  AND failed.runtime_version_id = running.runtime_version_id
+  AND failed.platform = running.platform
+  -- Back ON it, or behind it. Ahead of it is the case the resolution owns.
+  AND failed.id >= running.id;
+
 -- name: ResolveDeviceUpdateFailures :execrows
 UPDATE device_update_failures failure
 SET resolved_at = sqlc.arg(observed_at)

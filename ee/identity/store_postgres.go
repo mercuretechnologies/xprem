@@ -743,6 +743,17 @@ func (s *PostgresIdentityStore) resolveUpdateFailures(
 	}); err != nil {
 		log.Printf("identity: resolving update failures failed: %v", err)
 	}
+	// And the way back, for a device that met the same broken update again.
+	// Closing has to be reversible or it is a one-way door: an aborted rollout
+	// serves the failing release a second time, and the device that already
+	// went past it once would never be counted again.
+	if _, err := s.engine.ReopenDeviceUpdateFailures(ctx, pgdb.ReopenDeviceUpdateFailuresParams{
+		AppID:       appUUID,
+		EasClientID: clientUUID,
+		UpdateUuid:  currentUpdate,
+	}); err != nil {
+		log.Printf("identity: reopening update failures failed: %v", err)
+	}
 	return nil
 }
 

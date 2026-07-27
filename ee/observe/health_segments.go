@@ -94,8 +94,9 @@ func (h *HealthHistory) ReadBySegment(
 	from, to time.Time,
 ) (map[string][]HealthSegmentPoint, error) {
 	return cachedRead(
+		ctx,
 		readCacheKey("health-segments", appID, updateIDs, dimension, from.UTC(), to.UTC()),
-		func() (map[string][]HealthSegmentPoint, error) {
+		func(ctx context.Context) (map[string][]HealthSegmentPoint, error) {
 			return h.readBySegment(ctx, appID, updateIDs, dimension, from, to)
 		})
 }

@@ -169,9 +169,9 @@ FROM counted`
 // times the fleet. Summed across updates, though, because a device is on
 // exactly one update at a time and those sets are disjoint.
 //
-// argMax on (bucket, captured_at) does the rollup and the ReplacingMergeTree
-// deduplication in one pass: latest bucket wins, and within one bucket the
-// latest capture wins.
+// argMax on captured_at deduplicates what the ReplacingMergeTree has not merged
+// yet; the rollup itself is a second step, because it has to pick ONE capture
+// per drawn point rather than one per series.
 //
 // A sample is attributed to the FIRST instant at or after it, which is what
 // makes this agree with the grid it replaces: there, a bucket takes the last
@@ -190,22 +190,31 @@ func (h *HealthHistory) readSegmentSnapshots(
 	step int64,
 ) (map[string][]HealthSegmentPoint, error) {
 	rows, err := h.clickhouse.Conn.Query(ctx, `
-		SELECT t, segment, sum(devices) AS devices, sum(faulty) AS faulty
-		FROM (
+		WITH mapped AS (
 		  SELECT toDateTime(?) + toIntervalSecond(
 		           greatest(0, toInt64(ceil(
 		             (toInt64(toUInt32(bucket)) - toInt64(toUInt32(toDateTime(?)))) / ?
 		           ))) * ?) AS t,
-		         update_id, segment,
-		         argMax(devices_on_update, (bucket, captured_at)) AS devices,
-		         argMax(faulty_devices, (bucket, captured_at)) AS faulty
+		         bucket, update_id, segment,
+		         argMax(devices_on_update, captured_at) AS devices,
+		         argMax(faulty_devices, captured_at) AS faulty
 		  FROM update_health_segment_snapshots
 		  WHERE app_id = ? AND dimension = ? AND toString(update_id) IN ?
 		    -- One capture interval of reach behind the window: the sample that
 		    -- answers its opening instant was taken before it.
 		    AND bucket >= ? AND bucket <= ?
-		  GROUP BY t, update_id, segment
-		)
+		  GROUP BY t, bucket, update_id, segment
+		),
+		-- One capture answers each drawn point, and the same one for every
+		-- update and every segment. Taking each series' own latest sample
+		-- inside the coarse bucket instead summed counts measured at different
+		-- instants: an update losing devices mid-bucket kept its earlier,
+		-- larger figure while the update receiving them contributed its later
+		-- one, and the total ran above the fleet.
+		chosen AS (SELECT t, max(bucket) AS at FROM mapped GROUP BY t)
+		SELECT mapped.t AS t, segment, sum(devices) AS devices, sum(faulty) AS faulty
+		FROM mapped
+		INNER JOIN chosen ON chosen.t = mapped.t AND chosen.at = mapped.bucket
 		GROUP BY t, segment
 		ORDER BY t`,
 		from.UTC(), from.UTC(), step, step,

@@ -310,8 +310,8 @@ export const UpdateHealthHistory = ({
   if (query.data?.source === 'state') {
     return (
       <UpdateStateHistory
+        series={series}
         pointsByUpdate={query.data.updates}
-        updateUUIDs={updateUUIDs}
         annotations={annotations}
         renderAnnotationDetails={renderAnnotationDetails}
       />

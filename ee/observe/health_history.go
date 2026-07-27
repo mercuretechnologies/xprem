@@ -81,10 +81,14 @@ func StartHealthOutboxDiscarder(parent context.Context, postgresEngine *database
 func (h *HealthHistory) Start(parent context.Context) func() {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		h.run(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		h.runSegments(ctx)
 	}()
 	return func() {
 		cancel()
@@ -92,24 +96,42 @@ func (h *HealthHistory) Start(parent context.Context) func() {
 	}
 }
 
+// runSegments captures the segmented counters on their own goroutine and their
+// own rhythm.
+//
+// Its own goroutine, because one capture rebuilds a grid over the whole fleet
+// and is allowed minutes to do it. Sharing the loop above meant a slow capture
+// held back outbox delivery and the per-minute snapshot, so a background job
+// feeding a secondary chart could punch a hole in the headline one. The
+// separate advisory lock was there to prevent exactly that and could not, since
+// the two never ran concurrently to begin with.
+//
+// And deliberately NOT on the change trigger the unsplit snapshot follows. That
+// trigger exists so a failing release shows up on the headline chart within
+// seconds; the split is a breakdown a reader opens on purpose, and its finest
+// bucket is five minutes.
+func (h *HealthHistory) runSegments(ctx context.Context) {
+	ticker := time.NewTicker(healthSegmentBucket)
+	defer ticker.Stop()
+	h.captureSegmentSnapshots(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.captureSegmentSnapshots(ctx)
+		}
+	}
+}
+
 func (h *HealthHistory) run(ctx context.Context) {
 	outboxTicker := time.NewTicker(healthOutboxInterval)
 	snapshotTicker := time.NewTicker(healthSnapshotInterval)
-	// Segments are captured on their own rhythm, and deliberately NOT on the
-	// change trigger the unsplit snapshot follows. That trigger exists so a
-	// failing release shows up on the headline chart within seconds; the split
-	// is a breakdown a reader opens on purpose, its finest bucket is five
-	// minutes, and one capture rebuilds a grid over the whole fleet. Following
-	// the trigger would have paid that grid up to six times a minute to refine
-	// a bucket the chart cannot draw.
-	segmentTicker := time.NewTicker(healthSegmentBucket)
 	defer outboxTicker.Stop()
 	defer snapshotTicker.Stop()
-	defer segmentTicker.Stop()
 
 	h.drainOutbox(ctx)
 	h.captureSnapshots(ctx)
-	h.captureSegmentSnapshots(ctx)
 	lastCapture := time.Now()
 	// A change waiting for the floor to elapse. Held rather than dropped: on a
 	// quiet fleet the delivering drain is the only one there is, so forgetting
@@ -137,8 +159,6 @@ func (h *HealthHistory) run(ctx context.Context) {
 			h.captureSnapshots(ctx)
 			lastCapture = time.Now()
 			pending = false
-		case <-segmentTicker.C:
-			h.captureSegmentSnapshots(ctx)
 		}
 	}
 }
