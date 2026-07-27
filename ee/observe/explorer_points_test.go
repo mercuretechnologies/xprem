@@ -25,6 +25,11 @@ import (
 // wrong window, and no unit test can tell the difference.
 func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
+	// The seed migration refuses without these and RunDBMigrations reports it
+	// with log.Fatalf, which takes the whole package binary down, unit tests
+	// included. Every other store test in the repo sets them for that reason.
+	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(pgURL)
 	clickhouse.RunDBMigrations(chURL, pgURL)
 

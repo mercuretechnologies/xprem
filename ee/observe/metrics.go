@@ -28,16 +28,55 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	// Deliberately NOT a reason on the counter above: that one counts RECORDS
+	// that were not stored, and these two count something else entirely.
+	// Folding them in made the series unreadable, since the enrichment skip is
+	// both the loudest contributor and the one that loses nothing, which left
+	// an operator unable to tell it apart from the one that loses data.
+	observeBatchWorkSkippedVec = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "observe_batch_work_skipped_total",
+			Help: "Per-batch database work a ceiling refused to do, by kind",
+		},
+		[]string{"kind"},
+	)
 )
 
 const (
 	reasonForgedClientID = "forged_client_id"
 	reasonTelemetry      = "telemetry_no_sink"
-	reasonOverCap        = "over_batch_cap"
+	// Records the batch ceiling cut before anything read them: genuinely not
+	// stored, which is what observe_records_dropped_total means.
+	reasonOverCap = "over_batch_cap"
+)
+
+// The three kinds of work a per-batch ceiling can refuse, kept apart because
+// they do not cost the same thing. An identity operation refused is data lost
+// for good, since identity records never reach the telemetry rows. A health
+// signal refused leaves the failure registry short of a transition while the
+// raw events survive in ClickHouse. An enrichment refused stores the row whole
+// minus its branch column.
+const (
+	workIdentityOp   = "identity_operation"
+	workHealthSignal = "health_signal"
+	workOriginLookup = "origin_lookup"
 )
 
 func init() {
-	prometheus.MustRegister(observeBatchesVec, observeRecordsDroppedVec)
+	prometheus.MustRegister(observeBatchesVec, observeRecordsDroppedVec, observeBatchWorkSkippedVec)
+}
+
+func observeIdentityOpsDropped(n int) { observeBatchWorkSkipped(workIdentityOp, n) }
+
+func observeHealthSignalsSkipped(n int) { observeBatchWorkSkipped(workHealthSignal, n) }
+
+func observeOriginLookupsSkipped(n int) { observeBatchWorkSkipped(workOriginLookup, n) }
+
+func observeBatchWorkSkipped(kind string, n int) {
+	if n > 0 {
+		observeBatchWorkSkippedVec.WithLabelValues(kind).Add(float64(n))
+	}
 }
 
 func observeBatch(result string) {

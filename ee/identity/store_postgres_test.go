@@ -82,10 +82,13 @@ func seedPublishedUpdate(t *testing.T, pool *pgxpool.Pool, appID, updateID strin
 	require.NoError(t, pool.QueryRow(ctx,
 		"INSERT INTO runtime_versions (app_id, version) VALUES ($1, $2) RETURNING id",
 		appID, "health-"+suffix).Scan(&runtimeVersionID))
+	// updates.id is assigned by the publish path rather than by a sequence, so
+	// it is allocated here: a test seeding two updates would otherwise collide
+	// on a hardcoded one.
 	_, err := pool.Exec(ctx, `
 		INSERT INTO updates
 			(id, update_uuid, branch_id, runtime_version_id, update_type, commit_hash, platform, checked_at)
-		VALUES (1, $1, $2, $3, 0, 'health-test', 'ios', CURRENT_TIMESTAMP)`,
+		SELECT COALESCE(MAX(id), 0) + 1, $1, $2, $3, 0, 'health-test', 'ios', CURRENT_TIMESTAMP FROM updates`,
 		updateID, branchID, runtimeVersionID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -755,6 +758,10 @@ func TestTouchDeviceTracksCurrentUpdate(t *testing.T) {
 	ctx := context.Background()
 	deviceID := uuid.NewString()
 	updateA, updateB := uuid.NewString(), uuid.NewString()
+	// Both are real publishes: the registry only records an update the server
+	// knows, so a fixture naming one it never published is testing nothing.
+	seedPublishedUpdate(t, pool, appID, updateA)
+	seedPublishedUpdate(t, pool, appID, updateB)
 
 	// Registration carries the running update.
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, observed(updateA), DeviceInfo{}))
@@ -1127,6 +1134,7 @@ func TestUpdateHealthCounts(t *testing.T) {
 	appID := seedApp(t, pool)
 	ctx := context.Background()
 	updateA, updateB := uuid.NewString(), uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, updateA)
 	seedPublishedUpdate(t, pool, appID, updateB)
 
 	// 2 devices on A, 1 on B, 1 on the embedded bundle; B crashed on one.
@@ -1162,6 +1170,9 @@ func TestUpdateHealthByIDs(t *testing.T) {
 	appID := seedApp(t, pool)
 	ctx := context.Background()
 	updateA, updateB, updateGhost := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	// A and B are real publishes; the ghost deliberately is not, since the
+	// point of it is an update nothing ever ran.
+	seedPublishedUpdate(t, pool, appID, updateA)
 	seedPublishedUpdate(t, pool, appID, updateB)
 
 	// 2 devices running A this month, 1 running B; B also crashed at launch
@@ -1494,6 +1505,55 @@ func TestDeviceReleaseDimensionsRefuseAnotherAppsUpdate(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 0, count)
+
+	// Nor is the id itself kept. The header is unauthenticated, so storing it
+	// raw put an update this app never published into an analytical column,
+	// and the outbox trigger fires on every change of it: alternating invented
+	// ids would mint one permanent adoption event per request.
+	device, err := store.GetDevice(ctx, appID, claimant)
+	require.NoError(t, err)
+	require.Nil(t, device.CurrentUpdateID)
+
+	var events int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT count(*) FROM device_health_outbox WHERE app_id = $1 AND eas_client_id = $2",
+		appID, claimant).Scan(&events))
+	require.Zero(t, events, "an update the server never published is not an adoption")
+}
+
+// Same refusal for an id that resolves to nothing at all, which is what a
+// device back on its embedded bundle reports: the bundle's own id matches no
+// updates row. It reads as "on no known update" rather than naming a bundle
+// the server never published, and publishing an update is what fills it in.
+func TestDeviceCurrentUpdateRefusesAnUnknownID(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	real := uuid.NewString()
+	seedPublishedUpdate(t, pool, appID, real)
+	deviceID := uuid.NewString()
+
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, observed(real), DeviceInfo{}))
+	onReal, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.NotNil(t, onReal.CurrentUpdateID)
+	require.Equal(t, real, *onReal.CurrentUpdateID)
+
+	// Back on the embedded bundle: the id it reports is its own, not a row.
+	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, observed(uuid.NewString()), DeviceInfo{}))
+	after, err := store.GetDevice(ctx, appID, deviceID)
+	require.NoError(t, err)
+	require.Nil(t, after.CurrentUpdateID, "an unknown id must not linger, and must not be stored either")
+	require.Nil(t, after.Branch)
+
+	// One adoption event, for the real update. Leaving it is not an adoption,
+	// and neither is coming back to something the server cannot name.
+	var events int
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT count(*) FROM device_health_outbox WHERE app_id = $1 AND eas_client_id = $2",
+		appID, deviceID).Scan(&events))
+	require.Equal(t, 1, events)
 }
 
 // The online count sits next to filtered figures, so it narrows on the same

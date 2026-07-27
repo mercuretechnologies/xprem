@@ -104,6 +104,7 @@ jobs:
           - 9000:9000
           - 8123:8123
         options: >-
+          --ulimit nofile=262144:262144
           --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"
           --health-interval 10s
           --health-timeout 5s

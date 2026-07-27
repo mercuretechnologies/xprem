@@ -275,7 +275,7 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 			// The raw nano (not the clamped time) goes into the hash so a
 			// retried batch hashes identically whenever it re-arrives.
 			row.ContentHash = contentHash(
-				row.EASClientID, row.SessionID, row.MetricName,
+				row.EASClientID, row.SessionID, row.UpdateID, row.MetricName,
 				strconv.FormatUint(point.TimeUnixNano, 10),
 				strconv.FormatFloat(point.Value, 'g', -1, 64),
 				row.RouteName, row.CustomParams, row.Attributes,
@@ -320,7 +320,7 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 				Body:           record.Body,
 			}
 			row.ContentHash = contentHash(
-				row.EASClientID, row.SessionID, row.EventName,
+				row.EASClientID, row.SessionID, row.UpdateID, row.EventName,
 				strconv.FormatUint(record.TimeUnixNano, 10),
 				strconv.Itoa(int(record.SeverityNumber)), row.SeverityText,
 				strconv.FormatBool(row.IsFatal),
@@ -389,8 +389,13 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 // the same line at the same instant would merge. is_fatal and severity_text are in
 // for the plainer reason that they are stored columns stripped out of the
 // attributes, so leaving them out means two rows that differ on screen can share
-// an identity. The update id is deliberately absent: an app run cannot change
-// update, so (device, session) already pins it.
+// an identity. The update id is in for a reason that reads as redundant and is
+// not: a metric point can carry its OWN expo.update_id, which overrides the
+// session's because on expo.updates.download_time it names the update that was
+// just DOWNLOADED rather than the one running, and that key is stripped out of
+// the attributes as an envelope field. Two downloads in one session would
+// otherwise share an identity. It is safe to include because it is read from
+// the wire and never resolved here.
 func contentHash(parts ...string) uint64 {
 	h := fnv.New64a()
 	for _, part := range parts {

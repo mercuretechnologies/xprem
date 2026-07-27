@@ -4056,14 +4056,15 @@ func (q *Queries) RecordDeviceRuntimeFailure(ctx context.Context, arg RecordDevi
 
 const registerDevice = `-- name: RegisterDevice :execrows
 WITH origin AS (
-    SELECT b.name AS branch_name,
+    SELECT u.update_uuid,
+           b.name AS branch_name,
            rv.version AS runtime_version,
            u.platform,
            u.publish_group
     FROM updates u
     INNER JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
     LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
-    WHERE u.update_uuid = $7::uuid
+    WHERE u.update_uuid = $11::uuid
     LIMIT 1
 )
 INSERT INTO device_identity (
@@ -4073,32 +4074,33 @@ INSERT INTO device_identity (
 )
 VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8,
-    $9, $10, $11,
-    CASE WHEN $7::uuid IS NULL
+    $6, (SELECT update_uuid FROM origin), $7,
+    $8, $9, $10,
+    CASE WHEN $11::uuid IS NULL
         THEN NULL ELSE $12::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
 ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     last_seen_at = CURRENT_TIMESTAMP,
-    current_update_id = COALESCE(EXCLUDED.current_update_id, device_identity.current_update_id),
-    branch_name = CASE WHEN EXCLUDED.current_update_id IS NULL
+    current_update_id = CASE WHEN $11::uuid IS NULL
+        THEN device_identity.current_update_id ELSE EXCLUDED.current_update_id END,
+    branch_name = CASE WHEN $11::uuid IS NULL
         THEN device_identity.branch_name ELSE EXCLUDED.branch_name END,
-    runtime_version = CASE WHEN EXCLUDED.current_update_id IS NULL
+    runtime_version = CASE WHEN $11::uuid IS NULL
         THEN device_identity.runtime_version ELSE EXCLUDED.runtime_version END,
-    platform = CASE WHEN EXCLUDED.current_update_id IS NULL
+    platform = CASE WHEN $11::uuid IS NULL
         THEN device_identity.platform ELSE EXCLUDED.platform END,
-    publish_group = CASE WHEN EXCLUDED.current_update_id IS NULL
+    publish_group = CASE WHEN $11::uuid IS NULL
         THEN device_identity.publish_group ELSE EXCLUDED.publish_group END,
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
     os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
     app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
-    current_update_observed_at = CASE WHEN EXCLUDED.current_update_id IS NULL
+    current_update_observed_at = CASE WHEN $11::uuid IS NULL
         THEN device_identity.current_update_observed_at
         ELSE EXCLUDED.current_update_observed_at END
-WHERE EXCLUDED.current_update_id IS NULL
+WHERE $11::uuid IS NULL
    OR device_identity.current_update_observed_at IS NULL
    OR EXCLUDED.current_update_observed_at >= device_identity.current_update_observed_at
 `
@@ -4110,11 +4112,11 @@ type RegisterDeviceParams struct {
 	City            *string            `json:"city"`
 	Lat             *float64           `json:"lat"`
 	Lng             *float64           `json:"lng"`
-	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
 	DeviceModel     *string            `json:"device_model"`
 	OsName          *string            `json:"os_name"`
 	OsVersion       *string            `json:"os_version"`
 	AppVersion      *string            `json:"app_version"`
+	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
 	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
 }
 
@@ -4123,6 +4125,11 @@ type RegisterDeviceParams struct {
 // race with a concurrent registration of the same device.
 // Same rule as TouchDeviceIdentity on the conflict arm: the release columns
 // follow current_update_id, and only when this registration names one.
+// The arms below test the PARAMETER and not EXCLUDED: now that the insert
+// writes the RESOLVED update, EXCLUDED is NULL both when the check-in named no
+// update and when it named one the server does not know, and those two must
+// not behave the same. The first keeps what the row holds, the second blanks
+// it, exactly as TouchDeviceIdentity does.
 // Same staleness guard as TouchDeviceIdentity, on the arm that absorbs the
 // race between two concurrent registrations of the same device.
 func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) (int64, error) {
@@ -4133,11 +4140,11 @@ func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) 
 		arg.City,
 		arg.Lat,
 		arg.Lng,
-		arg.CurrentUpdateID,
 		arg.DeviceModel,
 		arg.OsName,
 		arg.OsVersion,
 		arg.AppVersion,
+		arg.CurrentUpdateID,
 		arg.ObservedAt,
 	)
 	if err != nil {
@@ -4422,7 +4429,8 @@ func (q *Queries) TopIdentityValues(ctx context.Context, arg TopIdentityValuesPa
 
 const touchDeviceIdentity = `-- name: TouchDeviceIdentity :execrows
 WITH origin AS (
-    SELECT b.name AS branch_name,
+    SELECT u.update_uuid,
+           b.name AS branch_name,
            rv.version AS runtime_version,
            u.platform,
            u.publish_group
@@ -4437,13 +4445,23 @@ UPDATE device_identity SET
     city = COALESCE($4, device_identity.city),
     lat = COALESCE($5, device_identity.lat),
     lng = COALESCE($6, device_identity.lng),
-    current_update_id = COALESCE($7, device_identity.current_update_id),
-    -- Rewritten only when this check-in names an update, so a manifest poll
-    -- that carries no header keeps what the last one established, and an update
-    -- deleted since then keeps describing the device instead of blanking it.
-    -- When it does name one, the resolution stands whatever it returns: a
-    -- forged or unknown id becomes NULL rather than leaving the row claiming a
-    -- branch it no longer runs.
+    -- The RESOLVED update, never the id as it arrived. The header is
+    -- unauthenticated, so a device can name an update that does not exist or
+    -- belongs to another app, and writing it raw put a value the server never
+    -- published into an analytical column. Worse, the outbox trigger fires on
+    -- every change of this column, so alternating invented ids minted one
+    -- permanent adoption event per request. Unresolved now lands NULL, which
+    -- the trigger ignores (it only enqueues a non-NULL update).
+    --
+    -- The cost is that a device back on its embedded bundle reports the
+    -- bundle's own id, which matches no row, so it reads as "on no known
+    -- update" rather than naming the bundle. Publishing an update to a fresh
+    -- app is what fills this in, and the docs say so.
+    current_update_id = CASE WHEN $7::uuid IS NULL
+        THEN device_identity.current_update_id ELSE (SELECT o.update_uuid FROM origin o) END,
+    -- Rewritten on the same rule, so the release columns can never describe an
+    -- update the id column does not hold: a manifest poll carrying no header
+    -- keeps what the last one established.
     branch_name = CASE WHEN $7::uuid IS NULL
         THEN device_identity.branch_name ELSE (SELECT o.branch_name FROM origin o) END,
     runtime_version = CASE WHEN $7::uuid IS NULL

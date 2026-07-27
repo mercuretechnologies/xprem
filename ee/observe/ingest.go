@@ -42,6 +42,29 @@ const maxBatchBodyBytes = 16 << 20
 // ingestion request indefinitely. Each coalesced operation gets its own bound.
 const identityApplyTimeout = 5 * time.Second
 
+// Per-batch ceilings on the PostgreSQL work one request can order. They are
+// NOT a second maxRecordsPerBatch: 10k records cost ONE ClickHouse insert,
+// while each of the three paths below costs a round trip per item, so the
+// record cap alone still let a single POST order ten thousand sequential
+// operations.
+//
+// The numbers come from what the SDK can produce, not from taste. A batch is
+// one device's backlog and Android evicts pending records after 7 days, so the
+// worst legitimate batch is one device over a week. $set is an explicit call
+// the app makes, a handful per session, and CoalesceRequests folds the
+// adjacent ones. Runtime signals are grouped per (device, update) with equal
+// consecutive states collapsed, and a device runs one update at a time. So a
+// real client lands one to two orders of magnitude below these, while a
+// crafted one no longer gets ten thousand transactions out of one request.
+//
+// Over the ceiling the records are still stored: only their PostgreSQL side
+// effect is skipped, and counted so the drop is visible rather than assumed.
+const (
+	maxIdentityOpsPerBatch    = 64
+	maxRuntimeSignalsPerBatch = 64
+	maxUpdateLookupsPerBatch  = 16
+)
+
 // telemetryInsertTimeout bounds the ClickHouse write, which was the one store
 // call on this path running on the bare request context: a degraded ClickHouse
 // held the goroutine and its connection for as long as the client was willing
@@ -82,9 +105,9 @@ func NewIngestHandler(identityService *identity.Service, telemetry TelemetrySink
 	return &IngestHandler{identityService: identityService, telemetry: telemetry, branches: branches, checkIns: checkIns}
 }
 
-// recordCheckIns registers each distinct device of a batch (one, in practice: a
-// batch is a single device's backlog) into the registry, debounced by the
-// recorder's cache. Telemetry knows the device's running update (the
+// recordCheckIns registers the device of a batch (one: namesOneInstallation
+// refused the request otherwise) into the registry, debounced by the recorder's
+// cache. Telemetry knows the device's running update (the
 // expo.app.updates.id resource attribute, flattened onto every row), so the
 // check-in carries it: devices that rarely poll the manifest still keep their
 // adoption state fresh. Per device, the NEWEST row wins: a backlog flush
@@ -139,6 +162,43 @@ func recordCheckIns[R any](
 	}
 }
 
+// namesOneInstallation reports whether every resource of a batch names the same
+// device. The wire allows any number of them, since the client id lives in the
+// attributes of each resource and a body carries a list of them, but no client
+// produces that: the app id comes from the URL and the client id is persisted
+// per install, so one dispatch is one installation's own backlog.
+//
+// A body naming two is therefore forged, and the answer is to refuse the whole
+// of it rather than to keep a part. Keeping the first would mean storing
+// records under a device chosen from a body built to lie about which device
+// sent them.
+func namesOneInstallation[R any](resources []R, attributesOf func(R) map[string]any) bool {
+	first := ""
+	for _, resource := range resources {
+		raw, _ := attributesOf(resource)[EASClientIDKey].(string)
+		// Compared parsed, never raw. The iOS client spells its UUIDs in
+		// upper case and Android in lower, and the refusal below is permanent:
+		// a published client drops the batch for good on a 4xx. Two spellings
+		// of one id must not be able to destroy a legitimate dispatch.
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			// No id, or one that is not an id: unattributable, dropped and
+			// counted further down the pipeline. It claims no device, so it
+			// cannot claim a second one.
+			continue
+		}
+		clientID := parsed.String()
+		if first == "" {
+			first = clientID
+			continue
+		}
+		if clientID != first {
+			return false
+		}
+	}
+	return true
+}
+
 // clientIP renders the request's client address, "" when it cannot be trusted
 // or parsed. Geo resolution and the registry both key on it.
 func clientIP(r *http.Request) string {
@@ -186,6 +246,72 @@ func acknowledgeBatch(w http.ResponseWriter, rejectedField string, rejected int)
 				maxRecordsPerBatch, maxRecordsPerBatch),
 		},
 	})
+}
+
+// keepNewestIdentityWork bounds how many transactions one batch may order of
+// the identity store, keeping the TAIL exactly as the record cap keeps the
+// newest records. Coalescing leaves each key's changing values in order, so the
+// last requests carry the state the row is meant to end in; keeping the head
+// would leave the profile on a value the device abandoned long ago, and never
+// mention it again.
+//
+// This is the one ceiling that truly loses data. An identity record is excluded
+// from the telemetry rows (FlattenLogs skips it), so what is refused here is
+// stored nowhere, which is why it is counted apart from the enrichment a
+// ceiling merely postpones.
+func keepNewestIdentityWork(requests []identity.Request) []identity.Request {
+	if len(requests) <= maxIdentityOpsPerBatch {
+		return requests
+	}
+	observeIdentityOpsDropped(len(requests) - maxIdentityOpsPerBatch)
+	return requests[len(requests)-maxIdentityOpsPerBatch:]
+}
+
+// resolveRowOrigins denormalizes the branch and the publish onto every row,
+// bounded by how many DISTINCT updates one batch may look up. The resolver
+// caches, negatives included, so a repeated id is free; what is not free is a
+// batch naming thousands of ids that have never been seen, each of which is a
+// query before it becomes a cache entry. Past the ceiling the rows keep an
+// empty branch, which is the same thing they carry when the lookup fails.
+// Generic for the same reason recordCheckIns is: both row types embed the
+// envelope this writes to, and one accessor beats two copies of the ceiling.
+func resolveRowOrigins[R any](
+	ctx context.Context,
+	resolve func(ctx context.Context, appID, updateID string) (string, string),
+	appID string,
+	rows []R,
+	envelopeOf func(*R) *Envelope,
+) {
+	// Chosen walking BACKWARDS, so a batch over the ceiling keeps the branch on
+	// its newest rows rather than its oldest, which is the same end the record
+	// cap picks. The embedded-bundle sentinel never costs a lookup (the
+	// resolver returns before touching its cache), so it must not spend a slot
+	// either.
+	resolvable := make(map[string]struct{}, maxUpdateLookupsPerBatch)
+	skipped := 0
+	for i := len(rows) - 1; i >= 0; i-- {
+		updateID := envelopeOf(&rows[i]).UpdateID
+		if updateID == "" || updateID == ZeroUpdateID {
+			continue
+		}
+		if _, known := resolvable[updateID]; known {
+			continue
+		}
+		if len(resolvable) == maxUpdateLookupsPerBatch {
+			skipped++
+			continue
+		}
+		resolvable[updateID] = struct{}{}
+	}
+	observeOriginLookupsSkipped(skipped)
+
+	for i := range rows {
+		envelope := envelopeOf(&rows[i])
+		if _, allowed := resolvable[envelope.UpdateID]; !allowed {
+			continue
+		}
+		envelope.Branch, envelope.UpdateGroupID = resolve(ctx, appID, envelope.UpdateID)
+	}
 }
 
 // preserveBatchOnPanic answers 503 rather than letting gorilla turn a panic
@@ -242,6 +368,13 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	// Same permanence, same reasoning: a body naming two installations is not
+	// something a client will send differently next time.
+	if !namesOneInstallation(batch.Resources, func(r ResourceLogs) map[string]any { return r.Attributes }) {
+		observeBatch(resultBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	appID := mux.Vars(r)["APP_ID"]
 	remoteIP := clientIP(r)
@@ -250,8 +383,12 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 
 	if h.identityService != nil {
-		requests := identityRequestsFromBatch(batch, appID, remoteIP)
-		for _, req := range identity.CoalesceRequests(requests) {
+		// One installation per batch is already guaranteed by the rejection
+		// above, so coalescing sees one device and the ceiling here only has
+		// to bound the transactions that survive the fold.
+		requests := keepNewestIdentityWork(
+			identity.CoalesceRequests(identityRequestsFromBatch(batch, appID, remoteIP)))
+		for _, req := range requests {
 			applyContext, cancelApply := context.WithTimeout(r.Context(), identityApplyTimeout)
 			_, err := h.identityService.Apply(applyContext, req)
 			cancelApply()
@@ -301,9 +438,8 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		observeRecordsDropped(reasonTelemetry, len(rows))
 	} else {
 		if len(rows) > 0 {
-			for i := range rows {
-				rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
-			}
+			resolveRowOrigins(r.Context(), h.resolveOrigin, appID, rows,
+				func(row *LogRow) *Envelope { return &row.Envelope })
 			insertContext, cancelInsert := context.WithTimeout(r.Context(), telemetryInsertTimeout)
 			err := h.telemetry.InsertLogs(insertContext, rows)
 			cancelInsert()
@@ -364,8 +500,37 @@ func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, r
 		return nil
 	}
 
-	for key, signals := range groupRuntimeHealthSignals(rows) {
-		for _, signal := range normalizeRuntimeHealthSignals(signals) {
+	grouped := groupRuntimeHealthSignals(rows)
+	// Sorted, because the budget below is shared: ranging over the map would
+	// hand it out in a different order every request, so the same body posted
+	// twice would leave PostgreSQL in two different states, and the published
+	// clients re-post a batch after any failure.
+	keys := make([]runtimeHealthKey, 0, len(grouped))
+	for key := range grouped {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].device != keys[j].device {
+			return keys[i].device < keys[j].device
+		}
+		return keys[i].update < keys[j].update
+	})
+
+	// Per group, not shared: what the registry has to get right is each
+	// (device, update)'s FINAL state, and a budget spent in order would leave
+	// the last groups with nothing at all.
+	perGroup := max(1, maxRuntimeSignalsPerBatch/max(1, len(keys)))
+	for _, key := range keys {
+		signals := normalizeRuntimeHealthSignals(grouped[key])
+		// The NEWEST of the group. A crash loop alternates crash and start, so
+		// nothing collapses, and keeping the head would end on whichever state
+		// came first: an update still crashing would be recorded as recovered
+		// because a restart from an hour ago was the last one applied.
+		if len(signals) > perGroup {
+			observeHealthSignalsSkipped(len(signals) - perGroup)
+			signals = signals[len(signals)-perGroup:]
+		}
+		for _, signal := range signals {
 			if err := h.applyRuntimeHealthSignal(ctx, appID, key, signal); err != nil {
 				return err
 			}
@@ -514,6 +679,11 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if !namesOneInstallation(batch.Resources, func(r ResourceMetrics) map[string]any { return r.Attributes }) {
+		observeBatch(resultBadRequest)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	appID := mux.Vars(r)["APP_ID"]
 	remoteIP := clientIP(r)
@@ -528,9 +698,8 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
 		func(row MetricRow) Envelope { return row.Envelope })
 	if len(rows) > 0 {
-		for i := range rows {
-			rows[i].Branch, rows[i].UpdateGroupID = h.resolveOrigin(r.Context(), appID, rows[i].UpdateID)
-		}
+		resolveRowOrigins(r.Context(), h.resolveOrigin, appID, rows,
+			func(row *MetricRow) *Envelope { return &row.Envelope })
 		insertContext, cancelInsert := context.WithTimeout(r.Context(), telemetryInsertTimeout)
 		err := h.telemetry.InsertMetrics(insertContext, rows)
 		cancelInsert()

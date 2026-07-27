@@ -100,6 +100,12 @@ func (h *HealthHistory) run(ctx context.Context) {
 	h.drainOutbox(ctx)
 	h.captureSnapshots(ctx)
 	lastCapture := time.Now()
+	// A change waiting for the floor to elapse. Held rather than dropped: on a
+	// quiet fleet the delivering drain is the only one there is, so forgetting
+	// it meant the change waited for the next heartbeat instead of for the
+	// floor, turning a second of staleness into up to a minute for exactly the
+	// deployment where one failing device matters most.
+	pending := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -109,14 +115,17 @@ func (h *HealthHistory) run(ctx context.Context) {
 			// than the floor. ClickHouse keeps one logical point per minute
 			// via argMax, so anything faster rewrites the same bucket at the
 			// price of another full-fleet read.
-			if h.drainOutbox(ctx) && time.Since(lastCapture) >= healthSnapshotFloor {
+			pending = h.drainOutbox(ctx) || pending
+			if pending && time.Since(lastCapture) >= healthSnapshotFloor {
 				h.captureSnapshots(ctx)
 				lastCapture = time.Now()
+				pending = false
 			}
 		case <-snapshotTicker.C:
 			// Heartbeat repairs a missed trigger and records quiet periods.
 			h.captureSnapshots(ctx)
 			lastCapture = time.Now()
+			pending = false
 		}
 	}
 }

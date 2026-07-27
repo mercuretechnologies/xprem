@@ -166,6 +166,69 @@ func TestHandleLogsResponseContract(t *testing.T) {
 		require.Len(t, sink.logs, maxRecordsPerBatch)
 	})
 
+	// The record ceiling bounds ClickHouse rows, which cost one insert. These
+	// bound PostgreSQL, which costs a round trip per item, and without them a
+	// single POST still ordered ten thousand sequential operations.
+	t.Run("identity operations are capped per batch", func(t *testing.T) {
+		mutator := &recordingMutator{}
+		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+
+		// Alternating ops on the SAME key is what the fold cannot compress: a
+		// write cannot be assumed to land, so each value change costs its own
+		// transaction. This is the shape that turned one request into one
+		// transaction per record.
+		var records []string
+		for i := 0; i < maxIdentityOpsPerBatch*3; i++ {
+			op := "$set"
+			if i%2 == 1 {
+				op = "$set_once"
+			}
+			records = append(records, fmt.Sprintf(
+				`{"timeUnixNano":1,"attributes":[{"key":"event.name","value":{"stringValue":"%s"}},{"key":"userId","value":{"stringValue":"u%d"}}]}`,
+				op, i))
+		}
+		body := []byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"expo.eas_client.id","value":{"stringValue":"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}}]},"scopeLogs":[{"logRecords":[` +
+			strings.Join(records, ",") + `]}]}]}`)
+
+		recorder := serveIngest(handler, http.MethodPost, logsPath, body)
+		require.Equal(t, http.StatusNoContent, recorder.Code, "a capped batch is still accepted")
+		// ApplySetOnce is a no-op fake, so only the $set half is recorded: what
+		// matters is that the total stopped at the ceiling.
+		require.LessOrEqual(t, len(mutator.sets), maxIdentityOpsPerBatch)
+		require.NotEmpty(t, mutator.sets, "the ceiling bounds the work, it does not refuse it")
+	})
+
+	// The client id is persisted per install and the app id comes from the URL,
+	// so one dispatch is one installation's backlog. A body naming two is
+	// forged, and there is nothing in it worth keeping: storing records under
+	// whichever device came first would be storing them under a device chosen
+	// by the forger.
+	t.Run("two installations in one body is a permanent 400", func(t *testing.T) {
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), &capturingSink{}, nil, nil)
+		body := logsBodyWithRecords([]string{
+			"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+			"7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d",
+		}, 1)
+
+		recorder := serveIngest(handler, http.MethodPost, logsPath, body)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+	})
+
+	// The refusal is permanent, so a false one destroys a legitimate dispatch:
+	// the published clients drop the batch for good on a 4xx. iOS spells its
+	// UUIDs in upper case and Android in lower, so the check compares parsed
+	// ids and not the bytes on the wire.
+	t.Run("one installation spelled two ways is still one installation", func(t *testing.T) {
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), &capturingSink{}, nil, nil)
+		body := logsBodyWithRecords([]string{
+			"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+			"8B9C1FE0-93B3-4B3A-8C1D-2F4A5E6B7C8D",
+		}, 1)
+
+		recorder := serveIngest(handler, http.MethodPost, logsPath, body)
+		require.Equal(t, http.StatusNoContent, recorder.Code)
+	})
+
 	t.Run("store failure is a retryable 503, never 500", func(t *testing.T) {
 		handler := NewIngestHandler(identity.NewService(&recordingMutator{fail: true}, nil), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(androidLogsFixture))
@@ -254,7 +317,7 @@ const jsCrashLogsFixture = `{
     {
       "resource": {
         "attributes": [
-          { "key": "expo.eas_client.id", "value": { "stringValue": "7a6b5c4d-3e2f-4a0b-9c8d-7e6f5a4b3c2d" } }
+          { "key": "expo.eas_client.id", "value": { "stringValue": "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d" } }
         ]
       },
       "scopeLogs": [
@@ -284,8 +347,10 @@ func TestHandleLogsJSCrashProjection(t *testing.T) {
 		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(jsCrashLogsFixture))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
-		// One call: the same (device, update) pair collapses, the
-		// embedded-bundle device is skipped (no update to blame).
+		// One call: the same (device, update) pair collapses, and the session
+		// on the embedded bundle is skipped, having no update to blame. Both
+		// resources name the same installation, which is the only shape a
+		// client can send.
 		require.Len(t, mutator.runtime, 1)
 		failure := mutator.runtime[0]
 		require.Equal(t, "failure", failure.kind)
@@ -554,4 +619,32 @@ func TestFlattenBoundsHostileResourceAttributes(t *testing.T) {
 	// A real value is far below the bound and must come through untouched.
 	short := newEnvelope(testAppID, map[string]any{deviceModelKey: "SM-A546B"})
 	require.Equal(t, "SM-A546B", short.DeviceModel)
+}
+
+// An identity record is excluded from the telemetry rows, so what this ceiling
+// refuses is stored nowhere: which end it keeps decides whether a profile ends
+// on the value the device last sent or on one it abandoned. The record cap
+// keeps the newest records for the same reason, and the two must not pull in
+// opposite directions on the same batch.
+func TestKeepNewestIdentityWork(t *testing.T) {
+	value := func(req identity.Request) string { return req.Attributes["level"].(string) }
+
+	total := maxIdentityOpsPerBatch * 2
+	requests := make([]identity.Request, 0, total)
+	for i := 0; i < total; i++ {
+		requests = append(requests, identity.Request{
+			AppID: "app", EASClientID: "d1", Op: identity.OpSet,
+			Attributes: map[string]any{"level": fmt.Sprintf("v%03d", i)},
+		})
+	}
+
+	kept := keepNewestIdentityWork(requests)
+	require.Len(t, kept, maxIdentityOpsPerBatch)
+	require.Equal(t, fmt.Sprintf("v%03d", total-1), value(kept[len(kept)-1]),
+		"the device's final value must be the one that lands")
+	require.Equal(t, fmt.Sprintf("v%03d", total-maxIdentityOpsPerBatch), value(kept[0]))
+
+	// Under the ceiling nothing is touched, not even reallocated.
+	short := requests[:3]
+	require.Equal(t, short, keepNewestIdentityWork(short))
 }
