@@ -4314,7 +4314,9 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
             THEN device_identity.current_update_arrived_at
         WHEN device_identity.current_update_id IS DISTINCT FROM EXCLUDED.current_update_id
             THEN EXCLUDED.current_update_arrived_at
-        ELSE COALESCE(device_identity.current_update_arrived_at, EXCLUDED.current_update_arrived_at)
+        -- Same as above: a device merely seen again keeps whatever it has,
+        -- NULL included.
+        ELSE device_identity.current_update_arrived_at
     END
 WHERE $11::uuid IS NULL
    OR device_identity.current_update_observed_at IS NULL
@@ -4866,7 +4868,15 @@ UPDATE device_identity SET
             THEN device_identity.current_update_arrived_at
         WHEN device_identity.current_update_id IS DISTINCT FROM (SELECT o.update_uuid FROM origin o)
             THEN $12::timestamptz
-        ELSE COALESCE(device_identity.current_update_arrived_at, $12::timestamptz)
+        -- Unchanged means unchanged, including when nothing is recorded yet.
+        -- Filling a NULL here with the current instant would have dated the
+        -- whole pre-existing fleet at the deploy that introduced the column,
+        -- within one debounce window, and drawn a vertical cliff there on any
+        -- window spanning it. It buys nothing either way: a NULL and a stamp
+        -- read identically on every window that starts after the deploy, since
+        -- both fold into the first bucket, and on the windows where they differ
+        -- the NULL is the honest one.
+        ELSE device_identity.current_update_arrived_at
     END,
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2

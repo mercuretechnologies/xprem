@@ -62,12 +62,11 @@ const (
 // dimension is. Writes grow with updates that still carry devices times the
 // cardinality of the dimension, which an operator bounds with a TTL on this
 // table rather than with a cut nobody can undo.
-// captureSegmentSnapshotsAt reports whether the bucket was written whole. The
-// caller keeps a bucket that was not and redoes it, because a half-written one
-// is indistinguishable from a fleet that shrank.
-func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket time.Time) bool {
+// captureSegmentSnapshotsAt counts one bucket, or does nothing if another
+// replica is already on it.
+func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket time.Time) {
 	if h.clickhouse == nil {
-		return true
+		return
 	}
 	// One replica at a time, for the same reason the unsplit snapshot elects
 	// one: the numbers are a property of the fleet, not of the replica that
@@ -76,12 +75,10 @@ func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket ti
 	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, segmentSnapshotAdvisoryLockID, "health segment snapshot")
 	if err != nil {
 		log.Printf("observe: taking the segment snapshot lock failed: %v", err)
-		return false
+		return
 	}
-	// Another replica owns this bucket. Nothing to redo: it is being written,
-	// or it already was.
 	if !locked {
-		return true
+		return
 	}
 	defer release()
 
@@ -90,9 +87,7 @@ func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket ti
 
 	if err := h.captureSegmentBucket(ctx, bucket); err != nil {
 		log.Printf("observe: capturing segmented health failed: %v", err)
-		return false
 	}
-	return true
 }
 
 // captureSegmentBucket counts one bucket. Split out from the caller above so
@@ -257,6 +252,18 @@ func (h *HealthHistory) readSegmentSnapshots(
 // full of holes: a process down for two hours captured nothing for two hours,
 // and a chart drawn from that shows a gap where the events would have shown a
 // fleet. Checking only the start would have called that covered.
+//
+// What the margin below does NOT catch, and cannot: a gap short enough to stay
+// inside it while still emptying a drawn point. On a 24h window a rolling
+// restart costing eight captures is 97% coverage, yet the coarse points whose
+// step contains none of them have no row and disappear from every series. The
+// two tolerances cannot be reconciled by tuning, because on a wide window one
+// drawn point is a fraction of a percent of the buckets: catching it would mean
+// demanding a complete window, which a deployment that ever restarts would
+// never satisfy, and every read would fall back to the grid forever. So the
+// residual is a chart with a few missing points across a restart, against a
+// chart that is always slow. Filling them would mean carrying the last known
+// sample forward across the gap, which is a different read, not a threshold.
 //
 // Failing this check is never wrong, only slower, so it errs toward the grid:
 // a young app with barely any buckets falls back, and rebuilding the grid for

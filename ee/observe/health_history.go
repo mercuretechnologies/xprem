@@ -113,37 +113,43 @@ func (h *HealthHistory) Start(parent context.Context) func() {
 func (h *HealthHistory) runSegments(ctx context.Context) {
 	ticker := time.NewTicker(healthSegmentBucket)
 	defer ticker.Stop()
-	// A bucket whose capture did not finish, kept so the next tick redoes it.
-	//
-	// The capture is one INSERT ... SELECT, and a ClickHouse insert is not
-	// atomic across blocks: on a fleet large enough for the result to exceed
-	// one, a capture cut short by the timeout or by shutdown leaves the bucket
-	// half written. Nothing downstream can tell that apart from a bucket where
-	// the fleet really did shrink, since the coverage check only asks whether a
-	// bucket has rows, so the chart would draw a dip at the instant of a
-	// restart. Redoing the whole bucket writes every row again with a newer
-	// captured_at, which is what the read prefers.
-	var unfinished time.Time
-	capture := func() {
-		if !unfinished.IsZero() {
-			if h.captureSegmentSnapshotsAt(ctx, unfinished) {
-				unfinished = time.Time{}
-			}
-		}
-		at := time.Now().UTC().Truncate(healthSegmentBucket)
-		if !h.captureSegmentSnapshotsAt(ctx, at) {
-			unfinished = at
-		}
-	}
-	capture()
+	h.captureSegmentWindow(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			capture()
+			h.captureSegmentWindow(ctx)
 		}
 	}
+}
+
+// captureSegmentWindow writes the bucket that just closed and re-writes the one
+// before it.
+//
+// The rewrite is unconditional, and that is the point: it needs no memory of
+// what failed. A capture is one INSERT ... SELECT, and a ClickHouse insert is
+// not atomic across blocks, so on a fleet large enough for the result to exceed
+// one, a capture cut short by its timeout or by a shutdown leaves the bucket
+// half written. Nothing downstream can tell that apart from a bucket where the
+// fleet really did shrink, since coverage only asks whether a bucket has rows,
+// and the chart would draw a dip at the instant of a restart.
+//
+// Remembering which bucket to redo was tried and was worse. The advisory lock
+// makes "another replica has this" indistinguishable from "this is done", which
+// silently dropped the retry on any multi-replica deployment; a single slot
+// forgot the older of two consecutive failures; and running the retry before
+// computing the current instant let a slow retry push that instant into the
+// next bucket, skipping one and capturing another twice. Every one of those is
+// bookkeeping about a rare event. Two passes over a bucket cost one capture per
+// tick, measured in seconds against a five-minute period, and the second pass
+// supersedes the first through captured_at whether or not the first finished.
+func (h *HealthHistory) captureSegmentWindow(ctx context.Context) {
+	closed := time.Now().UTC().Truncate(healthSegmentBucket)
+	// Oldest first, so the newest capture is the freshest thing in the table
+	// if the pair is interrupted partway.
+	h.captureSegmentSnapshotsAt(ctx, closed.Add(-healthSegmentBucket))
+	h.captureSegmentSnapshotsAt(ctx, closed)
 }
 
 func (h *HealthHistory) run(ctx context.Context) {
