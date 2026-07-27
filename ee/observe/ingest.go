@@ -336,24 +336,56 @@ func preserveBatchOnPanic(w http.ResponseWriter, signal string) {
 	}
 }
 
-// readBatch reads the body under the size ceiling and translates a failure into
-// the status the SDK reads. ok=false means the response is already written and
-// the caller has nothing left to do.
-func readBatch(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBatchBodyBytes))
-	if err == nil {
-		return body, true
-	}
+// batchReader hands the decoder the body under the size ceiling, without
+// holding it. It used to read the whole thing into a []byte first, so the peak
+// was the raw bytes AND the object tree json.Unmarshal built from them, both
+// alive at once and the tree several times the size of its source. Decoding
+// straight off the wire keeps only the decoder's own buffer, a few kilobytes.
+//
+// The ceiling is unchanged: MaxBytesReader still stops at maxBatchBodyBytes,
+// and the decoder surfaces its error, which is why the caller still gets a 413
+// on an oversized body.
+func batchReader(w http.ResponseWriter, r *http.Request) io.Reader {
+	return http.MaxBytesReader(w, r.Body, maxBatchBodyBytes)
+}
+
+// decodeFailure answers a body that could not be decoded, and the two reasons
+// are answered differently.
+//
+// OVERSIZED gets a 2xx, which reads backwards until you look at what the
+// published clients do: any non-2xx keeps the batch pending and re-sends it
+// WHOLESALE on the next dispatch, with no backoff and no permanent drop (the
+// 4xx classification only exists on the SDK's unreleased main). A 413 would
+// therefore pin a device on the same oversized body until Android's seven-day
+// eviction finally threw it away: it would never drain, never send anything
+// newer, and would pay the upload every time it backgrounded. Acknowledging it
+// costs this one batch and lets the device move on to the next, which is the
+// same trade acknowledgeBatch makes for the record cap.
+//
+// MALFORMED gets a 400. Same reasoning as everywhere else here: a body that
+// will never parse is not worth retrying, and a broken client does not repair
+// itself.
+func decodeFailure(w http.ResponseWriter, err error, rejectedField string) {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
+		log.Printf("observe: refusing a batch over %d bytes; acknowledged so the device can move on", maxBatchBodyBytes)
 		observeBatch(resultTooLarge)
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		return nil, false
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// The count is unknown: nothing was decoded, which is the point. The
+		// message carries what a reader needs instead.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"partialSuccess": map[string]any{
+				rejectedField: 0,
+				"errorMessage": fmt.Sprintf(
+					"batch body exceeded %d bytes and was refused whole; send smaller batches",
+					maxBatchBodyBytes),
+			},
+		})
+		return
 	}
-	// The body could not be read off the wire: transient, preserve.
-	observeBatch(resultUnavailable)
-	w.WriteHeader(http.StatusServiceUnavailable)
-	return nil, false
+	observeBatch(resultBadRequest)
+	w.WriteHeader(http.StatusBadRequest)
 }
 
 // HandleLogs ingests POST /observe/{APP_ID}/{projectId}/v1/logs. App-existence
@@ -367,17 +399,12 @@ func readBatch(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	defer preserveBatchOnPanic(w, "logs")
 
-	body, ok := readBatch(w, r)
-	if !ok {
-		return
-	}
-
-	batch, err := DecodeLogs(body)
+	batch, err := DecodeLogs(batchReader(w, r))
 	if err != nil {
-		// Structurally unreadable JSON: a broken client will not repair
-		// itself, 400 (permanent) rather than an eternal retry loop.
-		observeBatch(resultBadRequest)
-		w.WriteHeader(http.StatusBadRequest)
+		// Oversized, or structurally unreadable JSON: a broken client will not
+		// repair itself, so both answer permanently rather than invite an
+		// eternal retry loop.
+		decodeFailure(w, err, rejectedLogRecordsField)
 		return
 	}
 	// Same permanence, same reasoning: a body naming two installations is not
@@ -697,15 +724,12 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, ok := readBatch(w, r)
-	if !ok {
-		return
-	}
-
-	batch, err := DecodeMetrics(body)
+	batch, err := DecodeMetrics(batchReader(w, r))
 	if err != nil {
-		observeBatch(resultBadRequest)
-		w.WriteHeader(http.StatusBadRequest)
+		// Oversized, or structurally unreadable JSON: both permanent, so the
+		// client is told to stop rather than to retry a body that will never
+		// parse or never fit.
+		decodeFailure(w, err, rejectedDataPointsField)
 		return
 	}
 	if !namesOneInstallation(batch.Resources, func(r ResourceMetrics) map[string]any { return r.Attributes }) {

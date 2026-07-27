@@ -133,11 +133,32 @@ func TestHandleLogsResponseContract(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, recorder.Code)
 	})
 
-	t.Run("oversized body is a permanent 413", func(t *testing.T) {
+	// An oversized body is acknowledged, not refused, and the reason is what
+	// the published clients do with a non-2xx: they keep the batch pending and
+	// re-send it WHOLESALE on the next dispatch, with no backoff and no
+	// permanent drop. A 413 would therefore pin the device on the same
+	// oversized body until Android's seven-day eviction threw it away, so it
+	// would never drain and never send anything newer. Acknowledging costs
+	// this one batch and lets the device move on.
+	t.Run("oversized body is acknowledged so the device can move on", func(t *testing.T) {
 		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), nil, nil, nil)
-		big := bytes.Repeat([]byte("x"), maxBatchBodyBytes+1)
+		// Valid JSON, so the decoder reads it rather than failing on the first
+		// byte: an oversized body that is ALSO malformed is a 400, and rightly
+		// so, which is covered by the case above.
+		big := append([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"pad","value":{"stringValue":"`),
+			bytes.Repeat([]byte("x"), maxBatchBodyBytes+1)...)
+		big = append(big, []byte(`"}}]}}]}`)...)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, big)
-		require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		var response struct {
+			PartialSuccess struct {
+				ErrorMessage string `json:"errorMessage"`
+			} `json:"partialSuccess"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+		require.Contains(t, response.PartialSuccess.ErrorMessage, "exceeded",
+			"a client that reads the body must learn why nothing landed")
 	})
 
 	// Over the cap the batch is still a success: any non-2xx has the published
@@ -478,7 +499,7 @@ func TestIngestEndToEnd(t *testing.T) {
 }
 
 func TestIdentityRequestsFromBatch(t *testing.T) {
-	batch, err := DecodeLogs([]byte(androidLogsFixture))
+	batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 	require.NoError(t, err)
 	requests := identityRequestsFromBatch(batch, "app-1", "203.0.113.7")
 	require.Len(t, requests, 1)
@@ -489,14 +510,14 @@ func TestIdentityRequestsFromBatch(t *testing.T) {
 
 	t.Run("forged client id yields no requests", func(t *testing.T) {
 		body := strings.ReplaceAll(androidLogsFixture, "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "not-a-uuid")
-		b, err := DecodeLogs([]byte(body))
+		b, err := DecodeLogs(bytes.NewReader([]byte(body)))
 		require.NoError(t, err)
 		require.Empty(t, identityRequestsFromBatch(b, "app-1", ""))
 	})
 
 	t.Run("telemetry records yield no requests", func(t *testing.T) {
 		body := strings.ReplaceAll(androidLogsFixture, "$set", "exception")
-		b, err := DecodeLogs([]byte(body))
+		b, err := DecodeLogs(bytes.NewReader([]byte(body)))
 		require.NoError(t, err)
 		require.Empty(t, identityRequestsFromBatch(b, "app-1", ""))
 	})
@@ -512,7 +533,7 @@ func TestIdentityRequestsFromBatch(t *testing.T) {
 func TestIdentityPassLeavesTelemetryRecognizable(t *testing.T) {
 	for _, op := range []string{"$set", "$set_once"} {
 		t.Run(op, func(t *testing.T) {
-			batch, err := DecodeLogs([]byte(strings.ReplaceAll(androidLogsFixture, "$set", op)))
+			batch, err := DecodeLogs(bytes.NewReader([]byte(strings.ReplaceAll(androidLogsFixture, "$set", op))))
 			require.NoError(t, err)
 
 			requests := identityRequestsFromBatch(batch, "app-1", "203.0.113.7")
@@ -532,7 +553,7 @@ func TestIdentityPassLeavesTelemetryRecognizable(t *testing.T) {
 	// a decoded record would make the fold write the second $set into the first
 	// record's attributes.
 	t.Run("coalescing does not write back into the records", func(t *testing.T) {
-		batch, err := DecodeLogs([]byte(androidLogsFixture))
+		batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 		require.NoError(t, err)
 		requests := identityRequestsFromBatch(batch, "app-1", "")
 		require.Len(t, requests, 1)

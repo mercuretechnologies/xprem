@@ -5,6 +5,7 @@
 package observe
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,7 +31,7 @@ func loadFixture(t *testing.T, name string) []byte {
 }
 
 func TestFlattenMetricsIOS(t *testing.T) {
-	batch, err := DecodeMetrics(loadFixture(t, "ios_metrics.json"))
+	batch, err := DecodeMetrics(bytes.NewReader(loadFixture(t, "ios_metrics.json")))
 	require.NoError(t, err)
 	rows := FlattenMetrics("app-1", batch, flattenNow)
 	require.Len(t, rows, 4)
@@ -67,7 +68,7 @@ func TestFlattenMetricsIOS(t *testing.T) {
 }
 
 func TestFlattenMetricsAndroid(t *testing.T) {
-	batch, err := DecodeMetrics(loadFixture(t, "android_metrics.json"))
+	batch, err := DecodeMetrics(bytes.NewReader(loadFixture(t, "android_metrics.json")))
 	require.NoError(t, err)
 	rows := FlattenMetrics("app-1", batch, flattenNow)
 	require.Len(t, rows, 2)
@@ -86,7 +87,7 @@ func TestFlattenMetricsAndroid(t *testing.T) {
 }
 
 func TestFlattenLogsIOS(t *testing.T) {
-	batch, err := DecodeLogs(loadFixture(t, "ios_logs.json"))
+	batch, err := DecodeLogs(bytes.NewReader(loadFixture(t, "ios_logs.json")))
 	require.NoError(t, err)
 	rows := FlattenLogs("app-1", batch, flattenNow)
 	require.Len(t, rows, 3)
@@ -116,7 +117,7 @@ func TestFlattenLogsSkipsIdentityOps(t *testing.T) {
 			{"attributes":[{"key":"event.name","value":{"stringValue":"$set"}},{"key":"userId","value":{"stringValue":"u-1"}}]},
 			{"attributes":[{"key":"event.name","value":{"stringValue":"checkout"}}]}
 		]}]}]}`)
-	batch, err := DecodeLogs(body)
+	batch, err := DecodeLogs(bytes.NewReader(body))
 	require.NoError(t, err)
 	rows := FlattenLogs("app-1", batch, flattenNow)
 	// $set is identity's, only the telemetry record lands.
@@ -128,7 +129,7 @@ func TestFlattenDropsForgedClientID(t *testing.T) {
 	body := []byte(`{"resourceMetrics":[{"resource":{"attributes":[
 		{"key":"expo.eas_client.id","value":{"stringValue":"not-a-uuid"}}]},
 		"scopeMetrics":[{"metrics":[{"name":"expo.app_startup.tti","gauge":{"dataPoints":[{"timeUnixNano":1,"asDouble":1}]}}]}]}]}`)
-	batch, err := DecodeMetrics(body)
+	batch, err := DecodeMetrics(bytes.NewReader(body))
 	require.NoError(t, err)
 	assert.Empty(t, FlattenMetrics("app-1", batch, flattenNow))
 }
@@ -140,7 +141,7 @@ func TestFlattenMetricsPointUpdateIDOverride(t *testing.T) {
 		"scopeMetrics":[{"metrics":[{"name":"expo.updates.download_time","gauge":{"dataPoints":[
 			{"timeUnixNano":1767960489000000000,"asDouble":2.5,"attributes":[
 				{"key":"expo.update_id","value":{"stringValue":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"}}]}]}}]}]}]}`)
-	batch, err := DecodeMetrics(body)
+	batch, err := DecodeMetrics(bytes.NewReader(body))
 	require.NoError(t, err)
 	rows := FlattenMetrics("app-1", batch, flattenNow)
 	require.Len(t, rows, 1)
@@ -161,9 +162,9 @@ func TestClampTimestamp(t *testing.T) {
 
 func TestFlattenDeterministicHashes(t *testing.T) {
 	fixture := loadFixture(t, "ios_logs.json")
-	batch1, err := DecodeLogs(fixture)
+	batch1, err := DecodeLogs(bytes.NewReader(fixture))
 	require.NoError(t, err)
-	batch2, err := DecodeLogs(fixture)
+	batch2, err := DecodeLogs(bytes.NewReader(fixture))
 	require.NoError(t, err)
 	rows1 := FlattenLogs("app-1", batch1, flattenNow)
 	rows2 := FlattenLogs("app-1", batch2, flattenNow.Add(time.Hour))
@@ -176,7 +177,7 @@ func TestFlattenDeterministicHashes(t *testing.T) {
 }
 
 func TestDecodeToleratesUnknownFields(t *testing.T) {
-	batch, err := DecodeMetrics(loadFixture(t, "unknown_fields.json"))
+	batch, err := DecodeMetrics(bytes.NewReader(loadFixture(t, "unknown_fields.json")))
 	require.NoError(t, err)
 	assert.NotEmpty(t, batch.Resources)
 }
@@ -194,7 +195,7 @@ func logsWithoutSession(clientID, body string) []byte {
 
 func hashOfSingleLog(t *testing.T, body []byte) uint64 {
 	t.Helper()
-	batch, err := DecodeLogs(body)
+	batch, err := DecodeLogs(bytes.NewReader(body))
 	require.NoError(t, err)
 	rows := FlattenLogs("app-1", batch, time.Now().UTC())
 	require.Len(t, rows, 1)

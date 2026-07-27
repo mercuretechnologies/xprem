@@ -5,6 +5,7 @@
 package observe
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -54,7 +55,7 @@ const androidLogsFixture = `{
 const iosLogsFixture = `{"resourceLogs":[{"resource":{"attributes":[{"key":"expo.eas_client.id","value":{"stringValue":"7A6B5C4D-3E2F-1A0B-9C8D-7E6F5A4B3C2D"}}]},"scopeLogs":[{"scope":{"name":"expo-observe","version":"56.0.16"},"logRecords":[{"timeUnixNano":1767960489000000000,"severityNumber":9,"severityText":"INFO","body":{"stringValue":"user logged in"},"attributes":[{"key":"event.name","value":{"stringValue":"$unset"}},{"key":"keys","value":{"arrayValue":{"values":[{"stringValue":"userId"},{"stringValue":"tenant"}]}}},{"key":"seats","value":{"intValue":42}}]}]}],"schemaUrl":"https://opentelemetry.io/schemas/1.27.0"}]}`
 
 func TestDecodeLogsAndroidShape(t *testing.T) {
-	batch, err := DecodeLogs([]byte(androidLogsFixture))
+	batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 	require.NoError(t, err)
 	require.Len(t, batch.Resources, 1)
 
@@ -71,7 +72,7 @@ func TestDecodeLogsAndroidShape(t *testing.T) {
 }
 
 func TestDecodeLogsIOSShape(t *testing.T) {
-	batch, err := DecodeLogs([]byte(iosLogsFixture))
+	batch, err := DecodeLogs(bytes.NewReader([]byte(iosLogsFixture)))
 	require.NoError(t, err)
 	require.Len(t, batch.Resources, 1)
 
@@ -86,25 +87,25 @@ func TestDecodeLogsIOSShape(t *testing.T) {
 func TestDecodeLogsTolerance(t *testing.T) {
 	// Unknown fields and empty bodies are tolerated: rejecting destroys the
 	// batch on the device.
-	batch, err := DecodeLogs([]byte(`{"resourceLogs":[],"partialSuccess":{"whatever":1}}`))
+	batch, err := DecodeLogs(bytes.NewReader([]byte(`{"resourceLogs":[],"partialSuccess":{"whatever":1}}`)))
 	require.NoError(t, err)
 	require.Empty(t, batch.Resources)
 
-	batch, err = DecodeLogs([]byte(`{}`))
+	batch, err = DecodeLogs(bytes.NewReader([]byte(`{}`)))
 	require.NoError(t, err)
 	require.Empty(t, batch.Resources)
 
 	// Structural garbage is a hard error (the 400 arm).
-	_, err = DecodeLogs([]byte(`not json at all`))
+	_, err = DecodeLogs(bytes.NewReader([]byte(`not json at all`)))
 	require.Error(t, err)
 
 	// Unrepresentable values decode to nil instead of failing the batch.
-	batch, err = DecodeLogs([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"x","value":{"intValue":"not-a-number"}}]},"scopeLogs":[]}]}`))
+	batch, err = DecodeLogs(bytes.NewReader([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"x","value":{"intValue":"not-a-number"}}]},"scopeLogs":[]}]}`)))
 	require.NoError(t, err)
 	require.Nil(t, batch.Resources[0].Attributes["x"])
 
 	// kvlistValue unwraps to a nested map.
-	batch, err = DecodeLogs([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"nested","value":{"kvlistValue":{"values":[{"key":"a","value":{"doubleValue":1.5}}]}}}]},"scopeLogs":[]}]}`))
+	batch, err = DecodeLogs(bytes.NewReader([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"nested","value":{"kvlistValue":{"values":[{"key":"a","value":{"doubleValue":1.5}}]}}}]},"scopeLogs":[]}]}`)))
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"a": 1.5}, batch.Resources[0].Attributes["nested"])
 }
@@ -143,7 +144,7 @@ func decodedLogRecords(batch LogBatch) []LogRecord {
 func TestDecodeLogsCapsRecordsPerBatch(t *testing.T) {
 	const surplus = 5
 	first := "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
-	batch, err := DecodeLogs(logsBodyWithRecords([]string{first}, maxRecordsPerBatch+surplus))
+	batch, err := DecodeLogs(bytes.NewReader(logsBodyWithRecords([]string{first}, maxRecordsPerBatch+surplus)))
 	require.NoError(t, err)
 
 	records := decodedLogRecords(batch)
@@ -162,7 +163,7 @@ func TestDecodeLogsCapsRecordsPerBatch(t *testing.T) {
 func TestDecodeLogsSkipsResourcesEntirelyOverTheCap(t *testing.T) {
 	older := "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
 	newer := "7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d"
-	batch, err := DecodeLogs(logsBodyWithRecords([]string{older, newer}, maxRecordsPerBatch))
+	batch, err := DecodeLogs(bytes.NewReader(logsBodyWithRecords([]string{older, newer}, maxRecordsPerBatch)))
 	require.NoError(t, err)
 
 	require.Len(t, batch.Resources, 1, "the fully dropped resource must not survive decoding")
@@ -181,7 +182,7 @@ func TestDecodeMetricsCapsPointsPerBatch(t *testing.T) {
 	body := []byte(`{"resourceMetrics":[{"resource":{"attributes":[{"key":"expo.eas_client.id","value":{"stringValue":"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}}]},"scopeMetrics":[{"metrics":[` +
 		strings.Join(points, ",") + `]}]}]}`)
 
-	batch, err := DecodeMetrics(body)
+	batch, err := DecodeMetrics(bytes.NewReader(body))
 	require.NoError(t, err)
 	require.Len(t, batch.Resources, 1)
 	require.Len(t, batch.Resources[0].Points, maxRecordsPerBatch)
@@ -192,7 +193,7 @@ func TestDecodeMetricsCapsPointsPerBatch(t *testing.T) {
 // A batch under the cap must decode exactly as before, dropped count included:
 // the guard is invisible to every real device.
 func TestDecodeLogsLeavesNormalBatchesAlone(t *testing.T) {
-	batch, err := DecodeLogs([]byte(androidLogsFixture))
+	batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 	require.NoError(t, err)
 	require.Zero(t, batch.DroppedRecords)
 	require.Len(t, decodedLogRecords(batch), 1)

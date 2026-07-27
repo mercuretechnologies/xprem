@@ -12,6 +12,7 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 )
 
@@ -119,9 +120,9 @@ func leadingSkip(total int) int {
 // JSON we can read at all; a readable body with zero records is normal, and a
 // body over the record cap is decoded down to its newest maxRecordsPerBatch
 // rather than rejected.
-func DecodeLogs(body []byte) (LogBatch, error) {
+func DecodeLogs(body io.Reader) (LogBatch, error) {
 	var decoded otlpLogsBody
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := json.NewDecoder(body).Decode(&decoded); err != nil {
 		return LogBatch{}, fmt.Errorf("unreadable OTLP logs body: %w", err)
 	}
 	total := 0
@@ -173,9 +174,9 @@ func countLogRecords(resource otlpResourceLogs) int {
 // DecodeMetrics parses an OTLP/JSON metrics body, same tolerance contract as
 // DecodeLogs. Only gauges are read: the SDK never emits sums or histograms,
 // and an unknown metric shape must not fail the batch.
-func DecodeMetrics(body []byte) (MetricBatch, error) {
+func DecodeMetrics(body io.Reader) (MetricBatch, error) {
 	var decoded otlpMetricsBody
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := json.NewDecoder(body).Decode(&decoded); err != nil {
 		return MetricBatch{}, fmt.Errorf("unreadable OTLP metrics body: %w", err)
 	}
 	total := 0

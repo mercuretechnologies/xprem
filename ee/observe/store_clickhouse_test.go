@@ -5,6 +5,7 @@
 package observe
 
 import (
+	"bytes"
 	"context"
 	"expo-open-ota/internal/database/clickhouse"
 	"testing"
@@ -32,7 +33,7 @@ func TestClickHouseTelemetrySinkRoundTrip(t *testing.T) {
 	appID := uuid.NewString()
 	now := time.Now().UTC()
 
-	metricBatch, err := DecodeMetrics(loadFixture(t, "ios_metrics.json"))
+	metricBatch, err := DecodeMetrics(bytes.NewReader(loadFixture(t, "ios_metrics.json")))
 	require.NoError(t, err)
 	metricRows := FlattenMetrics(appID, metricBatch, now)
 	require.NotEmpty(t, metricRows)
@@ -41,7 +42,7 @@ func TestClickHouseTelemetrySinkRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, sink.InsertMetrics(ctx, metricRows))
 
-	logBatch, err := DecodeLogs(loadFixture(t, "ios_logs.json"))
+	logBatch, err := DecodeLogs(bytes.NewReader(loadFixture(t, "ios_logs.json")))
 	require.NoError(t, err)
 	logRows := FlattenLogs(appID, logBatch, now)
 	require.NotEmpty(t, logRows)
