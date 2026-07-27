@@ -93,7 +93,45 @@ func TestSweepFreesExpiredSets(t *testing.T) {
 	}
 }
 
-// The sweep is amortised: it costs one map walk per interval, not one per Set.
+// Sadd is a write path too, and on the busiest workload in the product it is
+// the ONLY one: TrackActiveUser adds a device to a set on every manifest poll
+// and never calls Set. Sweeping from Set alone would have left that growth
+// resting on some other caller happening to write a string.
+func TestSaddSweepsToo(t *testing.T) {
+	c := NewLocalCache()
+	ttl := 1
+	past := time.Now().Add(-time.Minute)
+	if err := c.Sadd("seen_users:app-1:stale", []string{"device-a"}, &ttl); err != nil {
+		t.Fatalf("Sadd: %v", err)
+	}
+	c.mu.Lock()
+	c.lastSweep = time.Now().Add(-2 * sweepInterval)
+	c.setExpirations[withPrefix("seen_users:app-1:stale")] = &past
+	c.items[withPrefix("expired-string")] = CacheItem{Value: "v", Expiration: &past}
+	c.mu.Unlock()
+
+	// A second Sadd, with not a single Set anywhere in this test.
+	if err := c.Sadd("seen_users:app-1:live", []string{"device-b"}, &ttl); err != nil {
+		t.Fatalf("Sadd: %v", err)
+	}
+
+	c.mu.RLock()
+	_, staleSet := c.setItems[withPrefix("seen_users:app-1:stale")]
+	_, staleString := c.items[withPrefix("expired-string")]
+	_, liveSet := c.setItems[withPrefix("seen_users:app-1:live")]
+	c.mu.RUnlock()
+	if staleSet {
+		t.Fatal("an expired set must be freed by a write to another set")
+	}
+	if staleString {
+		t.Fatal("the sweep frees both stores, whichever write path triggered it")
+	}
+	if !liveSet {
+		t.Fatal("the set being written must survive its own sweep")
+	}
+}
+
+// The sweep is amortised: it costs one map walk per interval, not one per write.
 func TestSweepIsRateLimited(t *testing.T) {
 	c := NewLocalCache()
 	ttl := 1

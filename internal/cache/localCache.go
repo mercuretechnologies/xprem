@@ -50,6 +50,18 @@ func NewLocalCache() *LocalCache {
 // write lock. Entries with no TTL are kept: they were written to live until
 // they are replaced or deleted, and dropping them here would be a cache miss
 // nobody asked for.
+// maybeSweepLocked sweeps if the interval has passed. Called from every write
+// path, because every write path is a way for the maps to grow: Set feeds
+// items, Sadd feeds setItems and setExpirations. Sweeping from only one of
+// them would leave the other's growth resting on the hope that the first is
+// also being called, and the metrics path is a counter-example: TrackActiveUser
+// only ever calls Sadd and Scard.
+func (c *LocalCache) maybeSweepLocked(now time.Time) {
+	if now.Sub(c.lastSweep) >= sweepInterval {
+		c.sweepLocked(now)
+	}
+}
+
 func (c *LocalCache) sweepLocked(now time.Time) {
 	c.lastSweep = now
 	for key, item := range c.items {
@@ -104,9 +116,7 @@ func (c *LocalCache) Set(key string, value string, ttl *int) error {
 		Expiration: expiration,
 	}
 
-	if now := time.Now(); now.Sub(c.lastSweep) >= sweepInterval {
-		c.sweepLocked(now)
-	}
+	c.maybeSweepLocked(time.Now())
 	return nil
 }
 
@@ -183,6 +193,8 @@ func (c *LocalCache) Sadd(key string, members []string, ttl *int) error {
 	for _, member := range members {
 		c.setItems[prefixedKey][member] = struct{}{}
 	}
+
+	c.maybeSweepLocked(time.Now())
 	return nil
 }
 
