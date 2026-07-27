@@ -75,6 +75,37 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 	}
 }
 
+// NewDashboardOnlyMiddleware refuses a CLI credential on a group of routes,
+// whatever the routes are. It runs after NewAuthMiddleware, which is what put
+// the credential on the context, and it turns "this group takes accounts and
+// nothing else" into something the group carries rather than something a
+// reader has to derive.
+//
+// It exists because the alternative was an invariant nobody checks. A CLI
+// credential is app-scoped, so NewAuthMiddleware already refuses it on any
+// route without an {APP_ID} path variable, which today happens to be every
+// route in routes_account.go. That is a property of the paths, not a decision:
+// the first account route to name an app would silently become CLI-reachable.
+// This says the decision out loud, so adding such a route stays safe.
+func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if services.CliAuthFromContext(r.Context()) != nil {
+				http.Error(w, "This route requires a dashboard session", http.StatusForbidden)
+				return
+			}
+			// No principal either means the group was wired without an
+			// authentication middleware in front of it. Refusing is the only
+			// safe reading: the routes below expect a signed-in account.
+			if services.PrincipalFromContext(r.Context()) == nil {
+				http.Error(w, "This route requires a dashboard session", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // NewAdminMiddleware guards a route behind the account-level admin flag. It
 // only accepts dashboard sessions — a CLI credential is app-scoped publishing
 // access, not an account, so it never reaches admin-gated routes.
