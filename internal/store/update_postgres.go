@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -251,6 +252,78 @@ func (s *PostgresUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appI
 		})
 	}
 	return members, nil
+}
+
+func (s *PostgresUpdateStore) GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error) {
+	rows, err := s.engine.Queries.GetPublishGroupsPage(ctx, pgdb.GetPublishGroupsPageParams{
+		AppID:          ToPgUUID(appId),
+		BranchName:     branchName,
+		RuntimeVersion: runtimeVersion,
+		BeforeID:       cursor,
+		RowLimit:       int32(limit + 1),
+	})
+	if err != nil {
+		return types.PublishGroupsPage{}, fmt.Errorf("failed to retrieve publish groups: %w", err)
+	}
+
+	type groupWithCursor struct {
+		item     types.PublishGroupItem
+		newestID int64
+	}
+	grouped := make([]groupWithCursor, 0, limit+1)
+	groupIndexes := make(map[string]int, limit+1)
+	for _, row := range rows {
+		groupID := row.PublishGroup.String()
+		index, ok := groupIndexes[groupID]
+		if !ok {
+			message := ""
+			if row.Message != nil {
+				message = *row.Message
+			}
+			index = len(grouped)
+			groupIndexes[groupID] = index
+			grouped = append(grouped, groupWithCursor{
+				newestID: row.NewestID,
+				item: types.PublishGroupItem{
+					PublishGroup: groupID,
+					CreatedAt:    row.CreatedAt.Time.Format(time.RFC3339),
+					CommitHash:   row.CommitHash,
+					Message:      message,
+					Platforms:    make([]string, 0, 2),
+					Updates:      make([]types.PublishGroupUpdateItem, 0, 2),
+				},
+			})
+		}
+		group := &grouped[index].item
+		createdAt := row.CreatedAt.Time.Format(time.RFC3339)
+		if createdAt > group.CreatedAt {
+			group.CreatedAt = createdAt
+		}
+		if !slices.Contains(group.Platforms, row.Platform) {
+			group.Platforms = append(group.Platforms, row.Platform)
+		}
+		group.Updates = append(group.Updates, types.PublishGroupUpdateItem{
+			UpdateId:   strconv.FormatInt(row.ID, 10),
+			CreatedAt:  createdAt,
+			Platform:   row.Platform,
+			CommitHash: row.CommitHash,
+		})
+	}
+
+	hasMore := len(grouped) > limit
+	if hasMore {
+		grouped = grouped[:limit]
+	}
+	items := make([]types.PublishGroupItem, 0, len(grouped))
+	for _, group := range grouped {
+		items = append(items, group.item)
+	}
+	var nextCursor *string
+	if hasMore {
+		cursorValue := strconv.FormatInt(grouped[len(grouped)-1].newestID, 10)
+		nextCursor = &cursorValue
+	}
+	return types.PublishGroupsPage{Items: items, NextCursor: nextCursor}, nil
 }
 
 func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error) {

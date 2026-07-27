@@ -10,15 +10,16 @@ import { isExpoInstalled } from '../lib/package';
 import { promptAsync } from '../lib/prompts';
 import {
   PublishGroupSummary,
+  ServerPublishGroupsPage,
   ServerUpdateItem,
   describePublishGroup,
+  fetchPublishGroups,
   fetchRuntimeVersions,
   fetchUpdates,
-  groupPublishedUpdates,
 } from '../lib/serverUpdates';
 import { resolveVcsClient } from '../lib/vcs';
 
-const UPDATES_PAGE_SIZE = 20;
+const REPUBLISH_PAGE_SIZE = 20;
 
 type GroupSelection = { kind: 'group'; group: PublishGroupSummary } | { kind: 'loadMore' };
 
@@ -114,51 +115,27 @@ export default class Publish extends Command {
       })),
     });
     Log.log(`Selected runtime version: ${selectedRuntimeVersion.runtimeVersion}`);
-    const updates: ServerUpdateItem[] = [];
-    let nextCursor: string | null | undefined;
-    const loadNextPage = async (): Promise<void> => {
-      const previousCount = updates.length;
-      do {
-        const page = await fetchUpdates({
+    let firstGroupsPage: ServerPublishGroupsPage | null = null;
+    if (platform === 'all') {
+      try {
+        firstGroupsPage = await fetchPublishGroups({
           baseUrl,
           appId,
           branch,
           runtimeVersion: selectedRuntimeVersion.runtimeVersion,
           credentials,
-          cursor: nextCursor ?? undefined,
-          limit: UPDATES_PAGE_SIZE,
+          limit: REPUBLISH_PAGE_SIZE,
         });
-        // Rollbacks have no files to republish. Apply a requested platform
-        // before presenting pages, but do not fetch ahead merely to fill 20.
-        updates.push(
-          ...page.items.filter(
-            update =>
-              update.updateUUID !== 'Rollback to embedded' &&
-              (platform === 'all' || update.platform === platform)
-          )
-        );
-        nextCursor = page.nextCursor;
-      } while (updates.length === previousCount && nextCursor);
-    };
-
-    try {
-      await loadNextPage();
-    } catch (e) {
-      Log.error(e instanceof Error ? e.message : e);
-      process.exit(1);
-    }
-    if (updates.length === 0 && !nextCursor) {
-      Log.error(
-        `No republishable updates found for runtime version ${selectedRuntimeVersion.runtimeVersion} on platform ${platform}.`
-      );
-      process.exit(1);
+      } catch (e) {
+        Log.error(e instanceof Error ? e.message : e);
+        process.exit(1);
+      }
     }
 
-    let { groups } = groupPublishedUpdates(updates);
-    // Offer the group mode only when there is something to group and the user
-    // did not already narrow the run to one platform.
+    // Publish groups are a control-plane read model. Servers without that
+    // capability return no group page and keep the single-update flow.
     let mode: 'group' | 'single' = 'single';
-    if (platform === 'all' && groups.length > 0) {
+    if (firstGroupsPage && firstGroupsPage.items.length > 0) {
       const selectedMode = await promptAsync({
         type: 'select',
         name: 'mode',
@@ -180,6 +157,12 @@ export default class Publish extends Command {
     }
 
     if (mode === 'group') {
+      if (!firstGroupsPage) {
+        Log.error('Publish group listing is not available');
+        process.exit(1);
+      }
+      const groups = [...firstGroupsPage.items];
+      let nextGroupCursor = firstGroupsPage.nextCursor;
       let group: PublishGroupSummary | undefined;
       let initialChoiceIndex = 0;
       while (!group) {
@@ -188,7 +171,7 @@ export default class Publish extends Command {
             ...describePublishGroup(candidate),
             value: { kind: 'group', group: candidate },
           }));
-        if (nextCursor) {
+        if (nextGroupCursor) {
           choices.push({ title: 'Load more publishes', value: { kind: 'loadMore' } });
         }
         const selectedGroup = await promptAsync({
@@ -202,12 +185,24 @@ export default class Publish extends Command {
         if (selection.kind === 'loadMore') {
           const previousGroupCount = groups.length;
           try {
-            await loadNextPage();
+            const page = await fetchPublishGroups({
+              baseUrl,
+              appId,
+              branch,
+              runtimeVersion: selectedRuntimeVersion.runtimeVersion,
+              credentials,
+              cursor: nextGroupCursor ?? undefined,
+              limit: REPUBLISH_PAGE_SIZE,
+            });
+            if (!page) {
+              throw new Error('Publish group listing is no longer available');
+            }
+            groups.push(...page.items);
+            nextGroupCursor = page.nextCursor;
           } catch (e) {
             Log.error(e instanceof Error ? e.message : e);
             process.exit(1);
           }
-          groups = groupPublishedUpdates(updates).groups;
           initialChoiceIndex = Math.min(previousGroupCount, Math.max(0, groups.length - 1));
         } else {
           group = selection.group;
@@ -239,6 +234,46 @@ export default class Publish extends Command {
           : `✅ Republished ${group.platforms.join(' + ')}`
       );
       return;
+    }
+
+    const updates: ServerUpdateItem[] = [];
+    let nextCursor: string | null | undefined;
+    const loadNextPage = async (): Promise<void> => {
+      const previousCount = updates.length;
+      do {
+        const page = await fetchUpdates({
+          baseUrl,
+          appId,
+          branch,
+          runtimeVersion: selectedRuntimeVersion.runtimeVersion,
+          credentials,
+          cursor: nextCursor ?? undefined,
+          limit: REPUBLISH_PAGE_SIZE,
+        });
+        // Rollbacks have no files to republish. Apply a requested platform
+        // before presenting pages, but do not fetch ahead merely to fill 20.
+        updates.push(
+          ...page.items.filter(
+            update =>
+              update.updateUUID !== 'Rollback to embedded' &&
+              (platform === 'all' || update.platform === platform)
+          )
+        );
+        nextCursor = page.nextCursor;
+      } while (updates.length === previousCount && nextCursor);
+    };
+
+    try {
+      await loadNextPage();
+    } catch (e) {
+      Log.error(e instanceof Error ? e.message : e);
+      process.exit(1);
+    }
+    if (updates.length === 0 && !nextCursor) {
+      Log.error(
+        `No republishable updates found for runtime version ${selectedRuntimeVersion.runtimeVersion} on platform ${platform}.`
+      );
+      process.exit(1);
     }
 
     let selectedUpdate: ServerUpdateItem | undefined;

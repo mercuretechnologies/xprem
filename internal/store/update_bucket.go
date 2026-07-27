@@ -331,6 +331,10 @@ func (s *BucketUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appId 
 	return nil, ErrNotSupportedInStatelessMode
 }
 
+func (s *BucketUpdateStore) GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error) {
+	return types.PublishGroupsPage{}, ErrNotSupportedInStatelessMode
+}
+
 func (s *BucketUpdateStore) GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error) {
 	return nil, ErrNotSupportedInStatelessMode
 }

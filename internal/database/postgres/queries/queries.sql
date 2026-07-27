@@ -305,6 +305,37 @@ WHERE b.app_id = $1
   AND u.checked_at IS NOT NULL
 ORDER BY u.id;
 
+-- name: GetPublishGroupsPage :many
+-- Page logical publishes rather than update rows. page_groups applies the
+-- limit before joining members back in, so every returned group is complete.
+WITH grouped AS (
+  SELECT u.publish_group, u.branch_id, u.runtime_version_id, MAX(u.id)::BIGINT AS newest_id
+  FROM updates u
+  JOIN branches b ON u.branch_id = b.id
+  JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+  WHERE b.app_id = sqlc.arg('app_id')
+    AND b.name = sqlc.arg('branch_name')
+    AND rv.version = sqlc.arg('runtime_version')
+    AND u.publish_group IS NOT NULL
+    AND u.checked_at IS NOT NULL
+  GROUP BY u.publish_group, u.branch_id, u.runtime_version_id
+), page_groups AS (
+  SELECT publish_group, branch_id, runtime_version_id, newest_id
+  FROM grouped
+  WHERE (sqlc.narg('before_id')::BIGINT IS NULL OR newest_id < sqlc.narg('before_id'))
+  ORDER BY newest_id DESC
+  LIMIT sqlc.arg('row_limit')
+)
+SELECT pg.publish_group, pg.newest_id, u.id, u.created_at, u.platform,
+       u.commit_hash, u.message
+FROM page_groups pg
+JOIN updates u
+  ON u.publish_group = pg.publish_group
+ AND u.branch_id = pg.branch_id
+ AND u.runtime_version_id = pg.runtime_version_id
+WHERE u.checked_at IS NOT NULL
+ORDER BY pg.newest_id DESC, u.id ASC;
+
 -- name: GetUpdateMetadata :one
 SELECT updates.id, update_uuid, platform, commit_hash, message
 FROM updates

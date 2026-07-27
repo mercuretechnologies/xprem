@@ -1688,6 +1688,90 @@ func (q *Queries) GetOAuthClient(ctx context.Context, id pgtype.UUID) (OauthClie
 	return i, err
 }
 
+const getPublishGroupsPage = `-- name: GetPublishGroupsPage :many
+WITH grouped AS (
+  SELECT u.publish_group, u.branch_id, u.runtime_version_id, MAX(u.id)::BIGINT AS newest_id
+  FROM updates u
+  JOIN branches b ON u.branch_id = b.id
+  JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+  WHERE b.app_id = $1
+    AND b.name = $2
+    AND rv.version = $3
+    AND u.publish_group IS NOT NULL
+    AND u.checked_at IS NOT NULL
+  GROUP BY u.publish_group, u.branch_id, u.runtime_version_id
+), page_groups AS (
+  SELECT publish_group, branch_id, runtime_version_id, newest_id
+  FROM grouped
+  WHERE ($4::BIGINT IS NULL OR newest_id < $4)
+  ORDER BY newest_id DESC
+  LIMIT $5
+)
+SELECT pg.publish_group, pg.newest_id, u.id, u.created_at, u.platform,
+       u.commit_hash, u.message
+FROM page_groups pg
+JOIN updates u
+  ON u.publish_group = pg.publish_group
+ AND u.branch_id = pg.branch_id
+ AND u.runtime_version_id = pg.runtime_version_id
+WHERE u.checked_at IS NOT NULL
+ORDER BY pg.newest_id DESC, u.id ASC
+`
+
+type GetPublishGroupsPageParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+	RuntimeVersion string      `json:"runtime_version"`
+	BeforeID       *int64      `json:"before_id"`
+	RowLimit       int32       `json:"row_limit"`
+}
+
+type GetPublishGroupsPageRow struct {
+	PublishGroup pgtype.UUID        `json:"publish_group"`
+	NewestID     int64              `json:"newest_id"`
+	ID           int64              `json:"id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Platform     string             `json:"platform"`
+	CommitHash   string             `json:"commit_hash"`
+	Message      *string            `json:"message"`
+}
+
+// Page logical publishes rather than update rows. page_groups applies the
+// limit before joining members back in, so every returned group is complete.
+func (q *Queries) GetPublishGroupsPage(ctx context.Context, arg GetPublishGroupsPageParams) ([]GetPublishGroupsPageRow, error) {
+	rows, err := q.db.Query(ctx, getPublishGroupsPage,
+		arg.AppID,
+		arg.BranchName,
+		arg.RuntimeVersion,
+		arg.BeforeID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetPublishGroupsPageRow
+	for rows.Next() {
+		var i GetPublishGroupsPageRow
+		if err := rows.Scan(
+			&i.PublishGroup,
+			&i.NewestID,
+			&i.ID,
+			&i.CreatedAt,
+			&i.Platform,
+			&i.CommitHash,
+			&i.Message,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRefreshToken = `-- name: GetRefreshToken :one
 SELECT id, user_id, family_id, created_at, expires_at, used_at, replaced_by,
        (used_at IS NOT NULL AND used_at > CURRENT_TIMESTAMP - $1::interval) AS used_recently

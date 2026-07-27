@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchWithRetries } from '../../lib/fetch';
 import { promptAsync } from '../../lib/prompts';
-import { fetchRuntimeVersions, fetchUpdates } from '../../lib/serverUpdates';
+import { fetchPublishGroups, fetchRuntimeVersions, fetchUpdates } from '../../lib/serverUpdates';
 import Republish from '../republish';
 
 vi.mock('../../lib/fetch', () => ({
@@ -37,6 +37,7 @@ vi.mock('../../lib/serverUpdates', async importOriginal => {
   const original = await importOriginal<typeof import('../../lib/serverUpdates')>();
   return {
     ...original,
+    fetchPublishGroups: vi.fn(),
     fetchRuntimeVersions: vi.fn(),
     fetchUpdates: vi.fn(),
   };
@@ -62,6 +63,20 @@ function serverUpdate(overrides: Record<string, unknown>): any {
     commitHash: 'abc1234def',
     message: 'Fix crash',
     ...overrides,
+  };
+}
+
+function publishGroup(id: string, message = `Publish ${id}`): any {
+  return {
+    publishGroup: id,
+    createdAt: '2026-07-24T10:00:00Z',
+    commitHash: 'abc1234def',
+    message,
+    platforms: ['ios', 'android'],
+    updates: [
+      serverUpdate({ updateId: `${id}-ios`, platform: 'ios' }),
+      serverUpdate({ updateId: `${id}-android`, platform: 'android' }),
+    ],
   };
 }
 
@@ -94,6 +109,7 @@ function lastPostUrl(): URL {
 describe('republish command flow', () => {
   beforeEach(() => {
     vi.mocked(fetchRuntimeVersions).mockResolvedValue(runtimeVersionsPayload);
+    vi.mocked(fetchPublishGroups).mockResolvedValue(null);
     vi.mocked(fetchWithRetries).mockResolvedValue({
       ok: true,
       status: 200,
@@ -106,11 +122,9 @@ describe('republish command flow', () => {
   });
 
   it('offers the publish group mode and republishes the group in one call', async () => {
-    // The android member is beyond this page boundary. The CLI must submit the
-    // group id instead of constructing a partial republish from loaded members.
-    vi.mocked(fetchUpdates).mockResolvedValue({
-      items: [serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' })],
-      nextCursor: '100',
+    vi.mocked(fetchPublishGroups).mockResolvedValue({
+      items: [publishGroup('group-a')],
+      nextCursor: null,
     });
     answerPrompts({
       runtimeVersion: '1.0.0',
@@ -127,10 +141,14 @@ describe('republish command flow', () => {
     expect(url.searchParams.get('runtimeVersion')).toBe('1.0.0');
     expect(url.searchParams.has('updateId')).toBe(false);
     expect(url.searchParams.has('platform')).toBe(false);
-    expect(fetchUpdates).toHaveBeenCalledTimes(1);
+    expect(fetchUpdates).not.toHaveBeenCalled();
   });
 
   it('republishes a single update through the historical wire format', async () => {
+    vi.mocked(fetchPublishGroups).mockResolvedValue({
+      items: [publishGroup('group-a')],
+      nextCursor: null,
+    });
     vi.mocked(fetchUpdates).mockResolvedValue({
       items: [
         serverUpdate({ updateId: '100', platform: 'ios', publishGroup: 'group-a' }),
@@ -151,6 +169,43 @@ describe('republish command flow', () => {
     expect(url.searchParams.get('platform')).toBe('ios');
     expect(url.searchParams.get('commitHash')).toBe('abc1234def');
     expect(url.searchParams.has('publishGroup')).toBe(false);
+  });
+
+  it('pages complete publish groups independently from updates', async () => {
+    vi.mocked(fetchPublishGroups)
+      .mockResolvedValueOnce({
+        items: [publishGroup('group-a'), publishGroup('group-b')],
+        nextCursor: '200',
+      })
+      .mockResolvedValueOnce({
+        items: [publishGroup('group-c')],
+        nextCursor: null,
+      });
+    let groupPromptCount = 0;
+    answerPrompts({
+      runtimeVersion: '1.0.0',
+      mode: 'group',
+      group: (question: any) => {
+        groupPromptCount += 1;
+        if (groupPromptCount === 1) {
+          expect(question.choices).toHaveLength(3);
+          return question.choices.at(-1).value;
+        }
+        expect(question.choices).toHaveLength(3);
+        expect(question.choices.every((choice: any) => choice.value.kind === 'group')).toBe(true);
+        expect(question.initial).toBe(2);
+        return question.choices[2].value;
+      },
+    });
+
+    await Republish.run(['--branch', 'main'], eoasRoot);
+
+    expect(fetchPublishGroups).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cursor: '200', limit: 20 })
+    );
+    expect(fetchUpdates).not.toHaveBeenCalled();
+    expect(lastPostUrl().searchParams.get('publishGroup')).toBe('group-c');
   });
 
   it('skips the mode question when --platform narrows the run', async () => {

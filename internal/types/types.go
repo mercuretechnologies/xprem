@@ -92,6 +92,29 @@ type PublishGroupMember struct {
 	CommitHash string
 }
 
+// PublishGroupItem is one logical eoas publish. Its per-platform rows are
+// returned together so a page boundary can never split a publish group.
+type PublishGroupItem struct {
+	PublishGroup string                   `json:"publishGroup"`
+	CreatedAt    string                   `json:"createdAt"`
+	CommitHash   string                   `json:"commitHash"`
+	Message      string                   `json:"message,omitempty"`
+	Platforms    []string                 `json:"platforms"`
+	Updates      []PublishGroupUpdateItem `json:"updates"`
+}
+
+type PublishGroupUpdateItem struct {
+	UpdateId   string `json:"updateId"`
+	CreatedAt  string `json:"createdAt"`
+	Platform   string `json:"platform"`
+	CommitHash string `json:"commitHash"`
+}
+
+type PublishGroupsPage struct {
+	Items      []PublishGroupItem `json:"items"`
+	NextCursor *string            `json:"nextCursor"`
+}
+
 type UpdatesPage struct {
 	Items      []UpdateItem `json:"items"`
 	NextCursor *string      `json:"nextCursor"`
