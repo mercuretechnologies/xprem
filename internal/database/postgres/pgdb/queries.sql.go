@@ -3178,7 +3178,6 @@ LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
 LEFT JOIN device_identity d ON d.app_id = o.app_id AND d.eas_client_id = o.eas_client_id
 ORDER BY o.id
 LIMIT $1
-FOR UPDATE OF o SKIP LOCKED
 `
 
 type ListDeviceHealthOutboxRow struct {
@@ -3207,6 +3206,18 @@ type ListDeviceHealthOutboxRow struct {
 // with them, so they are resolved here, once, on a bounded batch. The update
 // side is permanent (an update never changes branch), the device side is the
 // hardware as currently known, which is what a crash is read against.
+// Deliberately NOT "FOR UPDATE SKIP LOCKED" any more. The row lock used to be
+// what stopped two replicas delivering the same event, and it worked, but it
+// only holds for the life of its transaction: the delivery had to keep that
+// transaction open across the ClickHouse insert, so an unreachable ClickHouse
+// pinned a connection and a transaction id, and a transaction id that never
+// advances stops vacuum from cleaning a table that takes an event per device
+// state change.
+//
+// Mutual exclusion moved to a session advisory lock taken by the caller, which
+// costs no transaction. What guards against a double delivery afterwards is
+// the destination: device_health_events is a ReplacingMergeTree keyed on
+// (app_id, outbox_id), so the same event delivered twice collapses.
 // The EXISTS scopes the update to the event's app, not just its uuid. update_id
 // originates from an unauthenticated header, so a device of app A can name an
 // update of app B: without it, `branch` correctly resolves to ” (that join IS

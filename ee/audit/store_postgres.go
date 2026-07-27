@@ -8,13 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"expo-open-ota/internal/database"
+	"expo-open-ota/internal/database/postgres"
 	"expo-open-ota/internal/database/postgres/pgdb"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresAuditStore struct {
@@ -166,41 +166,9 @@ func (s *PostgresAuditStore) ExportCursor(ctx context.Context) (int64, error) {
 // migrationAdvisoryLockID in internal/database/postgres for the convention).
 const exportAdvisoryLockID = 823672943
 
-// TryExportLock claims the "one exporter at a time" advisory lock. A session
-// advisory lock belongs to the connection that took it, so it lives on a
-// connection pinned from the pool for the whole export, never on the shared
-// pool where every query may land on a different session.
+// TryExportLock claims the "one exporter at a time" advisory lock.
 func (s *PostgresAuditStore) TryExportLock(ctx context.Context) (func(), bool, error) {
-	pool, isPool := s.engine.DB.(*pgxpool.Pool)
-	if !isPool {
-		// No pool means no session to pin: run unlocked. The cursor CAS keeps
-		// concurrent exporters correct, the lock only spares duplicate uploads.
-		return func() {}, true, nil
-	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to acquire a connection for the audit export lock: %w", err)
-	}
-	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", exportAdvisoryLockID).Scan(&locked); err != nil {
-		conn.Release()
-		return nil, false, fmt.Errorf("failed to take the audit export lock: %w", err)
-	}
-	if !locked {
-		conn.Release()
-		return nil, false, nil
-	}
-	release := func() {
-		// Background context: the unlock must run even after the tick's
-		// timeout. A failed unlock must not return a still-locked session to
-		// the pool (the lock would leak forever), so the session is closed
-		// instead: ending it releases every advisory lock it holds.
-		if _, err := conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", exportAdvisoryLockID); err != nil {
-			_ = conn.Conn().Close(context.Background())
-		}
-		conn.Release()
-	}
-	return release, true, nil
+	return postgres.TryAdvisoryLock(ctx, s.engine.DB, exportAdvisoryLockID, "audit export")
 }
 
 func (s *PostgresAuditStore) AdvanceExportCursor(ctx context.Context, from int64, to int64) (bool, error) {

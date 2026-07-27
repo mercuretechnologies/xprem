@@ -13,6 +13,7 @@ import (
 
 	"expo-open-ota/internal/database"
 	"expo-open-ota/internal/database/clickhouse"
+	"expo-open-ota/internal/database/postgres"
 	"expo-open-ota/internal/database/postgres/pgdb"
 
 	"github.com/google/uuid"
@@ -148,26 +149,62 @@ func (h *HealthHistory) drainOutbox(ctx context.Context) bool {
 	return delivered
 }
 
-func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
-	tx, err := h.postgres.DB.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("beginning outbox transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+// outboxAdvisoryLockID serializes outbox drainers across replicas (see
+// migrationAdvisoryLockID in internal/database/postgres for the convention).
+const outboxAdvisoryLockID = 745103622
 
-	queries := h.postgres.Queries.WithTx(tx)
-	rows, err := queries.ListDeviceHealthOutbox(ctx, healthOutboxBatchSize)
+// outboxSendTimeout bounds the ClickHouse insert. Nothing held it before, and
+// the drain runs every second: an unreachable ClickHouse meant a delivery that
+// never returned, on a loop.
+const outboxSendTimeout = 15 * time.Second
+
+// snapshotAdvisoryLockID elects one replica to take fleet snapshots. Separate
+// from the outbox lock so a slow drain never stops a capture, and the other way
+// round: they run on different cadences and neither waits on the other.
+const snapshotAdvisoryLockID = 745103623
+
+// lockOutbox elects one drainer across replicas.
+func (h *HealthHistory) lockOutbox(ctx context.Context) (func(), bool, error) {
+	return postgres.TryAdvisoryLock(ctx, h.postgres.DB, outboxAdvisoryLockID, "health outbox")
+}
+
+// deliverOutboxBatch moves one batch of events from PostgreSQL to ClickHouse.
+//
+// Read, send, delete, with NO transaction spanning the send. It used to be one
+// transaction holding FOR UPDATE SKIP LOCKED row locks across the ClickHouse
+// insert, which meant an unreachable ClickHouse pinned a connection and a
+// transaction id for as long as it stayed unreachable, on a loop that fires
+// every second. A transaction id that never advances is what stops vacuum from
+// cleaning a table fed by every device state change.
+//
+// The cost of that shape is that delivery is at-least-once: a crash between
+// the send and the delete replays the batch. That is what the destination was
+// built for, device_health_events being a ReplacingMergeTree keyed on
+// (app_id, outbox_id), so a replayed event collapses into the one already
+// there rather than double-counting.
+func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
+	release, locked, err := h.lockOutbox(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("claiming outbox rows: %w", err)
+		return 0, err
+	}
+	if !locked {
+		// Another replica is draining. Not an error and not a miss: it is
+		// delivering the same rows this one would have.
+		return 0, nil
+	}
+	defer release()
+
+	rows, err := h.postgres.Queries.ListDeviceHealthOutbox(ctx, healthOutboxBatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("reading outbox rows: %w", err)
 	}
 	if len(rows) == 0 {
-		if err := tx.Commit(ctx); err != nil {
-			return 0, fmt.Errorf("committing empty outbox transaction: %w", err)
-		}
 		return 0, nil
 	}
 
-	batch, err := h.clickhouse.Conn.PrepareBatch(ctx, `INSERT INTO device_health_events
+	sendCtx, cancelSend := context.WithTimeout(ctx, outboxSendTimeout)
+	defer cancelSend()
+	batch, err := h.clickhouse.Conn.PrepareBatch(sendCtx, `INSERT INTO device_health_events
 		(outbox_id, event_type, app_id, eas_client_id, update_id, previous_update_id,
 		 failure_type, fatal_error, occurred_at,
 		 branch, runtime_version, platform, os_name, os_version, device_model, country_code,
@@ -212,16 +249,33 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 	if err := batch.Send(); err != nil {
 		return 0, fmt.Errorf("sending health event batch: %w", err)
 	}
-	if err := queries.DeleteDeviceHealthOutbox(ctx, ids); err != nil {
+	// Delivered. Anything that goes wrong from here replays the batch, which
+	// the destination absorbs.
+	if err := h.postgres.Queries.DeleteDeviceHealthOutbox(ctx, ids); err != nil {
 		return 0, fmt.Errorf("deleting delivered outbox rows: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("committing outbox delivery: %w", err)
 	}
 	return len(rows), nil
 }
 
 func (h *HealthHistory) captureSnapshots(ctx context.Context) {
+	// One replica at a time. ListCurrentUpdateHealthSnapshots aggregates the
+	// whole device_identity table and then joins the failures of every update
+	// it tracks, and every replica used to run it on its own timer: at ten
+	// replicas that is ten identical full-fleet scans a minute, for one set of
+	// numbers that would have been the same from any of them.
+	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, snapshotAdvisoryLockID, "health snapshot")
+	if err != nil {
+		log.Printf("observe: taking the health snapshot lock failed: %v", err)
+		return
+	}
+	if !locked {
+		// Another replica is capturing the same minute. Nothing to do and
+		// nothing lost: the snapshot is a property of the fleet, not of the
+		// replica that reads it.
+		return
+	}
+	defer release()
+
 	rows, err := h.postgres.ListCurrentUpdateHealthSnapshots(ctx)
 	if err != nil {
 		log.Printf("observe: health snapshot query failed: %v", err)
