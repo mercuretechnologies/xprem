@@ -5,6 +5,7 @@
 package observe
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +25,7 @@ func TestConcurrentReadsOfOneKeyComputeOnce(t *testing.T) {
 	key := readCacheKey("test-collapse", uuid.NewString())
 	var computations atomic.Int32
 
-	compute := func() (int, error) {
+	compute := func(context.Context) (int, error) {
 		computations.Add(1)
 		// Long enough that the others are certainly inside cachedRead while
 		// this one runs, which is what makes the assertion mean something.
@@ -38,7 +39,7 @@ func TestConcurrentReadsOfOneKeyComputeOnce(t *testing.T) {
 		wg.Add(1)
 		go func(slot int) {
 			defer wg.Done()
-			value, err := cachedRead(key, compute)
+			value, err := cachedRead(context.Background(), key, compute)
 			require.NoError(t, err)
 			answers[slot] = value
 		}(i)
@@ -57,7 +58,7 @@ func TestConcurrentReadsOfOneKeyComputeOnce(t *testing.T) {
 // the answer either.
 func TestConcurrentReadsOfDifferentKeysDoNotCollapse(t *testing.T) {
 	var computations atomic.Int32
-	compute := func() (int, error) {
+	compute := func(context.Context) (int, error) {
 		computations.Add(1)
 		time.Sleep(20 * time.Millisecond)
 		return 1, nil
@@ -68,7 +69,7 @@ func TestConcurrentReadsOfDifferentKeysDoNotCollapse(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := cachedRead(readCacheKey("test-distinct", uuid.NewString()), compute)
+			_, err := cachedRead(context.Background(), readCacheKey("test-distinct", uuid.NewString()), compute)
 			require.NoError(t, err)
 		}()
 	}
@@ -82,14 +83,58 @@ func TestConcurrentReadsOfDifferentKeysDoNotCollapse(t *testing.T) {
 func TestAFailedReadIsNotCached(t *testing.T) {
 	key := readCacheKey("test-failure", uuid.NewString())
 	var computations atomic.Int32
-	failing := func() (int, error) {
+	failing := func(context.Context) (int, error) {
 		computations.Add(1)
 		return 0, errInvalidObserveFilter
 	}
 
-	_, err := cachedRead(key, failing)
+	_, err := cachedRead(context.Background(), key, failing)
 	require.Error(t, err)
-	_, err = cachedRead(key, failing)
+	_, err = cachedRead(context.Background(), key, failing)
 	require.Error(t, err)
 	require.EqualValues(t, 2, computations.Load(), "a failure must not be served from the cache")
+}
+
+// The collapse must not make one viewer's departure everyone else's problem.
+// Only the leader's closure runs, so before the computation was detached from
+// its caller, a client closing its tab cancelled the shared query and every
+// reader waiting behind it received that cancellation as a 500.
+func TestALeaderGivingUpDoesNotFailTheReadersBehindIt(t *testing.T) {
+	key := readCacheKey("test-detached", uuid.NewString())
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+
+	started := make(chan struct{})
+	var computed atomic.Int32
+	compute := func(ctx context.Context) (int, error) {
+		computed.Add(1)
+		close(started)
+		// Long enough for the leader to walk away mid-computation.
+		time.Sleep(150 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 7, nil
+	}
+
+	var wg sync.WaitGroup
+	var waiterValue int
+	var waiterErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-started
+		waiterValue, waiterErr = cachedRead(context.Background(), key, compute)
+	}()
+
+	go func() {
+		_, _ = cachedRead(leaderCtx, key, compute)
+	}()
+
+	<-started
+	cancelLeader()
+	wg.Wait()
+
+	require.NoError(t, waiterErr, "a reader still connected must get its answer")
+	require.Equal(t, 7, waiterValue)
+	require.EqualValues(t, 1, computed.Load(), "still one computation for both")
 }
