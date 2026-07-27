@@ -73,25 +73,25 @@ func serveHealthHistory(handler *HealthHistoryHandler, appID, query string) *htt
 
 func TestHealthHistoryHandlerReturnsUnavailableWithoutClickHouse(t *testing.T) {
 	recorder := serveHealthHistory(
-		NewHealthHistoryHandler(nil),
+		NewHealthHistoryHandler(nil, nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString(),
 	)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.JSONEq(t, `{"available":false,"updates":{}}`, recorder.Body.String())
+	require.JSONEq(t, `{"available":false,"source":"none","updates":{}}`, recorder.Body.String())
 }
 
 func TestHealthHistoryHandlerReturnsUnavailableWithTypedNilHistory(t *testing.T) {
 	var history *HealthHistory
 	recorder := serveHealthHistory(
-		NewHealthHistoryHandler(history),
+		NewHealthHistoryHandler(history, nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString(),
 	)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.JSONEq(t, `{"available":false,"updates":{}}`, recorder.Body.String())
+	require.JSONEq(t, `{"available":false,"source":"none","updates":{}}`, recorder.Body.String())
 }
 
 func TestHealthHistoryHandlerReadsRequestedWindow(t *testing.T) {
@@ -107,7 +107,7 @@ func TestHealthHistoryHandlerReadsRequestedWindow(t *testing.T) {
 	}
 
 	recorder := serveHealthHistory(
-		NewHealthHistoryHandler(reader),
+		NewHealthHistoryHandler(reader, nil),
 		appID,
 		"ids="+updateA+","+updateB+","+updateA+"&from="+from+"&to="+to,
 	)
@@ -137,7 +137,7 @@ func TestHealthHistoryHandlerRejectsInvalidInput(t *testing.T) {
 	}
 	for _, query := range tests {
 		t.Run(query, func(t *testing.T) {
-			recorder := serveHealthHistory(NewHealthHistoryHandler(nil), appID, query)
+			recorder := serveHealthHistory(NewHealthHistoryHandler(nil, nil), appID, query)
 			require.Equal(t, http.StatusBadRequest, recorder.Code)
 		})
 	}
@@ -173,7 +173,7 @@ func TestHealthHistorySplitsBySegment(t *testing.T) {
 	}
 	updateID := uuid.NewString()
 	recorder := serveHealthSegments(
-		NewHealthHistoryHandler(reader),
+		NewHealthHistoryHandler(reader, nil),
 		uuid.NewString(),
 		"ids="+updateID+"&dimension=deviceModel",
 	)
@@ -191,7 +191,7 @@ func TestHealthHistorySplitsBySegment(t *testing.T) {
 	require.Len(t, response.Segments["SM-A546B"], 1)
 
 	rejected := serveHealthSegments(
-		NewHealthHistoryHandler(&recordingHealthHistoryReader{}),
+		NewHealthHistoryHandler(&recordingHealthHistoryReader{}, nil),
 		uuid.NewString(),
 		"ids="+updateID+"&dimension=easClientId",
 	)
@@ -203,7 +203,7 @@ func TestHealthHistorySplitsBySegment(t *testing.T) {
 func TestHealthSegmentsRefuseAnUnknownDimension(t *testing.T) {
 	reader := &recordingHealthHistoryReader{}
 	recorder := serveHealthSegments(
-		NewHealthHistoryHandler(reader),
+		NewHealthHistoryHandler(reader, nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString()+"&dimension=easClientId",
 	)
@@ -216,7 +216,7 @@ func TestHealthSegmentsRefuseAnUnknownDimension(t *testing.T) {
 func TestHealthSegmentsRequireADimension(t *testing.T) {
 	reader := &recordingHealthHistoryReader{}
 	recorder := serveHealthSegments(
-		NewHealthHistoryHandler(reader),
+		NewHealthHistoryHandler(reader, nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString(),
 	)
@@ -233,14 +233,14 @@ func TestHealthHistoryHandlerBoundsTheWindow(t *testing.T) {
 	rfc := func(t time.Time) string { return t.Format(time.RFC3339) }
 
 	beyond := serveHealthHistory(
-		NewHealthHistoryHandler(&recordingHealthHistoryReader{}),
+		NewHealthHistoryHandler(&recordingHealthHistoryReader{}, nil),
 		uuid.NewString(),
 		"ids="+updateID+"&from="+rfc(now.Add(-91*24*time.Hour))+"&to="+rfc(now),
 	)
 	require.Equal(t, http.StatusBadRequest, beyond.Code)
 
 	within := serveHealthHistory(
-		NewHealthHistoryHandler(&recordingHealthHistoryReader{}),
+		NewHealthHistoryHandler(&recordingHealthHistoryReader{}, nil),
 		uuid.NewString(),
 		"ids="+updateID+"&from="+rfc(now.Add(-89*24*time.Hour))+"&to="+rfc(now),
 	)
@@ -252,7 +252,7 @@ func TestHealthHistoryHandlerBoundsTheWindow(t *testing.T) {
 // empty one.
 func TestHealthHistoryUnavailableKeepsTheRequestedShape(t *testing.T) {
 	recorder := serveHealthSegments(
-		NewHealthHistoryHandler(nil),
+		NewHealthHistoryHandler(nil, nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString()+"&dimension=deviceModel",
 	)

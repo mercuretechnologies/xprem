@@ -43,20 +43,22 @@ type HealthHistoryReader interface {
 const maxHealthHistoryWindow = 90 * 24 * time.Hour
 
 // HealthHistoryHandler exposes ClickHouse history without making ClickHouse a
-// requirement for the dashboard. Deployments without it return available=false
-// and keep the PostgreSQL instant-T health endpoint fully operational.
+// requirement for the dashboard. Deployments without it fall back to what
+// PostgreSQL's live state can reconstruct, and keep the instant-T health
+// endpoint fully operational either way.
 type HealthHistoryHandler struct {
 	reader HealthHistoryReader
+	state  *StateHistory
 }
 
-func NewHealthHistoryHandler(reader HealthHistoryReader) *HealthHistoryHandler {
+func NewHealthHistoryHandler(reader HealthHistoryReader, state *StateHistory) *HealthHistoryHandler {
 	// A nil *HealthHistory stored in an interface is itself non-nil. Wiring
 	// does exactly that when ClickHouse is disabled, so normalize it here
 	// before the handler uses the interface.
 	if history, ok := reader.(*HealthHistory); ok && history == nil {
 		reader = nil
 	}
-	return &HealthHistoryHandler{reader: reader}
+	return &HealthHistoryHandler{reader: reader, state: state}
 }
 
 // healthHistoryQuery is what both handlers below need before they can answer,
@@ -113,22 +115,46 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 		return
 	}
 
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+
+	// Without the projection, PostgreSQL still holds enough to draw something
+	// true, and "source" says which of the two the caller got. It is not a
+	// detail the caller may ignore: the two series answer different questions,
+	// and the field names below differ for the same reason, so a client that
+	// forgets to branch fails to read the payload rather than mislabelling it.
 	if h.reader == nil {
+		if h.state == nil {
+			handlers.RenderJSON(w, http.StatusOK, map[string]any{
+				"available": false,
+				"source":    "none",
+				"updates":   map[string][]HealthHistoryPoint{},
+			})
+			return
+		}
+		points, err := h.state.Read(readContext, mux.Vars(r)["APP_ID"], query.updateIDs, query.from, query.to)
+		if err != nil {
+			handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
+			return
+		}
 		handlers.RenderJSON(w, http.StatusOK, map[string]any{
-			"available": false,
-			"updates":   map[string][]HealthHistoryPoint{},
+			"available": true,
+			"source":    "state",
+			"updates":   points,
 		})
 		return
 	}
 
-	readContext, cancelRead := boundedRead(r)
-	defer cancelRead()
 	points, err := h.reader.Read(readContext, mux.Vars(r)["APP_ID"], query.updateIDs, query.from, query.to)
 	if err != nil {
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{"available": true, "updates": points})
+	handlers.RenderJSON(w, http.StatusOK, map[string]any{
+		"available": true,
+		"source":    "projected",
+		"updates":   points,
+	})
 }
 
 // GetUpdateHealthSegmentsHandler answers the same window split by a device

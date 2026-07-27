@@ -1723,3 +1723,186 @@ func TestApplySetCountsAWideMutation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ValueCount{{Value: "after", DeviceCount: 2}}, values)
 }
+
+// seedLineage publishes n updates on ONE branch, runtime and platform, in
+// order, and returns their uuids oldest first. seedPublishedUpdate gives each
+// update its own branch, which is the opposite of what resolution needs: the
+// rule turns entirely on whether two updates belong to the same line and which
+// of them is later.
+func seedLineage(t *testing.T, pool *pgxpool.Pool, appID string, n int) []string {
+	t.Helper()
+	ctx := context.Background()
+	suffix := uuid.NewString()[:8]
+	var branchID, runtimeVersionID int64
+	require.NoError(t, pool.QueryRow(ctx,
+		"INSERT INTO branches (app_id, name) VALUES ($1, $2) RETURNING id",
+		appID, "line-"+suffix).Scan(&branchID))
+	require.NoError(t, pool.QueryRow(ctx,
+		"INSERT INTO runtime_versions (app_id, version) VALUES ($1, $2) RETURNING id",
+		appID, "line-"+suffix).Scan(&runtimeVersionID))
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		updateID := uuid.NewString()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO updates
+				(id, update_uuid, branch_id, runtime_version_id, update_type, commit_hash, platform, checked_at)
+			SELECT COALESCE(MAX(id), 0) + 1, $1, $2, $3, 0, 'line-test', 'ios', CURRENT_TIMESTAMP FROM updates`,
+			updateID, branchID, runtimeVersionID)
+		require.NoError(t, err)
+		ids = append(ids, updateID)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM branches WHERE id = $1", branchID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM runtime_versions WHERE id = $1", runtimeVersionID)
+	})
+	return ids
+}
+
+func failureResolved(t *testing.T, pool *pgxpool.Pool, appID, deviceID, updateID string, failureType FailureType) bool {
+	t.Helper()
+	var resolved *time.Time
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT resolved_at FROM device_update_failures
+		WHERE app_id = $1 AND eas_client_id = $2 AND update_id = $3 AND failure_type = $4`,
+		appID, deviceID, updateID, string(failureType)).Scan(&resolved))
+	return resolved != nil
+}
+
+// A manifest failure had no way to close. The recovery signal the runtime path
+// uses is a successful JS startup, and an update that fails to launch natively
+// never produces one, so the row stayed open forever and its update read 0%
+// health long after the fleet had moved on.
+//
+// What closes it is where the device went next, and the DIRECTION is the whole
+// rule: forward means recovered, backward is the rollback itself.
+func TestMovingForwardResolvesAFailureAndRollingBackDoesNot(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	line := seedLineage(t, pool, appID, 3)
+	older, failed, newer := line[0], line[1], line[2]
+
+	stuck, moved := uuid.NewString(), uuid.NewString()
+	later := time.Now().UTC().Add(time.Minute)
+
+	for _, device := range []string{stuck, moved} {
+		require.NoError(t, store.TouchDevice(ctx, appID, device, nil, nil, DeviceInfo{}))
+		require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{failed}, "boom", FailureTypeUpdate))
+	}
+
+	// The rollback: expo-updates could not launch it, so the device is back on
+	// the previous release. It is still stuck on this failure.
+	require.NoError(t, store.TouchDevice(ctx, appID, stuck, nil,
+		&CurrentUpdate{ID: older, ObservedAt: later}, DeviceInfo{}))
+	require.False(t, failureResolved(t, pool, appID, stuck, failed, FailureTypeUpdate),
+		"a device that rolled BACK is exactly the device still suffering from this update")
+
+	// The fix ships and the device takes it.
+	require.NoError(t, store.TouchDevice(ctx, appID, moved, nil,
+		&CurrentUpdate{ID: newer, ObservedAt: later}, DeviceInfo{}))
+	require.True(t, failureResolved(t, pool, appID, moved, failed, FailureTypeUpdate),
+		"a device that moved past the update is no longer failing on it")
+
+	// And the resolution has to reach ClickHouse, or the projected history
+	// keeps counting a device the live state stopped counting.
+	var recovered int
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM device_health_outbox
+		WHERE app_id = $1 AND eas_client_id = $2 AND update_id = $3 AND event_type = 'recovered'`,
+		appID, moved, failed).Scan(&recovered))
+	require.Equal(t, 1, recovered, "resolving must enqueue the recovery for the projection")
+}
+
+// Running the update again clears a manifest failure, because it means the
+// update launched after all. It must NOT clear a runtime failure: there,
+// running the update is the failing state, since the device launches it and
+// then crashes in JS. Clearing on that signal would wipe every JS crash on the
+// device's next manifest poll.
+func TestRunningTheUpdateClearsAManifestFailureButNotAJSCrash(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	line := seedLineage(t, pool, appID, 1)
+	update := line[0]
+	device := uuid.NewString()
+	later := time.Now().UTC().Add(time.Minute)
+
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil, nil, DeviceInfo{}))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{update}, "boom", FailureTypeUpdate))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{update}, "TypeError", FailureTypeRuntime))
+
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil,
+		&CurrentUpdate{ID: update, ObservedAt: later}, DeviceInfo{}))
+
+	require.True(t, failureResolved(t, pool, appID, device, update, FailureTypeUpdate),
+		"the update it could not launch is the update it is now running")
+	require.False(t, failureResolved(t, pool, appID, device, update, FailureTypeRuntime),
+		"a device crashing in JS reports this update as current on every poll")
+}
+
+// Resolution follows one line of releases. Another branch, another runtime or
+// another platform is another lineage, and a higher id there says nothing
+// about this device's update.
+func TestMovingForwardOnAnotherLineageResolvesNothing(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	failed := seedLineage(t, pool, appID, 1)[0]
+	elsewhere := seedLineage(t, pool, appID, 1)[0] // published after, other branch
+	device := uuid.NewString()
+
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil, nil, DeviceInfo{}))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{failed}, "boom", FailureTypeUpdate))
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil,
+		&CurrentUpdate{ID: elsewhere, ObservedAt: time.Now().UTC().Add(time.Minute)}, DeviceInfo{}))
+
+	require.False(t, failureResolved(t, pool, appID, device, failed, FailureTypeUpdate),
+		"a newer update on another branch does not mean this one was fixed")
+}
+
+// The poll that reports a fresh failure also reports what the device is
+// running. That must not close the failure it just opened.
+func TestAFailureReportedByTheSamePollStaysOpen(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	line := seedLineage(t, pool, appID, 2)
+	failed, older := line[1], line[0]
+	device := uuid.NewString()
+
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil, nil, DeviceInfo{}))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{failed}, "boom", FailureTypeUpdate))
+	// Same instant, which is what a single poll looks like: the strict
+	// comparison on last_seen_at makes the failure win the tie.
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil,
+		&CurrentUpdate{ID: older, ObservedAt: time.Now().UTC().Add(-time.Minute)}, DeviceInfo{}))
+	require.False(t, failureResolved(t, pool, appID, device, failed, FailureTypeUpdate))
+}
+
+// The case that made the whole rule inert. expo-updates keeps listing a failed
+// update in Expo-Recent-Failed-Update-IDs for a while after the fact, so every
+// poll re-records the failure and stamps last_seen_at with the database clock,
+// which runs AFTER the request timestamp the resolution compares against. A
+// guard requiring last_seen_at < observed_at was therefore false on every poll,
+// for exactly the devices that had already moved on and needed clearing.
+func TestAStickyFailureReportDoesNotBlockResolutionAfterMovingOn(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+	line := seedLineage(t, pool, appID, 2)
+	failed, newer := line[0], line[1]
+	device := uuid.NewString()
+
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil, nil, DeviceInfo{}))
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{failed}, "boom", FailureTypeUpdate))
+
+	// The device is on the fix now, and its poll STILL carries the old failed
+	// id, re-stamping last_seen_at after the instant the poll was received.
+	pollInstant := time.Now().UTC()
+	require.NoError(t, store.RecordUpdateFailures(ctx, appID, device, []string{failed}, "", FailureTypeUpdate))
+	require.NoError(t, store.TouchDevice(ctx, appID, device, nil,
+		&CurrentUpdate{ID: newer, ObservedAt: pollInstant}, DeviceInfo{}))
+
+	require.True(t, failureResolved(t, pool, appID, device, failed, FailureTypeUpdate),
+		"a device that has moved past the update is clear, whatever its poll keeps repeating")
+}

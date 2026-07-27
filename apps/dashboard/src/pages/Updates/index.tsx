@@ -250,13 +250,18 @@ export const Updates = () => {
 
   const updates = useMemo(() => query.data?.pages.flatMap(page => page.items) ?? [], [query.data]);
   const healthIdBatches = useMemo(() => {
+    // Every update on the page, not only the ones the feed marks health
+    // relevant. That flag means "heads its branch, or is the control of a
+    // running rollout", which is not the same thing as "has devices on it":
+    // the moment a release is rolled back, the version the fleet returns TO
+    // stops being relevant and its device count vanished from the table
+    // exactly when it started to matter.
+    //
+    // Asking for all of them is close to free. The feed is paginated, the ids
+    // go out in batches, and the counts are GROUP BYs over an index on
+    // (app_id, current_update_id) where an abandoned update matches nothing.
     const updateUUIDs = Array.from(
-      new Set(
-        updates
-          .filter(update => update.healthRelevant)
-          .map(update => update.updateUUID)
-          .filter(isUuid)
-      )
+      new Set(updates.map(update => update.updateUUID).filter(isUuid))
     );
     const batches: string[][] = [];
     for (let index = 0; index < updateUUIDs.length; index += healthBatchSize) {
@@ -625,10 +630,12 @@ export const Updates = () => {
                 const rolloutPercentage = group.updates.find(
                   update => update.rolloutPercentage != null
                 )?.rolloutPercentage;
+                // Summed over every update of the group, not only the ones
+                // heading their branch: a group is one publish across
+                // platforms, and dropping the members that have been
+                // superseded understated a fleet that had rolled back onto it.
                 const groupHealth = aggregateUpdateHealth(
-                  group.updates
-                    .filter(update => update.healthRelevant)
-                    .map(update => healthByUuid[update.updateUUID])
+                  group.updates.map(update => healthByUuid[update.updateUUID])
                 );
                 return (
                   <Fragment key={group.key}>
@@ -736,17 +743,20 @@ export const Updates = () => {
                           <TableCell>
                             <PlatformIcon platform={update.platform} />
                           </TableCell>
+                          {/* Every update carries its own figures, whether or
+                              not it still heads its branch. A dash now means
+                              "not measured yet", never "no longer the current
+                              one": a version the fleet rolled back TO is the
+                              case where the count matters most, and it stops
+                              being health relevant at the exact moment it
+                              starts carrying devices again. */}
                           <TableCell className="text-right font-medium tabular-nums">
-                            {update.healthRelevant && healthByUuid[update.updateUUID]
+                            {healthByUuid[update.updateUUID]
                               ? healthByUuid[update.updateUUID].devicesOnUpdate.toLocaleString()
                               : '—'}
                           </TableCell>
                           <TableCell>
-                            {update.healthRelevant ? (
-                              <HealthBadge health={healthByUuid[update.updateUUID]} />
-                            ) : (
-                              <span className="text-muted-foreground/60">—</span>
-                            )}
+                            <HealthBadge health={healthByUuid[update.updateUUID]} />
                           </TableCell>
                           <TableCell>
                             <CommitLabel value={update.commitHash} />

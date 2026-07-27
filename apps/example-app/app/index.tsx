@@ -20,6 +20,16 @@ import { UpdatesLogViewer } from '@/components/LogViewer'
 export default function HomeScreen() {
   const [loading, load] = useState<boolean>(false)
   const [logs, setLogs] = useState<Updates.UpdatesLogEntry[]>([])
+
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const randomCrash = () => {
+    // Random throw an error 50% of time
+    if (Math.random() < 0.5) {
+      throw new Error('Random crash!')
+    }
+  }
+
   useEffect(() => {
     const fetchLogs = async () => {
       try {
@@ -31,15 +41,9 @@ export default function HomeScreen() {
     }
 
     fetchLogs()
-    randomCrash()
+    // randomCrash()
   }, [])
 
-  const randomCrash = () => {
-    // Random throw an error 50% of time
-    if (Math.random() < 0.5) {
-      throw new Error('Random crash!')
-    }
-  }
 
   const checkUpdates = async () => {
     if (__DEV__ || loading || Platform.OS === 'web') {

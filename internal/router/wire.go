@@ -111,6 +111,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// Historical health is optional and ClickHouse-backed. Its handler is
 	// always wired so no-ClickHouse deployments can report available=false.
 	var healthHistory *observe.HealthHistory
+	// The fallback series, drawn from PostgreSQL's live state for deployments
+	// that run no ClickHouse. It needs the engine, which only exists in control
+	// plane mode, so it stays nil elsewhere and the handler says so.
+	var stateHistory *observe.StateHistory
 	var explorer *observe.Explorer
 	// Records device check-ins into the universal registry, debounced; nil
 	// only in stateless mode, where polls and ingestion are side-effect free.
@@ -149,6 +153,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		migrations.SetEngine(dbEngine)
 		postgres.RunDBMigrations(dbUrl)
 
+		stateHistory = observe.NewStateHistory(dbEngine)
 		authRepo = store.NewPostgresAuthStore(dbEngine)
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
@@ -311,7 +316,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		UsersHandler:                dashhandlers.NewUsersHandler(userService),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
-		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory),
+		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory, stateHistory),
 		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
 	}

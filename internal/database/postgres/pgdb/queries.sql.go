@@ -3131,26 +3131,6 @@ type ListCurrentUpdateHealthSnapshotsRow struct {
 	RuntimeIssues     int64       `json:"runtime_issues"`
 }
 
-// Absolute current health for every update the fleet is on. Three kinds of
-// row, and they answer different questions:
-//
-//	current/candidate  the newest checked update of each branch/runtime/
-//	                   platform, and control, the update an active rollout
-//	                   runs against. Their health score is what you watch
-//	                   during a release.
-//	legacy             every other update devices are still running. Its
-//	                   health is settled, but "how many are stuck on the
-//	                   version from three months ago" is a question an OTA
-//	                   operator has to be able to answer, and it can only be
-//	                   answered if the series was recorded while it was true.
-//
-// The legacy arm is bounded by where the fleet actually sits, not by how much
-// has ever been published: an app with a thousand updates has devices on a
-// handful of them. Adoption is counted once for every update in a single
-// grouped pass over (app_id, current_update_id), which is indexed, rather
-// than once per update.
-//
-// The ClickHouse worker samples these rows into one-minute buckets.
 func (q *Queries) ListCurrentUpdateHealthSnapshots(ctx context.Context) ([]ListCurrentUpdateHealthSnapshotsRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentUpdateHealthSnapshots)
 	if err != nil {
@@ -3663,6 +3643,149 @@ func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
 			&i.Permissions,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUpdateHealthStateDeltas = `-- name: ListUpdateHealthStateDeltas :many
+SELECT d.update_uuid,
+       d.idx AS bucket_index,
+       SUM(d.adopted)::bigint AS adopted_delta,
+       SUM(d.failing)::bigint AS failing_delta
+FROM (
+    SELECT di.current_update_id AS update_uuid,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(di.current_update_observed_at, $1::timestamptz) - $1::timestamptz
+           )) / $2::int)::int AS idx,
+           1 AS adopted,
+           0 AS failing
+    FROM device_identity di
+    WHERE di.app_id = $3
+      AND di.current_update_id = ANY($4::uuid[])
+      AND di.current_update_observed_at IS NOT NULL
+      AND di.current_update_observed_at <= $5::timestamptz
+
+    UNION ALL
+
+    SELECT f.update_id,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(f.first_seen_at, $1::timestamptz) - $1::timestamptz
+           )) / $2::int)::int,
+           0,
+           1
+    FROM device_update_failures f
+    WHERE f.app_id = $3
+      AND f.update_id = ANY($4::uuid[])
+      AND f.first_seen_at <= $5::timestamptz
+
+    UNION ALL
+
+    -- The other end of a fault that cleared. Without it the failure curve
+    -- would be cumulative too, and a fleet that recovered would read as a
+    -- fleet that never did.
+    SELECT f.update_id,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(f.resolved_at, $1::timestamptz) - $1::timestamptz
+           )) / $2::int)::int,
+           0,
+           -1
+    FROM device_update_failures f
+    WHERE f.app_id = $3
+      AND f.update_id = ANY($4::uuid[])
+      AND f.resolved_at IS NOT NULL
+      AND f.resolved_at <= $5::timestamptz
+) d
+GROUP BY d.update_uuid, d.idx
+ORDER BY d.update_uuid, d.idx
+`
+
+type ListUpdateHealthStateDeltasParams struct {
+	FromTs      pgtype.Timestamptz `json:"from_ts"`
+	StepSeconds int32              `json:"step_seconds"`
+	AppID       pgtype.UUID        `json:"app_id"`
+	UpdateIds   []pgtype.UUID      `json:"update_ids"`
+	ToTs        pgtype.Timestamptz `json:"to_ts"`
+}
+
+type ListUpdateHealthStateDeltasRow struct {
+	UpdateUuid   pgtype.UUID `json:"update_uuid"`
+	BucketIndex  int32       `json:"bucket_index"`
+	AdoptedDelta int64       `json:"adopted_delta"`
+	FailingDelta int64       `json:"failing_delta"`
+}
+
+// Absolute current health for every update the fleet is on. Three kinds of
+// row, and they answer different questions:
+//
+//	current/candidate  the newest checked update of each branch/runtime/
+//	                   platform, and control, the update an active rollout
+//	                   runs against. Their health score is what you watch
+//	                   during a release.
+//	legacy             every other update devices are still running. Its
+//	                   health is settled, but "how many are stuck on the
+//	                   version from three months ago" is a question an OTA
+//	                   operator has to be able to answer, and it can only be
+//	                   answered if the series was recorded while it was true.
+//
+// The legacy arm is bounded by where the fleet actually sits, not by how much
+// has ever been published: an app with a thousand updates has devices on a
+// handful of them. Adoption is counted once for every update in a single
+// grouped pass over (app_id, current_update_id), which is indexed, rather
+// than once per update.
+//
+// The ClickHouse worker samples these rows into one-minute buckets.
+// What PostgreSQL alone can say about an update over time, for deployments
+// with no ClickHouse. It is NOT the same answer as the projected history, and
+// the difference is worth stating precisely because only one of the two series
+// below is honest about the past.
+//
+// Failures are exact. device_update_failures keeps both ends of every fault
+// (first_seen_at, and resolved_at when a runtime issue recovers), so a count at
+// an instant is a real count at that instant, and the curve can fall as well as
+// rise.
+//
+// Arrivals are not, and cannot be. device_identity holds one row per device,
+// overwritten: it records when a device ARRIVED on the update it is running
+// now, never when it left the one before. So the only population reachable here
+// is "devices still on this update today", dated by when each of them arrived.
+// That curve is exact at its right edge and increasingly revisionist the
+// further back it is read, because every device that has since moved away was
+// erased from its own history. It can only ever rise: a rollback does not show
+// as a fall, it shows as a peak that was never there.
+//
+// Deltas rather than a count per bucket, which would have meant a full scan of
+// device_identity per point on the chart. Anything older than the window is
+// folded into bucket zero so the caller's running total starts at what was
+// already there rather than at nothing. The caller holds the window start and
+// the step, so it turns an index back into an instant and carries the running
+// sum itself.
+func (q *Queries) ListUpdateHealthStateDeltas(ctx context.Context, arg ListUpdateHealthStateDeltasParams) ([]ListUpdateHealthStateDeltasRow, error) {
+	rows, err := q.db.Query(ctx, listUpdateHealthStateDeltas,
+		arg.FromTs,
+		arg.StepSeconds,
+		arg.AppID,
+		arg.UpdateIds,
+		arg.ToTs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUpdateHealthStateDeltasRow
+	for rows.Next() {
+		var i ListUpdateHealthStateDeltasRow
+		if err := rows.Scan(
+			&i.UpdateUuid,
+			&i.BucketIndex,
+			&i.AdoptedDelta,
+			&i.FailingDelta,
 		); err != nil {
 			return nil, err
 		}
@@ -4258,6 +4381,95 @@ func (q *Queries) ResolveDeviceRuntimeFailure(ctx context.Context, arg ResolveDe
 		arg.EasClientID,
 		arg.UpdateUuid,
 		arg.OccurredAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resolveDeviceUpdateFailures = `-- name: ResolveDeviceUpdateFailures :execrows
+UPDATE device_update_failures failure
+SET resolved_at = $4
+FROM updates running
+JOIN branches running_branch ON running_branch.id = running.branch_id,
+     updates failed
+WHERE failure.app_id = $1
+  AND failure.eas_client_id = $2
+  AND failure.resolved_at IS NULL
+  AND running_branch.app_id = $1
+  AND running.update_uuid = $3
+  AND running.checked_at IS NOT NULL
+  AND failed.update_uuid = failure.update_id
+  AND (
+      (failed.branch_id = running.branch_id
+       AND failed.runtime_version_id = running.runtime_version_id
+       AND failed.platform = running.platform
+       AND failed.id < running.id)
+      OR (failed.id = running.id
+          AND failure.failure_type = 'update_issue'
+          AND failure.last_seen_at < $4)
+     )
+`
+
+type ResolveDeviceUpdateFailuresParams struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	EasClientID pgtype.UUID        `json:"eas_client_id"`
+	UpdateUuid  pgtype.UUID        `json:"update_uuid"`
+	ObservedAt  pgtype.Timestamptz `json:"observed_at"`
+}
+
+// A rollback that stopped being one. Manifest failures (update_issue) had no
+// resolution path at all: a device reports the update it could not launch, and
+// that row stayed open forever, because the recovery signal the runtime path
+// uses is a successful JS startup and a native launch failure never produces
+// one. An update the whole fleet had long moved past therefore kept every
+// failure it ever collected, and since its live population was zero, its
+// health read 0% for good.
+//
+// Two ways a device stops being stuck, and both are visible on the manifest
+// poll alone, with no telemetry involved.
+//
+// It has moved PAST the update, onto a later one of the same branch, runtime
+// and platform. Ordered on updates.id rather than on a timestamp: two
+// platforms published in the same second would otherwise resolve each other's
+// failures. The direction is what carries the meaning. A rollback lands on an
+// OLDER update, so the failure stays open and the device stays counted as
+// stuck; an upgrade lands on a newer one, so it closes. This holds for BOTH
+// kinds of failure: a device that crashed in JS on an update it has since left
+// behind is no longer failing on it either.
+//
+// Or it is running the very update it failed on, which means that update
+// launched after all. Restricted to update_issue, and the restriction is the
+// whole point: for a runtime failure, running the update IS the failing state,
+// since the device launches it and then crashes in JS. Resolving on that
+// signal would clear every JS crash on the next manifest poll. Those clear
+// through ResolveDeviceRuntimeFailure below, on a successful startup.
+//
+// The consequence is worth stating: faulty devices now means "stuck on this
+// update now" rather than "failed on it once". A bad release stops being
+// visible here once the fleet has moved on, and that history lives in the
+// ClickHouse projection instead, which is the only place that can keep it.
+//
+// The strict comparison on last_seen_at belongs to that second case ONLY, where
+// it settles a genuine ambiguity: the same poll saying "I run this update" and
+// "this update failed" must leave the failure open. There is no such ambiguity
+// when the device has moved past the update, and applying the guard there was
+// a bug that made the whole rule inert. expo-updates keeps listing a failed id
+// in Expo-Recent-Failed-Update-IDs for a while after the fact, so every poll
+// rewrote last_seen_at to the poll instant, which is stamped by the database
+// AFTER the request timestamp the resolution compares against. The comparison
+// was therefore false forever, for exactly the devices the rule exists to
+// clear.
+// The join to the failed update lives in the WHERE, not in an ON clause: the
+// row being updated is not part of the FROM list, so a JOIN condition cannot
+// reference it and the predicate would silently match nothing.
+func (q *Queries) ResolveDeviceUpdateFailures(ctx context.Context, arg ResolveDeviceUpdateFailuresParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveDeviceUpdateFailures,
+		arg.AppID,
+		arg.EasClientID,
+		arg.UpdateUuid,
+		arg.ObservedAt,
 	)
 	if err != nil {
 		return 0, err

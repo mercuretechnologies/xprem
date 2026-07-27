@@ -10,6 +10,7 @@ import (
 	"expo-open-ota/internal/database"
 	"expo-open-ota/internal/database/postgres/pgdb"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -692,7 +693,7 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		return fmt.Errorf("touching device: %w", err)
 	}
 	if rows == 1 {
-		return nil
+		return s.resolveUpdateFailures(ctx, appUUID, clientUUID, currentUpdate, observedAt)
 	}
 
 	register := pgdb.RegisterDeviceParams{
@@ -712,6 +713,35 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	// Two racers both landing here is absorbed by the upsert's ON CONFLICT.
 	if _, err := s.engine.RegisterDevice(ctx, register); err != nil {
 		return fmt.Errorf("registering device: %w", err)
+	}
+	return s.resolveUpdateFailures(ctx, appUUID, clientUUID, currentUpdate, observedAt)
+}
+
+// resolveUpdateFailures closes the manifest failures this poll disproves: the
+// device is running an update it had reported as failed, or it has moved past
+// one onto a later release of the same lineage.
+//
+// Runs after the touch rather than before, and after the recorder has stored
+// this poll's failures, so a poll that carries both a current update and a
+// fresh failure leaves that failure open. Best effort by design: it is a
+// correction to a count on a dashboard, and a device whose manifest was served
+// must not be handed an error because a bookkeeping update failed.
+func (s *PostgresIdentityStore) resolveUpdateFailures(
+	ctx context.Context,
+	appUUID, clientUUID, currentUpdate pgtype.UUID,
+	observedAt pgtype.Timestamptz,
+) error {
+	// No named update means the poll says nothing about what the device runs.
+	if !currentUpdate.Valid {
+		return nil
+	}
+	if _, err := s.engine.ResolveDeviceUpdateFailures(ctx, pgdb.ResolveDeviceUpdateFailuresParams{
+		AppID:       appUUID,
+		EasClientID: clientUUID,
+		UpdateUuid:  currentUpdate,
+		ObservedAt:  observedAt,
+	}); err != nil {
+		log.Printf("identity: resolving update failures failed: %v", err)
 	}
 	return nil
 }
@@ -852,6 +882,17 @@ func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID str
 	health := make(map[string]UpdateHealth, len(ids))
 	if len(ids) == 0 {
 		return health, nil
+	}
+	// Every id asked about gets an answer, including zero. The two queries
+	// below are GROUP BYs, so an update nobody runs and nobody failed on comes
+	// back from neither, and a caller reading a missing key cannot tell "no
+	// devices" from "not measured". On the updates feed those render as the
+	// same dash, which is the difference between "everyone left this version"
+	// and "we did not look".
+	for _, raw := range updateIDs {
+		if _, err := toPgUUID(raw); err == nil {
+			health[raw] = UpdateHealth{}
+		}
 	}
 
 	active, err := s.engine.DevicesOnUpdateByIDs(ctx, pgdb.DevicesOnUpdateByIDsParams{AppID: appUUID, UpdateIds: ids})

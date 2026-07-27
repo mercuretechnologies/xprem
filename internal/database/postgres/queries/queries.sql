@@ -1667,6 +1667,74 @@ ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
         ELSE device_update_failures.fatal_error
     END;
 
+-- A rollback that stopped being one. Manifest failures (update_issue) had no
+-- resolution path at all: a device reports the update it could not launch, and
+-- that row stayed open forever, because the recovery signal the runtime path
+-- uses is a successful JS startup and a native launch failure never produces
+-- one. An update the whole fleet had long moved past therefore kept every
+-- failure it ever collected, and since its live population was zero, its
+-- health read 0% for good.
+--
+-- Two ways a device stops being stuck, and both are visible on the manifest
+-- poll alone, with no telemetry involved.
+--
+-- It has moved PAST the update, onto a later one of the same branch, runtime
+-- and platform. Ordered on updates.id rather than on a timestamp: two
+-- platforms published in the same second would otherwise resolve each other's
+-- failures. The direction is what carries the meaning. A rollback lands on an
+-- OLDER update, so the failure stays open and the device stays counted as
+-- stuck; an upgrade lands on a newer one, so it closes. This holds for BOTH
+-- kinds of failure: a device that crashed in JS on an update it has since left
+-- behind is no longer failing on it either.
+--
+-- Or it is running the very update it failed on, which means that update
+-- launched after all. Restricted to update_issue, and the restriction is the
+-- whole point: for a runtime failure, running the update IS the failing state,
+-- since the device launches it and then crashes in JS. Resolving on that
+-- signal would clear every JS crash on the next manifest poll. Those clear
+-- through ResolveDeviceRuntimeFailure below, on a successful startup.
+--
+-- The consequence is worth stating: faulty devices now means "stuck on this
+-- update now" rather than "failed on it once". A bad release stops being
+-- visible here once the fleet has moved on, and that history lives in the
+-- ClickHouse projection instead, which is the only place that can keep it.
+--
+-- The strict comparison on last_seen_at belongs to that second case ONLY, where
+-- it settles a genuine ambiguity: the same poll saying "I run this update" and
+-- "this update failed" must leave the failure open. There is no such ambiguity
+-- when the device has moved past the update, and applying the guard there was
+-- a bug that made the whole rule inert. expo-updates keeps listing a failed id
+-- in Expo-Recent-Failed-Update-IDs for a while after the fact, so every poll
+-- rewrote last_seen_at to the poll instant, which is stamped by the database
+-- AFTER the request timestamp the resolution compares against. The comparison
+-- was therefore false forever, for exactly the devices the rule exists to
+-- clear.
+-- name: ResolveDeviceUpdateFailures :execrows
+UPDATE device_update_failures failure
+SET resolved_at = sqlc.arg(observed_at)
+-- The join to the failed update lives in the WHERE, not in an ON clause: the
+-- row being updated is not part of the FROM list, so a JOIN condition cannot
+-- reference it and the predicate would silently match nothing.
+FROM updates running
+JOIN branches running_branch ON running_branch.id = running.branch_id,
+     updates failed
+WHERE failure.app_id = $1
+  AND failure.eas_client_id = $2
+  AND failure.resolved_at IS NULL
+  AND running_branch.app_id = $1
+  AND running.update_uuid = $3
+  AND running.checked_at IS NOT NULL
+  AND failed.update_uuid = failure.update_id
+  AND (
+      (failed.branch_id = running.branch_id
+       AND failed.runtime_version_id = running.runtime_version_id
+       AND failed.platform = running.platform
+       AND failed.id < running.id)
+      OR (failed.id = running.id
+          AND failure.failure_type = 'update_issue'
+          AND failure.last_seen_at < sqlc.arg(observed_at))
+     );
+
 -- Successful JS startup. Recording the watermark even without an existing
 -- failure prevents a delayed older crash from regressing the device. Strict
 -- comparison makes a crash win timestamp ties.
@@ -1843,6 +1911,82 @@ DELETE FROM device_health_outbox;
 -- than once per update.
 --
 -- The ClickHouse worker samples these rows into one-minute buckets.
+-- What PostgreSQL alone can say about an update over time, for deployments
+-- with no ClickHouse. It is NOT the same answer as the projected history, and
+-- the difference is worth stating precisely because only one of the two series
+-- below is honest about the past.
+--
+-- Failures are exact. device_update_failures keeps both ends of every fault
+-- (first_seen_at, and resolved_at when a runtime issue recovers), so a count at
+-- an instant is a real count at that instant, and the curve can fall as well as
+-- rise.
+--
+-- Arrivals are not, and cannot be. device_identity holds one row per device,
+-- overwritten: it records when a device ARRIVED on the update it is running
+-- now, never when it left the one before. So the only population reachable here
+-- is "devices still on this update today", dated by when each of them arrived.
+-- That curve is exact at its right edge and increasingly revisionist the
+-- further back it is read, because every device that has since moved away was
+-- erased from its own history. It can only ever rise: a rollback does not show
+-- as a fall, it shows as a peak that was never there.
+--
+-- Deltas rather than a count per bucket, which would have meant a full scan of
+-- device_identity per point on the chart. Anything older than the window is
+-- folded into bucket zero so the caller's running total starts at what was
+-- already there rather than at nothing. The caller holds the window start and
+-- the step, so it turns an index back into an instant and carries the running
+-- sum itself.
+-- name: ListUpdateHealthStateDeltas :many
+SELECT d.update_uuid,
+       d.idx AS bucket_index,
+       SUM(d.adopted)::bigint AS adopted_delta,
+       SUM(d.failing)::bigint AS failing_delta
+FROM (
+    SELECT di.current_update_id AS update_uuid,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(di.current_update_observed_at, @from_ts::timestamptz) - @from_ts::timestamptz
+           )) / @step_seconds::int)::int AS idx,
+           1 AS adopted,
+           0 AS failing
+    FROM device_identity di
+    WHERE di.app_id = @app_id
+      AND di.current_update_id = ANY(@update_ids::uuid[])
+      AND di.current_update_observed_at IS NOT NULL
+      AND di.current_update_observed_at <= @to_ts::timestamptz
+
+    UNION ALL
+
+    SELECT f.update_id,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(f.first_seen_at, @from_ts::timestamptz) - @from_ts::timestamptz
+           )) / @step_seconds::int)::int,
+           0,
+           1
+    FROM device_update_failures f
+    WHERE f.app_id = @app_id
+      AND f.update_id = ANY(@update_ids::uuid[])
+      AND f.first_seen_at <= @to_ts::timestamptz
+
+    UNION ALL
+
+    -- The other end of a fault that cleared. Without it the failure curve
+    -- would be cumulative too, and a fleet that recovered would read as a
+    -- fleet that never did.
+    SELECT f.update_id,
+           floor(EXTRACT(EPOCH FROM (
+               GREATEST(f.resolved_at, @from_ts::timestamptz) - @from_ts::timestamptz
+           )) / @step_seconds::int)::int,
+           0,
+           -1
+    FROM device_update_failures f
+    WHERE f.app_id = @app_id
+      AND f.update_id = ANY(@update_ids::uuid[])
+      AND f.resolved_at IS NOT NULL
+      AND f.resolved_at <= @to_ts::timestamptz
+) d
+GROUP BY d.update_uuid, d.idx
+ORDER BY d.update_uuid, d.idx;
+
 -- name: ListCurrentUpdateHealthSnapshots :many
 WITH latest AS (
     SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)

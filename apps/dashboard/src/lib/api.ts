@@ -254,10 +254,37 @@ export type UpdateHealthSegmentsResponse = {
   segments: Record<string, UpdateHealthSegmentPoint[]>;
 };
 
-export type UpdateHealthHistoryResponse = {
-  available: boolean;
-  updates: Record<string, UpdateHealthHistoryPoint[]>;
+// What PostgreSQL alone can reconstruct, served when the deployment runs no
+// ClickHouse. Two counts, and only one of them is honest about the past, which
+// is why they are named for what they measure rather than for the curve they
+// happen to draw.
+export type UpdateStateHistoryPoint = {
+  timestamp: string;
+  // Devices running this update TODAY, placed at the moment each arrived on
+  // it. Rises only: nothing records when a device leaves an update, so one
+  // that has moved away is absent from the whole curve, including the stretch
+  // where it really was running this update.
+  arrivedDevices: number;
+  // Devices with an unresolved fault at that instant. Exact, and free to fall:
+  // faults carry both ends.
+  failingDevices: number;
 };
+
+// Discriminated on `source`, deliberately. The two payloads answer different
+// questions and their fields are named differently for the same reason, so a
+// caller that forgets to branch fails to read the data rather than drawing one
+// under the other's labels.
+export type UpdateHealthHistoryResponse =
+  | {
+      available: boolean;
+      source?: 'projected' | 'none';
+      updates: Record<string, UpdateHealthHistoryPoint[]>;
+    }
+  | {
+      available: boolean;
+      source: 'state';
+      updates: Record<string, UpdateStateHistoryPoint[]>;
+    };
 
 export type IdentityValueType = 'string' | 'number' | 'boolean';
 

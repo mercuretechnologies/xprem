@@ -14,6 +14,7 @@ import {
 } from '@/ee/components/charts/TimeSeriesChart';
 import { Skeleton } from '@/components/ui/skeleton';
 import { HealthRankTable } from '@/ee/components/HealthRankTable';
+import { UpdateStateHistory } from '@/ee/components/UpdateStateHistory';
 import { api, UpdateHealthHistoryPoint } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { cn } from '@/lib/utils';
@@ -235,13 +236,17 @@ export const UpdateHealthHistory = ({
     enabled: !!selectedAppId && updateUUIDs.length > 0,
     refetchInterval: live ? 5_000 : false,
   });
+  // The state payload is a different shape under the same key, so it is kept
+  // away from everything below: aggregateSeries reads devicesOnUpdate and
+  // friends, which that payload does not have.
+  const projected = query.data?.source === 'state' ? undefined : query.data;
   const aggregated = useMemo(
     () =>
       series.map(item => ({
         ...item,
-        points: aggregateSeries(item.updateUUIDs, query.data?.updates ?? {}),
+        points: aggregateSeries(item.updateUUIDs, projected?.updates ?? {}),
       })),
-    [query.data?.updates, series]
+    [projected?.updates, series]
   );
   const healthSeries = useMemo(
     () => toTimeSeries(aggregated, point => point.healthPercent),
@@ -298,6 +303,20 @@ export const UpdateHealthHistory = ({
     return <Skeleton className="h-80 w-full rounded-xl" />;
   }
   if (query.error || query.data?.available === false) return null;
+  // No telemetry storage: PostgreSQL's live state still yields two true
+  // curves, under their own labels and with their own caveat. Drawing them
+  // under this component's title would have promised a measurement they are
+  // not.
+  if (query.data?.source === 'state') {
+    return (
+      <UpdateStateHistory
+        pointsByUpdate={query.data.updates}
+        updateUUIDs={updateUUIDs}
+        annotations={annotations}
+        renderAnnotationDetails={renderAnnotationDetails}
+      />
+    );
+  }
   if (!hasPoints) {
     return (
       <div className="rounded-xl border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
