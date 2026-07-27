@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"expo-open-ota/ee/identity"
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"time"
 
@@ -138,6 +139,49 @@ func clampTimestamp(nano uint64, now time.Time) time.Time {
 // real model name or app version is far below this.
 const maxResourceValueRunes = 128
 
+// The content fields, bounded to the SAME limits the client already enforces
+// before it stores anything (expo-observe validation limits, section 6.4 of
+// the protocol). Mirroring them rather than inventing numbers means an honest
+// client is never truncated: it truncated itself first. What they stop is the
+// forged batch, which is where the danger was, because none of these columns
+// has a length of its own. ClickHouse String is unbounded, so a single record
+// could carry megabytes up to the 16MB body limit, and the per-batch record
+// ceiling counts records rather than bytes.
+//
+// The two LowCardinality columns matter most: that type builds a dictionary
+// per part and assumes a small set of distinct values, so arbitrary names are
+// exactly its pathological input.
+const (
+	// The client drops an event whose name exceeds this; the server truncates
+	// instead, keeping a record that is merely mislabeled over losing it.
+	maxEventNameRunes = 256
+	// The client truncates a body here, ellipsis included.
+	maxBodyRunes = 4096
+	// A route is a display name in the client's vocabulary.
+	maxRouteNameRunes = 128
+	// Not in the client's table: OTLP severity text is a word ("ERROR"), and
+	// it rides in a column shared with every other row.
+	maxSeverityTextRunes = 128
+	// Metric names come from a fixed vocabulary the SDK maps, so anything long
+	// is forged by construction.
+	maxMetricNameRunes = 256
+	// customParams is the user's params map serialized to a JSON string. Same
+	// budget as a body: it is free text as far as this server knows.
+	maxCustomParamsRunes = 4096
+)
+
+// The leftover record attributes, which land in one JSON string column. The
+// client keeps at most 128 per record, alphabetically, and counts the rest in
+// droppedAttributesCount; the count is mirrored here so the two agree on WHICH
+// survive. The byte ceiling is the server's own: 128 attributes say nothing
+// about their size, and the column would otherwise take whatever fits in the
+// request.
+const (
+	maxAttributesPerRecord = 128
+	maxAttributeValueRunes = 1024
+	maxAttributesBytes     = 16 * 1024
+)
+
 func truncateRunes(value string, limit int) string {
 	runes := []rune(value)
 	if len(runes) <= limit {
@@ -267,10 +311,10 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 			envelope.Timestamp = clampTimestamp(point.TimeUnixNano, now)
 			row := MetricRow{
 				Envelope:     envelope,
-				MetricName:   point.MetricName,
+				MetricName:   truncateRunes(point.MetricName, maxMetricNameRunes),
 				Value:        point.Value,
-				RouteName:    str(routeNameKey),
-				CustomParams: str(customParamsKey),
+				RouteName:    truncateRunes(str(routeNameKey), maxRouteNameRunes),
+				CustomParams: truncateRunes(str(customParamsKey), maxCustomParamsRunes),
 			}
 			// The raw nano (not the clamped time) goes into the hash so a
 			// retried batch hashes identically whenever it re-arrives.
@@ -313,11 +357,11 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 			envelope.Timestamp = clampTimestamp(record.TimeUnixNano, now)
 			row := LogRow{
 				Envelope:       envelope,
-				EventName:      eventName,
+				EventName:      truncateRunes(eventName, maxEventNameRunes),
 				SeverityNumber: record.SeverityNumber,
-				SeverityText:   record.SeverityText,
+				SeverityText:   truncateRunes(record.SeverityText, maxSeverityTextRunes),
 				IsFatal:        isFatal,
-				Body:           record.Body,
+				Body:           truncateRunes(record.Body, maxBodyRunes),
 			}
 			row.ContentHash = contentHash(
 				row.EASClientID, row.SessionID, row.UpdateID, row.EventName,
@@ -352,11 +396,43 @@ var (
 // encoding/json sorts map keys, so the output (and therefore the content
 // hash) is deterministic across retries of the same batch.
 func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
-	kept := make(map[string]any, len(attrs))
+	names := make([]string, 0, len(attrs))
 	for key, value := range attrs {
 		if envelope[key] || value == nil {
 			continue
 		}
+		names = append(names, key)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	// Alphabetical, which is the order the client retains in too: both ends
+	// then keep the same attributes when there are more than the ceiling.
+	sort.Strings(names)
+	if len(names) > maxAttributesPerRecord {
+		names = names[:maxAttributesPerRecord]
+	}
+
+	kept := make(map[string]any, len(names))
+	budget := maxAttributesBytes
+	for _, key := range names {
+		value := attrs[key]
+		if text, isText := value.(string); isText {
+			value = truncateRunes(text, maxAttributeValueRunes)
+		}
+		// Approximate, on purpose: this is a ceiling, not an accounting, and
+		// stopping one attribute early costs nothing next to marshalling the
+		// whole map again for every candidate.
+		cost := len(key) + 8
+		if text, isText := value.(string); isText {
+			cost += len(text)
+		} else {
+			cost += 64
+		}
+		if cost > budget {
+			break
+		}
+		budget -= cost
 		kept[key] = value
 	}
 	if len(kept) == 0 {

@@ -5,6 +5,8 @@
 package observe
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -227,4 +229,80 @@ func TestContentHashSeparatesFatalFromNonFatal(t *testing.T) {
 	warned := []byte(strings.Replace(string(plain), `"severityText":"INFO"`, `"severityText":"WARN"`, 1))
 	require.NotEqual(t, hashOfSingleLog(t, plain), hashOfSingleLog(t, warned),
 		"severity_text is stored, so it is part of what a row is")
+}
+
+// Every content field is bounded, at the same limits the client already
+// enforces before it stores anything. None of these columns has a length of
+// its own: ClickHouse String is unbounded, and the per-batch ceiling counts
+// records rather than bytes, so one forged record could otherwise carry
+// megabytes.
+func TestContentFieldsAreBounded(t *testing.T) {
+	huge := strings.Repeat("A", 200_000)
+	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"
+
+	logs := FlattenLogs("app-1", LogBatch{Resources: []ResourceLogs{{
+		Attributes: map[string]any{EASClientIDKey: client},
+		Records: []LogRecord{{
+			TimeUnixNano: uint64(flattenNow.UnixNano()),
+			Body:         huge,
+			SeverityText: huge,
+			Attributes:   map[string]any{EventNameKey: huge, "user.note": huge},
+		}},
+	}}}, flattenNow)
+	require.Len(t, logs, 1)
+	assert.Len(t, []rune(logs[0].Body), maxBodyRunes)
+	assert.Len(t, []rune(logs[0].EventName), maxEventNameRunes)
+	assert.Len(t, []rune(logs[0].SeverityText), maxSeverityTextRunes)
+	assert.LessOrEqual(t, len(logs[0].Attributes), maxAttributesBytes+1024,
+		"the attribute blob must stay inside its ceiling")
+
+	metrics := FlattenMetrics("app-1", MetricBatch{Resources: []ResourceMetrics{{
+		Attributes: map[string]any{EASClientIDKey: client},
+		Points: []MetricPoint{{
+			MetricName:   huge,
+			TimeUnixNano: uint64(flattenNow.UnixNano()),
+			Value:        1,
+			Attributes:   map[string]any{routeNameKey: huge, customParamsKey: huge},
+		}},
+	}}}, flattenNow)
+	require.Len(t, metrics, 1)
+	assert.Len(t, []rune(metrics[0].MetricName), maxMetricNameRunes)
+	assert.Len(t, []rune(metrics[0].RouteName), maxRouteNameRunes)
+	assert.Len(t, []rune(metrics[0].CustomParams), maxCustomParamsRunes)
+}
+
+// The attribute map is bounded in COUNT as well as in bytes, and the survivors
+// are the alphabetically first, which is the rule the client applies too: both
+// ends then keep the same attributes rather than each keeping its own set.
+func TestAttributeCountIsBoundedAlphabetically(t *testing.T) {
+	attrs := map[string]any{}
+	for i := 0; i < maxAttributesPerRecord+50; i++ {
+		attrs[fmt.Sprintf("k%04d", i)] = "v"
+	}
+	out := marshalAttributes(attrs, map[string]bool{})
+
+	var kept map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &kept))
+	assert.Len(t, kept, maxAttributesPerRecord)
+	assert.Contains(t, kept, "k0000", "the alphabetically first must survive")
+	assert.NotContains(t, kept, fmt.Sprintf("k%04d", maxAttributesPerRecord+49),
+		"the alphabetically last must be the one dropped")
+}
+
+// An honest client is never touched: it truncated itself first, so the server
+// bound must be a no-op on anything inside the contract.
+func TestBoundsLeaveAnHonestRecordAlone(t *testing.T) {
+	body := strings.Repeat("b", maxBodyRunes)
+	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"
+	logs := FlattenLogs("app-1", LogBatch{Resources: []ResourceLogs{{
+		Attributes: map[string]any{EASClientIDKey: client},
+		Records: []LogRecord{{
+			TimeUnixNano: uint64(flattenNow.UnixNano()),
+			Body:         body,
+			Attributes:   map[string]any{EventNameKey: "checkout_completed"},
+		}},
+	}}}, flattenNow)
+	require.Len(t, logs, 1)
+	assert.Equal(t, body, logs[0].Body, "a body at the contract limit passes whole")
+	assert.Equal(t, "checkout_completed", logs[0].EventName)
 }
