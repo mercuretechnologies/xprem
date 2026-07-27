@@ -2,10 +2,19 @@ package infrastructure
 
 import (
 	"expo-open-ota/ee/observe"
+	"expo-open-ota/internal/middleware"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 )
+
+// ingestReadDeadline bounds how long a batch may take to arrive. The body is
+// capped at 16MB and read in one shot, so a client with anything resembling a
+// working connection is done in well under this; what it refuses is the caller
+// that sends a byte at a time to hold a connection and a goroutine open. The
+// server only sets ReadHeaderTimeout, which does not cover a body.
+const ingestReadDeadline = 30 * time.Second
 
 // expo-observe ingestion (ee/observe), called by the SDK running inside every
 // installed app, all under one /observe prefix. The operator sets
@@ -29,6 +38,7 @@ func registerIngestRoutes(r *mux.Router, container *AppContainer) {
 	// app-background of every device) does not issue an uncached primary-key
 	// query per request.
 	observeSubrouter.Use(observe.CachedAppResolverMiddleware(container.AppRepo))
+	observeSubrouter.Use(middleware.NewReadDeadlineMiddleware(ingestReadDeadline))
 	observeSubrouter.HandleFunc("/{PROJECT_ID}/v1/logs", container.ObserveIngestHandler.HandleLogs).Methods(http.MethodPost)
 	observeSubrouter.HandleFunc("/{PROJECT_ID}/v1/metrics", container.ObserveIngestHandler.HandleMetrics).Methods(http.MethodPost)
 }

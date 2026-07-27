@@ -7,11 +7,29 @@ import (
 	"time"
 )
 
+// sweepInterval bounds how often a Set pays for a sweep. A minute is short
+// enough that a burst of one-minute keys does not outlive its usefulness by
+// much, and long enough that the sweep is amortised to nothing: one map walk
+// per minute against however many Sets happened in it.
+const sweepInterval = time.Minute
+
 type LocalCache struct {
 	items          map[string]CacheItem
 	setItems       map[string]map[string]struct{}
 	setExpirations map[string]*time.Time
-	mu             sync.RWMutex // RWMutex for safe concurrent access
+	// lastSweep is when expired entries were last dropped. Without it an
+	// expired key is only ever freed by a Get on that same key, so anything
+	// written once and never read again stays for the life of the process:
+	// unknown app ids, unknown update ids, stashed crash details, and one
+	// entry per device on a fleet of a million. Every one of those is written
+	// far more often than it is re-read.
+	//
+	// Swept from Set rather than from a goroutine on purpose. The map only
+	// grows through Set, so a cache nobody writes to needs no sweeping at all,
+	// and this way there is no ticker to stop, no lifecycle to own and nothing
+	// leaked by the many short-lived caches the tests build.
+	lastSweep time.Time
+	mu        sync.RWMutex // RWMutex for safe concurrent access
 }
 
 type CacheItem struct {
@@ -24,6 +42,26 @@ func NewLocalCache() *LocalCache {
 		items:          make(map[string]CacheItem),
 		setItems:       make(map[string]map[string]struct{}),
 		setExpirations: make(map[string]*time.Time),
+		lastSweep:      time.Now(),
+	}
+}
+
+// sweepLocked drops every entry whose TTL has passed. The caller holds the
+// write lock. Entries with no TTL are kept: they were written to live until
+// they are replaced or deleted, and dropping them here would be a cache miss
+// nobody asked for.
+func (c *LocalCache) sweepLocked(now time.Time) {
+	c.lastSweep = now
+	for key, item := range c.items {
+		if item.Expiration != nil && now.After(*item.Expiration) {
+			delete(c.items, key)
+		}
+	}
+	for key, expiration := range c.setExpirations {
+		if expiration != nil && now.After(*expiration) {
+			delete(c.setExpirations, key)
+			delete(c.setItems, key)
+		}
 	}
 }
 
@@ -64,6 +102,10 @@ func (c *LocalCache) Set(key string, value string, ttl *int) error {
 	c.items[withPrefix(key)] = CacheItem{
 		Value:      value,
 		Expiration: expiration,
+	}
+
+	if now := time.Now(); now.Sub(c.lastSweep) >= sweepInterval {
+		c.sweepLocked(now)
 	}
 	return nil
 }
