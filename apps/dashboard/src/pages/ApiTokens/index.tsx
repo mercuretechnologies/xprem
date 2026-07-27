@@ -18,7 +18,7 @@ import { ApiKeyRestrictionsSheet } from '@/ee/components/ApiKeyRestrictionsSheet
 export const ApiTokens = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   // Display gating only: the server re-checks the permission on its routes.
-  const canManageApiKeys = useAppPermission('apikeys:manage');
+  const canManageApiKeys = useAppPermission('apikeys:manage', 'admin-only');
   const { selectedAppId } = useSelectedApp();
   const { toast } = useToast();
   const queryClient = useQueryClient();

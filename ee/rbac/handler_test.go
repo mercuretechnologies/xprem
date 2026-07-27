@@ -138,7 +138,7 @@ func TestMyPermissionsHandler(t *testing.T) {
 	recorder := run(t, http.MethodGet, "/me/permissions", "", &services.DashboardPrincipal{UserId: "member-1"})
 	require.Equal(t, http.StatusOK, recorder.Code)
 	response := decode(recorder)
-	require.True(t, response.Enabled)
+	require.True(t, response.RBACEnabled)
 	require.False(t, response.IsAdmin)
 	require.Equal(t, map[string][]string{"app-1": {"branch:create"}}, response.Apps)
 
@@ -152,7 +152,7 @@ func TestMyPermissionsHandler(t *testing.T) {
 	run = newHandlerRig(NewRBACHandler(withLookup(unlicensedService(repo), lookup)))
 	recorder = run(t, http.MethodGet, "/me/permissions", "", &services.DashboardPrincipal{UserId: "member-1"})
 	response = decode(recorder)
-	require.False(t, response.Enabled)
+	require.False(t, response.RBACEnabled)
 	require.Nil(t, response.Apps)
 
 	// No session at all: refused.

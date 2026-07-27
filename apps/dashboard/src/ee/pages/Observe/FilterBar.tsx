@@ -8,6 +8,7 @@ import { Check, GitBranch, Pause, Radio, SlidersHorizontal, X } from 'lucide-rea
 import { api } from '@/lib/api';
 import { Combobox } from '@/components/Combobox';
 import { MultiSelect, MultiTextInput } from './MultiSelect';
+import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { AttributeFilters } from './AttributeFilters';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -177,6 +178,13 @@ export const FilterBar = ({
   ).filter(applies);
   const advancedCount = advancedKeys.filter(key => state[key].length > 0).length;
   const shows = (key: FilterKey) => advancedKeys.includes(key);
+  // The attribute filter reads the identity allowlist and the distinct values
+  // behind each key, which is the device registry rather than telemetry, and
+  // enumerating those values is exactly what identity:read protects. So it is
+  // hidden on its own permission: a member who may read telemetry but not
+  // browse devices keeps every other filter and simply does not get this one,
+  // instead of watching two requests 403 inside an open panel.
+  const canBrowseDevices = useAppPermission('identity:read', 'any-member');
 
   // The conditions are named by the same table that splits on them, so a
   // picker and the split it drills into always spell a value the same way.
@@ -314,7 +322,7 @@ export const FilterBar = ({
               </p>
             </div>
 
-            {shows('attributes') && (
+            {shows('attributes') && canBrowseDevices && (
               <div className="border-b pb-4">
                 <AttributeFilters
                   pairs={state.attributes}

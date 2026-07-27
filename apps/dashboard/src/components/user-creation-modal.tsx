@@ -30,7 +30,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }: CreateUserMo
   // While enterprise roles are enforced, a member created without a grant
   // sees an empty dashboard, so the modal offers the role assignment
   // directly. Without a license the modal keeps its community shape.
-  const { enabled: rbacEnabled } = usePermissions();
+  const { rbacEnabled } = usePermissions();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);

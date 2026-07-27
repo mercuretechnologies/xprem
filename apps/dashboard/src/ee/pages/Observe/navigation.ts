@@ -2,13 +2,8 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-import {
-  Braces,
-  Smartphone,
-  ChartNoAxesCombined,
-  Gauge,
-  MousePointerClick,
-} from 'lucide-react';
+import { Permission } from '@/ee/lib/PermissionsContext';
+import { Braces, Smartphone, ChartNoAxesCombined, Gauge, MousePointerClick } from 'lucide-react';
 
 // Each page answers one question an app team actually asks, which is why they
 // are named after the question and not after the table behind them. The order
@@ -35,9 +30,18 @@ export const observeNavigation: Array<{
   // Lowest expo-observe SDK that produces the data. Absent means the page
   // works with no SDK at all, from the manifest polls every client makes.
   minimumSdk?: number;
+  // What the account needs to open the page, mirroring the Access declaration
+  // the matching routes carry in internal/router/routes_app.go. Declared here
+  // rather than inside each view so the answer sits next to the page instead
+  // of being rediscovered in five components.
+  //
+  // The split follows what the data is, not the URL: the three telemetry pages
+  // read the Observe explorer, the two others read the device registry.
+  permission: Permission;
 }> = [
   {
     value: 'overview',
+    permission: 'observe:read',
     label: 'Overview',
     question: 'Is the app healthy right now?',
     icon: ChartNoAxesCombined,
@@ -45,6 +49,7 @@ export const observeNavigation: Array<{
   },
   {
     value: 'metrics',
+    permission: 'observe:read',
     label: 'Metrics',
     question: 'Is the served update group healthy, and is the app fast for everyone?',
     icon: Gauge,
@@ -52,6 +57,7 @@ export const observeNavigation: Array<{
   },
   {
     value: 'events',
+    permission: 'observe:read',
     label: 'Events',
     question: 'How is the app being used, and what exactly happened on a device?',
     icon: MousePointerClick,
@@ -60,6 +66,7 @@ export const observeNavigation: Array<{
   },
   {
     value: 'devices',
+    permission: 'identity:read',
     label: 'Devices',
     question: 'Which devices are out there, and what is on them?',
     icon: Smartphone,
@@ -67,6 +74,7 @@ export const observeNavigation: Array<{
   },
   {
     value: 'attributes',
+    permission: 'identity:read',
     label: 'Attributes',
     question: 'Which device metadata can I filter on?',
     icon: Braces,

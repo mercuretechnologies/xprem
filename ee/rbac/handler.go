@@ -222,12 +222,20 @@ func (h *RBACHandler) GetGrantSummaryHandler(w http.ResponseWriter, r *http.Requ
 }
 
 // MyPermissionsResponse tells the dashboard what to show the current account.
-// Enabled=false means fine-grained roles are not enforced (community rules:
-// isAdmin decides everything). For an admin, or when disabled, Apps is null.
+//
+// RBACEnabled answers "are fine-grained roles enforced right now", which needs
+// a control plane AND a valid enterprise license. False means the community
+// rules apply and isAdmin decides everything. It is named for the mechanism
+// and not just "enabled" because the accounts themselves carry an enabled
+// flag, and the two are unrelated: a disabled account cannot obtain a session
+// at all, which is settled long before this response is built.
+//
+// For an admin, or when roles are not enforced, Apps is null: there is nothing
+// per-app to say, the answer is the same everywhere.
 type MyPermissionsResponse struct {
-	Enabled bool                `json:"enabled"`
-	IsAdmin bool                `json:"isAdmin"`
-	Apps    map[string][]string `json:"apps"`
+	RBACEnabled bool                `json:"rbacEnabled"`
+	IsAdmin     bool                `json:"isAdmin"`
+	Apps        map[string][]string `json:"apps"`
 }
 
 // GetMyPermissionsHandler is display support only: the server re-checks every
@@ -237,8 +245,8 @@ func (h *RBACHandler) GetMyPermissionsHandler(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	response := MyPermissionsResponse{Enabled: h.service.Enabled(), IsAdmin: subject.IsAdmin}
-	if response.Enabled && !subject.IsAdmin {
+	response := MyPermissionsResponse{RBACEnabled: h.service.Enabled(), IsAdmin: subject.IsAdmin}
+	if response.RBACEnabled && !subject.IsAdmin {
 		byApp, err := h.service.EffectivePermissionsByApp(r.Context(), subject.UserID)
 		if err != nil {
 			renderRBACServiceError(w, err)

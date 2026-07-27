@@ -11,120 +11,181 @@ import (
 // Everything scoped to one app under /api/apps/{APP_ID}: the app itself, its
 // certificate, its branches and channels, its rollouts, its updates, its API
 // keys, and the Enterprise reads on top of those (device identity and the
-// Observe explorer). Called by the dashboard.
+// Observe explorer). Called by the dashboard, and by the eoas CLI on the two
+// routes that say so.
 //
 // The app COLLECTION, /apps, is not here but in routes_account.go: it names no
 // app, so it cannot sit behind the middlewares below, and it has to be
 // registered before this file's subrouter opens anyway.
 //
-// AUTHENTICATION, in three layers, and the order between the first two is the
-// point of the whole group.
+// AUTHENTICATION, in three layers.
 //
 //  1. NewAuthMiddleware, inherited from the /api subrouter built in NewRouter.
-//     It resolves a principal from either credential, and nothing runs without
-//     one.
+//     It resolves either credential, a dashboard session or an app-scoped CLI
+//     publishing token, and nothing runs without one.
 //
 //  2. AppResolverMiddleware, then RequireAppVisible, both on the subrouter so
-//     they cover every route below without anyone having to remember. The
-//     resolver validates the id and short-circuits unknown apps with 404
-//     before handlers run: without it, an unknown id falls through to bucket
-//     lookups that return empty lists, and the client sees 200 with [] instead
-//     of a proper "no such app" signal. RequireAppVisible is the enterprise
-//     half: while roles are enforced, a member without a grant on this app
-//     gets the same 404 as an unknown id, on reads and mutations alike.
-//     Validated CLI credentials pass through on their context marker.
+//     they cover every route without anyone having to remember. The resolver
+//     validates the id and short-circuits unknown apps with 404 before
+//     handlers run: without it, an unknown id falls through to bucket lookups
+//     that return empty lists, and the client sees 200 with [] instead of a
+//     proper "no such app" signal. RequireAppVisible is the enterprise half:
+//     while roles are enforced, a member without a grant on this app gets the
+//     same 404 as an unknown id. Validated CLI credentials pass through it on
+//     their context marker, and are then judged by layer 3.
 //
-//  3. requirePermission, per route, on the mutations. Admins always pass;
-//     members need the permission on this route's app through their enterprise
-//     grants (ee/rbac). Without a control plane or a valid license it degrades
-//     to exactly adminOnly's behavior, which keeps members read-only. It wraps
-//     individual routes rather than the subrouter because the reads next to
-//     them are deliberately open to any viewer of the app.
+//  3. The route's own Access declaration, the third argument of every call
+//     below. It answers three questions at once, and answering them is not
+//     optional: the registration helper refuses a route that carries no
+//     declaration, at boot.
 //
-// So a route registered here WITHOUT requirePermission is readable by anyone
-// who can see the app, and that is the rule to read the file by.
+//     AnyViewer()                any account that can see the app
+//     AnyViewerOrToken()         the same, plus a CLI publishing token
+//     NeedsPermission(perm, fb)  perm once roles are enforced, fb when not
+//
+// The fallback is per route because the right answer differs. Mutations use
+// FallbackAdminOnly: refusing a member the ability to delete a branch without
+// an enterprise license is the community edition working as intended. The
+// telemetry reads use FallbackAnyMember: they were open to every member before
+// these permissions existed, and taking that away from community deployments
+// would be a regression rather than a hardening. Flipping one is a one-word
+// change on its line.
 func registerAppRoutes(
 	apiSubrouter *mux.Router,
 	container *AppContainer,
-	requirePermission func(rbac.Permission) mux.MiddlewareFunc,
 ) {
 	appAuthSubrouter := apiSubrouter.PathPrefix("/apps/{APP_ID}").Subrouter()
 	appAuthSubrouter.StrictSlash(true)
 	appAuthSubrouter.Use(middleware.AppResolverMiddleware(container.AppRepo))
 	appAuthSubrouter.Use(rbac.RequireAppVisible(container.RBACService))
 
+	app := appGroup{router: appAuthSubrouter, rbacService: container.RBACService}
+
 	// The app itself. Registered as "" and not "/", which is what makes the
 	// path match exactly as the dashboard sends it: with StrictSlash on this
 	// subrouter, a route declared "/" answers a slashless call with a 301 to
-	// the slashed form, and every one of these three is called without one.
-	// The redirect would still work, browsers follow it and keep the method,
-	// it is simply a round trip nobody needs. The slashed form keeps working
-	// either way, StrictSlash redirects in both directions.
-	appAuthSubrouter.HandleFunc("", container.AppHandler.GetAppHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("", requirePermission(rbac.PermAppDelete)(http.HandlerFunc(container.AppHandler.DeleteAppHandler))).Methods(http.MethodDelete)
-	appAuthSubrouter.Handle("", requirePermission(rbac.PermAppRename)(http.HandlerFunc(container.AppHandler.UpdateAppHandler))).Methods(http.MethodPatch)
-	// The signing certificate is key material: admins, or the explicit
-	// certificate:read permission.
-	appAuthSubrouter.Handle("/certificate", requirePermission(rbac.PermCertificateRead)(http.HandlerFunc(container.AppHandler.DownloadAppCertificateHandler))).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/branches", requirePermission(rbac.PermBranchCreate)(http.HandlerFunc(container.BranchHandler.CreateBranchHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.Handle("/branches/{BRANCH}", requirePermission(rbac.PermBranchDelete)(http.HandlerFunc(container.BranchHandler.DeleteBranchHandler))).Methods(http.MethodDelete)
-	appAuthSubrouter.HandleFunc("/branches", container.BranchHandler.GetBranchesHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/channels", requirePermission(rbac.PermChannelCreate)(http.HandlerFunc(container.ChannelHandler.CreateChannelHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.Handle("/channels/{CHANNEL}", requirePermission(rbac.PermChannelDelete)(http.HandlerFunc(container.ChannelHandler.DeleteChannelHandler))).Methods(http.MethodDelete)
-	appAuthSubrouter.HandleFunc("/channels", container.ChannelHandler.GetChannelsHandler).Methods(http.MethodGet)
+	// the slashed form, and all three of these are called without one. The
+	// slashed form keeps working either way, StrictSlash redirects both ways.
+	app.route(http.MethodGet, "", container.AppHandler.GetAppHandler,
+		AnyViewer())
+	app.route(http.MethodDelete, "", container.AppHandler.DeleteAppHandler,
+		NeedsPermission(rbac.PermAppDelete, rbac.FallbackAdminOnly))
+	app.route(http.MethodPatch, "", container.AppHandler.UpdateAppHandler,
+		NeedsPermission(rbac.PermAppRename, rbac.FallbackAdminOnly))
+	// The signing certificate is key material.
+	app.route(http.MethodGet, "/certificate", container.AppHandler.DownloadAppCertificateHandler,
+		NeedsPermission(rbac.PermCertificateRead, rbac.FallbackAdminOnly))
+
+	// Branches and channels.
+	app.route(http.MethodGet, "/branches", container.BranchHandler.GetBranchesHandler,
+		AnyViewer())
+	app.route(http.MethodPost, "/branches", container.BranchHandler.CreateBranchHandler,
+		NeedsPermission(rbac.PermBranchCreate, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/branches/{BRANCH}", container.BranchHandler.DeleteBranchHandler,
+		NeedsPermission(rbac.PermBranchDelete, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/channels", container.ChannelHandler.GetChannelsHandler,
+		AnyViewer())
+	app.route(http.MethodPost, "/channels", container.ChannelHandler.CreateChannelHandler,
+		NeedsPermission(rbac.PermChannelCreate, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/channels/{CHANNEL}", container.ChannelHandler.DeleteChannelHandler,
+		NeedsPermission(rbac.PermChannelDelete, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/branch/{BRANCH_ID}/updateChannelBranchMapping", container.BranchHandler.UpdateChannelBranchMappingHandler,
+		NeedsPermission(rbac.PermChannelEditBranch, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/branches/{BRANCH}/protection", container.ApiKeyRestrictionHandler.SetBranchProtectionHandler,
+		NeedsPermission(rbac.PermBranchProtect, rbac.FallbackAdminOnly))
+
 	// Progressive rollouts, control-plane only. One permission covers a channel
 	// rollout's whole lifecycle, its per-update sibling has its own. There is
-	// no read route: a channel carries its active rollout in the listing, so a
-	// dedicated one answered a question already answered.
-	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.StartChannelRolloutHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.UpdateChannelRolloutHandler))).Methods(http.MethodPatch)
-	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout/end", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.EndChannelRolloutHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.HandleFunc("/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout", container.RolloutHandler.GetUpdateRolloutHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout", requirePermission(rbac.PermUpdateRolloutManage)(http.HandlerFunc(container.RolloutHandler.SetUpdateRolloutPercentageHandler))).Methods(http.MethodPut)
-	appAuthSubrouter.Handle("/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout/revert", requirePermission(rbac.PermUpdateRolloutManage)(http.HandlerFunc(container.RolloutHandler.RevertUpdateRolloutHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.HandleFunc("/branch/{BRANCH}/runtimeVersions", container.BranchHandler.GetRuntimeVersionsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/updates", container.UpdateHandler.GetUpdateFeedHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates", container.UpdateHandler.GetUpdatesHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates/{UPDATE_ID}", container.UpdateHandler.GetUpdateDetailsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/branch/{BRANCH_ID}/updateChannelBranchMapping", requirePermission(rbac.PermChannelEditBranch)(http.HandlerFunc(container.BranchHandler.UpdateChannelBranchMappingHandler))).Methods(http.MethodPost)
-	// An API token is publishing power over the app — minting and revoking
-	// need the apikeys:manage permission (or an admin). The list stays
-	// readable: it only carries names and hints.
-	appAuthSubrouter.Handle("/apiKeys", requirePermission(rbac.PermApiKeysManage)(http.HandlerFunc(container.ApiKeyHandler.CreateApiKeyHandler))).Methods(http.MethodPost)
-	appAuthSubrouter.HandleFunc("/apiKeys", container.ApiKeyHandler.GetApiKeysHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/apiKeys/{API_KEY_ID}/revoke", requirePermission(rbac.PermApiKeysManage)(http.HandlerFunc(container.ApiKeyHandler.RevokeApiKeyHandler))).Methods(http.MethodDelete)
-	// Enterprise: per-key access restrictions ride with the token permission
-	// (they change what a token can do); toggling branch protection is its
-	// own permission. Both stay license-gated in their service.
-	appAuthSubrouter.HandleFunc("/apiKeys/restrictions", container.ApiKeyRestrictionHandler.GetApiKeyRestrictionsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/apiKeys/{API_KEY_ID}/restrictions", requirePermission(rbac.PermApiKeysManage)(http.HandlerFunc(container.ApiKeyRestrictionHandler.SetApiKeyRestrictionsHandler))).Methods(http.MethodPut)
-	appAuthSubrouter.Handle("/branches/{BRANCH}/protection", requirePermission(rbac.PermBranchProtect)(http.HandlerFunc(container.ApiKeyRestrictionHandler.SetBranchProtectionHandler))).Methods(http.MethodPut)
-	// Device identity (ee/identity). Reads stay open to any app viewer; shaping
-	// the allowlist needs the identity:manage permission (admins bypass it).
-	appAuthSubrouter.HandleFunc("/identity/schema", container.IdentityHandler.GetSchemaHandler).Methods(http.MethodGet)
-	appAuthSubrouter.Handle("/identity/schema/{KEY}", requirePermission(rbac.PermIdentityManage)(http.HandlerFunc(container.IdentityHandler.UpsertSchemaKeyHandler))).Methods(http.MethodPut)
-	appAuthSubrouter.Handle("/identity/schema/{KEY}", requirePermission(rbac.PermIdentityManage)(http.HandlerFunc(container.IdentityHandler.DeleteSchemaKeyHandler))).Methods(http.MethodDelete)
-	appAuthSubrouter.HandleFunc("/identity/values", container.IdentityHandler.SearchValuesHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/identity/devices", container.IdentityHandler.ListDevicesHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/identity/online", container.IdentityHandler.OnlineDevicesHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/identity/devices/{EAS_CLIENT_ID}", container.IdentityHandler.GetDeviceHandler).Methods(http.MethodGet)
-	// Instant-T adoption and launch health per update, straight from the
-	// device registry (Postgres only, works without ClickHouse): feeds the
-	// updates table's MAU column and the rollout card's health score.
-	appAuthSubrouter.HandleFunc("/identity/update-health", container.IdentityHandler.UpdateHealthHandler).Methods(http.MethodGet)
-	// Historical series is projected into ClickHouse. The endpoint stays
-	// present without ClickHouse and reports available=false so the dashboard
-	// can hide the graph while instant-T health keeps working.
-	appAuthSubrouter.HandleFunc("/observe/update-health/history", container.ObserveHealthHistoryHandler.GetUpdateHealthHistoryHandler).Methods(http.MethodGet)
-	// The Observe explorer, all read-only and all open to any viewer of the app,
-	// like the other listings above: they aggregate telemetry, they never name a
-	// user. Each one degrades to available=false inside the handler when
-	// ClickHouse is absent rather than disappearing from the API. check-ins is
-	// the map's incremental live feed, not a listing.
-	appAuthSubrouter.HandleFunc("/observe/overview", container.ObserveExplorerHandler.GetOverviewHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/check-ins", container.ObserveExplorerHandler.GetCheckInsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/events", container.ObserveExplorerHandler.GetEventsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/logs", container.ObserveExplorerHandler.GetLogsHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/breakdown", container.ObserveExplorerHandler.GetBreakdownHandler).Methods(http.MethodGet)
-	appAuthSubrouter.HandleFunc("/observe/conditions", container.ObserveExplorerHandler.GetConditionsHandler).Methods(http.MethodGet)
+	// no channel rollout read route: a channel carries its active rollout in
+	// the listing, so a dedicated one answered a question already answered.
+	app.route(http.MethodPost, "/channels/{CHANNEL}/rollout", container.RolloutHandler.StartChannelRolloutHandler,
+		NeedsPermission(rbac.PermChannelRolloutManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPatch, "/channels/{CHANNEL}/rollout", container.RolloutHandler.UpdateChannelRolloutHandler,
+		NeedsPermission(rbac.PermChannelRolloutManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/channels/{CHANNEL}/rollout/end", container.RolloutHandler.EndChannelRolloutHandler,
+		NeedsPermission(rbac.PermChannelRolloutManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout", container.RolloutHandler.GetUpdateRolloutHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout", container.RolloutHandler.SetUpdateRolloutPercentageHandler,
+		NeedsPermission(rbac.PermUpdateRolloutManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout/revert", container.RolloutHandler.RevertUpdateRolloutHandler,
+		NeedsPermission(rbac.PermUpdateRolloutManage, rbac.FallbackAdminOnly))
+
+	// Updates. The two the CLI reads are the only routes in this file a
+	// publishing token may reach: eoas asks which runtime versions a branch
+	// has, then which updates that pair already holds, before it publishes.
+	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersions", container.BranchHandler.GetRuntimeVersionsHandler,
+		AnyViewerOrToken())
+	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates", container.UpdateHandler.GetUpdatesHandler,
+		AnyViewerOrToken())
+	app.route(http.MethodGet, "/updates", container.UpdateHandler.GetUpdateFeedHandler,
+		AnyViewer())
+	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates/{UPDATE_ID}", container.UpdateHandler.GetUpdateDetailsHandler,
+		AnyViewer())
+
+	// API tokens. Minting and revoking one is publishing power over the app;
+	// the list stays readable because it only carries names and hints.
+	app.route(http.MethodGet, "/apiKeys", container.ApiKeyHandler.GetApiKeysHandler,
+		AnyViewer())
+	app.route(http.MethodPost, "/apiKeys", container.ApiKeyHandler.CreateApiKeyHandler,
+		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/apiKeys/{API_KEY_ID}/revoke", container.ApiKeyHandler.RevokeApiKeyHandler,
+		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
+	// Enterprise: per-key access restrictions ride with the token permission,
+	// since they change what a token can do. License-gated in their service.
+	app.route(http.MethodGet, "/apiKeys/restrictions", container.ApiKeyRestrictionHandler.GetApiKeyRestrictionsHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/apiKeys/{API_KEY_ID}/restrictions", container.ApiKeyRestrictionHandler.SetApiKeyRestrictionsHandler,
+		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
+
+	// Device identity (ee/identity). Browsing the registry means reading
+	// per-device data: the client id, whatever metadata the app attached, the
+	// city and the coordinates. Seeing the app is no longer enough.
+	app.route(http.MethodGet, "/identity/devices", container.IdentityHandler.ListDevicesHandler,
+		NeedsPermission(rbac.PermIdentityRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/identity/devices/{EAS_CLIENT_ID}", container.IdentityHandler.GetDeviceHandler,
+		NeedsPermission(rbac.PermIdentityRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/identity/values", container.IdentityHandler.SearchValuesHandler,
+		NeedsPermission(rbac.PermIdentityRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/identity/online", container.IdentityHandler.OnlineDevicesHandler,
+		NeedsPermission(rbac.PermIdentityRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/identity/schema", container.IdentityHandler.GetSchemaHandler,
+		NeedsPermission(rbac.PermIdentityRead, rbac.FallbackAnyMember))
+	app.route(http.MethodPut, "/identity/schema/{KEY}", container.IdentityHandler.UpsertSchemaKeyHandler,
+		NeedsPermission(rbac.PermIdentityManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/identity/schema/{KEY}", container.IdentityHandler.DeleteSchemaKeyHandler,
+		NeedsPermission(rbac.PermIdentityManage, rbac.FallbackAdminOnly))
+
+	// Update health, deliberately NOT behind the two read permissions above
+	// even though one of them sits under /observe: both are aggregates per
+	// update naming no device, and they feed the updates table's adoption
+	// column and the rollout card's health score, which every member needs.
+	// Instant-T comes straight from the device registry and works without
+	// ClickHouse; the historical series is projected into it and reports
+	// available=false when it is absent, so the dashboard hides the graph
+	// instead of losing the route.
+	app.route(http.MethodGet, "/identity/update-health", container.IdentityHandler.UpdateHealthHandler,
+		AnyViewer())
+	app.route(http.MethodGet, "/observe/update-health/history", container.ObserveHealthHistoryHandler.GetUpdateHealthHistoryHandler,
+		AnyViewer())
+
+	// The Observe explorer. Read-only, and every one of them degrades to
+	// available=false inside the handler when ClickHouse is absent rather than
+	// disappearing from the API. They are permission-gated because of the log
+	// feed above all: a record carries the client id, the session id and a body
+	// the application wrote, so it holds whatever the app logged. The
+	// aggregates ride with it rather than splitting the Observe section into
+	// two halves a member could see one of.
+	app.route(http.MethodGet, "/observe/overview", container.ObserveExplorerHandler.GetOverviewHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/check-ins", container.ObserveExplorerHandler.GetCheckInsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/events", container.ObserveExplorerHandler.GetEventsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/logs", container.ObserveExplorerHandler.GetLogsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/breakdown", container.ObserveExplorerHandler.GetBreakdownHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/conditions", container.ObserveExplorerHandler.GetConditionsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 }

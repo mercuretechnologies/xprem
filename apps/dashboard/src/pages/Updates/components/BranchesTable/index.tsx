@@ -36,8 +36,8 @@ export const BranchesTable = () => {
   const { toast } = useToast();
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
-  const canDeleteBranch = useAppPermission('branch:delete');
-  const canProtectBranch = useAppPermission('branch:protect');
+  const canDeleteBranch = useAppPermission('branch:delete', 'admin-only');
+  const canProtectBranch = useAppPermission('branch:protect', 'admin-only');
   const [search, setSearch] = useState('');
   const [branchToDelete, setBranchToDelete] = useState<BranchRecord | null>(null);
   const [branchBeingToggled, setBranchBeingToggled] = useState<string | null>(null);

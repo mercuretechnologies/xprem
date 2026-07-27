@@ -1,7 +1,6 @@
 package infrastructure
 
 import (
-	"expo-open-ota/ee/rbac"
 	"expo-open-ota/internal/middleware"
 	"net/http"
 
@@ -64,21 +63,16 @@ func NewRouter(container *AppContainer) *mux.Router {
 	apiSubrouter := r.PathPrefix("/api").Subrouter()
 	apiSubrouter.Use(middleware.NewAuthMiddleware(container.DashboardAuthService, container.CliAuthService))
 
-	// Two gates share the mutation routes below. adminOnly guards the global
-	// administration surface (users, roles, license, SSO, app creation).
-	// requirePermission guards the app-scoped mutations: admins always pass,
-	// members need the permission on the route's app through their enterprise
-	// grants (ee/rbac), and without a control plane or a valid license it
-	// degrades to exactly adminOnly's behavior, keeping members read-only.
-	// Both wrap individual routes rather than a subrouter because admin and
-	// non-admin routes share path prefixes.
+	// adminOnly guards the global administration surface (users, roles,
+	// license, SSO, app creation). It wraps individual routes rather than a
+	// subrouter because admin and non-admin routes share path prefixes.
+	//
+	// The app-scoped half has its own vocabulary and builds its own gates from
+	// what each route declares: see the Access type in access.go.
 	adminOnly := middleware.NewAdminMiddleware(container.UserRepo)
-	requirePermission := func(perm rbac.Permission) mux.MiddlewareFunc {
-		return rbac.RequirePermission(container.RBACService, perm)
-	}
 
 	registerAccountRoutes(apiSubrouter, container, adminOnly)
-	registerAppRoutes(apiSubrouter, container, requirePermission)
+	registerAppRoutes(apiSubrouter, container)
 
 	return r
 }

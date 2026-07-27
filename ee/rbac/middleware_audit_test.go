@@ -34,11 +34,11 @@ func TestRequirePermissionRecordsDenials(t *testing.T) {
 	// A granted request leaves no event: domain actions are recorded by their
 	// own emitters, the middleware only reports refusals.
 	require.Equal(t, http.StatusOK,
-		performAppRequest(t, RequirePermission(service, PermBranchCreate), member).Code)
+		performAppRequest(t, RequirePermission(service, PermBranchCreate, FallbackAdminOnly), member).Code)
 	require.Empty(t, recorder.events)
 
 	// Granted app, missing permission.
-	performAppRequest(t, RequirePermission(service, PermBranchDelete), member)
+	performAppRequest(t, RequirePermission(service, PermBranchDelete, FallbackAdminOnly), member)
 	require.Len(t, recorder.events, 1)
 	event := recorder.events[0]
 	assert.Equal(t, auditlog.ActionPermissionDenied, event.Action)
@@ -54,7 +54,7 @@ func TestRequirePermissionRecordsDenials(t *testing.T) {
 
 	// No grant on the app at all: same event, named reason.
 	repo.grants["member-1"] = nil
-	performAppRequest(t, RequirePermission(service, PermBranchCreate), member)
+	performAppRequest(t, RequirePermission(service, PermBranchCreate, FallbackAdminOnly), member)
 	require.Len(t, recorder.events, 2)
 	assert.Equal(t, "no_app_grant", recorder.events[1].Metadata["reason"])
 }
@@ -68,7 +68,7 @@ func TestRequirePermissionCommunityFallbackRecordsNothing(t *testing.T) {
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
 
-	performAppRequest(t, RequirePermission(service, PermBranchCreate),
+	performAppRequest(t, RequirePermission(service, PermBranchCreate, FallbackAdminOnly),
 		&services.DashboardPrincipal{UserId: "member-1"})
 	require.Empty(t, recorder.events)
 }

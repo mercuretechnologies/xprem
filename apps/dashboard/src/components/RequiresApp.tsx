@@ -16,7 +16,7 @@ export const RequiresApp = ({ children }: { children: ReactNode }) => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const { apps, isLoading, error, refreshApps, setSelectedAppId } = useSelectedApp();
   const { isAdmin } = useCurrentUser();
-  const { enabled: rbacEnabled } = usePermissions();
+  const { rbacEnabled } = usePermissions();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   // While the list loads the pages render their own skeletons; the empty

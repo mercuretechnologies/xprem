@@ -38,7 +38,7 @@ const typeStyle: Record<IdentityValueType, string> = {
 };
 
 export const IdentityAttributes = () => {
-  const canManage = useAppPermission('identity:manage');
+  const canManage = useAppPermission('identity:manage', 'admin-only');
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);

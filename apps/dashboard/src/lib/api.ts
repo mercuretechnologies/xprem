@@ -475,7 +475,6 @@ export type ObserveOverview = {
   }>;
 };
 
-
 // How many devices checked in per city over one poll window. Same shape as the
 // overview's locations, so the map animates arrivals without a second geometry.
 export type ObserveCheckInFeed = {
@@ -828,7 +827,10 @@ export class ApiClient {
   // admins and when disabled.
   public async getMyPermissions() {
     return this.request<{
-      enabled: boolean;
+      // Are fine-grained roles enforced right now (control plane + valid
+      // enterprise license). Unrelated to whether the ACCOUNT is enabled,
+      // which is settled at sign-in and never reaches this response.
+      rbacEnabled: boolean;
       isAdmin: boolean;
       apps: Record<string, string[]> | null;
     }>(`/api/me/permissions`, {

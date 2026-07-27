@@ -27,7 +27,7 @@ export const UpdatesTable = ({
   const sheetRef = useRef<UpdateDetailsRef>(null);
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
-  const canManageUpdateRollout = useAppPermission('update-rollout:manage');
+  const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
   const { data, isLoading, error } = useQuery({
     queryKey: ['updates', selectedAppId, branch, runtimeVersion],
     queryFn: () => api.getUpdates(branch, runtimeVersion),

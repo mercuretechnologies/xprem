@@ -216,18 +216,18 @@ func TestAuthorize(t *testing.T) {
 	member := Subject{UserID: "user-1"}
 
 	// Through the role and through the direct grant.
-	require.NoError(t, service.Authorize(ctx, member, "app-1", PermChannelRolloutManage))
-	require.NoError(t, service.Authorize(ctx, member, "app-1", PermBranchCreate))
+	require.NoError(t, service.Authorize(ctx, member, "app-1", PermChannelRolloutManage, FallbackAdminOnly))
+	require.NoError(t, service.Authorize(ctx, member, "app-1", PermBranchCreate, FallbackAdminOnly))
 
 	// Granted app, missing permission: a 403 naming the permission.
-	err := service.Authorize(ctx, member, "app-1", PermAppDelete)
+	err := service.Authorize(ctx, member, "app-1", PermAppDelete, FallbackAdminOnly)
 	deniedErr := (*ErrPermissionDenied)(nil)
 	require.True(t, errors.As(err, &deniedErr), "expected ErrPermissionDenied, got %v", err)
 	require.Equal(t, PermAppDelete, deniedErr.Permission)
 
 	// No grant on the app: it does not exist for this member.
-	require.ErrorIs(t, service.Authorize(ctx, member, "app-2", PermBranchCreate), ErrNoAppAccess)
-	require.ErrorIs(t, service.Authorize(ctx, Subject{UserID: "user-2"}, "app-1", PermBranchCreate), ErrNoAppAccess)
+	require.ErrorIs(t, service.Authorize(ctx, member, "app-2", PermBranchCreate, FallbackAdminOnly), ErrNoAppAccess)
+	require.ErrorIs(t, service.Authorize(ctx, Subject{UserID: "user-2"}, "app-1", PermBranchCreate, FallbackAdminOnly), ErrNoAppAccess)
 }
 
 func TestAuthorizeAdminBypassesEverything(t *testing.T) {
@@ -237,7 +237,7 @@ func TestAuthorizeAdminBypassesEverything(t *testing.T) {
 	// No grant row, no license, not even a control plane: an admin is always
 	// allowed and always sees everything.
 	for _, service := range []*RBACService{licensedService(newFakeRepo()), unlicensedService(newFakeRepo()), unlicensedService(nil)} {
-		require.NoError(t, service.Authorize(ctx, admin, "any-app", PermAppDelete))
+		require.NoError(t, service.Authorize(ctx, admin, "any-app", PermAppDelete, FallbackAdminOnly))
 		visible, err := service.CanSeeApp(ctx, admin, "any-app")
 		require.NoError(t, err)
 		require.True(t, visible)
@@ -252,9 +252,52 @@ func TestAuthorizeFallsBackWithoutLicense(t *testing.T) {
 	repo := newFakeRepo()
 	repo.grants["user-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermAppDelete}}}
 
-	err := unlicensedService(repo).Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermAppDelete)
+	err := unlicensedService(repo).Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermAppDelete, FallbackAdminOnly)
 	require.ErrorIs(t, err, ErrRequiresValidLicense,
 		"an expired license must never widen member access beyond community rules")
+}
+
+// Without a license there are no grants to consult, so the route's own
+// fallback is the only thing left that can decide. A route that chose
+// FallbackAnyMember keeps letting members in, which is how the reads that were
+// open before these permissions existed avoid regressing on community
+// deployments: the permission only starts biting once roles are enforced.
+func TestAuthorizeHonorsAnyMemberFallbackWithoutLicense(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepo()
+
+	// No grant at all, which is the point: the fallback decides, not the data.
+	err := unlicensedService(repo).Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermObserveRead, FallbackAnyMember)
+	require.NoError(t, err)
+}
+
+// Once roles ARE enforced, the same route stops being open: the fallback is
+// about the unlicensed case only, and confusing the two would make the
+// permission decorative.
+func TestAnyMemberFallbackStopsApplyingOnceRolesAreEnforced(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepo()
+	repo.grants["user-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermIdentityRead}}}
+
+	service := licensedService(repo)
+	require.NoError(t, service.Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermIdentityRead, FallbackAnyMember))
+
+	err := service.Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermObserveRead, FallbackAnyMember)
+	var denied *ErrPermissionDenied
+	require.ErrorAs(t, err, &denied, "a granted app without the permission must still refuse")
+}
+
+// Stateless mode has exactly one account and it is an admin, so a non-admin
+// subject cannot legitimately reach the no-control-plane branch. It refuses
+// whatever the route asked for, because a branch that exists to catch a broken
+// invariant must not carry a widening.
+func TestAuthorizeRefusesWithoutControlPlaneEvenOnAnyMemberFallback(t *testing.T) {
+	ctx := context.Background()
+	service := NewRBACService(nil, nil)
+	service.licenseValid = func() bool { return true }
+
+	err := service.Authorize(ctx, Subject{UserID: "user-1"}, "app-1", PermObserveRead, FallbackAnyMember)
+	require.ErrorIs(t, err, ErrRequiresControlPlane)
 }
 
 func TestMemberVisibility(t *testing.T) {

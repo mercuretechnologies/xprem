@@ -22,7 +22,7 @@ export const Branches = () => {
   const { branchName, runtimeVersion } = useParams();
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
-  const canCreateBranch = useAppPermission('branch:create');
+  const canCreateBranch = useAppPermission('branch:create', 'admin-only');
   const [createOpen, setCreateOpen] = useState(false);
   const decodedBranch = branchName ? decodeURIComponent(branchName) : '';
   const decodedRuntime = runtimeVersion ? decodeURIComponent(runtimeVersion) : undefined;

@@ -10,6 +10,12 @@ package rbac
 // user_app_grants.extra_permissions, so renaming one is a data migration.
 type Permission string
 
+// NoPermission marks a route that no permission guards: any account allowed to see
+// the app may call it. It is a value rather than an absence so a route
+// declaration has to name it, which keeps "open on purpose" apart from
+// "nobody decided".
+const NoPermission Permission = ""
+
 const (
 	PermAppDelete       Permission = "app:delete"
 	PermAppRename       Permission = "app:rename"
@@ -37,9 +43,27 @@ const (
 	PermApiKeysManage Permission = "apikeys:manage"
 	// PermIdentityManage edits the device-identity metadata allowlist (the
 	// dashboard "Identity" section): which metadata keys are accepted and
-	// their types. Reading identity and browsing devices stays open to any app
-	// viewer; only shaping the allowlist needs this.
+	// their types.
 	PermIdentityManage Permission = "identity:manage"
+	// PermIdentityRead browses the device registry: the device list, one
+	// device's detail, the distinct values of a metadata key, and the live
+	// count. That is per-device data (the client id, the metadata the app
+	// chose to attach, the city and coordinates), so seeing the app is no
+	// longer enough to read it.
+	//
+	// Deliberately NOT covering /identity/update-health: that one is an
+	// aggregate per update with no device named, and it feeds the updates
+	// table and the rollout card, which every member needs.
+	PermIdentityRead Permission = "identity:read"
+	// PermObserveRead opens the Observe explorer: the overview, the event and
+	// metric series, the breakdowns, the filter metadata and the live map.
+	// It also covers the raw log feed, which is the reason this permission
+	// exists at all: a log record carries the client id, the session id and a
+	// body the application wrote, so it can hold anything the app logged.
+	//
+	// Deliberately NOT covering /observe/update-health/history: same reason as
+	// above, it is a per-update aggregate the updates views depend on.
+	PermObserveRead Permission = "observe:read"
 )
 
 // AllPermissions is the catalog, in the order the dashboard displays it.
@@ -57,6 +81,8 @@ var AllPermissions = []Permission{
 	PermUpdateRolloutManage,
 	PermApiKeysManage,
 	PermIdentityManage,
+	PermIdentityRead,
+	PermObserveRead,
 }
 
 var permissionSet = func() map[Permission]struct{} {

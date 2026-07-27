@@ -161,7 +161,7 @@ const BranchLabel = ({ branch }: { branch: string }) => (
 
 export const Updates = () => {
   const { selectedAppId } = useSelectedApp();
-  const canManageUpdateRollout = useAppPermission('update-rollout:manage');
+  const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
   const [searchParams, setSearchParams] = useSearchParams();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [managedRollout, setManagedRollout] = useState<ManagedUpdateRollout | null>(null);

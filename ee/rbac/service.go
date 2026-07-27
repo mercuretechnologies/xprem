@@ -354,19 +354,52 @@ func (s *RBACService) SetUserGrants(ctx context.Context, userID string, grants [
 	return nil
 }
 
-// Authorize decides one dashboard mutation on one app. Admins are allowed
+// Fallback is what a route grants a non-admin member when roles are NOT
+// enforced, which happens in stateless mode and on any deployment without a
+// valid enterprise license. It is declared per route rather than assumed,
+// because the right answer differs: refusing a member the ability to delete a
+// branch is the community edition working as intended, refusing them the
+// update list they have always read would be a regression.
+//
+// There is no valid zero value. A caller that forgets to choose gets a
+// refusal, not a silent grant.
+type Fallback int
+
+const (
+	// FallbackAdminOnly: without roles, only admins pass. This is what every
+	// permission-gated route did before fallbacks existed.
+	FallbackAdminOnly Fallback = iota + 1
+	// FallbackAnyMember: without roles, every signed-in member who can see the
+	// app passes. The permission still bites once roles are enforced, which is
+	// what makes granular control the enterprise feature rather than a
+	// restriction community deployments suddenly inherit.
+	FallbackAnyMember
+)
+
+// Authorize decides one dashboard action on one app. Admins are allowed
 // unconditionally. For members, the distinction between the two refusals is
 // deliberate: no grant at all reads as a 404 (the app does not exist for this
 // member), a missing permission on a granted app reads as a 403 naming the
 // permission.
-func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID string, perm Permission) error {
+func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID string, perm Permission, fallback Fallback) error {
 	if subject.IsAdmin {
 		return nil
 	}
+	// No control plane means stateless mode, where the only account that can
+	// exist is ADMIN_EMAIL and it is built with IsAdmin true, so a non-admin
+	// subject cannot reach this line. The fallback is deliberately NOT honored
+	// here: this branch exists to refuse if that ever stops holding, and a
+	// branch whose job is to fail closed must not carry a widening.
 	if s.repo == nil {
 		return ErrRequiresControlPlane
 	}
+	// A control plane without a valid license is the reachable case: real
+	// accounts, real members, no enforced roles and no grants to consult. The
+	// route's own fallback is the only thing left that can decide.
 	if !s.licenseValid() {
+		if fallback == FallbackAnyMember {
+			return nil
+		}
 		return ErrRequiresValidLicense
 	}
 	grant, err := s.repo.GetUserAppGrant(ctx, subject.UserID, appID)

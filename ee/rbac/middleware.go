@@ -53,12 +53,11 @@ func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Su
 	return Subject{UserID: principal.UserId, IsAdmin: user.IsAdmin}, true
 }
 
-// RequirePermission guards one app-scoped dashboard mutation: admins pass,
-// members need the permission on the route's APP_ID. It replaces the
-// community adminOnly gate on these routes, and degrades to exactly its
-// behavior when roles are not enforced (no control plane, no valid license):
-// members get the same 403 an admin-only route gives them today.
-func RequirePermission(service *RBACService, perm Permission) mux.MiddlewareFunc {
+// RequirePermission guards one app-scoped dashboard action: admins pass,
+// members need the permission on the route's APP_ID. When roles are not
+// enforced (no control plane, no valid license) there are no grants to read,
+// and the route's own fallback decides instead: see Fallback.
+func RequirePermission(service *RBACService, perm Permission, fallback Fallback) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			subject, ok := service.resolveSubject(w, r)
@@ -70,7 +69,7 @@ func RequirePermission(service *RBACService, perm Permission) mux.MiddlewareFunc
 				handlers.RenderError(w, http.StatusBadRequest, "invalid app id")
 				return
 			}
-			if err := service.Authorize(r.Context(), subject, appId, perm); err != nil {
+			if err := service.Authorize(r.Context(), subject, appId, perm, fallback); err != nil {
 				service.recordDenied(r, subject, appId, err, map[string]any{"permission": string(perm)})
 				renderAuthorizeError(w, err)
 				return

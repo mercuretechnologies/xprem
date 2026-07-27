@@ -107,9 +107,26 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     label: 'Identity',
     permissions: [
       {
+        value: 'identity:read',
+        label: 'Browse devices',
+        description:
+          'Read the device registry: the device list, one device in detail, the values of a metadata key and the live count. That is per-device data, including the metadata your app attached and the location.',
+      },
+      {
         value: 'identity:manage',
         label: 'Manage the identity allowlist',
-        description: 'Choose which device metadata keys are accepted and their types. Reading identity and browsing devices stays open to any member.',
+        description: 'Choose which device metadata keys are accepted and their types.',
+      },
+    ],
+  },
+  {
+    label: 'Observe',
+    permissions: [
+      {
+        value: 'observe:read',
+        label: 'Read telemetry',
+        description:
+          'Open the Observe explorer: the overview, events, metrics, breakdowns and the live map, and the raw log feed. A log record carries the client id, the session id and whatever body your app wrote.',
       },
     ],
   },

@@ -30,7 +30,7 @@ export const Users = () => {
 
   // While fine-grained roles are enforced, a member without a single grant
   // sees an empty dashboard; the summary lets the table warn about them.
-  const { enabled: rbacEnabled } = usePermissions();
+  const { rbacEnabled } = usePermissions();
 
   const usersQuery = useQuery({
     queryKey: ['users'],

@@ -16,9 +16,9 @@ import { useAppPermission } from '@/ee/lib/PermissionsContext';
 export const AppInfo = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   // Display gating only: the server re-checks each permission on its route.
-  const canRenameApp = useAppPermission('app:rename');
-  const canDeleteApp = useAppPermission('app:delete');
-  const canReadCertificate = useAppPermission('certificate:read');
+  const canRenameApp = useAppPermission('app:rename', 'admin-only');
+  const canDeleteApp = useAppPermission('app:delete', 'admin-only');
+  const canReadCertificate = useAppPermission('certificate:read', 'admin-only');
   const { selectedAppId, refreshApps } = useSelectedApp();
   const { toast } = useToast();
   const queryClient = useQueryClient();

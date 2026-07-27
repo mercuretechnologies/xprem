@@ -5,6 +5,8 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AdminOnlyNote } from '@/components/ui/admin-only-note';
+import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { FilterBar } from './FilterBar';
 import { useObserveFilters } from './filters';
 import { isObservePage, observePage } from './navigation';
@@ -30,6 +32,12 @@ export const Observe = () => {
   const { search } = useLocation();
   const page = observePage(requested);
   const filters = useObserveFilters(page.scopes);
+  // Display gating only, the routes re-check it. 'any-member' because the
+  // matching routes declare FallbackAnyMember: without an enterprise license
+  // roles are not enforced, and these pages were open to every member before
+  // the permissions existed. Hiding them here would contradict a server that
+  // answers them.
+  const allowed = useAppPermission(page.permission, 'any-member');
 
   // One canonical URL per page, so the sidebar can highlight on an exact
   // match and a pasted link always points at a page that exists. The query
@@ -56,17 +64,27 @@ export const Observe = () => {
         <p className="mt-1 text-sm text-muted-foreground">{page.question}</p>
       </header>
 
-      {!page.scopes.includes('none') && (
+      {!allowed && (
+        <AdminOnlyNote>
+          {page.permission === 'observe:read'
+            ? 'You do not have permission to read this app telemetry. Ask an admin to grant you access.'
+            : 'You do not have permission to browse this app devices. Ask an admin to grant you access.'}
+        </AdminOnlyNote>
+      )}
+
+      {allowed && !page.scopes.includes('none') && (
         <FilterBar filters={filters} showDimensions={page.value === 'metrics'} />
       )}
 
-      <Suspense fallback={<Skeleton className="h-[520px] rounded-xl" />}>
-        {page.value === 'overview' && <OverviewView filters={filters} />}
-        {page.value === 'metrics' && <MetricsView filters={filters} />}
-        {page.value === 'events' && <EventsView filters={filters} />}
-        {page.value === 'devices' && <DevicesView filters={filters} />}
-        {page.value === 'attributes' && <IdentityAttributes />}
-      </Suspense>
+      {allowed && (
+        <Suspense fallback={<Skeleton className="h-[520px] rounded-xl" />}>
+          {page.value === 'overview' && <OverviewView filters={filters} />}
+          {page.value === 'metrics' && <MetricsView filters={filters} />}
+          {page.value === 'events' && <EventsView filters={filters} />}
+          {page.value === 'devices' && <DevicesView filters={filters} />}
+          {page.value === 'attributes' && <IdentityAttributes />}
+        </Suspense>
+      )}
     </div>
   );
 };

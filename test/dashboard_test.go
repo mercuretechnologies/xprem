@@ -411,6 +411,11 @@ func TestDashboardUseExpoAuthCrossAppAttackRejected(t *testing.T) {
 // Use-Cli-Auth happy path: caller's Expo token resolves to the same username
 // as the app's EXPO_ACCESS_TOKEN (ValidateExpoAuth's match check) so the
 // middleware lets the request through to the handler.
+//
+// On runtimeVersions rather than on branches, because the route has to be one
+// the CLI is allowed to reach: only the two routes eoas calls before publishing
+// declare AnyViewerOrToken, everything else in routes_app.go refuses a
+// publishing credential outright.
 func TestDashboardUseExpoAuthHappyPath(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
@@ -436,7 +441,7 @@ func TestDashboardUseExpoAuthHappyPath(t *testing.T) {
 
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/apps/test-app-id/branches", nil)
+	req, _ := http.NewRequest("GET", "/api/apps/test-app-id/branch/branch-1/runtimeVersions", nil)
 	req.Header.Set("Use-Cli-Auth", "true")
 	req.Header.Set("Authorization", "Bearer expo_test_token")
 	router.ServeHTTP(respRec, req)

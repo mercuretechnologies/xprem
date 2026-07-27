@@ -125,10 +125,10 @@ export const Channels = () => {
   const { toast } = useToast();
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
-  const canCreateChannel = useAppPermission('channel:create');
-  const canDeleteChannel = useAppPermission('channel:delete');
-  const canEditChannelBranch = useAppPermission('channel:edit-branch');
-  const canManageRollout = useAppPermission('channel-rollout:manage');
+  const canCreateChannel = useAppPermission('channel:create', 'admin-only');
+  const canDeleteChannel = useAppPermission('channel:delete', 'admin-only');
+  const canEditChannelBranch = useAppPermission('channel:edit-branch', 'admin-only');
+  const canManageRollout = useAppPermission('channel-rollout:manage', 'admin-only');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [editingMapping, setEditingMapping] = useState(false);
