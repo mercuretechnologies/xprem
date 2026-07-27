@@ -292,7 +292,11 @@ func TestSnapshotCaptureIsElectedSeparatelyFromTheDrain(t *testing.T) {
 	releaseDrain()
 
 	releaseSnapshot()
-	_, freeNow, err := postgres.TryAdvisoryLock(ctx, otherPool, snapshotAdvisoryLockID, "health snapshot")
+	// Released, not just checked: a held lock pins a connection out of the
+	// pool, and pgxpool.Close waits for every acquired connection to come
+	// back, so forgetting it hangs the test rather than failing it.
+	releaseAgain, freeNow, err := postgres.TryAdvisoryLock(ctx, otherPool, snapshotAdvisoryLockID, "health snapshot")
 	require.NoError(t, err)
 	require.True(t, freeNow, "the lock must be released when the capture ends")
+	releaseAgain()
 }
