@@ -269,3 +269,43 @@ func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 			"attempt %d with everything accepted: %v", attempt, reference)
 	}
 }
+
+// The decoder turns an OTLP arrayValue into []any and a kvlistValue into
+// map[string]any, both legal attribute values. Comparing two of them with `==`
+// panics, which the ingest handler answers with a 503, which the published
+// clients read as "retry": one attribute holding a list turned a batch into a
+// poison pill the device replayed for ever.
+func TestCoalesceRequestsSurvivesUncomparableValues(t *testing.T) {
+	for _, value := range []any{
+		[]any{"a", "b"},
+		map[string]any{"nested": "v"},
+		[]any{map[string]any{"deep": []any{1}}},
+	} {
+		require.NotPanics(t, func() {
+			out := CoalesceRequests([]Request{
+				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
+				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
+			})
+			// Reported as different rather than merged, which costs a group and
+			// never a wrong outcome: the store drops such a value anyway.
+			require.Len(t, out, 2)
+		}, "%T", value)
+	}
+
+	// The scalars the store can actually keep still merge, including the two
+	// numeric shapes the decoder produces.
+	for _, value := range []any{"v", true, int64(42), 4.2} {
+		out := CoalesceRequests([]Request{
+			{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
+			{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
+		})
+		require.Len(t, out, 1, "%T", value)
+	}
+
+	// Same type, different value: not the same write.
+	out := CoalesceRequests([]Request{
+		{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": "a"}},
+		{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": "b"}},
+	})
+	require.Len(t, out, 2)
+}

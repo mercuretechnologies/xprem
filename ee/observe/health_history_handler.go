@@ -120,8 +120,10 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 	// Split requested: the response keys become segment values instead of
 	// update ids, and the caller knows which it asked for.
 	if dimension != "" {
+		readContext, cancelRead := boundedRead(r)
+		defer cancelRead()
 		segments, err := h.reader.ReadBySegment(
-			r.Context(), mux.Vars(r)["APP_ID"], updateIDs, dimension, from, to,
+			readContext, mux.Vars(r)["APP_ID"], updateIDs, dimension, from, to,
 		)
 		if err != nil {
 			log.Printf("observe: reading segmented health history failed: %v", err)
@@ -136,7 +138,9 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 		return
 	}
 
-	points, err := h.reader.Read(r.Context(), mux.Vars(r)["APP_ID"], updateIDs, from, to)
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	points, err := h.reader.Read(readContext, mux.Vars(r)["APP_ID"], updateIDs, from, to)
 	if err != nil {
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return

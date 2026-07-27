@@ -881,17 +881,24 @@ func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
 	defer teardown()
 
 	// The one exception, and it writes nothing durable: the crash detail is
-	// sent by the client exactly once, and the failures that land here are
-	// transient and correlated with the incident it documents. The recorder
-	// holds it in memory for the next poll that resolves.
-	t.Run("a refused poll still hands over its one-shot crash detail", func(t *testing.T) {
-		mockWorkingExpoResponse("staging")
+	// sent by the client exactly once, and a TRANSIENT resolution failure is
+	// correlated with the incident it documents. The recorder holds it in
+	// memory for the next poll that resolves.
+	t.Run("a transiently refused poll still hands over its crash detail", func(t *testing.T) {
+		httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+			func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("operationName") == "FetchExpoChannelMapping" {
+					return httpmock.NewStringResponse(http.StatusInternalServerError, ""), nil
+				}
+				return MockExpoAccountResponse(map[string]interface{}{
+					"id": "test_id", "username": "test_username", "email": "test_email",
+				})
+			})
 		r := checkInRequest("staging", "1")
-		r.Header.Set("expo-app-id", "no-such-app")
 		r.Header.Set("expo-fatal-error", "TypeError: undefined is not a function")
 
 		w, recorded := serveWithCheckInRecorder(r)
-		assert.Equal(t, 404, w.Code)
+		assert.Equal(t, 500, w.Code)
 		assert.Len(t, recorded, 1)
 		assert.True(t, recorded[0].Rejected, "the recorder must know this poll was refused")
 		assert.Equal(t, "TypeError: undefined is not a function", recorded[0].FatalError)
@@ -899,6 +906,22 @@ func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
 		// device that is not being registered.
 		assert.Equal(t, "", recorded[0].RemoteIP)
 		assert.Equal(t, "", recorded[0].CurrentUpdateID)
+	})
+
+	// A 4xx says the app or the channel does not exist, and that answer will
+	// not change on its own: there is no later poll to re-attach a detail to.
+	// Stashing there would let an unknown app id put an entry in the cache for
+	// an hour, once per request, through the very mechanism meant to avoid
+	// writing anything.
+	t.Run("a permanently refused poll hands over nothing at all", func(t *testing.T) {
+		mockWorkingExpoResponse("staging")
+		r := checkInRequest("staging", "1")
+		r.Header.Set("expo-app-id", "no-such-app")
+		r.Header.Set("expo-fatal-error", "TypeError: undefined is not a function")
+
+		w, recorded := serveWithCheckInRecorder(r)
+		assert.Equal(t, 404, w.Code)
+		assert.Empty(t, recorded)
 	})
 
 	t.Run("a channel that maps to no branch registers nothing", func(t *testing.T) {

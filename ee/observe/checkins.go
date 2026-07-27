@@ -64,6 +64,24 @@ func fatalStashKey(appID, easClientID string) string {
 	return "observe:fatal:" + appID + ":" + easClientID
 }
 
+// maxFatalErrorRunes bounds the crash detail before it is stored anywhere. It
+// arrives either as an OTLP attribute of a batch up to 16MB or as a manifest
+// header bounded only by the server's header limit, and from there it is copied
+// into PostgreSQL, into the outbox, into ClickHouse and into the cache stash,
+// so an unbounded value is amplified four times over. The client's own contract
+// truncates a log body at 4096 characters, and a crash message that needs more
+// than that is a stack trace nobody reads from a table cell.
+const maxFatalErrorRunes = 4096
+
+// boundFatalError caps the crash detail at maxFatalErrorRunes, counted in runes
+// so a multi-byte message is never cut mid-character.
+func boundFatalError(detail string) string {
+	if runes := []rune(detail); len(runes) > maxFatalErrorRunes {
+		return string(runes[:maxFatalErrorRunes])
+	}
+	return detail
+}
+
 // checkInState is a check-in reduced to its EFFECTIVE update-health state,
 // normalized so that every source describes the same device state with the
 // same strings. The wire is inconsistent on purpose-defeating details: the
@@ -97,7 +115,7 @@ type checkInState struct {
 }
 
 func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInState {
-	state := checkInState{fatalError: checkIn.FatalError, observedAt: checkIn.ObservedAt}
+	state := checkInState{fatalError: boundFatalError(checkIn.FatalError), observedAt: checkIn.ObservedAt}
 	// Never in the future. Telemetry timestamps are client-supplied and only
 	// clamped to a day of skew, and one device with a fast clock would
 	// otherwise record an observation no later check-in could beat, freezing
@@ -201,7 +219,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	if checkIn.Rejected {
 		if checkIn.FatalError != "" {
 			ttl := fatalStashTTLSeconds
-			_ = r.cache.Set(fatalStashKey(checkIn.AppID, checkIn.EASClientID), checkIn.FatalError, &ttl)
+			_ = r.cache.Set(fatalStashKey(checkIn.AppID, checkIn.EASClientID), boundFatalError(checkIn.FatalError), &ttl)
 		}
 		return
 	}

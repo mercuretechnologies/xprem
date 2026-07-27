@@ -42,6 +42,13 @@ const maxBatchBodyBytes = 16 << 20
 // ingestion request indefinitely. Each coalesced operation gets its own bound.
 const identityApplyTimeout = 5 * time.Second
 
+// identityPhaseTimeout bounds the operations TOGETHER. Per-operation bounds
+// multiply: sixty-four of them at five seconds each is a request entitled to
+// five minutes of a connection, which is not a bound at all. The phase gets the
+// budget, each operation still gets its own so one stall cannot eat all of it,
+// and whichever expires first answers 503, which keeps the batch on the device.
+const identityPhaseTimeout = 30 * time.Second
+
 // Per-batch ceilings on the PostgreSQL work one request can order. They are
 // NOT a second maxRecordsPerBatch: 10k records cost ONE ClickHouse insert,
 // while each of the three paths below costs a round trip per item, so the
@@ -62,7 +69,12 @@ const identityApplyTimeout = 5 * time.Second
 const (
 	maxIdentityOpsPerBatch    = 64
 	maxRuntimeSignalsPerBatch = 64
-	maxUpdateLookupsPerBatch  = 16
+	// How many (device, update) pairs one batch may write health for. Same
+	// reasoning as the signal ceiling and the same order of magnitude: a batch
+	// is one device's backlog, and a device runs one update at a time, so the
+	// pairs it can name are the updates it went through.
+	maxRuntimeGroupsPerBatch = 16
+	maxUpdateLookupsPerBatch = 16
 )
 
 // telemetryInsertTimeout bounds the ClickHouse write, which was the one store
@@ -388,8 +400,10 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		// to bound the transactions that survive the fold.
 		requests := keepNewestIdentityWork(
 			identity.CoalesceRequests(identityRequestsFromBatch(batch, appID, remoteIP)))
+		phaseContext, cancelPhase := context.WithTimeout(r.Context(), identityPhaseTimeout)
+		defer cancelPhase()
 		for _, req := range requests {
-			applyContext, cancelApply := context.WithTimeout(r.Context(), identityApplyTimeout)
+			applyContext, cancelApply := context.WithTimeout(phaseContext, identityApplyTimeout)
 			_, err := h.identityService.Apply(applyContext, req)
 			cancelApply()
 			if err != nil {
@@ -516,7 +530,20 @@ func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, r
 		return keys[i].update < keys[j].update
 	})
 
-	// Per group, not shared: what the registry has to get right is each
+	// The GROUPS are bounded first. Budgeting per group without bounding how
+	// many there are only moved the problem: a floor of one signal each turns
+	// ten thousand invented update ids into ten thousand round trips, which is
+	// the very thing the ceiling exists to stop. A batch is one device, and a
+	// device runs one update at a time, so the groups it can legitimately name
+	// are the updates it ran over the backlog.
+	if len(keys) > maxRuntimeGroupsPerBatch {
+		for _, key := range keys[maxRuntimeGroupsPerBatch:] {
+			observeHealthSignalsSkipped(len(grouped[key]))
+		}
+		keys = keys[:maxRuntimeGroupsPerBatch]
+	}
+
+	// Then per group, not shared: what the registry has to get right is each
 	// (device, update)'s FINAL state, and a budget spent in order would leave
 	// the last groups with nothing at all.
 	perGroup := max(1, maxRuntimeSignalsPerBatch/max(1, len(keys)))
@@ -615,7 +642,9 @@ func jsCrashMessage(attributes string) string {
 		return ""
 	}
 	message, _ := attrs["message"].(string)
-	return message
+	// Bounded here too, and not only on the manifest path: this one comes out
+	// of a batch body that may be 16MB, and it lands in the same columns.
+	return boundFatalError(message)
 }
 
 // identityRequestsFromBatch turns a decoded logs batch into the identity

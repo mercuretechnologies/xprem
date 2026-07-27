@@ -96,7 +96,9 @@ func resolveAppID(r *http.Request) string {
 // registry seam, and only that: no remote address, so nothing resolves a place
 // for a device we are not registering. A poll carrying no crash detail is not
 // reported at all, which keeps a refused request exactly as free of side
-// effects as it was.
+// effects as it was. The caller decides WHEN to reach here, and only does so
+// for a transient failure: there is nothing to hold a detail for when the
+// answer is that the app does not exist.
 func (h *ExpoProtocolHandler) reportRejectedCrash(r *http.Request, appId string, params services.ManifestRequestParams) {
 	if h.onDeviceCheckIn == nil || params.ClientID == "" || params.ExpoFatalError == "" {
 		return
@@ -168,20 +170,26 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 
 	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
 	if err != nil {
-		// The crash detail is the one thing this poll carries that no later
-		// poll can. The client sends it once, and the resolution failures that
-		// land here are transient (a channel mapping the control plane could
-		// not read) and correlated with the very incident the detail
-		// documents. So it is handed over even though the poll is refused,
-		// marked rejected: the recorder holds it in memory and re-attaches it
-		// to the next poll that resolves, writing nothing durable now.
-		h.reportRejectedCrash(r, appId, params)
 		var svcErr *services.ExpoProtocolError
+		status := http.StatusInternalServerError
+		message := "Internal operational error"
 		if errors.As(err, &svcErr) {
-			http.Error(w, svcErr.Message, svcErr.StatusCode)
-			return
+			status, message = svcErr.StatusCode, svcErr.Message
 		}
-		http.Error(w, "Internal operational error", http.StatusInternalServerError)
+		// The crash detail is the one thing this poll carries that no later
+		// poll can, so a resolution that failed TRANSIENTLY still hands it
+		// over: the recorder holds it in memory and re-attaches it to the next
+		// poll that resolves, writing nothing durable now.
+		//
+		// Only transiently. A 4xx says the app or the channel does not exist,
+		// and that answer will not change on its own, so there is no later poll
+		// to re-attach anything to. Stashing there would let an unknown app id
+		// put an entry in the cache for an hour, once per request, which is a
+		// growth path opened by the very mechanism meant to avoid writing.
+		if status >= http.StatusInternalServerError {
+			h.reportRejectedCrash(r, appId, params)
+		}
+		http.Error(w, message, status)
 		return
 	}
 

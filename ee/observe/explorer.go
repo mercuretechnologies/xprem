@@ -288,6 +288,13 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 // Deliberately not used by ReadOverview: it reads Postgres between the two
 // steps and returns early when there is no ClickHouse at all, so going through
 // here would make it pay for a cohort lookup it never uses.
+// telemetryReadTimeout bounds a ClickHouse read. Without one a degraded
+// ClickHouse holds the HTTP goroutine and its connection for as long as the
+// caller waits, and a dashboard refreshing on a timer stacks those up. The
+// write path has had its own bound since telemetryInsertTimeout; this is the
+// same reasoning for the side that runs on every page view.
+const telemetryReadTimeout = 30 * time.Second
+
 func (e *Explorer) prepareTelemetryRead(
 	ctx context.Context,
 	appID string,

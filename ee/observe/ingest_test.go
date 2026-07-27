@@ -626,6 +626,28 @@ func TestFlattenBoundsHostileResourceAttributes(t *testing.T) {
 // on the value the device last sent or on one it abandoned. The record cap
 // keeps the newest records for the same reason, and the two must not pull in
 // opposite directions on the same batch.
+// Budgeting per group without bounding how many groups there are only moved the
+// problem: a floor of one signal each turns ten thousand invented update ids
+// into ten thousand PostgreSQL round trips from one request.
+func TestRuntimeHealthBoundsTheNumberOfGroups(t *testing.T) {
+	mutator := &recordingMutator{}
+	handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+
+	device := "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
+	var resources []string
+	for i := 0; i < maxRuntimeGroupsPerBatch*10; i++ {
+		resources = append(resources, fmt.Sprintf(
+			`{"resource":{"attributes":[{"key":"expo.eas_client.id","value":{"stringValue":"%s"}},{"key":"expo.app.updates.id","value":{"stringValue":"%s"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":1767960489000000000,"attributes":[{"key":"event.name","value":{"stringValue":"%s"}}]}]}]}`,
+			device, uuid.NewString(), JSCrashEventName))
+	}
+	body := []byte(`{"resourceLogs":[` + strings.Join(resources, ",") + `]}`)
+
+	recorder := serveIngest(handler, http.MethodPost, logsPath, body)
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.LessOrEqual(t, len(mutator.runtime), maxRuntimeGroupsPerBatch,
+		"one request must not order a write per invented update id")
+}
+
 func TestKeepNewestIdentityWork(t *testing.T) {
 	value := func(req identity.Request) string { return req.Attributes["level"].(string) }
 

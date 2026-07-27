@@ -68,6 +68,35 @@ func RequestFromRecord(appID string, easClientID string, op Op, attributes map[s
 	return req, true
 }
 
+// sameScalar reports whether two wire values are the same, for the only shapes
+// a stored value can have. It exists because `==` on two `any` PANICS when the
+// dynamic type is uncomparable, and the decoder produces exactly those: an OTLP
+// arrayValue becomes []any and a kvlistValue becomes map[string]any, both legal
+// attribute values the SDK accepts. The panic surfaced as a 503, which the
+// published clients read as "retry", so one attribute holding a list turned a
+// batch into a poison pill the device replayed for ever.
+//
+// Anything that is not one of these four is reported as different, which costs
+// an extra group and never a wrong outcome. The store would drop such a value
+// anyway: coerceValue only ever yields a string, a number or a bool.
+func sameScalar(a, b any) bool {
+	switch left := a.(type) {
+	case string:
+		right, ok := b.(string)
+		return ok && left == right
+	case bool:
+		right, ok := b.(bool)
+		return ok && left == right
+	case int64:
+		right, ok := b.(int64)
+		return ok && left == right
+	case float64:
+		right, ok := b.(float64)
+		return ok && left == right
+	}
+	return false
+}
+
 // CoalesceRequests reduces ONE installation's operations to the fewest store
 // transactions that reach the SAME row, so a backlog does not cost one
 // transaction per operation. The SDK ships its whole backlog in a single POST,
@@ -138,7 +167,7 @@ func CoalesceRequests(requests []Request) []Request {
 		if held, taken := current.writes[name]; taken {
 			// Same operation, same value: the second one changes nothing
 			// whatever the schema decides, so it costs no group.
-			if held.op == op && held.value == value {
+			if held.op == op && sameScalar(held.value, value) {
 				return
 			}
 			current = &group{writes: map[string]write{}}

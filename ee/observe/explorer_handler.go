@@ -224,6 +224,17 @@ func (h *ExplorerHandler) metadataFilter(ctx context.Context, appID string, pair
 	return docs, nil
 }
 
+// boundedRead gives every telemetry read the same deadline. Without one a
+// degraded ClickHouse holds the HTTP goroutine and its connection for as long
+// as the caller waits, and a dashboard refreshing on a timer stacks those up
+// until the pool is gone. The write path has had telemetryInsertTimeout since
+// the ingestion work; this is the same reasoning for the side that runs on
+// every page view, and it covers the PostgreSQL cohort lookup that precedes
+// the ClickHouse query too.
+func boundedRead(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), telemetryReadTimeout)
+}
+
 func (h *ExplorerHandler) parseBaseQuery(r *http.Request, maximum time.Duration) (ExplorerQuery, error) {
 	from, to, err := parseExplorerTimes(r.URL.Query(), maximum)
 	if err != nil {
@@ -337,7 +348,9 @@ func (h *ExplorerHandler) GetEventsHandler(w http.ResponseWriter, r *http.Reques
 		handlers.RenderJSON(w, http.StatusOK, Events{Available: false, Events: []ObserveEventSeries{}})
 		return
 	}
-	events, err := h.reader.ReadEvents(r.Context(), mux.Vars(r)["APP_ID"], query)
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	events, err := h.reader.ReadEvents(readContext, mux.Vars(r)["APP_ID"], query)
 	if err != nil {
 		log.Printf("observe: reading events failed: %v", err)
 		h.renderQueryError(w, err)
@@ -360,7 +373,9 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 		})
 		return
 	}
-	overview, err := h.reader.ReadOverview(r.Context(), mux.Vars(r)["APP_ID"], query)
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	overview, err := h.reader.ReadOverview(readContext, mux.Vars(r)["APP_ID"], query)
 	if err != nil {
 		log.Printf("observe: reading overview failed: %v", err)
 		h.renderQueryError(w, err)
@@ -395,8 +410,10 @@ func (h *ExplorerHandler) GetCheckInsHandler(w http.ResponseWriter, r *http.Requ
 		handlers.RenderJSON(w, http.StatusOK, CheckInFeed{Cities: []ObserveLocation{}, Cursor: now})
 		return
 	}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
 	feed, err := h.reader.ReadCheckIns(
-		r.Context(),
+		readContext,
 		mux.Vars(r)["APP_ID"],
 		CheckInQuery{Since: since, Dimensions: dimensions},
 	)
@@ -452,7 +469,9 @@ func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Req
 		})
 		return
 	}
-	breakdown, err := h.reader.ReadBreakdown(r.Context(), mux.Vars(r)["APP_ID"], BreakdownQuery{
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	breakdown, err := h.reader.ReadBreakdown(readContext, mux.Vars(r)["APP_ID"], BreakdownQuery{
 		ExplorerQuery: base,
 		Metric:        metric,
 		Dimension:     dimension,
@@ -511,7 +530,9 @@ func (h *ExplorerHandler) GetLogsHandler(w http.ResponseWriter, r *http.Request)
 		handlers.RenderJSON(w, http.StatusOK, LogsPage{Available: false, Logs: []ObserveLog{}})
 		return
 	}
-	page, err := h.reader.ReadLogs(r.Context(), mux.Vars(r)["APP_ID"], LogsQuery{
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	page, err := h.reader.ReadLogs(readContext, mux.Vars(r)["APP_ID"], LogsQuery{
 		ExplorerQuery: base,
 		Severity:      severity,
 		Search:        search,

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -464,4 +465,28 @@ func TestParseCachedCheckInAcceptsLegacyValue(t *testing.T) {
 	assert.Equal(t, testUpdateA, current)
 	assert.Equal(t, "fabc", failedFP)
 	assert.Equal(t, "d42", deviceFP)
+}
+
+// The crash detail arrives either as an attribute of a batch up to 16MB or as a
+// manifest header, and from there it is copied into PostgreSQL, the outbox,
+// ClickHouse and the cache stash. Unbounded, one poll amplifies four times.
+func TestFatalErrorIsBoundedBeforeItIsStoredAnywhere(t *testing.T) {
+	store := &fakeTouchStore{}
+	localCache := cache.NewLocalCache()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+
+	huge := strings.Repeat("é", maxFatalErrorRunes*3)
+	recorder.Record(context.Background(), checkInWith(testUpdateA, `"`+testUpdateB+`"`, huge))
+
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.lastFatal != ""
+	}, 2*time.Second, 10*time.Millisecond)
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	// Counted in runes, so a multi-byte message is never cut mid-character.
+	require.Equal(t, maxFatalErrorRunes, len([]rune(store.lastFatal)))
+	require.True(t, utf8.ValidString(store.lastFatal))
 }
