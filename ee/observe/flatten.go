@@ -5,9 +5,10 @@
 package observe
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"expo-open-ota/ee/identity"
-	"hash/fnv"
 	"sort"
 	"strconv"
 	"time"
@@ -63,8 +64,11 @@ type Envelope struct {
 	Timestamp      time.Time
 	// Attributes carries the leftover point attributes as sorted JSON:
 	// setGlobalAttributes merges arbitrary user keys into every row.
-	Attributes  string
-	ContentHash uint64
+	Attributes string
+	// ContentKey is what folds a retried row onto the one already stored: the
+	// published clients re-send a whole batch after any non-2xx, so duplicates
+	// are a certainty rather than an edge case. See contentKey.
+	ContentKey uuid.UUID
 }
 
 // MetricRow mirrors the observe_metrics table.
@@ -318,12 +322,13 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 			}
 			// The raw nano (not the clamped time) goes into the hash so a
 			// retried batch hashes identically whenever it re-arrives.
-			row.ContentHash = contentHash(
+			hashParts := []string{
 				row.EASClientID, row.SessionID, row.UpdateID, row.MetricName,
 				strconv.FormatUint(point.TimeUnixNano, 10),
 				strconv.FormatFloat(point.Value, 'g', -1, 64),
 				row.RouteName, row.CustomParams, row.Attributes,
-			)
+			}
+			row.ContentKey = contentKey(hashParts...)
 			rows = append(rows, row)
 		}
 	}
@@ -363,13 +368,14 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 				IsFatal:        isFatal,
 				Body:           truncateRunes(record.Body, maxBodyRunes),
 			}
-			row.ContentHash = contentHash(
+			hashParts := []string{
 				row.EASClientID, row.SessionID, row.UpdateID, row.EventName,
 				strconv.FormatUint(record.TimeUnixNano, 10),
 				strconv.Itoa(int(record.SeverityNumber)), row.SeverityText,
 				strconv.FormatBool(row.IsFatal),
 				row.Body, row.Attributes,
-			)
+			}
+			row.ContentKey = contentKey(hashParts...)
 			rows = append(rows, row)
 		}
 	}
@@ -472,11 +478,39 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 // the attributes as an envelope field. Two downloads in one session would
 // otherwise share an identity. It is safe to include because it is read from
 // the wire and never resolved here.
-func contentHash(parts ...string) uint64 {
-	h := fnv.New64a()
+
+// contentKey is the identity a retried row is folded onto at read time.
+//
+// It replaced a 64-bit FNV over NUL-separated parts, and two things were wrong
+// with that, the second worse than the first.
+//
+// 128 bits instead of 64: a 64-bit fingerprint collides by birthday at roughly
+// 2.7% once an app holds a billion distinct contents, and a collision is
+// silent, since the read GROUPs BY this and simply stops showing one of the
+// two rows.
+//
+// Length-prefixed parts instead of a NUL separator: a NUL INSIDE a part could
+// take the place of a separator, so two different rows could be fed the same
+// bytes. On the metric path routeName and customParams are adjacent and both
+// arrive raw from the wire, which made the collision constructible rather than
+// merely possible: routeName "/checkout" with customParams "b\0c" hashed
+// identically to routeName "/checkout\0b" with customParams "c". A caller
+// could therefore make someone else's row disappear from a view. Widening
+// alone would not have fixed that, because both inputs really are the same
+// bytes; the length is what tells the boundaries apart.
+//
+// SHA-256 truncated rather than a faster 128-bit hash: it is in the standard
+// library, it removes any question of a chosen collision rather than only the
+// accidental kind, and next to what a row costs to store and read it is free.
+func contentKey(parts ...string) uuid.UUID {
+	h := sha256.New()
+	var length [8]byte
 	for _, part := range parts {
+		binary.LittleEndian.PutUint64(length[:], uint64(len(part)))
+		_, _ = h.Write(length[:])
 		_, _ = h.Write([]byte(part))
-		_, _ = h.Write([]byte{0})
 	}
-	return h.Sum64()
+	var key uuid.UUID
+	copy(key[:], h.Sum(nil)[:16])
+	return key
 }

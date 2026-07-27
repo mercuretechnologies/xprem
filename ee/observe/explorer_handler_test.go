@@ -190,7 +190,7 @@ func TestExplorerLogsRejectsInvalidCursor(t *testing.T) {
 }
 
 func TestLogCursorRoundTrip(t *testing.T) {
-	cursor := LogCursor{Timestamp: time.Date(2026, 7, 24, 10, 0, 0, 123, time.UTC), EventKey: 42}
+	cursor := LogCursor{Timestamp: time.Date(2026, 7, 24, 10, 0, 0, 123, time.UTC), EventKey: "5a2b1c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}
 	decoded, err := DecodeLogCursor(EncodeLogCursor(cursor))
 	require.NoError(t, err)
 	require.Equal(t, cursor, *decoded)
@@ -209,11 +209,14 @@ func TestLogCursorRefusesAnythingButAnExactKey(t *testing.T) {
 		require.Nil(t, decoded, "key %q", key)
 	}
 
-	// The shape the server itself mints still decodes.
-	valid := base64.RawURLEncoding.EncodeToString([]byte(timestamp + "|42"))
-	decoded, err := DecodeLogCursor(valid)
-	require.NoError(t, err)
-	require.EqualValues(t, 42, decoded.EventKey)
+	// Both shapes the server itself mints still decode: a content key, and the
+	// outbox id of a native crash.
+	for _, key := range []string{"5a2b1c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "42"} {
+		valid := base64.RawURLEncoding.EncodeToString([]byte(timestamp + "|" + key))
+		decoded, err := DecodeLogCursor(valid)
+		require.NoError(t, err, "key %q", key)
+		require.Equal(t, key, decoded.EventKey)
+	}
 }
 
 func TestExplorerHandlerParsesHardwareDimensions(t *testing.T) {

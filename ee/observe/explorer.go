@@ -513,9 +513,7 @@ func (e *Explorer) readSummary(ctx context.Context, appID string, query Explorer
 			       any(l.eas_build_id), any(l.update_id), any(l.session_id),
 			       any(l.platform), 1 AS is_event
 			FROM observe_logs l WHERE %s
-			GROUP BY if(l.content_hash = 0,
-			            cityHash64(l.eas_client_id, l.session_id, l.event_name, l.timestamp),
-			            l.content_hash)
+			GROUP BY l.content_key
 		)`, embeddedUpdateID, metricsWhere, dedupKey, logsWhere)
 	args := append(prependAppID(appID, metricsArgs), prependAppID(appID, logsArgs)...)
 	if err := e.clickhouse.Conn.QueryRow(ctx, sql, args...).Scan(
@@ -574,9 +572,7 @@ func (e *Explorer) readMetricStats(ctx context.Context, appID string, query Expl
 			       any(JSONHas(m.custom_params, 'expo.device.thermalState')) AS has_conditions
 			FROM %s
 			WHERE %s
-			GROUP BY if(m.content_hash = 0,
-			            cityHash64(m.eas_client_id, m.session_id, m.metric_name, m.timestamp, m.value),
-			            m.content_hash)
+			GROUP BY m.content_key
 		)
 		GROUP BY metric_name
 		ORDER BY count() DESC, metric_name
@@ -658,9 +654,7 @@ func (e *Explorer) readMetricPoints(
 			       any(m.value) AS value
 			FROM %s
 			WHERE %s
-			GROUP BY if(m.content_hash = 0,
-			            cityHash64(m.eas_client_id, m.session_id, m.metric_name, m.timestamp, m.value),
-			            m.content_hash)
+			GROUP BY m.content_key
 		)
 		GROUP BY metric_name, bucket
 		ORDER BY metric_name, bucket`, source, where)
@@ -705,7 +699,7 @@ func (e *Explorer) ReadEvents(ctx context.Context, appID string, query ExplorerQ
 			SELECT l.event_name, l.eas_client_id, l.session_id
 			FROM observe_logs l
 			WHERE %s
-			GROUP BY l.event_name, l.eas_client_id, l.session_id, l.timestamp, l.content_hash
+			GROUP BY l.event_name, l.eas_client_id, l.session_id, l.timestamp, l.content_key
 		)
 		GROUP BY event_name
 		ORDER BY count() DESC, event_name
@@ -744,7 +738,7 @@ func (e *Explorer) ReadEvents(ctx context.Context, appID string, query ExplorerQ
 			SELECT l.event_name, l.timestamp
 			FROM observe_logs l
 			WHERE %s AND l.event_name IN ?
-			GROUP BY l.event_name, l.eas_client_id, l.session_id, l.timestamp, l.content_hash
+			GROUP BY l.event_name, l.eas_client_id, l.session_id, l.timestamp, l.content_key
 		)
 		GROUP BY event_name, bucket
 		ORDER BY event_name, bucket`, where)

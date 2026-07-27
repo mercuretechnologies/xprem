@@ -42,7 +42,7 @@ func orZeroUUID(value string) string {
 
 // ingested_at is deliberately absent from both column lists: the server-side
 // DEFAULT now() stamps it, so a retried batch differs only in ingested_at and
-// query-time dedup on content_hash stays honest.
+// query-time dedup on content_key stays honest.
 func (s *ClickHouseTelemetrySink) InsertMetrics(ctx context.Context, rows []MetricRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -51,7 +51,7 @@ func (s *ClickHouseTelemetrySink) InsertMetrics(ctx context.Context, rows []Metr
 		(app_id, eas_client_id, update_id, update_group_id, branch, channel, runtime_version, platform,
 		 session_id, metric_name, value, route_name, custom_params, attributes,
 		 os_name, os_version, device_model, country_code, lat, lng, app_version, app_build_number,
-		 eas_build_id, environment, sdk_version, timestamp, content_hash)`)
+		 eas_build_id, environment, sdk_version, timestamp, content_key)`)
 	if err != nil {
 		return err
 	}
@@ -63,7 +63,7 @@ func (s *ClickHouseTelemetrySink) InsertMetrics(ctx context.Context, rows []Metr
 			row.Value, row.RouteName, row.CustomParams, row.Attributes,
 			row.OSName, row.OSVersion, row.DeviceModel, row.CountryCode, row.Lat, row.Lng, row.AppVersion,
 			row.AppBuildNumber, row.EASBuildID, row.Environment, row.SDKVersion,
-			row.Timestamp, row.ContentHash,
+			row.Timestamp, row.ContentKey,
 		); err != nil {
 			return err
 		}
@@ -79,7 +79,7 @@ func (s *ClickHouseTelemetrySink) InsertLogs(ctx context.Context, rows []LogRow)
 		(app_id, eas_client_id, update_id, update_group_id, branch, channel, runtime_version, platform,
 		 session_id, event_name, severity_number, severity_text, is_fatal, body, attributes,
 		 os_name, os_version, device_model, country_code, lat, lng, app_version, app_build_number,
-		 eas_build_id, environment, sdk_version, timestamp, content_hash)`)
+		 eas_build_id, environment, sdk_version, timestamp, content_key)`)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (s *ClickHouseTelemetrySink) InsertLogs(ctx context.Context, rows []LogRow)
 			row.SeverityNumber, row.SeverityText, isFatal, row.Body, row.Attributes,
 			row.OSName, row.OSVersion, row.DeviceModel, row.CountryCode, row.Lat, row.Lng, row.AppVersion,
 			row.AppBuildNumber, row.EASBuildID, row.Environment, row.SDKVersion,
-			row.Timestamp, row.ContentHash,
+			row.Timestamp, row.ContentKey,
 		); err != nil {
 			return err
 		}

@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/google/uuid"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,11 +35,14 @@ type LogsQuery struct {
 
 type LogCursor struct {
 	Timestamp time.Time
-	EventKey  uint64
+	// EventKey is a String since content_key: the three identity eras it can
+	// come from do not share a numeric type, and the cursor only ever compares
+	// and orders it.
+	EventKey string
 }
 
 type ObserveLog struct {
-	EventKey       uint64    `json:"eventKey,string"`
+	EventKey       string    `json:"eventKey"`
 	Timestamp      time.Time `json:"timestamp"`
 	EASClientID    string    `json:"easClientId"`
 	UpdateID       string    `json:"updateId"`
@@ -216,7 +220,7 @@ func (e *Explorer) ReadLogs(ctx context.Context, appID string, query LogsQuery) 
 		nativeSQL = `
 			UNION ALL
 			SELECT
-				outbox_id AS event_key,
+				toString(outbox_id) AS event_key,
 				argMax(occurred_at, ingested_at) AS timestamp,
 				argMax(eas_client_id, ingested_at) AS eas_client_id,
 				argMax(update_id, ingested_at) AS update_id,
@@ -280,9 +284,7 @@ func (e *Explorer) ReadLogs(ctx context.Context, appID string, query LogsQuery) 
 				argMax(sdk_version, ingested_at) AS sdk_version
 			FROM (
 				SELECT l.*,
-				       if(content_hash = 0,
-				          cityHash64(toString(eas_client_id), toString(session_id), event_name, body, toString(timestamp)),
-				          content_hash) AS event_key
+				       toString(content_key) AS event_key
 				FROM observe_logs l
 				WHERE %s
 			)
@@ -351,13 +353,26 @@ func DecodeLogCursor(raw string) (*LogCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ParseUint and not Sscan: Sscan stops at the first byte it cannot use and
-	// reports success on what it read, so "42junk" decodes to 42 and "0x10" to
-	// 16. A corrupted cursor would then page from a position nobody asked for
-	// instead of being refused.
-	eventKey, err := strconv.ParseUint(parts[1], 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid cursor key: %w", err)
+	// The key is text now, but not free text: it is the content key of a
+	// telemetry row, a UUID, or the outbox id of a native crash, a decimal
+	// number. Anything else is a corrupted cursor and is refused rather than
+	// paged from, which is the property the old strconv.ParseUint had: a
+	// tolerant parse would let "42junk" page from 42 and " 42" from somewhere
+	// else again, so a caller would silently get a window nobody asked for.
+	eventKey := parts[1]
+	if !isCursorKey(eventKey) {
+		return nil, fmt.Errorf("invalid cursor key")
 	}
 	return &LogCursor{Timestamp: timestamp, EventKey: eventKey}, nil
+}
+
+func isCursorKey(value string) bool {
+	if value == "" {
+		return false
+	}
+	if _, err := uuid.Parse(value); err == nil {
+		return true
+	}
+	_, err := strconv.ParseUint(value, 10, 64)
+	return err == nil
 }

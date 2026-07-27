@@ -77,11 +77,11 @@ func TestClickHouseTelemetrySinkRoundTrip(t *testing.T) {
 	require.EqualValues(t, 1, fatalCount)
 
 	// A published-SDK retry re-sends the identical batch: rows double, but
-	// uniqExact(content_hash) holds. This is the query-time dedup contract.
+	// uniqExact(content_key) holds. This is the query-time dedup contract.
 	require.NoError(t, sink.InsertLogs(ctx, logRows))
 	var total, distinct uint64
 	require.NoError(t, engine.Conn.QueryRow(ctx, `
-		SELECT count(), uniqExact(content_hash) FROM observe_logs WHERE app_id = ?`, appID,
+		SELECT count(), uniqExact(content_key) FROM observe_logs WHERE app_id = ?`, appID,
 	).Scan(&total, &distinct))
 	assert.EqualValues(t, 2*len(logRows), total)
 	assert.EqualValues(t, len(logRows), distinct)

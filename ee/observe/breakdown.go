@@ -368,13 +368,15 @@ func groupingSQL(grouping breakdownGrouping) (selected, aliases []sqlFragment) {
 // same data point can land twice. Grouping on one hash rather than on the six
 // columns it stands for is what keeps that collapse from costing more than the
 // aggregate it feeds.
-const dedupKey sqlFragment = `if(m.content_hash = 0,
-	            cityHash64(m.eas_client_id, m.session_id, m.metric_name, m.timestamp, m.value),
-	            m.content_hash)`
+// A published client re-sends an entire batch after any failed dispatch, so
+// the same data point can land twice. Grouping on one key rather than on the
+// six columns it stands for is what keeps that collapse from costing more than
+// the aggregate it feeds.
+const dedupKey sqlFragment = `m.content_key`
 
 // The inner GROUP BY is the deduplication the rest of the explorer uses: a
 // published client re-sends an entire batch after any failed dispatch, so the
-// same data point can land twice and content_hash is what collapses it.
+// same data point can land twice and content_key is what collapses it.
 func (e *Explorer) ReadBreakdown(
 	ctx context.Context,
 	appID string,

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +61,7 @@ func TestFlattenMetricsIOS(t *testing.T) {
 	assert.Contains(t, tti.CustomParams, "expo.frameRate.slowFrames")
 	// In-range wire timestamp preserved, not clamped.
 	assert.Equal(t, time.Unix(0, 1767960489000000000).UTC(), tti.Timestamp)
-	assert.NotZero(t, tti.ContentHash)
+	assert.NotEqual(t, uuid.UUID{}, tti.ContentKey)
 
 	nav := rows[1]
 	assert.Equal(t, "expo.navigation.cold_ttr", nav.MetricName)
@@ -172,7 +173,7 @@ func TestFlattenDeterministicHashes(t *testing.T) {
 	// A retried batch hashes identically whenever it re-arrives: the hash
 	// reads the raw wire nano, never the (time-dependent) clamped value.
 	for i := range rows1 {
-		assert.Equal(t, rows1[i].ContentHash, rows2[i].ContentHash, "row %d", i)
+		assert.Equal(t, rows1[i].ContentKey, rows2[i].ContentKey, "row %d", i)
 	}
 }
 
@@ -193,19 +194,19 @@ func logsWithoutSession(clientID, body string) []byte {
 		"attributes":[{"key":"event.name","value":{"stringValue":"exception"}}]}]}]}]}`)
 }
 
-func hashOfSingleLog(t *testing.T, body []byte) uint64 {
+func hashOfSingleLog(t *testing.T, body []byte) uuid.UUID {
 	t.Helper()
 	batch, err := DecodeLogs(bytes.NewReader(body))
 	require.NoError(t, err)
 	rows := FlattenLogs("app-1", batch, time.Now().UTC())
 	require.Len(t, rows, 1)
-	return rows[0].ContentHash
+	return rows[0].ContentKey
 }
 
 // Two phones logging the same line at the same instant are two records, and the
 // dedup key has to say so. Without the device in the hash they shared one, since
 // a missing session collapses onto a single value for the whole fleet.
-func TestContentHashSeparatesDevicesWithoutASession(t *testing.T) {
+func TestContentKeySeparatesDevicesWithoutASession(t *testing.T) {
 	first := hashOfSingleLog(t, logsWithoutSession("8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "fetch failed"))
 	second := hashOfSingleLog(t, logsWithoutSession("7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d", "fetch failed"))
 	require.NotEqual(t, first, second, "two devices must not share one dedup identity")
@@ -219,7 +220,7 @@ func TestContentHashSeparatesDevicesWithoutASession(t *testing.T) {
 // is_fatal and severity_text are stored columns pulled out of the attributes, so
 // they are not covered by the attributes JSON the hash already carries. Two rows
 // that read differently on screen must not share an identity.
-func TestContentHashSeparatesFatalFromNonFatal(t *testing.T) {
+func TestContentKeySeparatesFatalFromNonFatal(t *testing.T) {
 	const client = "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
 	plain := logsWithoutSession(client, "boom")
 	fatal := []byte(strings.Replace(string(plain),

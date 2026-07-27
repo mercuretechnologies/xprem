@@ -6,6 +6,7 @@ package observe
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
 				UpdateID:      ZeroUpdateID,
 				UpdateGroupID: ZeroUpdateID,
 				Timestamp:     now.Add(-time.Minute),
-				ContentHash:   uint64(len(name)) + uint64(value*1000),
+				ContentKey:    contentKey(name, fmt.Sprint(value)),
 			},
 			MetricName: name,
 			Value:      value,

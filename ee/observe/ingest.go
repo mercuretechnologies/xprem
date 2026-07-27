@@ -450,7 +450,7 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	// non-identity records; each ingesting device is also registered in the
 	// universal registry (debounced). On insert failure, 503 preserves the
 	// batch; the identity re-apply on that retry is idempotent, and the
-	// identical re-flattened rows carry the same content_hash for query-time
+	// identical re-flattened rows carry the same content_key for query-time
 	// dedup.
 	rows := FlattenLogs(appID, batch, time.Now().UTC())
 	// JS crash reports are projected into the failure registry before the
