@@ -1671,3 +1671,55 @@ func TestListDevicesAcceptsSeveralValues(t *testing.T) {
 	require.Len(t, single, 1)
 	require.Equal(t, onFirst, single[0].EASClientID)
 }
+
+// The stats of a whole mutation settle in two statements, whatever its size.
+// This used to be three per key executed one at a time, so a hundred-key
+// mutation cost three hundred sequential round trips with the transaction and
+// its row locks held throughout.
+//
+// What the batching must not change is the arithmetic, so this walks a wide
+// mutation through a full move: every key set, then every key changed at once.
+func TestApplySetCountsAWideMutation(t *testing.T) {
+	store, pool := setupIdentityStore(t)
+	appID := seedApp(t, pool)
+	ctx := context.Background()
+
+	const keyCount = 60
+	first := map[string]any{}
+	second := map[string]any{}
+	for i := 0; i < keyCount; i++ {
+		key := fmt.Sprintf("k%02d", i)
+		declareKey(t, store, appID, key, ValueTypeString)
+		first[key] = "before"
+		second[key] = "after"
+	}
+
+	clientID := uuid.NewString()
+	_, err := store.ApplySet(ctx, appID, clientID, first, nil)
+	require.NoError(t, err)
+	for i := 0; i < keyCount; i++ {
+		values, err := store.SearchMetadataValues(ctx, appID, fmt.Sprintf("k%02d", i), "", 10)
+		require.NoError(t, err)
+		require.Equal(t, []ValueCount{{Value: "before", DeviceCount: 1}}, values)
+	}
+
+	// Sixty decrements and sixty increments in one ordered statement.
+	_, err = store.ApplySet(ctx, appID, clientID, second, nil)
+	require.NoError(t, err)
+	for i := 0; i < keyCount; i++ {
+		key := fmt.Sprintf("k%02d", i)
+		values, err := store.SearchMetadataValues(ctx, appID, key, "", 10)
+		require.NoError(t, err)
+		require.Equal(t, []ValueCount{{Value: "after", DeviceCount: 1}}, values,
+			"%s: the emptied value must be pruned, not left at zero", key)
+	}
+
+	// Two devices on the same value count twice, which is the whole point of
+	// the table: the autocomplete ranks by how many devices carry a value.
+	other := uuid.NewString()
+	_, err = store.ApplySet(ctx, appID, other, map[string]any{"k00": "after"}, nil)
+	require.NoError(t, err)
+	values, err := store.SearchMetadataValues(ctx, appID, "k00", "", 10)
+	require.NoError(t, err)
+	require.Equal(t, []ValueCount{{Value: "after", DeviceCount: 2}}, values)
+}

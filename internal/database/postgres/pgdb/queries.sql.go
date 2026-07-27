@@ -65,6 +65,65 @@ func (q *Queries) AdvanceAuditExportCursor(ctx context.Context, arg AdvanceAudit
 	return q.db.Exec(ctx, advanceAuditExportCursor, arg.LastExportedID, arg.LastExportedID_2)
 }
 
+const applyIdentityValueStats = `-- name: ApplyIdentityValueStats :exec
+INSERT INTO identity_value_stats (app_id, key, value, device_count)
+SELECT $1, t.key, t.value, t.delta
+FROM (
+    SELECT unnest($2::TEXT[])   AS key,
+           unnest($3::TEXT[]) AS value,
+           unnest($4::INT[])  AS delta
+) AS t
+WHERE t.delta > 0
+   OR EXISTS (
+       SELECT 1 FROM identity_value_stats s
+       WHERE s.app_id = $1 AND s.key = t.key AND s.value = t.value
+   )
+ORDER BY t.key, t.value
+ON CONFLICT (app_id, key, value) DO UPDATE SET
+    device_count = GREATEST(identity_value_stats.device_count + EXCLUDED.device_count, 0),
+    last_seen_at = CURRENT_TIMESTAMP
+`
+
+type ApplyIdentityValueStatsParams struct {
+	AppID  pgtype.UUID `json:"app_id"`
+	Keys   []string    `json:"keys"`
+	Values []string    `json:"values"`
+	Deltas []int32     `json:"deltas"`
+}
+
+// Per-value device counts, kept in step with the merges that produce them and
+// read back by autocomplete. The decrement floors at zero instead of deleting
+// the row, because the delete would have to run inside the same lock ordering
+// as the merge to be safe, and a row at zero is harmless: the third statement
+// sweeps it afterwards, outside the hot path. A count that drifted below zero
+// would be unrecoverable, one that lingers at zero is not.
+// ONE statement for the whole mutation, increments and decrements together,
+// and that is not a detail: the ordering these rows are locked in is what
+// keeps two devices sharing a stat row (same tenant, same plan) from
+// deadlocking, and it has to hold across ALL of a transaction's ops, not
+// within each direction. Splitting into "every increment, then every
+// decrement" would let A lock acme then globex while B locks globex then
+// acme, which is the deadlock the caller's sort exists to prevent.
+//
+// ORDER BY inside the SELECT is therefore load-bearing: rows are processed,
+// and their conflicts locked, in that order. The caller sorts too, so the two
+// agree.
+//
+// The WHERE keeps a decrement of a row that does not exist a no-op, which is
+// what the plain UPDATE did before: the EXISTS reads without locking, so it
+// adds nothing to the ordering. And the conflict arm floors at zero, because a
+// count that drifted below zero would be unrecoverable while one lingering at
+// zero is swept by the statement below.
+func (q *Queries) ApplyIdentityValueStats(ctx context.Context, arg ApplyIdentityValueStatsParams) error {
+	_, err := q.db.Exec(ctx, applyIdentityValueStats,
+		arg.AppID,
+		arg.Keys,
+		arg.Values,
+		arg.Deltas,
+	)
+	return err
+}
+
 const clearUpdateRollout = `-- name: ClearUpdateRollout :execrows
 UPDATE updates
 SET rollout_percentage = NULL
@@ -347,23 +406,6 @@ func (q *Queries) CountUpdateFailures(ctx context.Context, arg CountUpdateFailur
 	return count, err
 }
 
-const decrementIdentityValueStat = `-- name: DecrementIdentityValueStat :exec
-UPDATE identity_value_stats
-SET device_count = GREATEST(device_count - 1, 0)
-WHERE app_id = $1 AND key = $2 AND value = $3
-`
-
-type DecrementIdentityValueStatParams struct {
-	AppID pgtype.UUID `json:"app_id"`
-	Key   string      `json:"key"`
-	Value string      `json:"value"`
-}
-
-func (q *Queries) DecrementIdentityValueStat(ctx context.Context, arg DecrementIdentityValueStatParams) error {
-	_, err := q.db.Exec(ctx, decrementIdentityValueStat, arg.AppID, arg.Key, arg.Value)
-	return err
-}
-
 const deleteAppByID = `-- name: DeleteAppByID :execresult
 DELETE FROM apps
 WHERE id = $1
@@ -525,17 +567,24 @@ func (q *Queries) DeleteUserByID(ctx context.Context, id pgtype.UUID) (pgconn.Co
 
 const deleteZeroIdentityValueStats = `-- name: DeleteZeroIdentityValueStats :exec
 DELETE FROM identity_value_stats
-WHERE app_id = $1 AND key = $2 AND value = $3 AND device_count <= 0
+WHERE app_id = $1
+  AND device_count <= 0
+  AND (key, value) IN (
+      SELECT unnest($2::TEXT[]), unnest($3::TEXT[])
+  )
 `
 
 type DeleteZeroIdentityValueStatsParams struct {
-	AppID pgtype.UUID `json:"app_id"`
-	Key   string      `json:"key"`
-	Value string      `json:"value"`
+	AppID  pgtype.UUID `json:"app_id"`
+	Keys   []string    `json:"keys"`
+	Values []string    `json:"values"`
 }
 
+// Sweeps the rows the statement above left at zero, in one pass over the pairs
+// it touched. Same rows, already locked by it, so this introduces no new
+// ordering.
 func (q *Queries) DeleteZeroIdentityValueStats(ctx context.Context, arg DeleteZeroIdentityValueStatsParams) error {
-	_, err := q.db.Exec(ctx, deleteZeroIdentityValueStats, arg.AppID, arg.Key, arg.Value)
+	_, err := q.db.Exec(ctx, deleteZeroIdentityValueStats, arg.AppID, arg.Keys, arg.Values)
 	return err
 }
 
@@ -2274,31 +2323,6 @@ func (q *Queries) HasActiveRolloutUpdate(ctx context.Context, arg HasActiveRollo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const incrementIdentityValueStat = `-- name: IncrementIdentityValueStat :exec
-INSERT INTO identity_value_stats (app_id, key, value, device_count)
-VALUES ($1, $2, $3, 1)
-ON CONFLICT (app_id, key, value) DO UPDATE SET
-    device_count = identity_value_stats.device_count + 1,
-    last_seen_at = CURRENT_TIMESTAMP
-`
-
-type IncrementIdentityValueStatParams struct {
-	AppID pgtype.UUID `json:"app_id"`
-	Key   string      `json:"key"`
-	Value string      `json:"value"`
-}
-
-// Per-value device counts, kept in step with the merges that produce them and
-// read back by autocomplete. The decrement floors at zero instead of deleting
-// the row, because the delete would have to run inside the same lock ordering
-// as the merge to be safe, and a row at zero is harmless: the third statement
-// sweeps it afterwards, outside the hot path. A count that drifted below zero
-// would be unrecoverable, one that lingers at zero is not.
-func (q *Queries) IncrementIdentityValueStat(ctx context.Context, arg IncrementIdentityValueStatParams) error {
-	_, err := q.db.Exec(ctx, incrementIdentityValueStat, arg.AppID, arg.Key, arg.Value)
-	return err
 }
 
 const insertApiKey = `-- name: InsertApiKey :one

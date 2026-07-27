@@ -219,11 +219,23 @@ func (s *PostgresIdentityStore) ApplyUnset(ctx context.Context, appID string, ea
 	return s.mutate(ctx, appID, easClientID, mutationUnset, nil, keys, geo)
 }
 
-// applyStatOps settles a batch of per-value stat mutations inside the
-// caller's transaction. The sort makes every writer touch (key, value) rows
-// in the same order, which is what keeps concurrent mutations deadlock-free;
-// the decrement-first tie-break just keeps the order fully deterministic.
+// applyStatOps settles a batch of per-value stat mutations inside the caller's
+// transaction, in TWO statements whatever the size of the batch. It used to be
+// three per key, executed one at a time: a hundred-key mutation cost three
+// hundred sequential round trips, with the transaction and its row locks held
+// for all of them, on the hottest path in the product.
+//
+// The sort survives the change and is still the point. It makes every writer
+// touch (key, value) rows in the same order, which is what keeps two devices
+// sharing a stat row (same tenant, same plan) from deadlocking, and it has to
+// hold across the WHOLE batch rather than within each direction: increments
+// and decrements therefore travel in one ordered statement rather than one
+// statement each. The decrement-first tie-break just keeps the order fully
+// deterministic.
 func applyStatOps(ctx context.Context, q *pgdb.Queries, appUUID pgtype.UUID, ops []statOp) error {
+	if len(ops) == 0 {
+		return nil
+	}
 	sort.Slice(ops, func(i, j int) bool {
 		if ops[i].key != ops[j].key {
 			return ops[i].key < ops[j].key
@@ -233,24 +245,30 @@ func applyStatOps(ctx context.Context, q *pgdb.Queries, appUUID pgtype.UUID, ops
 		}
 		return ops[i].decrement
 	})
-	for _, op := range ops {
+
+	keys := make([]string, len(ops))
+	values := make([]string, len(ops))
+	deltas := make([]int32, len(ops))
+	for i, op := range ops {
+		keys[i], values[i] = op.key, op.value
 		if op.decrement {
-			decParams := pgdb.DecrementIdentityValueStatParams{AppID: appUUID, Key: op.key, Value: op.value}
-			if err := q.DecrementIdentityValueStat(ctx, decParams); err != nil {
-				return fmt.Errorf("decrementing value stat: %w", err)
-			}
-			// Prune immediately: same row, already locked by the
-			// decrement, so this cannot introduce a new lock ordering.
-			delParams := pgdb.DeleteZeroIdentityValueStatsParams{AppID: appUUID, Key: op.key, Value: op.value}
-			if err := q.DeleteZeroIdentityValueStats(ctx, delParams); err != nil {
-				return fmt.Errorf("pruning zero value stat: %w", err)
-			}
-			continue
+			deltas[i] = -1
+		} else {
+			deltas[i] = 1
 		}
-		incParams := pgdb.IncrementIdentityValueStatParams{AppID: appUUID, Key: op.key, Value: op.value}
-		if err := q.IncrementIdentityValueStat(ctx, incParams); err != nil {
-			return fmt.Errorf("incrementing value stat: %w", err)
-		}
+	}
+
+	if err := q.ApplyIdentityValueStats(ctx, pgdb.ApplyIdentityValueStatsParams{
+		AppID: appUUID, Keys: keys, Values: values, Deltas: deltas,
+	}); err != nil {
+		return fmt.Errorf("applying value stats: %w", err)
+	}
+	// The rows the statement above floored at zero, swept in one pass over the
+	// pairs it touched: same rows, already locked by it, so no new ordering.
+	if err := q.DeleteZeroIdentityValueStats(ctx, pgdb.DeleteZeroIdentityValueStatsParams{
+		AppID: appUUID, Keys: keys, Values: values,
+	}); err != nil {
+		return fmt.Errorf("pruning zero value stats: %w", err)
 	}
 	return nil
 }

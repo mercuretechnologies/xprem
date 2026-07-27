@@ -1194,21 +1194,51 @@ RETURNING *;
 -- as the merge to be safe, and a row at zero is harmless: the third statement
 -- sweeps it afterwards, outside the hot path. A count that drifted below zero
 -- would be unrecoverable, one that lingers at zero is not.
--- name: IncrementIdentityValueStat :exec
+-- ONE statement for the whole mutation, increments and decrements together,
+-- and that is not a detail: the ordering these rows are locked in is what
+-- keeps two devices sharing a stat row (same tenant, same plan) from
+-- deadlocking, and it has to hold across ALL of a transaction's ops, not
+-- within each direction. Splitting into "every increment, then every
+-- decrement" would let A lock acme then globex while B locks globex then
+-- acme, which is the deadlock the caller's sort exists to prevent.
+--
+-- ORDER BY inside the SELECT is therefore load-bearing: rows are processed,
+-- and their conflicts locked, in that order. The caller sorts too, so the two
+-- agree.
+--
+-- The WHERE keeps a decrement of a row that does not exist a no-op, which is
+-- what the plain UPDATE did before: the EXISTS reads without locking, so it
+-- adds nothing to the ordering. And the conflict arm floors at zero, because a
+-- count that drifted below zero would be unrecoverable while one lingering at
+-- zero is swept by the statement below.
+-- name: ApplyIdentityValueStats :exec
 INSERT INTO identity_value_stats (app_id, key, value, device_count)
-VALUES ($1, $2, $3, 1)
+SELECT $1, t.key, t.value, t.delta
+FROM (
+    SELECT unnest(sqlc.arg(keys)::TEXT[])   AS key,
+           unnest(sqlc.arg(values)::TEXT[]) AS value,
+           unnest(sqlc.arg(deltas)::INT[])  AS delta
+) AS t
+WHERE t.delta > 0
+   OR EXISTS (
+       SELECT 1 FROM identity_value_stats s
+       WHERE s.app_id = $1 AND s.key = t.key AND s.value = t.value
+   )
+ORDER BY t.key, t.value
 ON CONFLICT (app_id, key, value) DO UPDATE SET
-    device_count = identity_value_stats.device_count + 1,
+    device_count = GREATEST(identity_value_stats.device_count + EXCLUDED.device_count, 0),
     last_seen_at = CURRENT_TIMESTAMP;
 
--- name: DecrementIdentityValueStat :exec
-UPDATE identity_value_stats
-SET device_count = GREATEST(device_count - 1, 0)
-WHERE app_id = $1 AND key = $2 AND value = $3;
-
+-- Sweeps the rows the statement above left at zero, in one pass over the pairs
+-- it touched. Same rows, already locked by it, so this introduces no new
+-- ordering.
 -- name: DeleteZeroIdentityValueStats :exec
 DELETE FROM identity_value_stats
-WHERE app_id = $1 AND key = $2 AND value = $3 AND device_count <= 0;
+WHERE app_id = $1
+  AND device_count <= 0
+  AND (key, value) IN (
+      SELECT unnest(sqlc.arg(keys)::TEXT[]), unnest(sqlc.arg(values)::TEXT[])
+  );
 
 -- Autocomplete, empty-search arm: top values of a key by device count.
 -- Deliberately a separate query from SearchIdentityValues: an OR'd
