@@ -10,11 +10,15 @@ package observe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"expo-open-ota/internal/cache"
 	"expo-open-ota/internal/database/postgres/pgdb"
 )
 
@@ -64,29 +68,28 @@ const observeLocationLimit = 500
 // The map answers to the same dimensions as the inventory it draws. Build
 // dimensions (channel, app version, EAS build, environment) are deliberately
 // absent: the registry never learns them, they exist only on telemetry rows.
-func (e *Explorer) locations(
-	ctx context.Context,
+func (e *Explorer) locationParams(
 	appID string,
 	activeSince time.Time,
 	query ExplorerQuery,
-) ([]ObserveLocation, error) {
+) (pgdb.ListObserveLocationsParams, error) {
 	appUUID, err := toPGUUID(appID)
 	if err != nil {
-		return nil, err
+		return pgdb.ListObserveLocationsParams{}, err
 	}
 	clientIDs, err := toPGUUIDs(query.EASClientIDs)
 	if err != nil {
-		return nil, err
+		return pgdb.ListObserveLocationsParams{}, err
 	}
 	updateIDs, err := toPGUUIDs(query.UpdateIDs)
 	if err != nil {
-		return nil, err
+		return pgdb.ListObserveLocationsParams{}, err
 	}
 	publishGroups, err := toPGUUIDs(query.UpdateGroupIDs)
 	if err != nil {
-		return nil, err
+		return pgdb.ListObserveLocationsParams{}, err
 	}
-	rows, err := e.postgres.ListObserveLocations(ctx, pgdb.ListObserveLocationsParams{
+	return pgdb.ListObserveLocationsParams{
 		AppID:           appUUID,
 		ActiveSince:     pgtype.Timestamptz{Time: activeSince.UTC(), Valid: true},
 		Filters:         query.MetadataFilter,
@@ -100,7 +103,97 @@ func (e *Explorer) locations(
 		Branch:          query.Branches,
 		RuntimeVersion:  query.RuntimeVersions,
 		Platform:        query.Platform,
-	})
+	}, nil
+}
+
+func (e *Explorer) locations(
+	ctx context.Context,
+	appID string,
+	activeSince time.Time,
+	query ExplorerQuery,
+) ([]ObserveLocation, error) {
+	params, err := e.locationParams(appID, activeSince, query)
+	if err != nil {
+		return nil, err
+	}
+	return e.runLocations(ctx, params)
+}
+
+// mapCacheTTLSeconds is how long one city aggregate is reused. Five seconds is
+// the poll cadence of the tightest period the dashboard offers ("last hour"),
+// so a lone viewer notices nothing, while every extra viewer within the window
+// is served for free.
+//
+// The staleness it buys back costs nothing visible, and that is a property of
+// the design rather than a hope: the map draws its SHAPE from this aggregate
+// and animates arrivals from ReadCheckIns, which reads the last thirty seconds
+// through an index and stays uncached. A device that checks in during the
+// window still appears, through the live feed, and is folded into the
+// aggregate at the next refresh.
+const mapCacheTTLSeconds = 5
+
+// cachedLocations serves the map's static layer, which is the expensive half.
+// It aggregates every device seen since the start of the selected period, so
+// on "last 7 days" that is the whole active fleet, and the dashboard refetches
+// it on a timer while live mode is on. Without this, ten open tabs are ten
+// identical scans of the same rows every few seconds.
+//
+// Deliberately NOT used by ReadCheckIns: that one is keyed on a cursor each
+// viewer owns, so two viewers never share a key, and it is cheap anyway.
+//
+// The key is derived from the query PARAMETERS rather than assembled by hand,
+// which is what makes it safe: a filter added to the struct later joins the
+// key without anyone remembering to, where a hand-written key would quietly
+// start serving one filter's answer to another.
+func (e *Explorer) cachedLocations(
+	ctx context.Context,
+	appID string,
+	activeSince time.Time,
+	query ExplorerQuery,
+) ([]ObserveLocation, error) {
+	params, err := e.locationParams(appID, activeSince, query)
+	if err != nil {
+		return nil, err
+	}
+
+	key := mapCacheKey(params)
+	store := cache.GetCache()
+	if payload := store.Get(key); payload != "" {
+		var cached []ObserveLocation
+		if json.Unmarshal([]byte(payload), &cached) == nil {
+			return cached, nil
+		}
+		// Unreadable is treated as absent: a payload written by an older
+		// shape must cost a query, never an error.
+	}
+
+	locations, err := e.runLocations(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if payload, err := json.Marshal(locations); err == nil {
+		ttl := mapCacheTTLSeconds
+		// Best effort. A cache that refuses the write costs the next caller a
+		// query, which is exactly where we were before.
+		_ = store.Set(key, string(payload), &ttl)
+	}
+	return locations, nil
+}
+
+// mapCacheKey fingerprints the parameters the query actually receives. SHA-256
+// rather than something cheaper because a collision here does not lose a row,
+// it serves one app or one filter set the answer belonging to another, and the
+// hash is free next to the scan it saves.
+func mapCacheKey(params pgdb.ListObserveLocationsParams) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", params)))
+	return "observe:map:" + hex.EncodeToString(sum[:])
+}
+
+func (e *Explorer) runLocations(
+	ctx context.Context,
+	params pgdb.ListObserveLocationsParams,
+) ([]ObserveLocation, error) {
+	rows, err := e.postgres.ListObserveLocations(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("listing observe locations: %w", err)
 	}

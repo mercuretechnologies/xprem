@@ -419,7 +419,7 @@ func (e *Explorer) ReadOverview(ctx context.Context, appID string, query Explore
 			Locations: []ObserveLocation{},
 		}, nil
 	}
-	locations, err := e.locations(ctx, appID, query.From, query)
+	locations, err := e.cachedLocations(ctx, appID, query.From, query)
 	if err != nil {
 		return Overview{}, err
 	}
