@@ -143,6 +143,16 @@ func TestHealthHistoryHandlerRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// segmentsAllowed builds the handler with the segmented mode authorized. The
+// permission itself is covered by TestHealthHistorySegmentsNeedTheObservePermission;
+// every other test here is about the shape of the answer, and would otherwise
+// be asserting the refusal by accident.
+func segmentsAllowed(reader HealthHistoryReader) *HealthHistoryHandler {
+	handler := NewHealthHistoryHandler(reader)
+	handler.SetSegmentAuthorizer(func(http.ResponseWriter, *http.Request) bool { return true })
+	return handler
+}
+
 // A split changes the shape of the answer: keys become segment values, and an
 // unknown dimension is refused rather than silently ignored.
 func TestHealthHistorySplitsBySegment(t *testing.T) {
@@ -153,7 +163,7 @@ func TestHealthHistorySplitsBySegment(t *testing.T) {
 	}
 	updateID := uuid.NewString()
 	recorder := serveHealthHistory(
-		NewHealthHistoryHandler(reader),
+		segmentsAllowed(reader),
 		uuid.NewString(),
 		"ids="+updateID+"&dimension=deviceModel",
 	)
@@ -171,11 +181,46 @@ func TestHealthHistorySplitsBySegment(t *testing.T) {
 	require.Len(t, response.Segments["SM-A546B"], 1)
 
 	rejected := serveHealthHistory(
-		NewHealthHistoryHandler(&recordingHealthHistoryReader{}),
+		segmentsAllowed(&recordingHealthHistoryReader{}),
 		uuid.NewString(),
 		"ids="+updateID+"&dimension=easClientId",
 	)
 	require.Equal(t, http.StatusBadRequest, rejected.Code)
+}
+
+// The route is open to any account that can see the app, because the plain
+// series feeds the updates table and the rollout card. The SEGMENTED mode is
+// not: it splits by device_model, os_version, country_code and their
+// neighbours, the very columns /observe/breakdown groups by under
+// observe:read. Without this check the endpoint would be a way around that
+// permission, reachable by a member holding a bare grant and nothing else.
+func TestHealthHistorySegmentsNeedTheObservePermission(t *testing.T) {
+	updateID := uuid.NewString()
+
+	// Refused: the authorizer says no, and the reader is never asked.
+	reader := &recordingHealthHistoryReader{}
+	handler := NewHealthHistoryHandler(reader)
+	handler.SetSegmentAuthorizer(func(w http.ResponseWriter, _ *http.Request) bool {
+		w.WriteHeader(http.StatusForbidden)
+		return false
+	})
+	refused := serveHealthHistory(handler, uuid.NewString(), "ids="+updateID+"&dimension=country")
+	require.Equal(t, http.StatusForbidden, refused.Code)
+	require.Empty(t, reader.dimension, "a refused split must not reach the reader")
+
+	// The same account still reads the plain series: that is the whole point
+	// of gating the mode rather than the route.
+	plain := serveHealthHistory(handler, uuid.NewString(), "ids="+updateID)
+	require.Equal(t, http.StatusOK, plain.Code)
+
+	// And an unwired authorizer refuses too: an ungated seam is a wiring
+	// mistake, and guessing "allow" here hands out fleet-wide breakdowns.
+	unwired := serveHealthHistory(
+		NewHealthHistoryHandler(&recordingHealthHistoryReader{}),
+		uuid.NewString(),
+		"ids="+updateID+"&dimension=country",
+	)
+	require.Equal(t, http.StatusForbidden, unwired.Code)
 }
 
 // A split rebuilds a device-by-bucket grid from raw events, so an unbounded
@@ -206,7 +251,7 @@ func TestHealthHistoryHandlerBoundsTheWindow(t *testing.T) {
 // empty one.
 func TestHealthHistoryUnavailableKeepsTheRequestedShape(t *testing.T) {
 	recorder := serveHealthHistory(
-		NewHealthHistoryHandler(nil),
+		segmentsAllowed(nil),
 		uuid.NewString(),
 		"ids="+uuid.NewString()+"&dimension=deviceModel",
 	)

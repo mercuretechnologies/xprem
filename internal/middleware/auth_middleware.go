@@ -43,10 +43,20 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				}
 
 				auth := helpers.GetAuth(r)
-				// These routes are branch-less reads: only the IP allowlist
-				// applies here, branch protection is enforced on the publish
-				// routes that carry a BRANCH.
-				credential, err := cliAuthService.ValidateCliCredential(r.Context(), appId, auth, "", helpers.ClientIP(r))
+				// The BRANCH of the matched route, empty when it has none, the
+				// same value the publish handlers pass. It used to be hardcoded
+				// empty here, described as "these routes are branch-less
+				// reads": that was wrong. The two routes a publishing token may
+				// reach both carry a {BRANCH}, and an empty name skips the
+				// protected-branch check entirely (the restriction service only
+				// looks it up when the name is non-empty). A CI key marked as
+				// having no access to protected branches could therefore still
+				// read production's runtime versions and update history: the
+				// restriction meant "cannot write" while reading as "has
+				// nothing to do with protected branches".
+				credential, err := cliAuthService.ValidateCliCredential(
+					r.Context(), appId, auth, mux.Vars(r)["BRANCH"], helpers.ClientIP(r),
+				)
 				if err != nil {
 					handlers.RenderCliAuthError(w, err)
 					return

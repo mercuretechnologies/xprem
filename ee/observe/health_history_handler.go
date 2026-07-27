@@ -47,6 +47,13 @@ const maxHealthHistoryWindow = 90 * 24 * time.Hour
 // and keep the PostgreSQL instant-T health endpoint fully operational.
 type HealthHistoryHandler struct {
 	reader HealthHistoryReader
+	// authorizeSegments decides the SEGMENTED mode only, and writes its own
+	// refusal. The route itself is open to any account that can see the app,
+	// because the plain series is a per-update aggregate the updates table and
+	// the rollout card both need. Splitting it by a device dimension is a
+	// different question with a different answer, and no middleware can tell
+	// them apart: they are the same route, distinguished by a query parameter.
+	authorizeSegments func(http.ResponseWriter, *http.Request) bool
 }
 
 func NewHealthHistoryHandler(reader HealthHistoryReader) *HealthHistoryHandler {
@@ -57,6 +64,17 @@ func NewHealthHistoryHandler(reader HealthHistoryReader) *HealthHistoryHandler {
 		reader = nil
 	}
 	return &HealthHistoryHandler{reader: reader}
+}
+
+// SetSegmentAuthorizer wires the permission check for the segmented mode. It
+// is a seam rather than a direct dependency so this package stays clear of
+// ee/rbac, and it is set from the router's composition root.
+//
+// Leaving it unset REFUSES the segmented mode. That is deliberate: an unwired
+// gate is a wiring mistake, and the failure mode of guessing "allow" here is
+// handing out fleet-wide device breakdowns.
+func (h *HealthHistoryHandler) SetSegmentAuthorizer(authorize func(http.ResponseWriter, *http.Request) bool) {
+	h.authorizeSegments = authorize
 }
 
 func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +138,17 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 	// Split requested: the response keys become segment values instead of
 	// update ids, and the caller knows which it asked for.
 	if dimension != "" {
+		// The dimensions on offer are device_model, os_version, country_code
+		// and their neighbours: the very columns /observe/breakdown groups by
+		// under observe:read. Answering them here without the same permission
+		// would make this endpoint a way around that one.
+		if h.authorizeSegments == nil {
+			handlers.RenderError(w, http.StatusForbidden, "This action requires an admin account")
+			return
+		}
+		if !h.authorizeSegments(w, r) {
+			return
+		}
 		readContext, cancelRead := boundedRead(r)
 		defer cancelRead()
 		segments, err := h.reader.ReadBySegment(

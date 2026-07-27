@@ -55,17 +55,22 @@ func registerAppRoutes(
 	container *AppContainer,
 ) {
 	appAuthSubrouter := apiSubrouter.PathPrefix("/apps/{APP_ID}").Subrouter()
-	appAuthSubrouter.StrictSlash(true)
+	// No StrictSlash. It used to be on, from when the app root was declared as
+	// "/" and every caller sent the slashless form, so it existed to bridge
+	// that gap with a 301. Registering the root as "" closed the gap, and what
+	// StrictSlash was left doing was answering a trailing slash with a 301 on
+	// EVERY method: Go's http.Client and curl -L both rewrite a 301 on a
+	// non-GET method to GET, so DELETE /api/apps/{id}/ came back as a 200 read
+	// and the caller saw success while nothing was deleted. No route here is
+	// declared with a trailing slash, so turning it off costs nothing and a
+	// trailing slash is now a plain 404.
 	appAuthSubrouter.Use(middleware.AppResolverMiddleware(container.AppRepo))
 	appAuthSubrouter.Use(rbac.RequireAppVisible(container.RBACService))
 
 	app := appGroup{router: appAuthSubrouter, rbacService: container.RBACService}
 
-	// The app itself. Registered as "" and not "/", which is what makes the
-	// path match exactly as the dashboard sends it: with StrictSlash on this
-	// subrouter, a route declared "/" answers a slashless call with a 301 to
-	// the slashed form, and all three of these are called without one. The
-	// slashed form keeps working either way, StrictSlash redirects both ways.
+	// The app itself, registered as "" so the path matches exactly what the
+	// dashboard sends: /api/apps/{id}, no trailing slash, on all three.
 	app.route(http.MethodGet, "", container.AppHandler.GetAppHandler,
 		AnyViewer())
 	app.route(http.MethodDelete, "", container.AppHandler.DeleteAppHandler,

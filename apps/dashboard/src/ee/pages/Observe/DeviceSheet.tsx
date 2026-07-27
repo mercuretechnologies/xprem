@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Filter, Loader2 } from 'lucide-react';
 import { api, type ObserveLog } from '@/lib/api';
+import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { deviceName, osLabel } from './deviceNames';
@@ -56,10 +57,16 @@ export const DeviceSheet = ({
   }, [log]);
 
   const easClientId = shown?.easClientId ?? '';
+  // The sheet opens from a log row, so the account holding it was vetted for
+  // observe:read. The registry section below is a different question and a
+  // different permission: an account may read telemetry without being allowed
+  // to browse devices, and asking anyway would 403 and render as "the registry
+  // could not be read", which reports a permission as an outage.
+  const canBrowseDevices = useAppPermission('identity:read', 'any-member');
   const deviceQuery = useQuery({
     queryKey: ['identity', 'device', api.getAppId(), easClientId],
     queryFn: () => api.getIdentityDevices({ easClientId: [easClientId] }, undefined, 1),
-    enabled: Boolean(log) && Boolean(easClientId),
+    enabled: canBrowseDevices && Boolean(log) && Boolean(easClientId),
   });
   const device = deviceQuery.data?.devices[0];
 
@@ -119,18 +126,24 @@ export const DeviceSheet = ({
             </Section>
 
             <Section title="Registry">
-              {deviceQuery.isLoading && (
+              {!canBrowseDevices && (
+                <p className="py-2 text-xs text-muted-foreground">
+                  You do not have permission to browse this app devices, so the registry side of
+                  this device is hidden.
+                </p>
+              )}
+              {canBrowseDevices && deviceQuery.isLoading && (
                 <p className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Reading the device registry
                 </p>
               )}
-              {deviceQuery.isError && (
+              {canBrowseDevices && deviceQuery.isError && (
                 <p className="py-2 text-xs text-muted-foreground">
                   The device registry could not be read.
                 </p>
               )}
-              {!deviceQuery.isLoading && !deviceQuery.isError && !device && (
+              {canBrowseDevices && !deviceQuery.isLoading && !deviceQuery.isError && !device && (
                 <p className="py-2 text-xs text-muted-foreground">
                   This device is not in the registry, which happens when it has not polled for an
                   update since telemetry reached the server.

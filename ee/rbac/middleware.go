@@ -60,23 +60,46 @@ func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Su
 func RequirePermission(service *RBACService, perm Permission, fallback Fallback) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			subject, ok := service.resolveSubject(w, r)
-			if !ok {
-				return
-			}
-			appId := mux.Vars(r)["APP_ID"]
-			if appId == "" {
-				handlers.RenderError(w, http.StatusBadRequest, "invalid app id")
-				return
-			}
-			if err := service.Authorize(r.Context(), subject, appId, perm, fallback); err != nil {
-				service.recordDenied(r, subject, appId, err, map[string]any{"permission": string(perm)})
-				renderAuthorizeError(w, err)
+			if !AuthorizeRequest(service, w, r, perm, fallback) {
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// AuthorizeRequest is the same decision as RequirePermission, asked from
+// inside a handler instead of in front of it, and it writes the refusal
+// itself. It exists for the case a middleware cannot express: one endpoint
+// whose answer depends on what the request ASKS for, not on which route it
+// matched. Update health history is the one, its segmented mode reads device
+// dimensions the plain mode never touches.
+//
+// Reach for it only when the route genuinely has two answers. A route with one
+// answer belongs behind RequirePermission, where it is visible in the routing
+// table rather than buried in a handler.
+func AuthorizeRequest(
+	service *RBACService,
+	w http.ResponseWriter,
+	r *http.Request,
+	perm Permission,
+	fallback Fallback,
+) bool {
+	subject, ok := service.resolveSubject(w, r)
+	if !ok {
+		return false
+	}
+	appId := mux.Vars(r)["APP_ID"]
+	if appId == "" {
+		handlers.RenderError(w, http.StatusBadRequest, "invalid app id")
+		return false
+	}
+	if err := service.Authorize(r.Context(), subject, appId, perm, fallback); err != nil {
+		service.recordDenied(r, subject, appId, err, map[string]any{"permission": string(perm)})
+		renderAuthorizeError(w, err)
+		return false
+	}
+	return true
 }
 
 // recordDenied reports a refusal to the audit trail: permission.denied is the

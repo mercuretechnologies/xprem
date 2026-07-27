@@ -56,7 +56,20 @@ func AnyViewerOrToken() Access {
 
 // NeedsPermission gates the route behind perm once roles are enforced, and
 // behind fallback when they are not.
+//
+// Both arguments are checked rather than trusted. NoPermission here would make
+// guard skip the permission middleware entirely, so the registration line
+// would read as a gate while the route behaved exactly like AnyViewer; a zero
+// Fallback would refuse every member once a license lapses, which fails closed
+// but for a reason nobody wrote down. Neither is a combination anyone means,
+// and both are caught at boot rather than in production.
 func NeedsPermission(perm rbac.Permission, fallback rbac.Fallback) Access {
+	if perm == rbac.NoPermission {
+		panic("router: NeedsPermission called with NoPermission, which gates nothing; use AnyViewer() if that is the intent")
+	}
+	if fallback != rbac.FallbackAdminOnly && fallback != rbac.FallbackAnyMember {
+		panic("router: NeedsPermission called without a Fallback; say what a member gets when roles are not enforced")
+	}
 	return Access{declared: true, perm: perm, fallback: fallback}
 }
 
@@ -99,7 +112,7 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 					handlers.RenderError(w, http.StatusForbidden, "This route requires a dashboard session")
 					return
 				}
-				next.ServeHTTP(w, r)
+				gated.ServeHTTP(w, r)
 				return
 			}
 			gated.ServeHTTP(w, r)

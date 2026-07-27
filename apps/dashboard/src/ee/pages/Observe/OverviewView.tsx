@@ -15,6 +15,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { Skeleton } from '@/components/ui/skeleton';
 import { liveInterval, type ObserveFilters } from './filters';
 import { ObserveNotice } from './ObserveNotice';
@@ -43,7 +44,11 @@ const StatTile = ({
 }) => (
   <div
     className="rounded-xl border bg-card p-4 shadow-card"
-    title={value == null ? `${label.toLowerCase()} unavailable` : `${exact.format(value)} ${label.toLowerCase()}`}>
+    title={
+      value == null
+        ? `${label.toLowerCase()} unavailable`
+        : `${exact.format(value)} ${label.toLowerCase()}`
+    }>
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <Icon className="h-3.5 w-3.5 text-primary" />
       {label}
@@ -70,11 +75,19 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
   // registry can honor, which is a subset of the ones this page offers: the
   // hint says so when the rest are in play, rather than letting the tile read
   // as if it answered the same question as its neighbours.
+  //
+  // This one tile reads the device registry rather than telemetry, so it
+  // answers to identity:read while the rest of the page answers to
+  // observe:read. An account may hold one and not the other, and firing the
+  // request anyway would 403 on a timer and report it as "the registry did
+  // not answer", which blames an outage for a permission decision.
+  const canBrowseDevices = useAppPermission('identity:read', 'any-member');
   const onlineQuery = useQuery({
     queryKey: ['identity', 'online', api.getAppId(), filters.registryQuery],
     queryFn: () => api.getOnlineDevices(filters.registryQuery),
     refetchInterval: filters.live ? 30_000 : false,
     placeholderData: previous => previous,
+    enabled: canBrowseDevices,
   });
 
   if (overviewQuery.isLoading) {
@@ -112,13 +125,17 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
           <StatTile
             icon={Radio}
             label="Online now"
-            value={onlineQuery.isError ? null : (onlineQuery.data?.online ?? 0)}
+            value={
+              onlineQuery.isError || !canBrowseDevices ? null : (onlineQuery.data?.online ?? 0)
+            }
             hint={
-              onlineQuery.isError
-                ? 'The device registry did not answer, so this count is unknown.'
-                : filters.registryHonorsAll
-                  ? `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes, any route`
-                  : `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes. Build and channel filters do not narrow this one.`
+              !canBrowseDevices
+                ? 'Counting live devices reads the device registry, which you do not have permission to browse.'
+                : onlineQuery.isError
+                  ? 'The device registry did not answer, so this count is unknown.'
+                  : filters.registryHonorsAll
+                    ? `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes, any route`
+                    : `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes. Build and channel filters do not narrow this one.`
             }
           />
           {/* "Devices", not "users": expo-observe identifies an install, and

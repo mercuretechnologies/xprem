@@ -21,6 +21,7 @@ import (
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
 	"log"
+	"net/http"
 	"time"
 )
 
@@ -286,6 +287,16 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
+	// Update health history answers two different questions on one route, so
+	// the permission for the segmented half is wired into the handler rather
+	// than declared in the routing table: see SetSegmentAuthorizer. The plain
+	// series stays open to any account that can see the app, because the
+	// updates table and the rollout card both read it.
+	healthHistoryHandler := observe.NewHealthHistoryHandler(healthHistory)
+	healthHistoryHandler.SetSegmentAuthorizer(func(w http.ResponseWriter, r *http.Request) bool {
+		return rbac.AuthorizeRequest(rbacService, w, r, rbac.PermObserveRead, rbac.FallbackAnyMember)
+	})
+
 	container := &AppContainer{
 		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService),
 		DashboardAuthService:        dashboardAuthService,
@@ -311,7 +322,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		UsersHandler:                dashhandlers.NewUsersHandler(userService),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
-		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory),
+		ObserveHealthHistoryHandler: healthHistoryHandler,
 		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
 	}
