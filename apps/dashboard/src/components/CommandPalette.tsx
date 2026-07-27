@@ -19,7 +19,7 @@ import { api } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
-import { observeNavigation } from '@/pages/Observe/navigation';
+import { observeNavigation } from '@/ee/pages/Observe/navigation';
 import {
   CommandDialog,
   CommandEmpty,

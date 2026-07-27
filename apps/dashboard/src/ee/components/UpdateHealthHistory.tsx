@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { useMemo, useState } from 'react';
 import type { ComponentType, SVGProps } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -7,9 +11,9 @@ import {
   TimeSeriesChart,
   TimeSeriesChartProps,
   TimeSeriesDefinition,
-} from '@/components/charts/TimeSeriesChart';
+} from '@/ee/components/charts/TimeSeriesChart';
 import { Skeleton } from '@/components/ui/skeleton';
-import { HealthRankTable } from '@/components/HealthRankTable';
+import { HealthRankTable } from '@/ee/components/HealthRankTable';
 import { api, UpdateHealthHistoryPoint } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { cn } from '@/lib/utils';

@@ -1,5 +1,9 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { Activity, AlertTriangle, Users } from 'lucide-react';
-import { TimeSeriesChart } from '@/components/charts/TimeSeriesChart';
+import { TimeSeriesChart } from '@/ee/components/charts/TimeSeriesChart';
 import { seriesColors } from './dimensions';
 
 // Sample curves, drawn once. A sentence saying "pick a branch" describes an

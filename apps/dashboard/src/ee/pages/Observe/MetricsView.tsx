@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Info, ServerCrash } from 'lucide-react';
@@ -5,8 +9,8 @@ import { api, ObserveBreakdownDimension, ObserveMetric } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { TimeSeriesChart, type TimeSeriesChartProps } from '@/components/charts/TimeSeriesChart';
-import { UpdateHealthHistory } from '@/pages/Updates/components/UpdateHealthHistory';
+import { TimeSeriesChart, type TimeSeriesChartProps } from '@/ee/components/charts/TimeSeriesChart';
+import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 import { HealthBySegment } from './HealthBySegment';
 import { HealthPlaceholder } from './HealthPlaceholder';
 import { liveInterval, type ObserveFilters } from './filters';

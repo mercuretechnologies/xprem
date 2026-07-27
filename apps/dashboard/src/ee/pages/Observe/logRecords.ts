@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { ObserveLog } from '@/lib/api';
 
 // What a log record looks like once it is read rather than stored, shared by

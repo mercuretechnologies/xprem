@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 // Telemetry carries `device.model.identifier`, which on Apple hardware is a
 // board name like `iPhone18,2`. Nobody reads a performance table written in
 // board names, so this maps the ones we can state with certainty to their

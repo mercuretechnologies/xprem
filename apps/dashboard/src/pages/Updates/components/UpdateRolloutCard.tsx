@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
-import { UpdateHealthHistory } from '@/pages/Updates/components/UpdateHealthHistory';
+import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 
 // Renders the active per-update rollout for a (branch, runtime version). The
 // controls (progress forward, finish, or revert) only show when the account

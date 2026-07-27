@@ -17,7 +17,7 @@ import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { formatTimestamp } from '@/lib/utils';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { Check, ChevronDown, ChevronUp, Copy, Package, Split, Undo2 } from 'lucide-react';
-import { UpdateHealthHistory } from '@/pages/Updates/components/UpdateHealthHistory';
+import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 
 interface Update {
   updateUUID: string;

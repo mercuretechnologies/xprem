@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, AlertTriangle, Users } from 'lucide-react';
@@ -7,10 +11,10 @@ import {
   TimeSeriesChart,
   type TimeSeriesAnnotation,
   type TimeSeriesChartProps,
-} from '@/components/charts/TimeSeriesChart';
+} from '@/ee/components/charts/TimeSeriesChart';
 import { liveInterval, type ObserveFilters } from './filters';
 import { dimensionSpec, seriesColors } from './dimensions';
-import { HealthRankTable } from '@/components/HealthRankTable';
+import { HealthRankTable } from '@/ee/components/HealthRankTable';
 import { exactNumber, withoutPartialBucket } from './format';
 
 type Metric = 'health' | 'adoption' | 'faults';

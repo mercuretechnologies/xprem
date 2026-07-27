@@ -69,7 +69,18 @@ lint_ee_headers:
 		echo "==> copy the 3-line header from any file in ee/ into the files above."; \
 		exit 1; \
 	fi; \
-	echo "==> $$n files, all carrying the EE license header"
+	echo "==> $$n files, all carrying the EE license header"; \
+	echo "==> EE files outside an ee/ directory"; \
+	rc=0; \
+	for f in $$(grep -rl '$(EE_HEADER)' --include='*.go' --include='*.ts' --include='*.tsx' \
+		--exclude-dir=node_modules . | grep -v '/ee/'); do \
+		echo "    EE header outside ee/: $$f"; rc=1; \
+	done; \
+	if [ $$rc -ne 0 ]; then \
+		echo "==> a file that declares itself Enterprise must live under an ee/ directory."; \
+		exit 1; \
+	fi; \
+	echo "==> none"
 
 test_app:
 ifeq ($(DOCKER_FLAG),docker)

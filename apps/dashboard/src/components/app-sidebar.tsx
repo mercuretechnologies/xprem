@@ -32,7 +32,7 @@ import { CreateAppModal } from '@/components/app-creation-modal';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
 import { EnterpriseBadge } from '@/ee/components/EnterpriseBadge';
-import { observeNavigation } from '@/pages/Observe/navigation';
+import { observeNavigation } from '@/ee/pages/Observe/navigation';
 import { ThemePreference, useTheme } from '@/lib/theme';
 
 const NavLink = ({

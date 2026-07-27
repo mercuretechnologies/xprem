@@ -25,7 +25,7 @@ import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Branches } from '@/pages/Branches';
 import { useSettings } from '@/lib/SettingsContext';
 
-const Observe = lazy(() => import('@/pages/Observe').then(module => ({ default: module.Observe })));
+const Observe = lazy(() => import('@/ee/pages/Observe').then(module => ({ default: module.Observe })));
 
 function withLayout(children: ReactNode) {
   return <Layout>{children}</Layout>;

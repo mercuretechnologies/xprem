@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { ParentSize } from '@visx/responsive';
 import { ChevronDown } from 'lucide-react';

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+// This file is governed by the Mercure Technologies Enterprise Edition License
+// (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
+
 import type { GeoProjection } from 'd3-geo';
 import { isFacing, meanLongitude } from './projection';
 import type { ObserveOverview } from '@/lib/api';
