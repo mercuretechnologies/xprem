@@ -76,8 +76,6 @@ func TestConcurrentMigratorsApplyOnce(t *testing.T) {
 		"goose_db_version",
 		"observe_metrics",
 		"observe_logs",
-		"device_current_update",
-		"update_crashes",
 		"device_health_events",
 		"update_health_snapshots",
 	} {
@@ -96,7 +94,7 @@ func TestConcurrentMigratorsApplyOnce(t *testing.T) {
 
 	var versionRows uint64
 	require.NoError(t, engine.Conn.QueryRow(ctx,
-		"SELECT count() FROM goose_db_version WHERE version_id = 20260723000000 AND is_applied = 1",
+		"SELECT count() FROM goose_db_version WHERE version_id = 20260727160000 AND is_applied = 1",
 	).Scan(&versionRows))
 	require.EqualValues(t, 1, versionRows, "migration must be recorded exactly once")
 }
