@@ -10,15 +10,11 @@ package observe
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"expo-open-ota/internal/cache"
 	"expo-open-ota/internal/database/postgres/pgdb"
 )
 
@@ -119,18 +115,17 @@ func (e *Explorer) locations(
 	return e.runLocations(ctx, params)
 }
 
-// mapCacheTTLSeconds is how long one city aggregate is reused. Five seconds is
-// the poll cadence of the tightest period the dashboard offers ("last hour"),
-// so a lone viewer notices nothing, while every extra viewer within the window
-// is served for free.
+// The map's static layer is the expensive half: it aggregates every device
+// seen since the start of the selected period, so on "last 7 days" that is the
+// whole active fleet, and the dashboard refetches it on a timer while live
+// mode is on.
 //
-// The staleness it buys back costs nothing visible, and that is a property of
-// the design rather than a hope: the map draws its SHAPE from this aggregate
-// and animates arrivals from ReadCheckIns, which reads the last thirty seconds
-// through an index and stays uncached. A device that checks in during the
-// window still appears, through the live feed, and is folded into the
-// aggregate at the next refresh.
-const mapCacheTTLSeconds = 5
+// The staleness the shared cache buys back costs nothing visible, and that is
+// a property of the design rather than a hope: the map draws its SHAPE from
+// this aggregate and animates arrivals from ReadCheckIns, which reads the last
+// thirty seconds through an index and stays uncached. A device that checks in
+// during the window still appears, through the live feed, and is folded into
+// the aggregate at the next refresh.
 
 // cachedLocations serves the map's static layer, which is the expensive half.
 // It aggregates every device seen since the start of the selected period, so
@@ -156,37 +151,9 @@ func (e *Explorer) cachedLocations(
 		return nil, err
 	}
 
-	key := mapCacheKey(params)
-	store := cache.GetCache()
-	if payload := store.Get(key); payload != "" {
-		var cached []ObserveLocation
-		if json.Unmarshal([]byte(payload), &cached) == nil {
-			return cached, nil
-		}
-		// Unreadable is treated as absent: a payload written by an older
-		// shape must cost a query, never an error.
-	}
-
-	locations, err := e.runLocations(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-	if payload, err := json.Marshal(locations); err == nil {
-		ttl := mapCacheTTLSeconds
-		// Best effort. A cache that refuses the write costs the next caller a
-		// query, which is exactly where we were before.
-		_ = store.Set(key, string(payload), &ttl)
-	}
-	return locations, nil
-}
-
-// mapCacheKey fingerprints the parameters the query actually receives. SHA-256
-// rather than something cheaper because a collision here does not lose a row,
-// it serves one app or one filter set the answer belonging to another, and the
-// hash is free next to the scan it saves.
-func mapCacheKey(params pgdb.ListObserveLocationsParams) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", params)))
-	return "observe:map:" + hex.EncodeToString(sum[:])
+	return cachedRead(
+		readCacheKey("map", params),
+		func() ([]ObserveLocation, error) { return e.runLocations(ctx, params) })
 }
 
 func (e *Explorer) runLocations(

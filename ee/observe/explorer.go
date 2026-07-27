@@ -407,6 +407,12 @@ func emptyMetricSeries() []MetricSeries {
 }
 
 func (e *Explorer) ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error) {
+	return cachedRead(
+		readCacheKey("overview", appID, query),
+		func() (Overview, error) { return e.readOverview(ctx, appID, query) })
+}
+
+func (e *Explorer) readOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error) {
 	resolvedQuery, emptyUpdateGroup, err := e.resolveUpdateGroup(ctx, appID, query)
 	if err != nil {
 		return Overview{}, err
@@ -679,6 +685,12 @@ func (e *Explorer) readMetricPoints(
 }
 
 func (e *Explorer) ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error) {
+	return cachedRead(
+		readCacheKey("events", appID, query),
+		func() (Events, error) { return e.readEvents(ctx, appID, query) })
+}
+
+func (e *Explorer) readEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error) {
 	events := Events{Available: e.clickhouse != nil, Events: []ObserveEventSeries{}}
 	if e.clickhouse == nil {
 		return events, nil

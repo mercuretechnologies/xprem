@@ -45,7 +45,6 @@ func IsHealthSegmentDimension(name string) bool {
 // Grid size guard: devices times buckets is what this query materializes, and
 // a fleet of a million devices at one-minute buckets is not a chart, it is an
 // outage. Buckets are capped, and the caller's window does the rest.
-const maxHealthSegmentBuckets = 180
 
 // The chart tells eight colours apart; past that a split stops informing.
 // Applied by TrimSegments on the rows already read, deliberately NOT as a
@@ -70,7 +69,39 @@ const maxHealthSegments = 8
 // updates: a device that never ran one cannot survive the final filter anyway,
 // and building its row per bucket first is how a fleet of a million turns into
 // 181 million intermediate rows for a chart about two updates.
+// bucketCount cuts the window exactly the way the rest of the explorer cuts
+// it, through observeBucket, so two series over one window are sampled the
+// same way. Deliberately independent of how large the fleet is: deriving the
+// step from the population would have given two apps different granularity for
+// the same window, which reads as a difference in the data rather than in the
+// sampling, and the size problem belongs to caching and pre-aggregation rather
+// than to silently coarsening one chart.
+func (h *HealthHistory) bucketCount(from, to time.Time) int64 {
+	window := to.Sub(from)
+	step := int64(observeBucket(window).Seconds())
+	buckets := int64(window.Seconds())/step + 1
+	return buckets
+}
+
 func (h *HealthHistory) ReadBySegment(
+	ctx context.Context,
+	appID string,
+	updateIDs []string,
+	dimension string,
+	from, to time.Time,
+) (map[string][]HealthSegmentPoint, error) {
+	return cachedRead(
+		readCacheKey("health-segments", appID, updateIDs, dimension, from.UTC(), to.UTC()),
+		func() (map[string][]HealthSegmentPoint, error) {
+			return h.readBySegment(ctx, appID, updateIDs, dimension, from, to)
+		})
+}
+
+// readBySegment is the read itself, behind the cache above. It walks a grid of
+// one row per device per bucket: the cost is that product rather than the rows
+// it reads, which on a million devices stayed at 3.3 million while the query
+// took eleven seconds.
+func (h *HealthHistory) readBySegment(
 	ctx context.Context,
 	appID string,
 	updateIDs []string,
@@ -85,11 +116,12 @@ func (h *HealthHistory) ReadBySegment(
 		return map[string][]HealthSegmentPoint{}, nil
 	}
 
-	step := int64((to.Sub(from) / maxHealthSegmentBuckets).Seconds())
+	buckets := h.bucketCount(from, to)
+	step := int64(to.Sub(from).Seconds()) / max(buckets-1, 1)
 	if step < 60 {
 		step = 60
+		buckets = int64(to.Sub(from).Seconds())/step + 1
 	}
-	buckets := int64(to.Sub(from).Seconds())/step + 1
 
 	// The dimension is an allowlisted column name, never caller input.
 	//

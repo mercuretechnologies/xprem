@@ -35,8 +35,8 @@ func TestMapCacheKeyIsSharedByIdenticalQueries(t *testing.T) {
 	from := time.Date(2026, 7, 27, 14, 0, 0, 0, time.UTC)
 	query := ExplorerQuery{Platform: []string{"ios"}, Branches: []string{"production"}}
 
-	first := mapCacheKey(mapParams(t, appID, from, query))
-	second := mapCacheKey(mapParams(t, appID, from, query))
+	first := readCacheKey("map", mapParams(t, appID, from, query))
+	second := readCacheKey("map", mapParams(t, appID, from, query))
 	require.Equal(t, first, second)
 }
 
@@ -47,7 +47,7 @@ func TestMapCacheKeySeparatesEveryDimension(t *testing.T) {
 	appID := uuid.NewString()
 	from := time.Date(2026, 7, 27, 14, 0, 0, 0, time.UTC)
 	base := ExplorerQuery{}
-	baseKey := mapCacheKey(mapParams(t, appID, from, base))
+	baseKey := readCacheKey("map", mapParams(t, appID, from, base))
 
 	for name, altered := range map[string]ExplorerQuery{
 		"platform":        {Platform: []string{"ios"}},
@@ -63,7 +63,7 @@ func TestMapCacheKeySeparatesEveryDimension(t *testing.T) {
 		"metadata":        {MetadataFilter: [][]byte{[]byte(`{"plan":"pro"}`)}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.NotEqual(t, baseKey, mapCacheKey(mapParams(t, appID, from, altered)),
+			require.NotEqual(t, baseKey, readCacheKey("map", mapParams(t, appID, from, altered)),
 				"filtering on %s must not be served the unfiltered answer", name)
 		})
 	}
@@ -78,13 +78,13 @@ func TestMapCacheKeySeparatesAppsAndWindows(t *testing.T) {
 	appA, appB := uuid.NewString(), uuid.NewString()
 
 	require.NotEqual(t,
-		mapCacheKey(mapParams(t, appA, from, query)),
-		mapCacheKey(mapParams(t, appB, from, query)),
+		readCacheKey("map", mapParams(t, appA, from, query)),
+		readCacheKey("map", mapParams(t, appB, from, query)),
 		"one app must never be served another app's fleet")
 
 	require.NotEqual(t,
-		mapCacheKey(mapParams(t, appA, from, query)),
-		mapCacheKey(mapParams(t, appA, from.Add(time.Minute), query)),
+		readCacheKey("map", mapParams(t, appA, from, query)),
+		readCacheKey("map", mapParams(t, appA, from.Add(time.Minute), query)),
 		"the next grid step must recompute")
 }
 

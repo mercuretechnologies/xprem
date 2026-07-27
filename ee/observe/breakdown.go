@@ -382,6 +382,16 @@ func (e *Explorer) ReadBreakdown(
 	appID string,
 	query BreakdownQuery,
 ) (Breakdown, error) {
+	return cachedRead(
+		readCacheKey("breakdown", appID, query),
+		func() (Breakdown, error) { return e.readBreakdown(ctx, appID, query) })
+}
+
+func (e *Explorer) readBreakdown(
+	ctx context.Context,
+	appID string,
+	query BreakdownQuery,
+) (Breakdown, error) {
 	dimension, found := breakdownDimensions[query.Dimension]
 	if query.Dimension == "" || !found {
 		return Breakdown{}, errInvalidObserveFilter

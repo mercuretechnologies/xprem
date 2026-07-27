@@ -66,8 +66,12 @@ func TestReadBySegmentLabelsBucketsWithTheirOwnState(t *testing.T) {
 	watched, nextUpdate, unrelated := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	upgrader, stable, elsewhere := uuid.NewString(), uuid.NewString(), uuid.NewString()
 
-	start := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
-	switched := start.Add(6 * time.Minute)
+	// Timed in multiples of the step the chart actually uses: observeBucket
+	// cuts anything up to six hours at five minutes, the same as every other
+	// series on the page, so a scenario written at one-minute resolution would
+	// be asserting on points that no chart ever draws.
+	start := time.Now().UTC().Truncate(time.Minute).Add(-50 * time.Minute)
+	switched := start.Add(30 * time.Minute)
 
 	insertHealthEvents(t, engine, appID, []healthEvent{
 		// Adopts the watched update on iOS 17, then moves to the next update
@@ -82,21 +86,21 @@ func TestReadBySegmentLabelsBucketsWithTheirOwnState(t *testing.T) {
 
 	history := NewHealthHistory(nil, engine)
 	bySegment, err := history.ReadBySegment(ctx, appID, []string{watched}, "osVersion",
-		start, start.Add(9*time.Minute))
+		start, start.Add(45*time.Minute))
 	require.NoError(t, err)
 
 	require.Contains(t, bySegment, "17", "the early buckets must keep the version the device ran then")
 	require.Contains(t, bySegment, "18")
 
 	// Before the switch: one device on each version, both running the update.
-	early := start.Add(2 * time.Minute)
+	early := start.Add(10 * time.Minute)
 	require.NotNil(t, pointAt(t, bySegment["17"], early))
 	require.EqualValues(t, 1, pointAt(t, bySegment["17"], early).DevicesOnUpdate)
 	require.EqualValues(t, 1, pointAt(t, bySegment["18"], early).DevicesOnUpdate)
 
 	// After it, the upgrader has left the watched update, so 17 has no bucket
 	// left at all rather than a relabelled one.
-	late := start.Add(8 * time.Minute)
+	late := start.Add(40 * time.Minute)
 	require.Nil(t, pointAt(t, bySegment["17"], late), "the device left the update, it must not linger under any label")
 	require.EqualValues(t, 1, pointAt(t, bySegment["18"], late).DevicesOnUpdate)
 
@@ -108,7 +112,39 @@ func TestReadBySegmentLabelsBucketsWithTheirOwnState(t *testing.T) {
 			total += point.DevicesOnUpdate
 		}
 	}
-	// 10 buckets. The upgrader is on the watched update for the first 6, the
-	// stable device for all 10.
+	// Ten buckets of five minutes. The upgrader is on the watched update for
+	// the first six, the stable device for all ten.
 	require.EqualValues(t, 16, total)
+}
+
+// The resolution follows observeBucket, the same rule every other chart on the
+// page uses, so two series over one window are cut the same way. Deliberately
+// independent of how large the fleet is: deriving the step from the population
+// gave two apps different granularity for the same window, which reads as a
+// difference in the data rather than in the sampling.
+func TestBucketCountFollowsTheSameStepAsTheRestOfTheExplorer(t *testing.T) {
+	history := &HealthHistory{}
+	to := time.Now().UTC()
+
+	for _, window := range []time.Duration{
+		3 * time.Hour, 24 * time.Hour, 7 * 24 * time.Hour, 30 * 24 * time.Hour,
+	} {
+		from := to.Add(-window)
+		step := int64(observeBucket(window).Seconds())
+		expected := int64(window.Seconds())/step + 1
+		require.EqualValues(t, expected, history.bucketCount(from, to),
+			"the segmented chart is cut exactly like the other charts (%s)", window)
+	}
+}
+
+// A short window is cut at the same five minutes as everything else, not
+// finer. There used to be a separate floor here saying "never finer than a
+// minute"; observeBucket's finest step is five, so it could never fire and its
+// only effect was to make a short window look like it had its own rule.
+func TestShortWindowsUseTheSameStepAsEverythingElse(t *testing.T) {
+	history := &HealthHistory{}
+	to := time.Now().UTC()
+	from := to.Add(-10 * time.Minute)
+	require.EqualValues(t, 3, history.bucketCount(from, to),
+		"ten minutes at a five minute step is three bucket edges")
 }
