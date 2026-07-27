@@ -204,17 +204,26 @@ func (h *HealthHistory) readSegmentSnapshots(
 		    -- answers its opening instant was taken before it.
 		    AND bucket >= ? AND bucket <= ?
 		  GROUP BY t, bucket, update_id, segment
-		),
+		)
 		-- One capture answers each drawn point, and the same one for every
 		-- update and every segment. Taking each series' own latest sample
 		-- inside the coarse bucket instead summed counts measured at different
 		-- instants: an update losing devices mid-bucket kept its earlier,
 		-- larger figure while the update receiving them contributed its later
 		-- one, and the total ran above the fleet.
-		chosen AS (SELECT t, max(bucket) AS at FROM mapped GROUP BY t)
-		SELECT mapped.t AS t, segment, sum(devices) AS devices, sum(faulty) AS faulty
-		FROM mapped
-		INNER JOIN chosen ON chosen.t = mapped.t AND chosen.at = mapped.bucket
+		--
+		-- A window rather than a second CTE naming the first one again: ClickHouse
+		-- substitutes a CTE textually instead of materialising it, so a second
+		-- reference reads the table and runs the argMax twice. Measured at
+		-- exactly 2x the rows read, on the one table whose whole purpose is to
+		-- make this read cheap.
+		SELECT t, segment, sum(devices) AS devices, sum(faulty) AS faulty
+		FROM (
+		  SELECT t, segment, devices, faulty, bucket,
+		         max(bucket) OVER (PARTITION BY t) AS answering
+		  FROM mapped
+		)
+		WHERE bucket = answering
 		GROUP BY t, segment
 		ORDER BY t`,
 		from.UTC(), from.UTC(), step, step,

@@ -18,14 +18,20 @@
 ALTER TABLE device_identity
     ADD COLUMN IF NOT EXISTS current_update_arrived_at TIMESTAMP WITH TIME ZONE;
 
--- Seeded from the watermark, which is the best available answer for rows that
--- predate this column: it is right for every device that has not polled since
--- it arrived, and too recent for the others. Those correct themselves on their
--- next move.
-UPDATE device_identity
-SET current_update_arrived_at = current_update_observed_at
-WHERE current_update_arrived_at IS NULL
-  AND current_update_observed_at IS NOT NULL;
+-- No backfill, deliberately, and not for lack of a source.
+--
+-- The obvious one is current_update_observed_at, but that column was itself
+-- added without one (20260726170000), so it is NULL on every row written before
+-- it and a backfill from it would match nothing on any real upgrade while still
+-- paying a full scan of the registry. Worse, goose wraps a migration in a
+-- transaction, so that scan would run under the ADD COLUMN's ACCESS EXCLUSIVE
+-- lock and block reads as well as writes on the hottest table of the product,
+-- which is exactly what 20260726125000_device_release_backfill.sql was split
+-- out to avoid.
+--
+-- A NULL arrival is not a device lost, either: the only reader folds it into
+-- the start of whatever window it is drawing, which is true of every row this
+-- column predates. Devices correct themselves the next time they move.
 
 -- +goose Down
 

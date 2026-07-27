@@ -3658,6 +3658,43 @@ func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
 }
 
 const listUpdateHealthStateDeltas = `-- name: ListUpdateHealthStateDeltas :many
+WITH failure_islands AS (
+    -- A device is failing on an update from its first fault until its last one
+    -- clears, and one device counts ONCE however many faults it holds: since
+    -- 20260726140000_failure_type_in_key.sql a launch rollback and a JS crash
+    -- on the same pair are two rows by design, and counting rows let the
+    -- failing curve climb above the population it is drawn against.
+    --
+    -- Merged rather than collapsed to one span, though. Taking MIN(first_seen)
+    -- and MAX(resolved) over every row of the device would bridge the gap
+    -- between two faults that did not overlap: a device that failed at 09:00,
+    -- recovered at 09:30 and crashed again at 14:00 would have read as failing
+    -- for the five healthy hours in between, and its second fault would have
+    -- been dated five hours early. So overlapping faults merge and disjoint
+    -- ones stay apart, which is the standard islands walk below.
+    SELECT update_id,
+           eas_client_id,
+           MIN(first_seen_at) AS opened_at,
+           CASE WHEN bool_or(resolved_at IS NULL) THEN NULL ELSE MAX(resolved_at) END AS closed_at
+    FROM (
+        SELECT update_id, eas_client_id, first_seen_at, resolved_at,
+               SUM(CASE WHEN prev_end IS NULL OR first_seen_at > prev_end THEN 1 ELSE 0 END)
+                   OVER (PARTITION BY update_id, eas_client_id ORDER BY first_seen_at) AS island
+        FROM (
+            SELECT f.update_id, f.eas_client_id, f.first_seen_at, f.resolved_at,
+                   -- An unresolved fault swallows everything that starts after
+                   -- it, hence infinity rather than NULL.
+                   MAX(COALESCE(f.resolved_at, 'infinity'::timestamptz)) OVER (
+                       PARTITION BY f.update_id, f.eas_client_id
+                       ORDER BY f.first_seen_at
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_end
+            FROM device_update_failures f
+            WHERE f.app_id = $3
+              AND f.update_id = ANY($4::uuid[])
+        ) ordered
+    ) grouped
+    GROUP BY update_id, eas_client_id, island
+)
 SELECT d.update_uuid,
        d.idx AS bucket_index,
        SUM(d.adopted)::bigint AS adopted_delta,
@@ -3665,69 +3702,50 @@ SELECT d.update_uuid,
 FROM (
     SELECT di.current_update_id AS update_uuid,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(di.current_update_arrived_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(
+                   -- No recorded arrival means the device was already there
+                   -- when the column appeared, so it belongs to the first
+                   -- bucket rather than to nothing at all. Dropping those rows
+                   -- put the curve permanently below the adoption count shown
+                   -- beside it.
+                   COALESCE(di.current_update_arrived_at, $1::timestamptz),
+                   $1::timestamptz
+               ) - $1::timestamptz
            )) / $2::int)::int AS idx,
            1 AS adopted,
            0 AS failing
     FROM device_identity di
     WHERE di.app_id = $3
       AND di.current_update_id = ANY($4::uuid[])
-      AND di.current_update_arrived_at IS NOT NULL
-      AND di.current_update_arrived_at <= $5::timestamptz
+      AND (di.current_update_arrived_at IS NULL
+           OR di.current_update_arrived_at <= $5::timestamptz)
 
     UNION ALL
 
-    -- One delta per DEVICE, not per failure row. Since
-    -- 20260726140000_failure_type_in_key.sql a launch rollback and a JS crash
-    -- on the same pair are two rows, deliberately, so counting rows would have
-    -- reported one device twice and let the failing curve climb above the
-    -- population it is drawn against. Every other failure count in this file
-    -- uses COUNT(DISTINCT eas_client_id) for the same reason.
-    --
-    -- A device is failing from its FIRST fault on the update until its LAST one
-    -- clears, and not at all while any of them is still open.
-    SELECT per_device.update_id,
+    SELECT i.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(per_device.opened_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(i.opened_at, $1::timestamptz) - $1::timestamptz
            )) / $2::int)::int,
            0,
            1
-    FROM (
-        SELECT f.update_id,
-               MIN(f.first_seen_at) AS opened_at,
-               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
-                    ELSE MAX(f.resolved_at) END AS closed_at
-        FROM device_update_failures f
-        WHERE f.app_id = $3
-          AND f.update_id = ANY($4::uuid[])
-        GROUP BY f.update_id, f.eas_client_id
-    ) per_device
-    WHERE per_device.opened_at <= $5::timestamptz
+    FROM failure_islands i
+    WHERE i.opened_at <= $5::timestamptz
 
     UNION ALL
 
-    -- The other end of a device's fault, once every one of them has cleared.
-    SELECT per_device.update_id,
+    -- The other end of each merged fault.
+    SELECT i.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(per_device.closed_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(i.closed_at, $1::timestamptz) - $1::timestamptz
            )) / $2::int)::int,
            0,
            -1
-    FROM (
-        SELECT f.update_id,
-               MIN(f.first_seen_at) AS opened_at,
-               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
-                    ELSE MAX(f.resolved_at) END AS closed_at
-        FROM device_update_failures f
-        WHERE f.app_id = $3
-          AND f.update_id = ANY($4::uuid[])
-        GROUP BY f.update_id, f.eas_client_id
-    ) per_device
-    WHERE per_device.closed_at IS NOT NULL
-      AND per_device.closed_at <= $5::timestamptz
+    FROM failure_islands i
+    WHERE i.closed_at IS NOT NULL
+      AND i.closed_at <= $5::timestamptz
       -- A resolution stamped before the fault it closes would otherwise emit
       -- its -1 in an earlier bucket than the +1 and drive the curve negative.
-      AND per_device.closed_at >= per_device.opened_at
+      AND i.closed_at >= i.opened_at
 ) d
 GROUP BY d.update_uuid, d.idx
 ORDER BY d.update_uuid, d.idx
@@ -4371,8 +4389,16 @@ WHERE failure.app_id = $1
   AND failed.branch_id = running.branch_id
   AND failed.runtime_version_id = running.runtime_version_id
   AND failed.platform = running.platform
-  -- Back ON it, or behind it. Ahead of it is the case the resolution owns.
-  AND failed.id >= running.id
+  -- Strictly BEHIND it: the device rolled back and is stuck again.
+  --
+  -- Not "on it", even though that reads as the symmetric case. Running the very
+  -- update one failed is the evidence the resolution uses to CLOSE the row, and
+  -- owning it here too made the two rules fight over the same pair of columns:
+  -- a device sending both manifest polls and telemetry closed on one and
+  -- re-opened on the other indefinitely, emitting an outbox event each way. The
+  -- resolution settles that case with a timestamp comparison this query cannot
+  -- make, so it keeps it.
+  AND failed.id > running.id
 `
 
 type ReopenDeviceUpdateFailuresParams struct {
@@ -4524,7 +4550,7 @@ func (q *Queries) ResolveDeviceRuntimeFailure(ctx context.Context, arg ResolveDe
 
 const resolveDeviceUpdateFailures = `-- name: ResolveDeviceUpdateFailures :execrows
 UPDATE device_update_failures failure
-SET resolved_at = $4
+SET resolved_at = GREATEST($4, failure.first_seen_at)
 FROM updates running
 JOIN branches running_branch ON running_branch.id = running.branch_id,
      updates failed
@@ -4553,6 +4579,12 @@ type ResolveDeviceUpdateFailuresParams struct {
 	ObservedAt  pgtype.Timestamptz `json:"observed_at"`
 }
 
+// Never before the fault it closes. observed_at is not always the instant the
+// request arrived: on the telemetry path it is the newest record of the batch,
+// which a device flushing a backlog can date days ago. A resolution stamped
+// before its own first_seen_at emits its -1 in an earlier bucket than the +1 on
+// the fallback chart, and reaches ClickHouse as a 'recovered' older than the
+// 'failure' it answers.
 // The join to the failed update lives in the WHERE, not in an ON clause: the
 // row being updated is not part of the FROM list, so a JOIN condition cannot
 // reference it and the predicate would silently match nothing.

@@ -711,8 +711,17 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		register.Lng = geo.Lng
 	}
 	// Two racers both landing here is absorbed by the upsert's ON CONFLICT.
-	if _, err := s.engine.RegisterDevice(ctx, register); err != nil {
+	registered, err := s.engine.RegisterDevice(ctx, register)
+	if err != nil {
 		return fmt.Errorf("registering device: %w", err)
+	}
+	// Zero rows means the conflict arm refused this observation as older than
+	// the one on file. An observation the registry would not believe must not
+	// be allowed to close or re-open a failure either: a backlog flushed after
+	// the device already moved on would otherwise rewrite history that the
+	// state it was rejected against already contradicts.
+	if registered == 0 {
+		return nil
 	}
 	return s.resolveUpdateFailures(ctx, appUUID, clientUUID, currentUpdate, observedAt)
 }
