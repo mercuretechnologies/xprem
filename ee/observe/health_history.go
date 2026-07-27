@@ -95,11 +95,21 @@ func (h *HealthHistory) Start(parent context.Context) func() {
 func (h *HealthHistory) run(ctx context.Context) {
 	outboxTicker := time.NewTicker(healthOutboxInterval)
 	snapshotTicker := time.NewTicker(healthSnapshotInterval)
+	// Segments are captured on their own rhythm, and deliberately NOT on the
+	// change trigger the unsplit snapshot follows. That trigger exists so a
+	// failing release shows up on the headline chart within seconds; the split
+	// is a breakdown a reader opens on purpose, its finest bucket is five
+	// minutes, and one capture rebuilds a grid over the whole fleet. Following
+	// the trigger would have paid that grid up to six times a minute to refine
+	// a bucket the chart cannot draw.
+	segmentTicker := time.NewTicker(healthSegmentBucket)
 	defer outboxTicker.Stop()
 	defer snapshotTicker.Stop()
+	defer segmentTicker.Stop()
 
 	h.drainOutbox(ctx)
 	h.captureSnapshots(ctx)
+	h.captureSegmentSnapshots(ctx)
 	lastCapture := time.Now()
 	// A change waiting for the floor to elapse. Held rather than dropped: on a
 	// quiet fleet the delivering drain is the only one there is, so forgetting
@@ -127,6 +137,8 @@ func (h *HealthHistory) run(ctx context.Context) {
 			h.captureSnapshots(ctx)
 			lastCapture = time.Now()
 			pending = false
+		case <-segmentTicker.C:
+			h.captureSegmentSnapshots(ctx)
 		}
 	}
 }

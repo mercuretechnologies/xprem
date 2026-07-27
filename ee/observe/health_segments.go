@@ -7,8 +7,11 @@ package observe
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // HealthSegmentPoint is one bucket of one segment: how many devices ran the
@@ -97,10 +100,13 @@ func (h *HealthHistory) ReadBySegment(
 		})
 }
 
-// readBySegment is the read itself, behind the cache above. It walks a grid of
-// one row per device per bucket: the cost is that product rather than the rows
-// it reads, which on a million devices stayed at 3.3 million while the query
-// took eleven seconds.
+// readBySegment is the read itself, behind the cache above. It answers from the
+// precounted snapshots when the worker has been running long enough to cover
+// the window, and rebuilds the grid live when it has not.
+//
+// The fallback is what a deployment sees for the first hours after an upgrade,
+// and what it keeps seeing for any window reaching back past the day the
+// counters started. It is the same answer, paid for on the spot.
 func (h *HealthHistory) readBySegment(
 	ctx context.Context,
 	appID string,
@@ -108,20 +114,52 @@ func (h *HealthHistory) readBySegment(
 	dimension string,
 	from, to time.Time,
 ) (map[string][]HealthSegmentPoint, error) {
-	column, found := healthSegmentDimensions[dimension]
-	if !found {
+	if !IsHealthSegmentDimension(dimension) {
 		return nil, errInvalidObserveFilter
 	}
 	if len(updateIDs) == 0 || !to.After(from) {
 		return map[string][]HealthSegmentPoint{}, nil
 	}
+	buckets, step := h.gridSteps(from, to)
 
-	buckets := h.bucketCount(from, to)
-	step := int64(to.Sub(from).Seconds()) / max(buckets-1, 1)
+	// A coverage check that fails is not a reason to fail the read: the grid
+	// answers the same question, more slowly.
+	covered, err := h.segmentSnapshotsCover(ctx, appID, from, to)
+	if err != nil {
+		log.Printf("observe: falling back to the live segmented grid: %v", err)
+	}
+	if covered {
+		return h.readSegmentSnapshots(ctx, appID, updateIDs, dimension, from, to, step)
+	}
+	return h.readSegmentGrid(ctx, appID, updateIDs, dimension, from, to, step, buckets)
+}
+
+// gridSteps cuts the window the way every other series on the page is cut, and
+// never finer than a minute, which is the retention of the events themselves.
+func (h *HealthHistory) gridSteps(from, to time.Time) (buckets, step int64) {
+	buckets = h.bucketCount(from, to)
+	step = int64(to.Sub(from).Seconds()) / max(buckets-1, 1)
 	if step < 60 {
 		step = 60
 		buckets = int64(to.Sub(from).Seconds())/step + 1
 	}
+	return buckets, step
+}
+
+// readSegmentGrid rebuilds the series from the raw events: one row per device
+// per bucket, walked by two ASOF joins. The cost is that product rather than
+// the rows it reads, which on a million devices stayed at 3.3 million while
+// the query took several seconds. This is what captureSegmentBucket collapses
+// to a single instant so a viewer never pays it.
+func (h *HealthHistory) readSegmentGrid(
+	ctx context.Context,
+	appID string,
+	updateIDs []string,
+	dimension string,
+	from, to time.Time,
+	step, buckets int64,
+) (map[string][]HealthSegmentPoint, error) {
+	column := healthSegmentDimensions[dimension]
 
 	// The dimension is an allowlisted column name, never caller input.
 	//
@@ -201,7 +239,13 @@ func (h *HealthHistory) readBySegment(
 		return nil, fmt.Errorf("reading segmented health history: %w", err)
 	}
 	defer rows.Close()
+	return scanSegmentPoints(rows)
+}
 
+// scanSegmentPoints turns (bucket, segment, devices, faulty) rows into the
+// series the chart draws. Shared by the live grid and by the precounted
+// snapshots so the two can never disagree on how a count becomes a percentage.
+func scanSegmentPoints(rows driver.Rows) (map[string][]HealthSegmentPoint, error) {
 	bySegment := make(map[string][]HealthSegmentPoint)
 	for rows.Next() {
 		var segment string
