@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiProblemError } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useToast } from '@/hooks/use-toast';
-import { ShieldAlert, Download, Edit2, Check, X, Trash2 } from 'lucide-react';
+import { ShieldAlert, Download, Edit2, Check, X, Trash2, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/PageHeader';
@@ -12,6 +12,41 @@ import { KeystoreCard } from './components/KeystoreCard';
 import { AdminOnlyNote } from '@/components/ui/admin-only-note';
 import { useSettings } from '@/lib/SettingsContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
+
+// The app id is what every CLI flag, every environment variable and every
+// support thread asks for, and it is a UUID: selecting thirty-six characters by
+// hand is where a wrong one comes from.
+const CopyAppIdButton = ({ value }: { value: string }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6 shrink-0 align-middle text-muted-foreground hover:text-foreground"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          // Long enough to be seen, short enough that the button is ready
+          // again before anyone reaches for it a second time.
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // Clipboard access can be refused, and over plain HTTP the API is not
+          // there at all. The id stays selectable either way, so the failure
+          // costs a manual copy rather than an error nobody can act on.
+          setCopied(false);
+        }
+      }}>
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+      <span className="sr-only">{copied ? 'App ID copied' : 'Copy app ID'}</span>
+    </Button>
+  );
+};
 
 export const AppInfo = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
@@ -193,11 +228,12 @@ export const AppInfo = () => {
           )
         }
         description={
-          <span>
-            App ID:{' '}
+          <span className="inline-flex items-center gap-1">
+            App ID:
             <code className="select-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
               {selectedAppId}
             </code>
+            <CopyAppIdButton value={selectedAppId} />
           </span>
         }
         actions={
