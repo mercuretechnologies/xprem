@@ -104,7 +104,7 @@ export const BranchesTable = () => {
       toast({
         title: next ? 'Branch protected' : 'Branch unprotected',
         description: next
-          ? `Only tokens allowed on protected branches can publish to "${branch.branchName}" now.`
+          ? `Only tokens allowed on protected branches can publish to or read "${branch.branchName}" now.`
           : `Any token can publish to "${branch.branchName}" again.`,
       });
       setBranchToProtect(null);
@@ -306,8 +306,8 @@ export const BranchesTable = () => {
                 "{branchToProtect?.branchName}"
               </strong>{' '}
               is protected, only API tokens explicitly allowed on protected branches can publish,
-              roll back or republish on it. Tokens handed to developers will be blocked, and the
-              branch cannot be deleted until the protection is lifted.
+              roll back or republish on it, or read what is on it. Tokens handed to developers will
+              be blocked, and the branch cannot be deleted until the protection is lifted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-4 gap-2 border-t pt-3 sm:gap-0">

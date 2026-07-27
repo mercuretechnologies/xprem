@@ -20,8 +20,9 @@ import {
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
 
 // Side panel to edit the enterprise access restrictions of one API token:
-// whether it may act on protected branches, and which source addresses may
-// use it. Without a valid license the form is masked by EnterpriseFeatureGate.
+// whether it may reach protected branches at all, writing or reading, and
+// which source addresses may use it. Without a valid license the form is
+// masked by EnterpriseFeatureGate.
 export const ApiKeyRestrictionsSheet = ({
   apiKey,
   onClose,
@@ -43,7 +44,7 @@ export const ApiKeyRestrictionsSheet = ({
         <SheetHeader>
           <SheetTitle>Access restrictions</SheetTitle>
           <SheetDescription>
-            Control whether “{apiKey?.name}” can act on protected branches, and whitelist the IP
+            Control whether “{apiKey?.name}” can reach protected branches, and whitelist the IP
             addresses allowed to use it. Branches are protected from the Branches page.
           </SheetDescription>
         </SheetHeader>
@@ -138,10 +139,13 @@ const RestrictionsForm = ({
             onChange={event => setCanAccessProtectedBranches(event.target.checked)}
           />
           <span>
-            <span className="block text-sm font-medium">Can act on protected branches</span>
+            <span className="block text-sm font-medium">Can reach protected branches</span>
             <span className="mt-0.5 block text-xs text-muted-foreground">
-              Grants publishing, rollbacks and republishing on protected branches. Leave unchecked
-              for tokens handed to developers.
+              Lets this token publish, roll back and republish on a protected branch, and also read
+              what is on one: its runtime versions and the updates already shipped there. Unchecked,
+              the token works normally everywhere else and is refused on protected branches alone,
+              which is what you want for a token handed to a developer or pasted into a shared CI
+              pipeline.
             </span>
           </span>
         </label>
