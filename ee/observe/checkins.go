@@ -60,6 +60,18 @@ func checkInCacheKey(appID, easClientID string) string {
 	return "observe:checkin:" + appID + ":" + easClientID
 }
 
+// checkInClaimTTLSeconds bounds a claim. Longer than touchTimeout so a write
+// that is merely slow is never preempted, short enough that a process killed
+// mid-write frees the device on the next poll rather than on the next hour.
+const checkInClaimTTLSeconds = 10
+
+// checkInClaimKey is the "someone is writing this device right now" marker. A
+// key of its own rather than the debounce key, which holds the recorded state
+// and lives sixty seconds: this one has to disappear the moment the write ends.
+func checkInClaimKey(appID, easClientID string) string {
+	return "observe:checkin:claim:" + appID + ":" + easClientID
+}
+
 func fatalStashKey(appID, easClientID string) string {
 	return "observe:fatal:" + appID + ":" + easClientID
 }
@@ -255,9 +267,32 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 		return
 	}
 
+	claim := ""
+	if state.fatalError == "" {
+		key := checkInClaimKey(checkIn.AppID, checkIn.EASClientID)
+		if taken, err := r.cache.TryLock(key, checkInClaimTTLSeconds); err != nil || !taken {
+			return
+		}
+		claim = key
+	}
+
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), touchTimeout)
 	go func() {
 		defer cancel()
+		// Released after the debounce below is written, never before: a claim
+		// dropped first would let the next poll through to redo the work the
+		// debounce is about to make unnecessary. Empty when this poll carried
+		// a crash and took no claim, in which case there is nothing of ours to
+		// release and the holder's claim must be left alone.
+		//
+		// Taken and released around the write itself, which is what keeps the
+		// claim's lifetime shorter than its TTL: touchTimeout bounds the write
+		// at five seconds, the claim lives ten, so a claim can never expire
+		// under its own holder and be deleted out from under whoever took it
+		// next.
+		if claim != "" {
+			defer r.cache.Delete(claim)
+		}
 		ttl := checkInTTLSeconds
 		if err := r.record(bgCtx, checkIn, state); err != nil {
 			log.Printf("observe: device check-in registration failed: %v", err)

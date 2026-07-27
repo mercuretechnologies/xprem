@@ -29,7 +29,10 @@ type fakeTouchStore struct {
 	failFailures atomic.Bool
 	calls        atomic.Int32
 
-	mu             sync.Mutex
+	mu sync.Mutex
+	// gate holds TouchDevice in flight when set, which is how a test observes
+	// what happens to a second check-in while the first is still writing.
+	gate           chan struct{}
 	lastCurrent    *identity.CurrentUpdate
 	lastDevice     identity.DeviceInfo
 	failedRecorded [][]string
@@ -39,6 +42,12 @@ type fakeTouchStore struct {
 
 func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *identity.Geo, current *identity.CurrentUpdate, device identity.DeviceInfo) error {
 	f.calls.Add(1)
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	if f.failing.Load() {
 		return errors.New("connection refused")
 	}
@@ -47,6 +56,23 @@ func (f *fakeTouchStore) TouchDevice(_ context.Context, _ string, _ string, _ *i
 	f.lastDevice = device
 	f.mu.Unlock()
 	return nil
+}
+
+// hold makes every TouchDevice wait until the returned func is called.
+func (f *fakeTouchStore) hold() func() {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.gate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.gate = nil
+			f.mu.Unlock()
+			close(gate)
+		})
+	}
 }
 
 func (f *fakeTouchStore) RecordUpdateFailures(_ context.Context, _ string, _ string, updateIDs []string, fatalError string, failureType identity.FailureType) error {
@@ -489,4 +515,62 @@ func TestFatalErrorIsBoundedBeforeItIsStoredAnywhere(t *testing.T) {
 	// Counted in runes, so a multi-byte message is never cut mid-character.
 	require.Equal(t, maxFatalErrorRunes, len([]rune(store.lastFatal)))
 	require.True(t, utf8.ValidString(store.lastFatal))
+}
+
+// A device is written once at a time. The debounce key is only set after the
+// database write returns, so every poll arriving while it runs used to read the
+// same stale value, decide the same way, and start its own write: eight polls
+// of one device in flight together meant eight goroutines and eight
+// transactions on the same row.
+func TestConcurrentCheckInsOfOneDeviceCollapseToOneWrite(t *testing.T) {
+	store := &fakeTouchStore{}
+	release := store.hold()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), cache.NewLocalCache())
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
+		}()
+	}
+	wg.Wait()
+
+	// One claim taken, so one write in flight, while the seven others stood
+	// down without starting anything.
+	assert.Eventually(t, func() bool { return store.calls.Load() == 1 }, time.Second, 10*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.EqualValues(t, 1, store.calls.Load(),
+		"eight concurrent polls of one device must produce one write, not eight")
+	release()
+}
+
+// The exception, and the reason it exists: expo-updates sends the fatal error
+// header once, on the first poll after the crash. A routine poll winning the
+// claim must not stand that one down, or the crash never reaches the dashboard.
+func TestACheckInCarryingACrashIgnoresTheClaim(t *testing.T) {
+	store := &fakeTouchStore{}
+	release := store.hold()
+	recorder := NewCheckInRecorder(identity.NewService(store, nil), cache.NewLocalCache())
+	ctx := context.Background()
+
+	// A routine poll takes the claim and stays in flight.
+	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
+	assert.Eventually(t, func() bool { return store.calls.Load() == 1 }, time.Second, 10*time.Millisecond)
+
+	// The crash arrives while that write is still running. It must not be
+	// refused: the routine poll holding the claim carries no crash detail, so
+	// standing this one down would lose it for good.
+	recorder.Record(ctx, checkInWith(testUpdateA, testUpdateB, "TypeError: undefined is not a function"))
+	assert.Eventually(t, func() bool { return store.calls.Load() == 2 }, time.Second, 10*time.Millisecond,
+		"a poll carrying a crash must never be refused by the claim")
+
+	release()
+	assert.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.lastFatal == "TypeError: undefined is not a function"
+	}, time.Second, 10*time.Millisecond, "the crash detail must reach the store")
 }

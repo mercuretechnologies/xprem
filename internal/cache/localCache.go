@@ -142,27 +142,35 @@ func (c *LocalCache) Clear() error {
 	return nil
 }
 
+// TryLock claims a key, or reports that someone already holds it. The Redis
+// implementation is a SETNX, so a claim taken here means the same thing across
+// replicas.
+//
+// An EXPIRED claim is not a claim: the holder's TTL ran out, which is what a
+// TTL is for. That check used to be missing, and a sleeping goroutine per lock
+// made up for it by deleting the entry when the time came. Callers that claim
+// per device rather than per job would have paid one goroutine per device for
+// that, which is the cost they took the lock to avoid, so the expiry is read
+// here and the memory is reclaimed by the same sweep as everything else.
 func (c *LocalCache) TryLock(key string, ttl int) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.items[withPrefix(key)]; exists {
-		return false, nil
+	now := time.Now()
+	prefixed := withPrefix(key)
+	if held, exists := c.items[prefixed]; exists {
+		if held.Expiration == nil || now.Before(*held.Expiration) {
+			return false, nil
+		}
 	}
 
-	exp := time.Now().Add(time.Duration(ttl) * time.Second)
-	c.items[withPrefix(key)] = CacheItem{
+	exp := now.Add(time.Duration(ttl) * time.Second)
+	c.items[prefixed] = CacheItem{
 		Value:      "locked",
 		Expiration: &exp,
 	}
 
-	go func() {
-		time.Sleep(time.Duration(ttl) * time.Second)
-		c.mu.Lock()
-		delete(c.items, withPrefix(key))
-		c.mu.Unlock()
-	}()
-
+	c.maybeSweepLocked(now)
 	return true, nil
 }
 
