@@ -144,9 +144,11 @@ func TestCoarseBucketsTakeTheLastSampleNotTheSum(t *testing.T) {
 	points, err := history.readSegmentSnapshots(ctx, appID, []string{update}, "osVersion",
 		start, start.Add(15*time.Minute), int64((15 * time.Minute).Seconds()))
 	require.NoError(t, err)
-	require.Len(t, points["17"], 1)
-	require.Equal(t, uint64(1), points["17"][0].DevicesOnUpdate,
-		"one device sampled three times is one device, not three")
+	require.NotEmpty(t, points["17"])
+	for _, point := range points["17"] {
+		require.Equal(t, uint64(1), point.DevicesOnUpdate,
+			"one device sampled three times is one device, not three")
+	}
 }
 
 // Coverage decides which path answers, so it has to be honest about an empty
@@ -294,4 +296,56 @@ func TestPrecountedSegmentsMatchTheLiveGridOnALongTail(t *testing.T) {
 		TrimSegments(live, maxHealthSegments),
 		TrimSegments(precounted, maxHealthSegments),
 		"the chart draws the same eight segments from either path")
+}
+
+// The equivalences above start their window on a capture boundary, so neither
+// exercised what happens when it does not. It usually does not: the live view
+// snaps its window to the minute while captures happen every five, so four
+// starts out of five land between two samples.
+//
+// Rounding a sample down to the instant it follows answered an instant with a
+// sample taken after it, and left the opening instant with nothing at all.
+// This walks every offset inside one capture interval and asks both paths the
+// same question at each.
+func TestPrecountedSegmentsAgreeWhenTheWindowStartsOffTheCaptureGrid(t *testing.T) {
+	engine, ctx := newSegmentFixture(t)
+	appID := uuid.NewString()
+	update := uuid.NewString()
+	aligned := time.Now().UTC().Truncate(healthSegmentBucket).Add(-12 * healthSegmentBucket)
+
+	// A fleet that changes over the window, so a point answered by the wrong
+	// sample carries a different number rather than the same one by luck.
+	events := []healthEvent{}
+	for i := 0; i < 9; i++ {
+		events = append(events, healthEvent{
+			id: uint64(i + 1), eventType: "first_seen", device: uuid.NewString(),
+			update: update, osVersion: "17",
+			occurredAt: aligned.Add(time.Duration(i) * healthSegmentBucket),
+		})
+	}
+	insertHealthEvents(t, engine, appID, events)
+
+	history := NewHealthHistory(nil, engine)
+	for i := -1; i <= 12; i++ {
+		require.NoError(t, history.captureSegmentBucket(ctx, aligned.Add(time.Duration(i)*healthSegmentBucket)))
+	}
+
+	for offset := time.Duration(0); offset < healthSegmentBucket; offset += time.Minute {
+		t.Run(offset.String(), func(t *testing.T) {
+			from := aligned.Add(offset)
+			to := from.Add(8 * healthSegmentBucket)
+			_, step := history.gridSteps(from, to)
+
+			live, err := history.readSegmentGrid(ctx, appID, []string{update}, "osVersion",
+				from, to, step, int64(to.Sub(from)/(time.Duration(step)*time.Second))+1)
+			require.NoError(t, err)
+			precounted, err := history.readSegmentSnapshots(ctx, appID, []string{update}, "osVersion",
+				from, to, step)
+			require.NoError(t, err)
+
+			require.NotEmpty(t, live["17"], "the scenario must draw something")
+			require.Equal(t, live["17"], precounted["17"],
+				"a window starting %s past a capture must read the same either way", offset)
+		})
+	}
 }

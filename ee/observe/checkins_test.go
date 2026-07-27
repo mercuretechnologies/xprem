@@ -111,6 +111,20 @@ func waitRecorded(t *testing.T, c cache.Cache, want int32, store *fakeTouchStore
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
+// waitCurrent waits for the write to have LANDED, which the call counter does
+// not say: it is incremented on entry to TouchDevice, deliberately, because two
+// tests hold a call in flight and count it while it is held. Everything the
+// store records is written on the way out, so a test that reads lastCurrent
+// after waiting on the counter is reading a value the call has not set yet.
+func waitCurrent(t *testing.T, store *fakeTouchStore, want string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.lastCurrent != nil && store.lastCurrent.ID == want
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
 func TestRecordDebouncesSteadyState(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
@@ -125,10 +139,7 @@ func TestRecordDebouncesSteadyState(t *testing.T) {
 	// First check-in registers (with its running update)...
 	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
 	waitRecorded(t, localCache, 1, store)
-	store.mu.Lock()
-	require.NotNil(t, store.lastCurrent)
-	assert.Equal(t, testUpdateA, store.lastCurrent.ID)
-	store.mu.Unlock()
+	waitCurrent(t, store, testUpdateA)
 
 	// ...and the SAME state within the TTL is debounced.
 	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
@@ -148,11 +159,8 @@ func TestRecordStateTransitionBustsDebounce(t *testing.T) {
 	// The device moved to update B: the fingerprint changes, the debounce
 	// must NOT swallow the transition.
 	recorder.Record(ctx, checkInWith(testUpdateB, "", ""))
-	require.Eventually(t, func() bool { return store.calls.Load() == 2 }, 2*time.Second, 10*time.Millisecond)
-	store.mu.Lock()
-	require.NotNil(t, store.lastCurrent)
-	assert.Equal(t, testUpdateB, store.lastCurrent.ID)
-	store.mu.Unlock()
+	waitCurrent(t, store, testUpdateB)
+	assert.EqualValues(t, 2, store.calls.Load())
 }
 
 func TestRecordRecordsFailures(t *testing.T) {
@@ -165,16 +173,21 @@ func TestRecordRecordsFailures(t *testing.T) {
 	// consumed fatal error riding along.
 	raw := `"` + testUpdateB + `"`
 	recorder.Record(ctx, checkInWith(testUpdateA, raw, "TypeError: undefined is not a function"))
+	// Both, because Record does its work in a goroutine and the two land at
+	// different moments: waiting on the failure alone caught the recorder
+	// mid-flight, before the touch it also owes, and read a counter that was
+	// still zero. Reproduced four times in twenty runs under -race.
 	require.Eventually(t, func() bool {
 		store.mu.Lock()
 		defer store.mu.Unlock()
-		return len(store.failedRecorded) == 1
+		return len(store.failedRecorded) == 1 && store.calls.Load() == 1
 	}, 2*time.Second, 10*time.Millisecond)
 	store.mu.Lock()
 	assert.Equal(t, []string{testUpdateB}, store.failedRecorded[0])
 	assert.Equal(t, "TypeError: undefined is not a function", store.lastFatal)
 	assert.Equal(t, identity.FailureTypeUpdate, store.lastType)
 	store.mu.Unlock()
+	// One check-in is one touch, still, once everything has settled.
 	assert.EqualValues(t, 1, store.calls.Load())
 }
 

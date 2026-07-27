@@ -426,14 +426,28 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 		if text, isText := value.(string); isText {
 			value = truncateRunes(text, maxAttributeValueRunes)
 		}
-		// Approximate, on purpose: this is a ceiling, not an accounting, and
-		// stopping one attribute early costs nothing next to marshalling the
-		// whole map again for every candidate.
 		cost := len(key) + 8
 		if text, isText := value.(string); isText {
 			cost += len(text)
 		} else {
-			cost += 64
+			// Serialized to be measured, and kept serialized so the work is
+			// not done twice. A flat 64 bytes was charged here before, which
+			// held for the numbers and booleans it was written for and not at
+			// all for the two OTLP shapes that reach this map as something
+			// else: arrayValue arrives as []any and kvlistValue as
+			// map[string]any, both nestable to whatever depth the body allows.
+			// Charged 64 bytes and then written out in full, one such
+			// attribute carried the entire batch past this ceiling and into a
+			// stored row, which is the amplification the ceiling exists to
+			// stop.
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				// Unserializable is unstorable. Skipping it keeps the rest of
+				// the record rather than losing all of it.
+				continue
+			}
+			cost += len(encoded)
+			value = json.RawMessage(encoded)
 		}
 		if cost > budget {
 			break

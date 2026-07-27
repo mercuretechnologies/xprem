@@ -172,6 +172,15 @@ FROM counted`
 // argMax on (bucket, captured_at) does the rollup and the ReplacingMergeTree
 // deduplication in one pass: latest bucket wins, and within one bucket the
 // latest capture wins.
+//
+// A sample is attributed to the FIRST instant at or after it, which is what
+// makes this agree with the grid it replaces: there, a bucket takes the last
+// event at or before itself, so an instant must be answered by the newest
+// sample that already existed when it came round. Rounding down instead
+// answered an instant with a sample taken after it, and left the opening
+// instant of a window with nothing at all whenever its start did not land on
+// a capture. That is not a corner case: the live view snaps its window to the
+// minute, and captures happen every five.
 func (h *HealthHistory) readSegmentSnapshots(
 	ctx context.Context,
 	appID string,
@@ -183,19 +192,24 @@ func (h *HealthHistory) readSegmentSnapshots(
 	rows, err := h.clickhouse.Conn.Query(ctx, `
 		SELECT t, segment, sum(devices) AS devices, sum(faulty) AS faulty
 		FROM (
-		  SELECT toDateTime(?) + toIntervalSecond(intDiv(toUInt32(bucket) - toUInt32(toDateTime(?)), ?) * ?) AS t,
+		  SELECT toDateTime(?) + toIntervalSecond(
+		           greatest(0, toInt64(ceil(
+		             (toInt64(toUInt32(bucket)) - toInt64(toUInt32(toDateTime(?)))) / ?
+		           ))) * ?) AS t,
 		         update_id, segment,
 		         argMax(devices_on_update, (bucket, captured_at)) AS devices,
 		         argMax(faulty_devices, (bucket, captured_at)) AS faulty
 		  FROM update_health_segment_snapshots
 		  WHERE app_id = ? AND dimension = ? AND toString(update_id) IN ?
+		    -- One capture interval of reach behind the window: the sample that
+		    -- answers its opening instant was taken before it.
 		    AND bucket >= ? AND bucket <= ?
 		  GROUP BY t, update_id, segment
 		)
 		GROUP BY t, segment
 		ORDER BY t`,
 		from.UTC(), from.UTC(), step, step,
-		appID, dimension, updateIDs, from.UTC(), to.UTC())
+		appID, dimension, updateIDs, from.UTC().Add(-healthSegmentBucket), to.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("reading segmented health snapshots: %w", err)
 	}

@@ -11,6 +11,8 @@ import (
 	"fmt"
 
 	"expo-open-ota/internal/cache"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // readCacheTTLSeconds is how long one answer is reused. Five seconds is the
@@ -49,18 +51,55 @@ func cachedRead[T any](key string, compute func() (T, error)) (T, error) {
 		// must cost a recompute, never an error.
 	}
 
-	fresh, err := compute()
+	// One computation per key at a time. The entry expiring is not a quiet
+	// moment: the dashboard refetches on a timer, so every open tab misses the
+	// same key within milliseconds of each other and, without this, each one
+	// started its own aggregation of the same rows. The cache collapses
+	// SEQUENTIAL readers, this collapses SIMULTANEOUS ones, and the second is
+	// the case that actually arises.
+	//
+	// Per process, not per cluster: replicas still compute once each. That is
+	// the shape of the problem worth solving here, since the tabs that
+	// synchronise are the ones behind a single connection.
+	fresh, err, _ := readFlight.Do(key, func() (any, error) {
+		// Re-read first: a caller that queued behind the leader wants the
+		// answer it just wrote, not another aggregation of the same rows.
+		if payload := store.Get(key); payload != "" {
+			var cached T
+			if json.Unmarshal([]byte(payload), &cached) == nil {
+				return cached, nil
+			}
+		}
+		computed, err := compute()
+		if err != nil {
+			return computed, err
+		}
+		if payload, err := json.Marshal(computed); err == nil {
+			ttl := readCacheTTLSeconds
+			// Best effort. A cache that refuses the write costs the next
+			// caller a recompute, which is exactly where we were before.
+			_ = store.Set(key, string(payload), &ttl)
+		}
+		return computed, nil
+	})
 	if err != nil {
-		return fresh, err
+		var zero T
+		return zero, err
 	}
-	if payload, err := json.Marshal(fresh); err == nil {
-		ttl := readCacheTTLSeconds
-		// Best effort. A cache that refuses the write costs the next caller a
-		// recompute, which is exactly where we were before.
-		_ = store.Set(key, string(payload), &ttl)
+	// Do returns what the callback returned, so this is the same concrete type
+	// on every path above.
+	typed, ok := fresh.(T)
+	if !ok {
+		var zero T
+		return zero, fmt.Errorf("cached read %q returned %T", key, fresh)
 	}
-	return fresh, nil
+	return typed, nil
 }
+
+// readFlight collapses concurrent misses of the same key. Keyed by the same
+// fingerprint as the cache entry, so two callers share a computation exactly
+// when they would have shared its answer.
+var readFlight singleflight.Group
 
 // readCacheKey fingerprints whatever identifies one read. Everything the query
 // depends on has to go in: a key that forgets a filter serves one question's

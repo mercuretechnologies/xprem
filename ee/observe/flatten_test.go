@@ -273,6 +273,52 @@ func TestContentFieldsAreBounded(t *testing.T) {
 	assert.Len(t, []rune(metrics[0].CustomParams), maxCustomParamsRunes)
 }
 
+// The ceiling has to hold for what an attribute can actually BE, not only for
+// the strings it is easiest to test with. OTLP carries arrayValue and
+// kvlistValue, which arrive here as []any and map[string]any and nest as deep
+// as the body allows. Charging them a flat 64 bytes and then serializing them
+// in full let a single attribute walk the whole batch past this ceiling and
+// into a stored row, which is precisely the amplification it exists to stop.
+func TestNestedAttributesAreChargedWhatTheyCost(t *testing.T) {
+	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"
+	// One array and one object, each far past the ceiling on their own, and
+	// each worth 64 bytes under the old accounting.
+	fat := make([]any, 40_000)
+	for i := range fat {
+		fat[i] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	}
+	nested := map[string]any{}
+	for i := 0; i < 20_000; i++ {
+		nested[fmt.Sprintf("k%05d", i)] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	}
+
+	logs := FlattenLogs("app-1", LogBatch{Resources: []ResourceLogs{{
+		Attributes: map[string]any{EASClientIDKey: client},
+		Records: []LogRecord{{
+			TimeUnixNano: uint64(flattenNow.UnixNano()),
+			Body:         "hello",
+			Attributes:   map[string]any{"a.list": fat, "b.object": nested},
+		}},
+	}}}, flattenNow)
+	require.Len(t, logs, 1)
+	assert.LessOrEqual(t, len(logs[0].Attributes), maxAttributesBytes+1024,
+		"a nested attribute must be charged what it serializes to, not a flat guess")
+
+	// And a nested value that FITS is still stored, unflattened: the fix is a
+	// measurement, not a ban on structure.
+	small := map[string]any{"plan": "pro", "seats": float64(3)}
+	kept := FlattenLogs("app-1", LogBatch{Resources: []ResourceLogs{{
+		Attributes: map[string]any{EASClientIDKey: client},
+		Records: []LogRecord{{
+			TimeUnixNano: uint64(flattenNow.UnixNano()),
+			Body:         "hello",
+			Attributes:   map[string]any{"context": small},
+		}},
+	}}}, flattenNow)
+	require.Len(t, kept, 1)
+	assert.JSONEq(t, `{"context":{"plan":"pro","seats":3}}`, kept[0].Attributes)
+}
+
 // The attribute map is bounded in COUNT as well as in bytes, and the survivors
 // are the alphabetically first, which is the rule the client applies too: both
 // ends then keep the same attributes rather than each keeping its own set.
