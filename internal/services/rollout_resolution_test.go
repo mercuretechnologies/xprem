@@ -1064,9 +1064,7 @@ func TestRolloutServiceRequiresControlPlane(t *testing.T) {
 	ctx := context.Background()
 	service := NewRolloutService(nil, nil, nil, nil)
 
-	_, err := service.GetChannelRollout(ctx, "app", "production")
-	assert.ErrorIs(t, err, ErrRolloutsRequireControlPlane)
-	_, err = service.StartChannelRollout(ctx, "app", "production", "beta", 10)
+	_, err := service.StartChannelRollout(ctx, "app", "production", "beta", 10)
 	assert.ErrorIs(t, err, ErrRolloutsRequireControlPlane)
 	_, err = service.UpdateChannelRolloutPercentage(ctx, "app", "production", 50)
 	assert.ErrorIs(t, err, ErrRolloutsRequireControlPlane)

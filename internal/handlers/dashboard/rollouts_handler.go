@@ -98,27 +98,6 @@ func (h *RolloutHandler) invalidateUpdateRolloutCaches(appId string, branchName 
 	go services.PreWarmManifestCache(h.updateService, appId, branchName, runtimeVersion, "android")
 }
 
-func (h *RolloutHandler) GetChannelRolloutHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	appId := vars["APP_ID"]
-	channelName := vars["CHANNEL"]
-	channelRollout, err := h.rolloutService.GetChannelRollout(r.Context(), appId, channelName)
-	if err != nil {
-		renderRolloutError(w, err, "An internal error occurred while fetching the channel rollout.")
-		return
-	}
-	response := map[string]interface{}{
-		"active": channelRollout != nil,
-	}
-	if channelRollout != nil {
-		response["rollout"] = channelRollout
-	}
-	marshaledResponse, _ := json.Marshal(response)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(marshaledResponse)
-}
-
 func (h *RolloutHandler) StartChannelRolloutHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]

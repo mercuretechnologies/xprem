@@ -227,10 +227,10 @@ func NewRouter(container *AppContainer) *mux.Router {
 	appAuthSubrouter.Handle("/channels", requirePermission(rbac.PermChannelCreate)(http.HandlerFunc(container.ChannelHandler.CreateChannelHandler))).Methods(http.MethodPost)
 	appAuthSubrouter.Handle("/channels/{CHANNEL}", requirePermission(rbac.PermChannelDelete)(http.HandlerFunc(container.ChannelHandler.DeleteChannelHandler))).Methods(http.MethodDelete)
 	appAuthSubrouter.HandleFunc("/channels", container.ChannelHandler.GetChannelsHandler).Methods(http.MethodGet)
-	// Progressive rollouts (control-plane only; reads stay open like the
-	// sibling listings). One permission covers a channel rollout's whole
-	// lifecycle, its per-update sibling has its own.
-	appAuthSubrouter.HandleFunc("/channels/{CHANNEL}/rollout", container.RolloutHandler.GetChannelRolloutHandler).Methods(http.MethodGet)
+	// Progressive rollouts, control-plane only. One permission covers a channel
+	// rollout's whole lifecycle, its per-update sibling has its own. There is
+	// no read route: a channel carries its active rollout in the listing, so a
+	// dedicated one answered a question already answered.
 	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.StartChannelRolloutHandler))).Methods(http.MethodPost)
 	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.UpdateChannelRolloutHandler))).Methods(http.MethodPatch)
 	appAuthSubrouter.Handle("/channels/{CHANNEL}/rollout/end", requirePermission(rbac.PermChannelRolloutManage)(http.HandlerFunc(container.RolloutHandler.EndChannelRolloutHandler))).Methods(http.MethodPost)

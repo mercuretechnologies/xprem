@@ -69,16 +69,6 @@ func NewRolloutService(rolloutRepo RolloutRepository, channelRepo ChannelReposit
 	}
 }
 
-func (s *RolloutService) GetChannelRollout(ctx context.Context, appId string, channelName string) (*types.ChannelRollout, error) {
-	if s.rolloutRepo == nil {
-		return nil, ErrRolloutsRequireControlPlane
-	}
-	if err := validation.Name("channelName", channelName); err != nil {
-		return nil, err
-	}
-	return s.rolloutRepo.GetChannelRollout(ctx, appId, channelName)
-}
-
 func (s *RolloutService) StartChannelRollout(ctx context.Context, appId string, channelName string, branchName string, percentage int) (*types.ChannelRollout, error) {
 	if s.rolloutRepo == nil {
 		return nil, ErrRolloutsRequireControlPlane
