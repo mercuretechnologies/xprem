@@ -1637,6 +1637,22 @@ ON CONFLICT (app_id, eas_client_id, update_id, failure_type) DO UPDATE SET
         device_update_failures.last_seen_at,
         EXCLUDED.last_seen_at
     ),
+    -- A fault reported after this row was closed re-opens it, mirroring what
+    -- RecordDeviceRuntimeFailure already does for the other kind. It used to be
+    -- unreachable, because nothing ever closed an update_issue; now that moving
+    -- onto a later release does, a device that goes forward once and later
+    -- fails this update again would otherwise have stayed closed for good and
+    -- been invisible in every faulty count.
+    --
+    -- Strictly after, so the sticky re-send of an id the device already
+    -- reported does not undo its own resolution: expo-updates keeps listing a
+    -- failed update for a while, and those repeats carry no new information.
+    resolved_at = CASE
+        WHEN device_update_failures.resolved_at IS NOT NULL
+         AND EXCLUDED.last_seen_at > device_update_failures.resolved_at
+        THEN NULL
+        ELSE device_update_failures.resolved_at
+    END,
     fatal_error = CASE
         WHEN device_update_failures.fatal_error = '' THEN EXCLUDED.fatal_error
         ELSE device_update_failures.fatal_error
