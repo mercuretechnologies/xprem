@@ -37,6 +37,7 @@ type UpdateRepository interface {
 	// group on (branch, runtime version), for the group republish.
 	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
 	GetUpdatesByPublishGroup(ctx context.Context, appId string, branchName string, runtimeVersion string, publishGroup string) ([]types.PublishGroupMember, error)
+	GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error)
 	GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error)
 	GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error)
 	GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error)
@@ -140,6 +141,16 @@ func (s *UpdateService) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Cont
 		return types.UpdatesPage{}, err
 	}
 	return s.updateRepo.GetUpdatesByRunTimeVersionAndBranchName(ctx, appId, runtimeVersion, branchName, cursor, limit)
+}
+
+func (s *UpdateService) GetPublishGroupsPage(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.PublishGroupsPage, error) {
+	if err := validation.Name("branchName", branchName); err != nil {
+		return types.PublishGroupsPage{}, err
+	}
+	if err := validation.Name("runtimeVersion", runtimeVersion); err != nil {
+		return types.PublishGroupsPage{}, err
+	}
+	return s.updateRepo.GetPublishGroupsPage(ctx, appId, branchName, runtimeVersion, cursor, limit)
 }
 
 func (s *UpdateService) GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error) {

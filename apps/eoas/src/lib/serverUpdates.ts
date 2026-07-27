@@ -27,6 +27,27 @@ export interface ServerUpdatesPage {
   nextCursor: string | null;
 }
 
+export interface PublishGroupUpdateItem {
+  updateId: string;
+  createdAt: string;
+  platform: string;
+  commitHash: string;
+}
+
+export interface PublishGroupSummary {
+  publishGroup: string;
+  platforms: string[];
+  commitHash: string;
+  message?: string;
+  createdAt: string;
+  updates: PublishGroupUpdateItem[];
+}
+
+export interface ServerPublishGroupsPage {
+  items: PublishGroupSummary[];
+  nextCursor: string | null;
+}
+
 export async function fetchRuntimeVersions({
   baseUrl,
   appId,
@@ -91,13 +112,47 @@ export async function fetchUpdates({
   return (await response.json()) as ServerUpdatesPage;
 }
 
-export interface PublishGroupSummary {
-  publishGroup: string;
-  platforms: string[];
-  commitHash: string;
-  message?: string;
-  createdAt: string;
-  updates: ServerUpdateItem[];
+// Publish groups only exist in control-plane mode. A 404 marks group mode as
+// unavailable without requiring a separate capability negotiation request.
+export async function fetchPublishGroups({
+  baseUrl,
+  appId,
+  branch,
+  runtimeVersion,
+  credentials,
+  cursor,
+  limit = 20,
+}: {
+  baseUrl: string;
+  appId: string;
+  branch: string;
+  runtimeVersion: string;
+  credentials: Credentials;
+  cursor?: string;
+  limit?: number;
+}): Promise<ServerPublishGroupsPage | null> {
+  const url = new URL(
+    `${baseUrl}/api/apps/${encodeURIComponent(appId)}/branch/${encodeURIComponent(
+      branch
+    )}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/publish-groups`
+  );
+  url.searchParams.set('limit', String(limit));
+  if (cursor) {
+    url.searchParams.set('cursor', cursor);
+  }
+  const response = await fetchWithRetries(url.toString(), {
+    headers: {
+      ...getAuthHeaders(credentials),
+      'use-cli-auth': 'true',
+    },
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to fetch publish groups: ${await response.text()}`);
+  }
+  return (await response.json()) as ServerPublishGroupsPage;
 }
 
 // groupPublishedUpdates splits a listing into publish groups (newest first)

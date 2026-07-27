@@ -275,6 +275,10 @@ func (r *fakeUpdateRepo) GetUpdatesByRunTimeVersionAndBranchName(_ context.Conte
 	return types.UpdatesPage{}, nil
 }
 
+func (r *fakeUpdateRepo) GetPublishGroupsPage(_ context.Context, _, _, _ string, _ *int64, _ int) (types.PublishGroupsPage, error) {
+	return types.PublishGroupsPage{}, nil
+}
+
 func (r *fakeUpdateRepo) GetUpdateFeed(_ context.Context, _ string, _ types.UpdateFeedQuery) ([]types.UpdateFeedItem, error) {
 	return nil, nil
 }

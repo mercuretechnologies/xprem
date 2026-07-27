@@ -96,6 +96,40 @@ func TestGetUpdatesByPublishGroupPostgres(t *testing.T) {
 	assert.Empty(t, none)
 }
 
+func TestGetPublishGroupsPagePostgres(t *testing.T) {
+	fixture := newRolloutFixture(t)
+	ctx := context.Background()
+
+	groups := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	for index, group := range groups {
+		baseID := int64((index + 1) * 100)
+		fixture.checkedUpdate(t, baseID+1, "ios", &group)
+		fixture.checkedUpdate(t, baseID+2, "android", &group)
+	}
+	// Neither legacy ungrouped updates nor unfinished groups are list entries.
+	fixture.checkedUpdate(t, 450, "android", nil)
+	unfinishedGroup := uuid.NewString()
+	_, err := fixture.updates.CreateUpdate(ctx, fixture.appId, 500, rolloutTestDefaultBranch, rolloutTestRuntime, "ios", "abc123", "", &unfinishedGroup)
+	require.NoError(t, err)
+
+	firstPage, err := fixture.updates.GetPublishGroupsPage(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime, nil, 2)
+	require.NoError(t, err)
+	require.Len(t, firstPage.Items, 2)
+	require.NotNil(t, firstPage.NextCursor)
+	assert.Equal(t, groups[2], firstPage.Items[0].PublishGroup)
+	assert.Equal(t, []string{"ios", "android"}, firstPage.Items[0].Platforms)
+	assert.Len(t, firstPage.Items[0].Updates, 2)
+	assert.Equal(t, groups[1], firstPage.Items[1].PublishGroup)
+
+	cursor, err := strconv.ParseInt(*firstPage.NextCursor, 10, 64)
+	require.NoError(t, err)
+	secondPage, err := fixture.updates.GetPublishGroupsPage(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime, &cursor, 2)
+	require.NoError(t, err)
+	require.Len(t, secondPage.Items, 1)
+	assert.Nil(t, secondPage.NextCursor)
+	assert.Equal(t, groups[0], secondPage.Items[0].PublishGroup)
+}
+
 func TestGetUpdateFeedPostgres(t *testing.T) {
 	fixture := newRolloutFixture(t)
 	ctx := context.Background()

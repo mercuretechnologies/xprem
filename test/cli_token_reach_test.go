@@ -82,9 +82,9 @@ func TestPublishingTokenIsRefusedOnAppScopedReads(t *testing.T) {
 	}
 }
 
-// The two exceptions, and the reason the credential is accepted at all here:
+// The three exceptions, and the reason the credential is accepted at all here:
 // eoas asks which runtime versions a branch already has, then which updates
-// that (branch, runtime version) pair holds, before it uploads anything.
+// or publish groups that (branch, runtime version) pair holds.
 func TestPublishingTokenStillReadsWhatEoasNeeds(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
@@ -97,6 +97,12 @@ func TestPublishingTokenStillReadsWhatEoasNeeds(t *testing.T) {
 		assert.Equal(t, http.StatusOK, cliRequest(t, http.MethodGet, path).Code,
 			"%s is what the CLI reads before publishing", path)
 	}
+
+	// The test container is stateless, where publish groups do not exist. A 404
+	// proves the token reached the handler instead of being rejected by auth.
+	path := "/api/apps/test-app-id/branch/branch-1/runtimeVersion/1.0.0/publish-groups"
+	assert.Equal(t, http.StatusNotFound, cliRequest(t, http.MethodGet, path).Code,
+		"%s must be reachable with a CLI publishing credential", path)
 }
 
 // Mutations were never reachable with a token: RequirePermission resolves a

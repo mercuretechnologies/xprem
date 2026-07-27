@@ -66,10 +66,14 @@ func registerAppRoutes(
 	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollout/revert", container.RolloutHandler.RevertUpdateRolloutHandler,
 		NeedsPermission(rbac.PermUpdateRolloutManage, rbac.FallbackAdminOnly))
 
-	// The only two routes in this file a publishing token may reach.
+	// Updates. The three the CLI reads are the only routes in this file a
+	// publishing token may reach: eoas asks which runtime versions a branch
+	// has, then which updates or publish groups that pair already holds.
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersions", container.BranchHandler.GetRuntimeVersionsHandler,
 		AnyViewerOrToken(apikeyrestrictions.ActionRead))
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates", container.UpdateHandler.GetUpdatesHandler,
+		AnyViewerOrToken(apikeyrestrictions.ActionRead))
+	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/publish-groups", container.UpdateHandler.GetPublishGroupsHandler,
 		AnyViewerOrToken(apikeyrestrictions.ActionRead))
 	app.route(http.MethodGet, "/updates", container.UpdateHandler.GetUpdateFeedHandler,
 		AnyViewer())

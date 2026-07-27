@@ -347,6 +347,58 @@ func (h *UpdateHandler) RepublishUpdateHandler(w http.ResponseWriter, r *http.Re
 	handlers.RenderJSON(w, http.StatusCreated, publishResponse{Updates: []types.Update{*newUpdate}})
 }
 
+func (h *UpdateHandler) GetPublishGroupsHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	appID := vars["APP_ID"]
+	branchName := vars["BRANCH"]
+	runtimeVersion := vars["RUNTIME_VERSION"]
+	if branchName == "" {
+		handlers.RenderError(w, http.StatusBadRequest, "Branch name is empty")
+		return
+	}
+	if runtimeVersion == "" {
+		handlers.RenderError(w, http.StatusBadRequest, "Runtime version is empty")
+		return
+	}
+
+	var cursor *int64
+	if rawCursor := r.URL.Query().Get("cursor"); rawCursor != "" {
+		parsedCursor, err := strconv.ParseInt(rawCursor, 10, 64)
+		if err != nil || parsedCursor <= 0 {
+			handlers.RenderError(w, http.StatusBadRequest, "Cursor must be a positive publish group position")
+			return
+		}
+		cursor = &parsedCursor
+	}
+	limit := defaultUpdatesPageLimit
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > maxUpdatesPageLimit {
+			handlers.RenderError(w, http.StatusBadRequest, "Limit must be between 1 and 100")
+			return
+		}
+		limit = parsedLimit
+	}
+
+	page, err := h.updateService.GetPublishGroupsPage(r.Context(), appID, runtimeVersion, branchName, cursor, limit)
+	if err != nil {
+		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+			handlers.RenderError(w, http.StatusNotFound, "Publish groups are not supported in stateless mode")
+			return
+		}
+		var valErr *validation.Error
+		if errors.As(err, &valErr) {
+			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while fetching publish groups.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(page)
+}
+
 func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	params := r.URL.Query()
