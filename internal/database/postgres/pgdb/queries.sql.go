@@ -1269,7 +1269,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 }
 
 const getDeviceIdentity = `-- name: GetDeviceIdentity :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 `
 
@@ -1301,12 +1301,13 @@ func (q *Queries) GetDeviceIdentity(ctx context.Context, arg GetDeviceIdentityPa
 		&i.PublishGroup,
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
+		&i.CurrentUpdateArrivedAt,
 	)
 	return i, err
 }
 
 const getDeviceIdentityForUpdate = `-- name: GetDeviceIdentityForUpdate :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 FOR UPDATE
 `
@@ -1339,6 +1340,7 @@ func (q *Queries) GetDeviceIdentityForUpdate(ctx context.Context, arg GetDeviceI
 		&i.PublishGroup,
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
+		&i.CurrentUpdateArrivedAt,
 	)
 	return i, err
 }
@@ -3272,7 +3274,7 @@ func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]Li
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version, d.current_update_observed_at
+SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version, d.current_update_observed_at, d.current_update_arrived_at
 FROM device_identity d
 WHERE d.app_id = $1
   AND (coalesce(cardinality($2::jsonb[]), 0) = 0 OR d.metadata @> ANY($2::jsonb[]))
@@ -3376,6 +3378,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 			&i.PublishGroup,
 			&i.AppVersion,
 			&i.CurrentUpdateObservedAt,
+			&i.CurrentUpdateArrivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3662,45 +3665,69 @@ SELECT d.update_uuid,
 FROM (
     SELECT di.current_update_id AS update_uuid,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(di.current_update_observed_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(di.current_update_arrived_at, $1::timestamptz) - $1::timestamptz
            )) / $2::int)::int AS idx,
            1 AS adopted,
            0 AS failing
     FROM device_identity di
     WHERE di.app_id = $3
       AND di.current_update_id = ANY($4::uuid[])
-      AND di.current_update_observed_at IS NOT NULL
-      AND di.current_update_observed_at <= $5::timestamptz
+      AND di.current_update_arrived_at IS NOT NULL
+      AND di.current_update_arrived_at <= $5::timestamptz
 
     UNION ALL
 
-    SELECT f.update_id,
+    -- One delta per DEVICE, not per failure row. Since
+    -- 20260726140000_failure_type_in_key.sql a launch rollback and a JS crash
+    -- on the same pair are two rows, deliberately, so counting rows would have
+    -- reported one device twice and let the failing curve climb above the
+    -- population it is drawn against. Every other failure count in this file
+    -- uses COUNT(DISTINCT eas_client_id) for the same reason.
+    --
+    -- A device is failing from its FIRST fault on the update until its LAST one
+    -- clears, and not at all while any of them is still open.
+    SELECT per_device.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(f.first_seen_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(per_device.opened_at, $1::timestamptz) - $1::timestamptz
            )) / $2::int)::int,
            0,
            1
-    FROM device_update_failures f
-    WHERE f.app_id = $3
-      AND f.update_id = ANY($4::uuid[])
-      AND f.first_seen_at <= $5::timestamptz
+    FROM (
+        SELECT f.update_id,
+               MIN(f.first_seen_at) AS opened_at,
+               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
+                    ELSE MAX(f.resolved_at) END AS closed_at
+        FROM device_update_failures f
+        WHERE f.app_id = $3
+          AND f.update_id = ANY($4::uuid[])
+        GROUP BY f.update_id, f.eas_client_id
+    ) per_device
+    WHERE per_device.opened_at <= $5::timestamptz
 
     UNION ALL
 
-    -- The other end of a fault that cleared. Without it the failure curve
-    -- would be cumulative too, and a fleet that recovered would read as a
-    -- fleet that never did.
-    SELECT f.update_id,
+    -- The other end of a device's fault, once every one of them has cleared.
+    SELECT per_device.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(f.resolved_at, $1::timestamptz) - $1::timestamptz
+               GREATEST(per_device.closed_at, $1::timestamptz) - $1::timestamptz
            )) / $2::int)::int,
            0,
            -1
-    FROM device_update_failures f
-    WHERE f.app_id = $3
-      AND f.update_id = ANY($4::uuid[])
-      AND f.resolved_at IS NOT NULL
-      AND f.resolved_at <= $5::timestamptz
+    FROM (
+        SELECT f.update_id,
+               MIN(f.first_seen_at) AS opened_at,
+               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
+                    ELSE MAX(f.resolved_at) END AS closed_at
+        FROM device_update_failures f
+        WHERE f.app_id = $3
+          AND f.update_id = ANY($4::uuid[])
+        GROUP BY f.update_id, f.eas_client_id
+    ) per_device
+    WHERE per_device.closed_at IS NOT NULL
+      AND per_device.closed_at <= $5::timestamptz
+      -- A resolution stamped before the fault it closes would otherwise emit
+      -- its -1 in an earlier bucket than the +1 and drive the curve negative.
+      AND per_device.closed_at >= per_device.opened_at
 ) d
 GROUP BY d.update_uuid, d.idx
 ORDER BY d.update_uuid, d.idx
@@ -3752,8 +3779,8 @@ type ListUpdateHealthStateDeltasRow struct {
 // rise.
 //
 // Arrivals are not, and cannot be. device_identity holds one row per device,
-// overwritten: it records when a device ARRIVED on the update it is running
-// now, never when it left the one before. So the only population reachable here
+// overwritten: current_update_arrived_at records when a device MOVED ONTO the
+// update it runs now, never when it left the one before. So the only population reachable here
 // is "devices still on this update today", dated by when each of them arrived.
 // That curve is exact at its right edge and increasingly revisionist the
 // further back it is read, because every device that has since moved away was
@@ -4228,12 +4255,16 @@ WITH origin AS (
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
     device_model, os_name, os_version, app_version, current_update_observed_at,
+    current_update_arrived_at,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, (SELECT update_uuid FROM origin), $7,
     $8, $9, $10,
+    CASE WHEN $11::uuid IS NULL
+        THEN NULL ELSE $12::timestamptz END,
+    -- A first sighting IS an arrival.
     CASE WHEN $11::uuid IS NULL
         THEN NULL ELSE $12::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
@@ -4257,7 +4288,16 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
     current_update_observed_at = CASE WHEN $11::uuid IS NULL
         THEN device_identity.current_update_observed_at
-        ELSE EXCLUDED.current_update_observed_at END
+        ELSE EXCLUDED.current_update_observed_at END,
+    -- Same distinction as TouchDeviceIdentity: the arrival only moves when the
+    -- update does.
+    current_update_arrived_at = CASE
+        WHEN $11::uuid IS NULL
+            THEN device_identity.current_update_arrived_at
+        WHEN device_identity.current_update_id IS DISTINCT FROM EXCLUDED.current_update_id
+            THEN EXCLUDED.current_update_arrived_at
+        ELSE COALESCE(device_identity.current_update_arrived_at, EXCLUDED.current_update_arrived_at)
+    END
 WHERE $11::uuid IS NULL
    OR device_identity.current_update_observed_at IS NULL
    OR EXCLUDED.current_update_observed_at >= device_identity.current_update_observed_at
@@ -4725,6 +4765,17 @@ UPDATE device_identity SET
     app_version = COALESCE($11, device_identity.app_version),
     current_update_observed_at = CASE WHEN $7::uuid IS NULL
         THEN device_identity.current_update_observed_at ELSE $12::timestamptz END,
+    -- Moved onto, not heard from. The watermark above advances on every poll,
+    -- because that is what makes it able to order racing observations; this one
+    -- stands still for as long as the device stays where it is, which is what
+    -- lets a chart date an adoption.
+    current_update_arrived_at = CASE
+        WHEN $7::uuid IS NULL
+            THEN device_identity.current_update_arrived_at
+        WHEN device_identity.current_update_id IS DISTINCT FROM (SELECT o.update_uuid FROM origin o)
+            THEN $12::timestamptz
+        ELSE COALESCE(device_identity.current_update_arrived_at, $12::timestamptz)
+    END,
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
   -- An observation older than the one on file changes nothing, not even
@@ -4915,7 +4966,7 @@ UPDATE device_identity SET
     lng = COALESCE($7, lng),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE app_id = $1 AND eas_client_id = $2
-RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at
+RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at
 `
 
 type UpdateDeviceIdentityParams struct {
@@ -4962,6 +5013,7 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.PublishGroup,
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
+		&i.CurrentUpdateArrivedAt,
 	)
 	return i, err
 }

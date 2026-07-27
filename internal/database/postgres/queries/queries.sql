@@ -1510,6 +1510,17 @@ UPDATE device_identity SET
     app_version = COALESCE(sqlc.narg('app_version'), device_identity.app_version),
     current_update_observed_at = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN device_identity.current_update_observed_at ELSE sqlc.arg('observed_at')::timestamptz END,
+    -- Moved onto, not heard from. The watermark above advances on every poll,
+    -- because that is what makes it able to order racing observations; this one
+    -- stands still for as long as the device stays where it is, which is what
+    -- lets a chart date an adoption.
+    current_update_arrived_at = CASE
+        WHEN sqlc.narg('current_update_id')::uuid IS NULL
+            THEN device_identity.current_update_arrived_at
+        WHEN device_identity.current_update_id IS DISTINCT FROM (SELECT o.update_uuid FROM origin o)
+            THEN sqlc.arg('observed_at')::timestamptz
+        ELSE COALESCE(device_identity.current_update_arrived_at, sqlc.arg('observed_at')::timestamptz)
+    END,
     last_seen_at = CURRENT_TIMESTAMP
 WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
   -- An observation older than the one on file changes nothing, not even
@@ -1546,12 +1557,16 @@ WITH origin AS (
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
     device_model, os_name, os_version, app_version, current_update_observed_at,
+    current_update_arrived_at,
     branch_name, runtime_version, platform, publish_group
 )
 VALUES (
     $1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'),
     sqlc.narg('lng'), (SELECT update_uuid FROM origin), sqlc.narg('device_model'),
     sqlc.narg('os_name'), sqlc.narg('os_version'), sqlc.narg('app_version'),
+    CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
+        THEN NULL ELSE sqlc.arg('observed_at')::timestamptz END,
+    -- A first sighting IS an arrival.
     CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN NULL ELSE sqlc.arg('observed_at')::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
@@ -1582,7 +1597,16 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
     current_update_observed_at = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN device_identity.current_update_observed_at
-        ELSE EXCLUDED.current_update_observed_at END
+        ELSE EXCLUDED.current_update_observed_at END,
+    -- Same distinction as TouchDeviceIdentity: the arrival only moves when the
+    -- update does.
+    current_update_arrived_at = CASE
+        WHEN sqlc.narg('current_update_id')::uuid IS NULL
+            THEN device_identity.current_update_arrived_at
+        WHEN device_identity.current_update_id IS DISTINCT FROM EXCLUDED.current_update_id
+            THEN EXCLUDED.current_update_arrived_at
+        ELSE COALESCE(device_identity.current_update_arrived_at, EXCLUDED.current_update_arrived_at)
+    END
 -- Same staleness guard as TouchDeviceIdentity, on the arm that absorbs the
 -- race between two concurrent registrations of the same device.
 WHERE sqlc.narg('current_update_id')::uuid IS NULL
@@ -1922,8 +1946,8 @@ DELETE FROM device_health_outbox;
 -- rise.
 --
 -- Arrivals are not, and cannot be. device_identity holds one row per device,
--- overwritten: it records when a device ARRIVED on the update it is running
--- now, never when it left the one before. So the only population reachable here
+-- overwritten: current_update_arrived_at records when a device MOVED ONTO the
+-- update it runs now, never when it left the one before. So the only population reachable here
 -- is "devices still on this update today", dated by when each of them arrived.
 -- That curve is exact at its right edge and increasingly revisionist the
 -- further back it is read, because every device that has since moved away was
@@ -1944,45 +1968,69 @@ SELECT d.update_uuid,
 FROM (
     SELECT di.current_update_id AS update_uuid,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(di.current_update_observed_at, @from_ts::timestamptz) - @from_ts::timestamptz
+               GREATEST(di.current_update_arrived_at, @from_ts::timestamptz) - @from_ts::timestamptz
            )) / @step_seconds::int)::int AS idx,
            1 AS adopted,
            0 AS failing
     FROM device_identity di
     WHERE di.app_id = @app_id
       AND di.current_update_id = ANY(@update_ids::uuid[])
-      AND di.current_update_observed_at IS NOT NULL
-      AND di.current_update_observed_at <= @to_ts::timestamptz
+      AND di.current_update_arrived_at IS NOT NULL
+      AND di.current_update_arrived_at <= @to_ts::timestamptz
 
     UNION ALL
 
-    SELECT f.update_id,
+    -- One delta per DEVICE, not per failure row. Since
+    -- 20260726140000_failure_type_in_key.sql a launch rollback and a JS crash
+    -- on the same pair are two rows, deliberately, so counting rows would have
+    -- reported one device twice and let the failing curve climb above the
+    -- population it is drawn against. Every other failure count in this file
+    -- uses COUNT(DISTINCT eas_client_id) for the same reason.
+    --
+    -- A device is failing from its FIRST fault on the update until its LAST one
+    -- clears, and not at all while any of them is still open.
+    SELECT per_device.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(f.first_seen_at, @from_ts::timestamptz) - @from_ts::timestamptz
+               GREATEST(per_device.opened_at, @from_ts::timestamptz) - @from_ts::timestamptz
            )) / @step_seconds::int)::int,
            0,
            1
-    FROM device_update_failures f
-    WHERE f.app_id = @app_id
-      AND f.update_id = ANY(@update_ids::uuid[])
-      AND f.first_seen_at <= @to_ts::timestamptz
+    FROM (
+        SELECT f.update_id,
+               MIN(f.first_seen_at) AS opened_at,
+               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
+                    ELSE MAX(f.resolved_at) END AS closed_at
+        FROM device_update_failures f
+        WHERE f.app_id = @app_id
+          AND f.update_id = ANY(@update_ids::uuid[])
+        GROUP BY f.update_id, f.eas_client_id
+    ) per_device
+    WHERE per_device.opened_at <= @to_ts::timestamptz
 
     UNION ALL
 
-    -- The other end of a fault that cleared. Without it the failure curve
-    -- would be cumulative too, and a fleet that recovered would read as a
-    -- fleet that never did.
-    SELECT f.update_id,
+    -- The other end of a device's fault, once every one of them has cleared.
+    SELECT per_device.update_id,
            floor(EXTRACT(EPOCH FROM (
-               GREATEST(f.resolved_at, @from_ts::timestamptz) - @from_ts::timestamptz
+               GREATEST(per_device.closed_at, @from_ts::timestamptz) - @from_ts::timestamptz
            )) / @step_seconds::int)::int,
            0,
            -1
-    FROM device_update_failures f
-    WHERE f.app_id = @app_id
-      AND f.update_id = ANY(@update_ids::uuid[])
-      AND f.resolved_at IS NOT NULL
-      AND f.resolved_at <= @to_ts::timestamptz
+    FROM (
+        SELECT f.update_id,
+               MIN(f.first_seen_at) AS opened_at,
+               CASE WHEN bool_or(f.resolved_at IS NULL) THEN NULL
+                    ELSE MAX(f.resolved_at) END AS closed_at
+        FROM device_update_failures f
+        WHERE f.app_id = @app_id
+          AND f.update_id = ANY(@update_ids::uuid[])
+        GROUP BY f.update_id, f.eas_client_id
+    ) per_device
+    WHERE per_device.closed_at IS NOT NULL
+      AND per_device.closed_at <= @to_ts::timestamptz
+      -- A resolution stamped before the fault it closes would otherwise emit
+      -- its -1 in an earlier bucket than the +1 and drive the curve negative.
+      AND per_device.closed_at >= per_device.opened_at
 ) d
 GROUP BY d.update_uuid, d.idx
 ORDER BY d.update_uuid, d.idx;

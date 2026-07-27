@@ -116,6 +116,7 @@ type DeviceIdentity struct {
 	PublishGroup            pgtype.UUID        `json:"publish_group"`
 	AppVersion              *string            `json:"app_version"`
 	CurrentUpdateObservedAt pgtype.Timestamptz `json:"current_update_observed_at"`
+	CurrentUpdateArrivedAt  pgtype.Timestamptz `json:"current_update_arrived_at"`
 }
 
 type DeviceUpdateFailure struct {
