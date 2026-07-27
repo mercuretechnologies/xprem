@@ -451,13 +451,7 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 	return string(out)
 }
 
-// contentHash fingerprints one row for retry deduplication: published SDKs
-// re-send a whole batch after ANY non-2xx, so duplicate rows are a certainty,
-// not an edge case. iOS only sends whole-second timestamps, so (session,
-// name, nano) alone could collide across genuinely distinct records; the
-// value/body and serialized attributes disambiguate. FNV-1a over the parts in
-// fixed order, deterministic across processes.
-// contentHash identifies ONE record as the client wrote it, so a batch the SDK
+// contentKey identifies ONE record as the client wrote it, so a batch the SDK
 // re-sends after a failed dispatch collapses at read time instead of counting
 // twice. Every stored field the client authored goes in, and nothing the server
 // resolved does: the branch, the publish group and the place are looked up here
@@ -478,11 +472,10 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 // the attributes as an envelope field. Two downloads in one session would
 // otherwise share an identity. It is safe to include because it is read from
 // the wire and never resolved here.
-
-// contentKey is the identity a retried row is folded onto at read time.
 //
-// It replaced a 64-bit FNV over NUL-separated parts, and two things were wrong
-// with that, the second worse than the first.
+// HOW it is computed matters as much as what goes in. It replaced a 64-bit FNV
+// over NUL-separated parts, and two things were wrong with that, the second
+// worse than the first.
 //
 // 128 bits instead of 64: a 64-bit fingerprint collides by birthday at roughly
 // 2.7% once an app holds a billion distinct contents, and a collision is
