@@ -77,7 +77,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 		return rbac.RequirePermission(container.RBACService, perm)
 	}
 
-	registerAccountRoutes(apiSubrouter, container, adminOnly, requirePermission)
+	registerAccountRoutes(apiSubrouter, container, adminOnly)
 	registerAppRoutes(apiSubrouter, container, requirePermission)
 
 	return r

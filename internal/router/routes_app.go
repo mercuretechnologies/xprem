@@ -8,10 +8,14 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Everything scoped to one app under /api/apps/{APP_ID}: its branches and
-// channels, its rollouts, its updates, its API keys, and the Enterprise reads
-// on top of those (device identity and the Observe explorer). Called by the
-// dashboard.
+// Everything scoped to one app under /api/apps/{APP_ID}: the app itself, its
+// certificate, its branches and channels, its rollouts, its updates, its API
+// keys, and the Enterprise reads on top of those (device identity and the
+// Observe explorer). Called by the dashboard.
+//
+// The app COLLECTION, /apps, is not here but in routes_account.go: it names no
+// app, so it cannot sit behind the middlewares below, and it has to be
+// registered before this file's subrouter opens anyway.
 //
 // AUTHENTICATION, in three layers, and the order between the first two is the
 // point of the whole group.
@@ -49,7 +53,19 @@ func registerAppRoutes(
 	appAuthSubrouter.Use(middleware.AppResolverMiddleware(container.AppRepo))
 	appAuthSubrouter.Use(rbac.RequireAppVisible(container.RBACService))
 
-	appAuthSubrouter.HandleFunc("/", container.AppHandler.GetAppHandler).Methods(http.MethodGet)
+	// The app itself. Registered as "" and not "/", which is what makes the
+	// path match exactly as the dashboard sends it: with StrictSlash on this
+	// subrouter, a route declared "/" answers a slashless call with a 301 to
+	// the slashed form, and every one of these three is called without one.
+	// The redirect would still work, browsers follow it and keep the method,
+	// it is simply a round trip nobody needs. The slashed form keeps working
+	// either way, StrictSlash redirects in both directions.
+	appAuthSubrouter.HandleFunc("", container.AppHandler.GetAppHandler).Methods(http.MethodGet)
+	appAuthSubrouter.Handle("", requirePermission(rbac.PermAppDelete)(http.HandlerFunc(container.AppHandler.DeleteAppHandler))).Methods(http.MethodDelete)
+	appAuthSubrouter.Handle("", requirePermission(rbac.PermAppRename)(http.HandlerFunc(container.AppHandler.UpdateAppHandler))).Methods(http.MethodPatch)
+	// The signing certificate is key material: admins, or the explicit
+	// certificate:read permission.
+	appAuthSubrouter.Handle("/certificate", requirePermission(rbac.PermCertificateRead)(http.HandlerFunc(container.AppHandler.DownloadAppCertificateHandler))).Methods(http.MethodGet)
 	appAuthSubrouter.Handle("/branches", requirePermission(rbac.PermBranchCreate)(http.HandlerFunc(container.BranchHandler.CreateBranchHandler))).Methods(http.MethodPost)
 	appAuthSubrouter.Handle("/branches/{BRANCH}", requirePermission(rbac.PermBranchDelete)(http.HandlerFunc(container.BranchHandler.DeleteBranchHandler))).Methods(http.MethodDelete)
 	appAuthSubrouter.HandleFunc("/branches", container.BranchHandler.GetBranchesHandler).Methods(http.MethodGet)

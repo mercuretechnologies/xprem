@@ -1,14 +1,18 @@
 package infrastructure
 
 import (
-	"expo-open-ota/ee/rbac"
 	"net/http"
 
 	"github.com/gorilla/mux"
 )
 
 // The account-wide half of /api: everything that is about the installation
-// itself rather than about one app. Called by the dashboard.
+// itself rather than about one app, which is the account signed in, the
+// edition it is running, and the administration of both. Called by the
+// dashboard. Anything naming ONE app lives in routes_app.go; the app
+// collection is the boundary case and it is here, at the end, because it names
+// none and because routes_app.go opens a /apps/{APP_ID} prefix subrouter that
+// has to be registered after it.
 //
 // AUTHENTICATION, in two layers.
 //
@@ -20,20 +24,13 @@ import (
 //
 // The second is per route, because admin and non-admin routes share path
 // prefixes and a subrouter cannot separate them. adminOnly guards the global
-// administration surface: users, roles, the license, SSO configuration, the
-// audit log and app creation. The routes left ungated are the ones every
-// signed-in account may read about itself or about the edition it is running.
-//
-// The flat /apps routes at the end are here rather than in routes_app.go for a
-// routing reason and it is worth stating: routes_app.go registers a PathPrefix
-// subrouter on /apps/{APP_ID} with StrictSlash(true), so these have to be
-// registered BEFORE it or the prefix would claim them first and the trailing
-// slash rule would answer with a redirect.
+// administration surface: users, roles, the license, SSO configuration and the
+// audit log. The routes left ungated are the ones every signed-in account may
+// read about itself or about the edition it is running.
 func registerAccountRoutes(
 	apiSubrouter *mux.Router,
 	container *AppContainer,
 	adminOnly mux.MiddlewareFunc,
-	requirePermission func(rbac.Permission) mux.MiddlewareFunc,
 ) {
 	apiSubrouter.HandleFunc("/settings", container.SettingsHandler.GetSettingsHandler).Methods(http.MethodGet)
 
@@ -80,14 +77,7 @@ func registerAccountRoutes(
 	apiSubrouter.Handle("/users/{USER_ID}/grants", adminOnly(http.HandlerFunc(container.RBACHandler.SetUserGrantsHandler))).Methods(http.MethodPut)
 	apiSubrouter.Handle("/users/grants/summary", adminOnly(http.HandlerFunc(container.RBACHandler.GetGrantSummaryHandler))).Methods(http.MethodGet)
 	apiSubrouter.HandleFunc("/me/permissions", container.RBACHandler.GetMyPermissionsHandler).Methods(http.MethodGet)
-
-	// Apps management router. Creating an app is global administration and
-	// stays admin-only; acting on an existing app is permission-gated.
-	apiSubrouter.Handle("/apps", adminOnly(http.HandlerFunc(container.AppHandler.CreateAppHandler))).Methods(http.MethodPost)
-	apiSubrouter.Handle("/apps/{APP_ID}", requirePermission(rbac.PermAppDelete)(http.HandlerFunc(container.AppHandler.DeleteAppHandler))).Methods(http.MethodDelete)
-	apiSubrouter.Handle("/apps/{APP_ID}", requirePermission(rbac.PermAppRename)(http.HandlerFunc(container.AppHandler.UpdateAppHandler))).Methods(http.MethodPatch)
 	apiSubrouter.HandleFunc("/apps", container.AppHandler.GetAppsHandler).Methods(http.MethodGet)
-	// The signing certificate is key material — admins, or the explicit
-	// certificate:read permission.
-	apiSubrouter.Handle("/apps/{APP_ID}/certificate", requirePermission(rbac.PermCertificateRead)(http.HandlerFunc(container.AppHandler.DownloadAppCertificateHandler))).Methods(http.MethodGet)
+	apiSubrouter.Handle("/apps", adminOnly(http.HandlerFunc(container.AppHandler.CreateAppHandler))).Methods(http.MethodPost)
+
 }
