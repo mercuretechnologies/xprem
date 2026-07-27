@@ -46,7 +46,7 @@ services:
     image: clickhouse/clickhouse-server:25.3
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?-secret}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-expo_ota_dev}
     ports:
       - "127.0.0.1:8123:8123"
