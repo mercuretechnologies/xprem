@@ -161,18 +161,23 @@ func registerAppRoutes(
 	app.route(http.MethodDelete, "/identity/schema/{KEY}", container.IdentityHandler.DeleteSchemaKeyHandler,
 		NeedsPermission(rbac.PermIdentityManage, rbac.FallbackAdminOnly))
 
-	// Update health, deliberately NOT behind the two read permissions above
-	// even though one of them sits under /observe: both are aggregates per
-	// update naming no device, and they feed the updates table's adoption
-	// column and the rollout card's health score, which every member needs.
-	// Instant-T comes straight from the device registry and works without
-	// ClickHouse; the historical series is projected into it and reports
-	// available=false when it is absent, so the dashboard hides the graph
-	// instead of losing the route.
+	// Update health. The two open ones are aggregates per update naming no
+	// device, and they feed the updates table's adoption column and the
+	// rollout card's health score, which every member needs. Instant-T comes
+	// straight from the device registry and works without ClickHouse; the
+	// historical series is projected into it and reports available=false when
+	// it is absent, so the dashboard hides the graph instead of losing the
+	// route.
 	app.route(http.MethodGet, "/identity/update-health", container.IdentityHandler.UpdateHealthHandler,
 		AnyViewer())
 	app.route(http.MethodGet, "/observe/update-health/history", container.ObserveHealthHistoryHandler.GetUpdateHealthHistoryHandler,
 		AnyViewer())
+	// Splitting that same window by a device dimension is a different question:
+	// it reads device_model, os_version, country_code and their neighbours, the
+	// very columns /observe/breakdown groups by just below. It is its own route
+	// so that answer is a line here rather than a check buried in a handler.
+	app.route(http.MethodGet, "/observe/update-health/segments", container.ObserveHealthHistoryHandler.GetUpdateHealthSegmentsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 
 	// The Observe explorer. Read-only, and every one of them degrades to
 	// available=false inside the handler when ClickHouse is absent rather than

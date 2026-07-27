@@ -33,15 +33,33 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 //
 // The ORDER of these calls is load-bearing in one place, noted again in
 // routes_account.go: the flat /api/apps routes are registered before the
-// /apps/{APP_ID} prefix subrouter that routes_app.go opens, which is what
-// keeps a DELETE on /api/apps/{id} from meeting that subrouter's StrictSlash
-// rule. Everything else matches on disjoint paths.
+// /apps/{APP_ID} prefix subrouter that routes_app.go opens, so the prefix
+// cannot claim them first. Everything else matches on disjoint paths, and mux
+// backtracks out of a prefix whose inner routes do not match.
 //
 // This package is also the composition root, so it is the one place under
 // internal/ that reaches into ee/. Enterprise behavior is wired here and
 // nowhere below.
 func NewRouter(container *AppContainer) *mux.Router {
 	r := mux.NewRouter()
+	// No automatic path cleaning. mux answers a path carrying a double slash
+	// or a dot segment with a 301 to the cleaned form, and Go's http.Client
+	// and curl -L both rewrite a 301 on a non-GET method to GET: a client
+	// whose base URL ends in a slash sends DELETE //api/apps/{id}, gets the
+	// redirect, re-issues it as GET, reads 200 and believes the app was
+	// deleted. Neither the dashboard nor eoas normalises its base URL, so that
+	// is one trailing slash in an operator's config away.
+	//
+	// Off, a double slash is a plain 404, which is a refusal a caller cannot
+	// mistake for success. This is the same reasoning that took StrictSlash
+	// off the app subrouter, applied one level up where it covers every route
+	// rather than one group.
+	//
+	// The dashboard's static handler is the one place that saw a benefit from
+	// cleaning, and it does not need it: it joins the request path onto the
+	// dist directory and verifies the result is still under it, which is what
+	// actually stops traversal. See routes_dashboard_assets.go.
+	r.SkipClean(true)
 	r.Use(middleware.LoggingMiddleware)
 	// Every request carries its network context (client IP, user agent) so
 	// audit events can be emitted from any layer below without the request.

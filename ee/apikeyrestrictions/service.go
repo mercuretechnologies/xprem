@@ -171,8 +171,12 @@ func (s *ApiKeyRestrictionService) SetBranchProtection(ctx context.Context, appI
 // enterprise feature, so without a control plane or an active license nothing
 // is enforced and every request passes (community behavior).
 //
-// branchName is empty for requests that do not target a branch (reads, local
-// file uploads); those only go through the IP allowlist. A branch that does
+// branchName is empty only for requests whose ROUTE carries no branch, such as
+// the local file upload; those go through the IP allowlist alone. Every route
+// that names a branch passes it, reads included: the two app-scoped reads a
+// publishing token may reach are branch-scoped, and letting them through
+// unchecked made this restriction mean "cannot write" while it reads as
+// "cannot touch". A branch that does
 // not exist yet is not protected: publishing to a brand-new branch stays
 // open, protecting it is an explicit admin action afterwards.
 func (s *ApiKeyRestrictionService) AuthorizeCliRequest(ctx context.Context, appID string, apiKeyID int64, branchName string, clientIP netip.Addr) error {

@@ -60,7 +60,7 @@ func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Su
 func RequirePermission(service *RBACService, perm Permission, fallback Fallback) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !AuthorizeRequest(service, w, r, perm, fallback) {
+			if !authorizeRequest(service, w, r, perm, fallback) {
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -68,17 +68,12 @@ func RequirePermission(service *RBACService, perm Permission, fallback Fallback)
 	}
 }
 
-// AuthorizeRequest is the same decision as RequirePermission, asked from
-// inside a handler instead of in front of it, and it writes the refusal
-// itself. It exists for the case a middleware cannot express: one endpoint
-// whose answer depends on what the request ASKS for, not on which route it
-// matched. Update health history is the one, its segmented mode reads device
-// dimensions the plain mode never touches.
-//
-// Reach for it only when the route genuinely has two answers. A route with one
-// answer belongs behind RequirePermission, where it is visible in the routing
-// table rather than buried in a handler.
-func AuthorizeRequest(
+// authorizeRequest is the decision RequirePermission wraps, split out so the
+// middleware stays three lines. Deliberately unexported: a handler that
+// authorizes itself is a permission nobody can find by reading the routing
+// table, and the one endpoint that seemed to need it turned out to be two
+// endpoints wearing one URL.
+func authorizeRequest(
 	service *RBACService,
 	w http.ResponseWriter,
 	r *http.Request,

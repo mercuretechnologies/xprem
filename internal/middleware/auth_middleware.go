@@ -54,6 +54,14 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				// read production's runtime versions and update history: the
 				// restriction meant "cannot write" while reading as "has
 				// nothing to do with protected branches".
+				//
+				// The SPELLING of the variable is load-bearing. This reads
+				// {BRANCH}, and routes_app.go also registers a route spelled
+				// {BRANCH_ID}. No token reaches that one today, so nothing
+				// breaks, but a future token-reachable route spelled
+				// {BRANCH_ID} would silently pass "" here and skip the
+				// protected-branch check again, which is exactly the hole this
+				// line closed.
 				credential, err := cliAuthService.ValidateCliCredential(
 					r.Context(), appId, auth, mux.Vars(r)["BRANCH"], helpers.ClientIP(r),
 				)

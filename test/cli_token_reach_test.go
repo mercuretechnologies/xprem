@@ -75,6 +75,7 @@ func TestPublishingTokenIsRefusedOnAppScopedReads(t *testing.T) {
 		"/api/apps/test-app-id/observe/breakdown",
 		"/api/apps/test-app-id/observe/conditions",
 		"/api/apps/test-app-id/observe/update-health/history",
+		"/api/apps/test-app-id/observe/update-health/segments",
 	} {
 		assert.Equal(t, http.StatusForbidden, cliRequest(t, http.MethodGet, path).Code,
 			"%s must not answer a publishing credential", path)

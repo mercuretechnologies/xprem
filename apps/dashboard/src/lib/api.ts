@@ -1226,9 +1226,10 @@ export class ApiClient {
       }
     );
   }
-  // Same route as getUpdateHealthHistory below, not a copy-paste slip: passing
-  // `dimension` is what switches the server from one series per update to one
-  // per segment value, so the two shapes are two readings of one endpoint.
+  // Its own route, not a mode of getUpdateHealthHistory below. Splitting the
+  // window by a device dimension reads different data and needs observe:read,
+  // while the plain series is open to anyone who can see the app because the
+  // updates table and the rollout card both draw it.
   public async getUpdateHealthSegments(
     updateUUIDs: string[],
     dimension: string,
@@ -1239,7 +1240,7 @@ export class ApiClient {
     if (from) search.set('from', from);
     if (to) search.set('to', to);
     return this.request<UpdateHealthSegmentsResponse>(
-      `${this.appScope()}/observe/update-health/history?${search.toString()}`,
+      `${this.appScope()}/observe/update-health/segments?${search.toString()}`,
       { method: 'GET' }
     );
   }

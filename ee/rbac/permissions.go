@@ -61,8 +61,12 @@ const (
 	// exists at all: a log record carries the client id, the session id and a
 	// body the application wrote, so it can hold anything the app logged.
 	//
-	// Deliberately NOT covering /observe/update-health/history: same reason as
-	// above, it is a per-update aggregate the updates views depend on.
+	// It also covers the SEGMENTED mode of /observe/update-health/history,
+	// which is not obvious from the routing table: that route is open to any
+	// app viewer because its plain series is a per-update aggregate the
+	// updates table and the rollout card both need, but asking it to split by
+	// a device dimension reads device_model, os_version and country_code, so
+	// the handler asks for this permission before answering.
 	PermObserveRead Permission = "observe:read"
 )
 

@@ -47,13 +47,6 @@ const maxHealthHistoryWindow = 90 * 24 * time.Hour
 // and keep the PostgreSQL instant-T health endpoint fully operational.
 type HealthHistoryHandler struct {
 	reader HealthHistoryReader
-	// authorizeSegments decides the SEGMENTED mode only, and writes its own
-	// refusal. The route itself is open to any account that can see the app,
-	// because the plain series is a per-update aggregate the updates table and
-	// the rollout card both need. Splitting it by a device dimension is a
-	// different question with a different answer, and no middleware can tell
-	// them apart: they are the same route, distinguished by a query parameter.
-	authorizeSegments func(http.ResponseWriter, *http.Request) bool
 }
 
 func NewHealthHistoryHandler(reader HealthHistoryReader) *HealthHistoryHandler {
@@ -66,18 +59,16 @@ func NewHealthHistoryHandler(reader HealthHistoryReader) *HealthHistoryHandler {
 	return &HealthHistoryHandler{reader: reader}
 }
 
-// SetSegmentAuthorizer wires the permission check for the segmented mode. It
-// is a seam rather than a direct dependency so this package stays clear of
-// ee/rbac, and it is set from the router's composition root.
-//
-// Leaving it unset REFUSES the segmented mode. That is deliberate: an unwired
-// gate is a wiring mistake, and the failure mode of guessing "allow" here is
-// handing out fleet-wide device breakdowns.
-func (h *HealthHistoryHandler) SetSegmentAuthorizer(authorize func(http.ResponseWriter, *http.Request) bool) {
-	h.authorizeSegments = authorize
+// healthHistoryQuery is what both handlers below need before they can answer,
+// and parsing it renders its own 400s. Shared because the two routes differ in
+// what they read and in who may read it, not in how they are addressed.
+type healthHistoryQuery struct {
+	updateIDs []string
+	from      time.Time
+	to        time.Time
 }
 
-func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWriter, r *http.Request) {
+func parseHealthHistoryQuery(w http.ResponseWriter, r *http.Request) (healthHistoryQuery, bool) {
 	updateIDs, ok := parseHealthHistoryUpdateIDs(r.URL.Query().Get("ids"))
 	if !ok {
 		handlers.RenderError(
@@ -85,18 +76,18 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 			http.StatusBadRequest,
 			"'ids' must contain between 1 and 20 unique update UUIDs.",
 		)
-		return
+		return healthHistoryQuery{}, false
 	}
 
 	to, err := parseHistoryTime(r.URL.Query().Get("to"), time.Now().UTC())
 	if err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "'to' must be an RFC3339 timestamp.")
-		return
+		return healthHistoryQuery{}, false
 	}
 	from, err := parseHistoryTime(r.URL.Query().Get("from"), to.Add(-24*time.Hour))
 	if err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "'from' must be an RFC3339 timestamp.")
-		return
+		return healthHistoryQuery{}, false
 	}
 	// Bounded like the explorer's windows are. A split rebuilds a
 	// device-by-bucket grid from raw events, so an unbounded 'from' is a full
@@ -107,27 +98,22 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 			http.StatusBadRequest,
 			"'from' must be earlier than 'to', and within 90 days of it.",
 		)
+		return healthHistoryQuery{}, false
+	}
+	return healthHistoryQuery{updateIDs: updateIDs, from: from, to: to}, true
+}
+
+// GetUpdateHealthHistoryHandler answers one series per update: adoption and
+// launch health over time, keyed by update id, naming no device. It feeds the
+// updates table's adoption column and the rollout card's health graph, which
+// is why the route is open to any account that can see the app.
+func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	query, ok := parseHealthHistoryQuery(w, r)
+	if !ok {
 		return
 	}
 
-	dimension := strings.TrimSpace(r.URL.Query().Get("dimension"))
-	if dimension != "" && !IsHealthSegmentDimension(dimension) {
-		handlers.RenderError(w, http.StatusBadRequest, "'dimension' cannot split health history.")
-		return
-	}
-
-	// Unavailable still answers in the shape that was asked for: a caller that
-	// requested a split reads `segments`, and finding the key missing entirely
-	// is a different failure from finding it empty.
 	if h.reader == nil {
-		if dimension != "" {
-			handlers.RenderJSON(w, http.StatusOK, map[string]any{
-				"available": false,
-				"dimension": dimension,
-				"segments":  map[string][]HealthSegmentPoint{},
-			})
-			return
-		}
 		handlers.RenderJSON(w, http.StatusOK, map[string]any{
 			"available": false,
 			"updates":   map[string][]HealthHistoryPoint{},
@@ -135,48 +121,67 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 		return
 	}
 
-	// Split requested: the response keys become segment values instead of
-	// update ids, and the caller knows which it asked for.
-	if dimension != "" {
-		// The dimensions on offer are device_model, os_version, country_code
-		// and their neighbours: the very columns /observe/breakdown groups by
-		// under observe:read. Answering them here without the same permission
-		// would make this endpoint a way around that one.
-		if h.authorizeSegments == nil {
-			handlers.RenderError(w, http.StatusForbidden, "This action requires an admin account")
-			return
-		}
-		if !h.authorizeSegments(w, r) {
-			return
-		}
-		readContext, cancelRead := boundedRead(r)
-		defer cancelRead()
-		segments, err := h.reader.ReadBySegment(
-			readContext, mux.Vars(r)["APP_ID"], updateIDs, dimension, from, to,
-		)
-		if err != nil {
-			log.Printf("observe: reading segmented health history failed: %v", err)
-			handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
-			return
-		}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	points, err := h.reader.Read(readContext, mux.Vars(r)["APP_ID"], query.updateIDs, query.from, query.to)
+	if err != nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, map[string]any{"available": true, "updates": points})
+}
+
+// GetUpdateHealthSegmentsHandler answers the same window split by a device
+// dimension: the keys become segment values instead of update ids.
+//
+// A separate route rather than a mode of the one above, and the reason is
+// worth stating because it used to be one route. It reads different data
+// (raw device_health_events rebuilt into a device-by-bucket grid, not the
+// per-update snapshots), returns a different shape, serves a different screen,
+// and answers to a different permission: the dimensions on offer are
+// device_model, os_version, country_code and their neighbours, the very
+// columns /observe/breakdown groups by under observe:read. As one route that
+// last part could only be enforced inside the handler, where nothing makes
+// anyone remember it. As two, it is a line in the routing table like every
+// other permission in this codebase.
+func (h *HealthHistoryHandler) GetUpdateHealthSegmentsHandler(w http.ResponseWriter, r *http.Request) {
+	query, ok := parseHealthHistoryQuery(w, r)
+	if !ok {
+		return
+	}
+
+	dimension := strings.TrimSpace(r.URL.Query().Get("dimension"))
+	if !IsHealthSegmentDimension(dimension) {
+		handlers.RenderError(w, http.StatusBadRequest, "'dimension' cannot split health history.")
+		return
+	}
+
+	// Unavailable still answers in the shape that was asked for: this caller
+	// reads `segments`, and finding the key missing entirely is a different
+	// failure from finding it empty.
+	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, map[string]any{
-			"available": true,
+			"available": false,
 			"dimension": dimension,
-			"segments":  TrimSegments(segments, maxHealthSegments),
+			"segments":  map[string][]HealthSegmentPoint{},
 		})
 		return
 	}
 
 	readContext, cancelRead := boundedRead(r)
 	defer cancelRead()
-	points, err := h.reader.Read(readContext, mux.Vars(r)["APP_ID"], updateIDs, from, to)
+	segments, err := h.reader.ReadBySegment(
+		readContext, mux.Vars(r)["APP_ID"], query.updateIDs, dimension, query.from, query.to,
+	)
 	if err != nil {
+		log.Printf("observe: reading segmented health history failed: %v", err)
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return
 	}
 	handlers.RenderJSON(w, http.StatusOK, map[string]any{
 		"available": true,
-		"updates":   points,
+		"dimension": dimension,
+		"segments":  TrimSegments(segments, maxHealthSegments),
 	})
 }
 
