@@ -14,6 +14,7 @@ type Cache interface {
 	TryLock(key string, ttl int) (bool, error)
 	Sadd(key string, members []string, ttl *int) error
 	Scard(key string) (int64, error)
+	Incr(key string, ttl int) (int64, error)
 }
 
 type CacheType string

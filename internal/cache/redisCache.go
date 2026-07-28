@@ -162,3 +162,35 @@ func (c *RedisCache) Scard(key string) (int64, error) {
 
 	return c.client.SCard(ctx, withPrefix(key)).Result()
 }
+
+// incrWithTTL is INCR plus an EXPIRE for any counter that has no deadline. It
+// is a script rather than two round trips because the pair must not be
+// interruptible: a process that died between the INCR and the EXPIRE would
+// leave a counter with no TTL, and a rate-limit counter that never expires
+// locks its subject out permanently, with no amount of waiting to recover.
+// Redis runs a script to completion, so this pair cannot be split.
+//
+// The condition is "has no deadline" rather than "the counter reads 1", though
+// both cover the ordinary creation case, since a key INCR has just brought
+// into existence carries no TTL. Keying off the value alone leaves a hole: a
+// key already holding a positive number without a TTL never passes through 1
+// again, so it would never be given a deadline. TTL answers -1 for exactly
+// that state, which makes it the question actually being asked. LocalCache.Incr
+// fills in a missing deadline for the same reason, and the two backends have to
+// agree here or the limiter's behavior would depend on CACHE_MODE.
+//
+// A script also keeps this working on Redis 6, where EXPIRE has no NX flag.
+var incrWithTTL = redis.NewScript(`
+	local value = redis.call('INCR', KEYS[1])
+	if redis.call('TTL', KEYS[1]) < 0 then
+		redis.call('EXPIRE', KEYS[1], ARGV[1])
+	end
+	return value
+`)
+
+func (c *RedisCache) Incr(key string, ttl int) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	return incrWithTTL.Run(ctx, c.client, []string{withPrefix(key)}, ttl).Int64()
+}

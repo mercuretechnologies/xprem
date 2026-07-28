@@ -3,6 +3,7 @@ package cache
 import (
 	"expo-open-ota/internal/version"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -204,6 +205,52 @@ func (c *LocalCache) Sadd(key string, members []string, ttl *int) error {
 
 	c.maybeSweepLocked(time.Now())
 	return nil
+}
+
+// Incr mirrors Redis INCR followed by an EXPIRE taken only on creation. The
+// whole operation sits under the write lock, so concurrent increments of the
+// same key are serialised rather than racing through a read-modify-write.
+//
+// A counter whose TTL has passed is treated as absent and restarts at 1 with a
+// fresh window, the same way the Redis key would simply have been evicted.
+func (c *LocalCache) Incr(key string, ttl int) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	prefixed := withPrefix(key)
+
+	if item, exists := c.items[prefixed]; exists {
+		if item.Expiration == nil || now.Before(*item.Expiration) {
+			// A non-numeric value under this key means it is being used for
+			// something else. Redis answers that with an error rather than
+			// silently resetting the counter, and so do we: overwriting would
+			// destroy whatever the other caller stored there.
+			current, err := strconv.ParseInt(item.Value, 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("cache: value at %q is not an integer", key)
+			}
+			// An entry that arrived here without a TTL, from a Set with a nil
+			// ttl on the same key, would otherwise stay forever: sweepLocked
+			// deliberately keeps nil-Expiration entries. A counter that never
+			// expires is a subject that never gets un-blocked, so a missing
+			// deadline is filled in rather than carried forward.
+			expiration := item.Expiration
+			if expiration == nil {
+				exp := now.Add(time.Duration(ttl) * time.Second)
+				expiration = &exp
+			}
+			next := current + 1
+			c.items[prefixed] = CacheItem{Value: strconv.FormatInt(next, 10), Expiration: expiration}
+			return next, nil
+		}
+	}
+
+	expiration := now.Add(time.Duration(ttl) * time.Second)
+	c.items[prefixed] = CacheItem{Value: "1", Expiration: &expiration}
+
+	c.maybeSweepLocked(now)
+	return 1, nil
 }
 
 func (c *LocalCache) Scard(key string) (int64, error) {
