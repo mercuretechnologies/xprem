@@ -102,10 +102,11 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var auditRepo audit.AuditRepository
 	// Device identity (ee/identity) is the Postgres device registry: wired
 	// in every DB-mode deployment (no ClickHouse required), it powers the
-	// identity dashboard and the update-health display. nil only in
-	// stateless mode, where the observe ingestion acknowledge-and-drops and
-	// the dashboard handler answers 400. The service owns the store; the
-	// ingest route and the dashboard handler both go through it.
+	// identity dashboard and the update-health display. nil in stateless
+	// mode and under DISABLE_DEVICE_TELEMETRY, where the observe ingestion
+	// acknowledge-and-drops and the dashboard handler answers 400. The
+	// service owns the store; the ingest route and the dashboard handler
+	// both go through it.
 	var identityService *identity.Service
 	// The ClickHouse side of Observe: telemetry rows and their branch
 	// enrichment. Declared as interfaces and only assigned inside the
@@ -122,7 +123,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var stateHistory *observe.StateHistory
 	var explorer *observe.Explorer
 	// Records device check-ins into the universal registry, debounced; nil
-	// only in stateless mode, where polls and ingestion are side-effect free.
+	// in stateless mode and under DISABLE_DEVICE_TELEMETRY, where polls and
+	// ingestion are side-effect free.
 	var checkInRecorder *observe.CheckInRecorder
 
 	cleanup := func() {}
@@ -158,7 +160,6 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		migrations.SetEngine(dbEngine)
 		postgres.RunDBMigrations(dbUrl)
 
-		stateHistory = observe.NewStateHistory(dbEngine)
 		authRepo = store.NewPostgresAuthStore(dbEngine)
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
@@ -176,51 +177,67 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		updateRepo = pgUpdateStore
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
 
-		// GeoIP enrichment is optional: without a configured GeoLite2 City
-		// database, devices simply stay unlocated. A configured-but-broken
-		// path fails the boot loudly instead of resolving nothing forever.
-		var geoResolver identity.GeoResolver
-		if mmdbPath := config.GetEnv("GEOIP_MMDB_PATH"); mmdbPath != "" {
-			resolver, err := identity.NewGeoLite2Resolver(mmdbPath)
-			if err != nil {
-				log.Fatalf("🚨 [IDENTITY] %v", err)
-			}
-			geoResolver = resolver
-			addCleanup(resolver.Close)
-		}
-		// The device registry (ee/identity) is Postgres-only and runs in
-		// EVERY DB-mode deployment: it powers the identity dashboard AND the
-		// update-health display (adoption/MAU, launch failures), which must
-		// work with no ClickHouse and no observe SDK.
-		identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine), geoResolver)
-		checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
-		// nil when ClickHouse is absent: the explorer then reduces to its
-		// Postgres half rather than disappearing.
-		var observeClickHouse *clickhouse.Engine
-
-		// ClickHouse gates ONLY the telemetry pipeline (the metrics/logs
-		// fact tables). A configured-but-broken URL fails the boot loudly
-		// instead of silently disabling a feature the operator asked for.
-		if chUrl := config.GetClickHouseURL(); chUrl != "" {
-			chEngine, err := clickhouse.NewClickHouseEngine(ctx, chUrl)
-			if err != nil {
-				log.Fatalf("🚨 [CLICKHOUSE] %v", err)
-			}
-			addCleanup(chEngine.Close)
-			clickhouse.RunDBMigrations(chUrl, dbUrl)
-			telemetrySink = observe.NewClickHouseTelemetrySink(chEngine)
-			branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateStore.GetUpdateOriginByUUID)
-			healthHistory = observe.NewHealthHistory(dbEngine, chEngine)
-			observeClickHouse = chEngine
-			addCleanup(healthHistory.Start(ctx))
-		} else {
-			// Not a Fatal: deployments without ClickHouse keep booting, the
-			// registry and update health work regardless; only the
-			// metrics/logs ingestion is off.
-			log.Println("⚙️  [OBSERVE] CLICKHOUSE_URL is not set; telemetry ingestion (metrics/logs) stays disabled")
+		// Everything a deployment records ABOUT A DEVICE hangs below: the
+		// Postgres registry and the update-health tables it feeds, then the
+		// ClickHouse telemetry pipeline on top of it. DISABLE_DEVICE_TELEMETRY
+		// leaves the whole subtree unwired, which is what makes "nothing is
+		// recorded" a property of the wiring instead of a check every write
+		// path has to remember. Every consumer already guards these nils: it
+		// is the shape stateless mode has always had.
+		if config.IsDeviceTelemetryDisabled() {
+			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
+			// Whatever the outbox still holds from before the switch: nothing
+			// drains it now that the projector is off, so it would sit there
+			// forever.
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
+		} else {
+			stateHistory = observe.NewStateHistory(dbEngine)
+			// GeoIP enrichment is optional: without a configured GeoLite2 City
+			// database, devices simply stay unlocated. A configured-but-broken
+			// path fails the boot loudly instead of resolving nothing forever.
+			var geoResolver identity.GeoResolver
+			if mmdbPath := config.GetEnv("GEOIP_MMDB_PATH"); mmdbPath != "" {
+				resolver, err := identity.NewGeoLite2Resolver(mmdbPath)
+				if err != nil {
+					log.Fatalf("🚨 [IDENTITY] %v", err)
+				}
+				geoResolver = resolver
+				addCleanup(resolver.Close)
+			}
+			// The device registry (ee/identity) is Postgres-only and runs in
+			// EVERY DB-mode deployment: it powers the identity dashboard AND the
+			// update-health display (adoption/MAU, launch failures), which must
+			// work with no ClickHouse and no observe SDK.
+			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine), geoResolver)
+			checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
+			// nil when ClickHouse is absent: the explorer then reduces to its
+			// Postgres half rather than disappearing.
+			var observeClickHouse *clickhouse.Engine
+
+			// ClickHouse gates ONLY the telemetry pipeline (the metrics/logs
+			// fact tables). A configured-but-broken URL fails the boot loudly
+			// instead of silently disabling a feature the operator asked for.
+			if chUrl := config.GetClickHouseURL(); chUrl != "" {
+				chEngine, err := clickhouse.NewClickHouseEngine(ctx, chUrl)
+				if err != nil {
+					log.Fatalf("🚨 [CLICKHOUSE] %v", err)
+				}
+				addCleanup(chEngine.Close)
+				clickhouse.RunDBMigrations(chUrl, dbUrl)
+				telemetrySink = observe.NewClickHouseTelemetrySink(chEngine)
+				branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateStore.GetUpdateOriginByUUID)
+				healthHistory = observe.NewHealthHistory(dbEngine, chEngine)
+				observeClickHouse = chEngine
+				addCleanup(healthHistory.Start(ctx))
+			} else {
+				// Not a Fatal: deployments without ClickHouse keep booting, the
+				// registry and update health work regardless; only the
+				// metrics/logs ingestion is off.
+				log.Println("⚙️  [OBSERVE] CLICKHOUSE_URL is not set; telemetry ingestion (metrics/logs) stays disabled")
+				addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
+			}
+			explorer = observe.NewExplorer(dbEngine, observeClickHouse)
 		}
-		explorer = observe.NewExplorer(dbEngine, observeClickHouse)
 	} else {
 		log.Println("⚙️  [STATELESS] Initializing Stateless Mode (Flat-Env Mode)...")
 		if err := config.LoadAppsFromFlatEnv(); err != nil {

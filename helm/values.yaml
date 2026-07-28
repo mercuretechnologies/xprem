@@ -466,6 +466,14 @@ environment:
     required:
       - key: "controlPlane"
         is: "true"
+  # Set to "true" to record nothing about the devices being served: no device
+  # registry, no update-health state, no telemetry ingestion. Updates are
+  # delivered exactly the same; the Observe and Identity dashboards report the
+  # feature as unavailable.
+  - name: "DISABLE_DEVICE_TELEMETRY"
+    value: ""
+    enabled: true
+    required: false
   - name: "JWT_SECRET"
     value: ""
     required: true

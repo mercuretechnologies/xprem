@@ -179,3 +179,22 @@ func TestTestMode(t *testing2.T) {
 	testMode := IsTestMode()
 	assert.True(t, testMode)
 }
+
+// The switch is off unless the operator says otherwise, and a value that is
+// not a boolean is not a way to turn collection off by accident.
+func TestDeviceTelemetryDisabled(t *testing2.T) {
+	teardown := setup(t)
+	defer teardown()
+	for value, expected := range map[string]bool{
+		"":      false,
+		"false": false,
+		"0":     false,
+		"maybe": false,
+		"true":  true,
+		"1":     true,
+		"TRUE":  true,
+	} {
+		t.Setenv("DISABLE_DEVICE_TELEMETRY", value)
+		assert.Equal(t, expected, IsDeviceTelemetryDisabled(), "DISABLE_DEVICE_TELEMETRY=%q", value)
+	}
+}

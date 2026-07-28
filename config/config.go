@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
@@ -35,6 +36,22 @@ func IsDBMode() bool {
 // Empty means Observe (identity included) is not enabled.
 func GetClickHouseURL() string {
 	return GetEnv("CLICKHOUSE_URL")
+}
+
+// IsDeviceTelemetryDisabled reports whether the operator turned off every
+// recording made about a device: the manifest check-ins that populate the
+// Postgres registry (device_identity and the update-health tables it feeds),
+// the identity ops and the telemetry rows the Observe SDK dispatches, and the
+// ClickHouse connection those rows would land in. It is the privacy switch a
+// deployment flips when it wants to serve updates and collect nothing about
+// who receives them.
+//
+// It disables COLLECTION, not the schema: the tables stay, and whatever was
+// recorded before the switch stays with them. Deleting it is the operator's
+// call, not a boot side effect.
+func IsDeviceTelemetryDisabled() bool {
+	disabled, _ := strconv.ParseBool(GetEnv("DISABLE_DEVICE_TELEMETRY"))
+	return disabled
 }
 
 func ValidateMasterKey() error {
