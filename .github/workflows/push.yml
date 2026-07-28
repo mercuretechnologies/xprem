@@ -6,7 +6,7 @@ on:
       - '**'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   lint:
@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -118,6 +120,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:

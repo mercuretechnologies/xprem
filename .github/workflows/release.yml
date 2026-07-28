@@ -5,17 +5,22 @@ on:
     tags:
       - "v*"
 
+# Write scopes are granted per job, only where the job actually publishes
+# something. Everything else runs read-only.
 permissions:
-  id-token: write
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -46,9 +51,14 @@ jobs:
   helm:
     runs-on: ubuntu-latest
     needs: docker
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Update Helm values.yaml
         run: |
@@ -86,9 +96,15 @@ jobs:
 
   npm:
     runs-on: ubuntu-latest
+    # npm publish --provenance signs through Sigstore and needs an OIDC token.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -115,9 +131,13 @@ jobs:
   github-release:
     runs-on: ubuntu-latest
     needs: [helm, npm]
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Download chart artifact
         uses: actions/download-artifact@v4
