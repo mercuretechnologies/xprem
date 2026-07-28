@@ -41,7 +41,7 @@ export const Account = () => {
         // navigation rather than a router transition, for the reason endSession
         // gives in lib/api.ts: the state held above the router never re-reads
         // the cleared tokens, and would keep issuing unauthenticated requests.
-        window.location.assign('/login?notice=password_changed');
+        window.location.assign('/login');
         return;
       }
       toast({

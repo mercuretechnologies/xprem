@@ -82,18 +82,6 @@ export const Login = () => {
     setSignInNotice(SSO_ERROR_MESSAGES[errorCode ?? ''] ?? SSO_ERROR_MESSAGES.sso_failed);
   }, [navigate]);
 
-  // Changing a password revokes every session of the account. When the server
-  // could not hand back a replacement, the Account page lands here with a full
-  // navigation, which discards any toast it might have shown: this notice is
-  // the only thing left to say the change did go through.
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('notice') !== 'password_changed') {
-      return;
-    }
-    window.history.replaceState(null, '', window.location.pathname);
-    setSignInNotice('Your password was changed. Sign in again with the new one.');
-  }, []);
-
   const onSubmit = useCallback(
     async (data: z.infer<typeof FormSchema>) => {
       try {
