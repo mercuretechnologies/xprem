@@ -156,3 +156,55 @@ func TestGuardedQueriesUnderConcurrentRemovals(t *testing.T) {
 		})
 	}
 }
+
+// The session version is bumped inside the same statement as the change that
+// justifies it, with a CASE on the column's previous value. Getting that
+// direction wrong is invisible to the in-memory fakes and would either sign
+// people out for nothing (bumping on a promotion) or leave a demoted admin
+// holding an admin session, so it is pinned here against real SQL.
+func TestSessionVersionMovesOnlyWhenAccessIsLost(t *testing.T) {
+	userStore, pool := setupUserStore(t)
+	ctx := context.Background()
+	resetUsers(t, pool)
+
+	// Stays admin and enabled throughout, so the "at least one admin" guard
+	// never refuses an operation on the account under test.
+	insertUser(t, userStore, "solo-admin@example.com", true)
+	member := insertUser(t, userStore, "member@example.com", false)
+
+	versionOf := func() int32 {
+		t.Helper()
+		user, err := userStore.GetUserByID(ctx, member.Id)
+		require.NoError(t, err)
+		return user.SessionVersion
+	}
+	require.EqualValues(t, 0, versionOf())
+
+	// A new password always ends the sessions minted under the old one.
+	require.NoError(t, userStore.UpdateUserPassword(ctx, member.Id, "new-hash"))
+	require.EqualValues(t, 1, versionOf())
+
+	// Losing access ends them too.
+	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, false))
+	require.EqualValues(t, 2, versionOf())
+
+	// Regaining it does not: approving an account must not sign anybody out,
+	// and there is nothing to revoke.
+	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, true))
+	require.EqualValues(t, 2, versionOf())
+
+	// Neither does gaining the admin flag.
+	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, member.Id, true))
+	require.EqualValues(t, 2, versionOf())
+
+	// Losing it does.
+	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, member.Id, false))
+	require.EqualValues(t, 3, versionOf())
+
+	// And an idempotent write is not a transition: repeating either call on an
+	// account already in that state must leave the version alone, or a
+	// no-op PATCH from the dashboard would sign the account out.
+	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, member.Id, false))
+	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, true))
+	require.EqualValues(t, 3, versionOf())
+}
