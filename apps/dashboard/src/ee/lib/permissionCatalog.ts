@@ -102,12 +102,6 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
         description:
           'Put a past update back at the head of its branch, or send a branch back to the bundle embedded in the app. Both change what every device runs at its next update check.',
       },
-      {
-        value: 'update:publish-protected',
-        label: 'Republish and roll back protected branches',
-        description:
-          'Needed on top of the one above, and only on branches you have protected. Grant it to the people you trust with production, the same way you decide which API tokens may touch a protected branch.',
-      },
     ],
   },
   {

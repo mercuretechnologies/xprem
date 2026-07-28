@@ -169,7 +169,6 @@ export const Updates = () => {
   const { selectedAppId } = useSelectedApp();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
   const canPublishUpdate = useAppPermission('update:publish', 'admin-only');
-  const canPublishProtected = useAppPermission('update:publish-protected', 'admin-only');
   const [searchParams, setSearchParams] = useSearchParams();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [managedRollout, setManagedRollout] = useState<ManagedUpdateRollout | null>(null);
@@ -404,12 +403,6 @@ export const Updates = () => {
     ] as const
   ).filter(([, , value]) => value);
   const columnCount = canPublishUpdate ? 9 : 8;
-  // Which branches the server will refuse a republish on without
-  // update:publish-protected. Empty whenever protection is not enforced, since
-  // the listing reports every branch unprotected then.
-  const protectedBranches = new Set(
-    (branchesQuery.data ?? []).filter(branch => branch.protected).map(branch => branch.branchName)
-  );
   // A rollback marker has no bundle to publish again, and both stores name it
   // with this literal in place of a UUID.
   const isRollbackRow = (update: UpdateFeedRecord) => update.updateUUID === 'Rollback to embedded';
@@ -444,7 +437,6 @@ export const Updates = () => {
       <RollbackDialog
         open={isRollbackOpen}
         onClose={() => setIsRollbackOpen(false)}
-        canPublishProtected={canPublishProtected}
         defaultBranch={filters.branch}
         defaultRuntimeVersion={filters.runtimeVersion}
       />
@@ -756,14 +748,7 @@ export const Updates = () => {
                             <Button
                               variant="ghost"
                               size="sm"
-                              disabled={
-                                protectedBranches.has(primary.branch) && !canPublishProtected
-                              }
-                              title={
-                                protectedBranches.has(primary.branch) && !canPublishProtected
-                                  ? `${primary.branch} is protected: republishing it needs a further permission`
-                                  : 'Republish'
-                              }
+                              title="Republish"
                               onClick={event => {
                                 event.stopPropagation();
                                 setRepublishTarget({

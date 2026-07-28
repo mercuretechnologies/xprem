@@ -1,9 +1,6 @@
 package handlers
 
 import (
-	"errors"
-	"expo-open-ota/internal/handlers"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,41 +25,6 @@ func publishRequest(t *testing.T, route string, handler http.HandlerFunc, branch
 		strings.NewReader(body),
 	))
 	return recorder
-}
-
-// The protected-branch guard runs before the body is even read, so a refusal
-// costs nothing and cannot be worked around by the payload. Both publish
-// routes must consult it: a route that forgot to is a branch anyone with
-// update:publish can rewrite.
-func TestPublishRoutesHonorTheProtectedBranchGuard(t *testing.T) {
-	routes := map[string]func(*UpdateHandler) http.HandlerFunc{
-		"rollback":  func(h *UpdateHandler) http.HandlerFunc { return h.CreateRollbackHandler },
-		"republish": func(h *UpdateHandler) http.HandlerFunc { return h.RepublishUpdateHandler },
-	}
-	for route, handlerOf := range routes {
-		t.Run(route+" denied", func(t *testing.T) {
-			handler := NewUpdateHandler(nil, nil)
-			var guardedBranch string
-			handler.SetProtectedBranchGuard(func(_ *http.Request, _ string, branchName string) error {
-				guardedBranch = branchName
-				return fmt.Errorf("%w: production is a protected branch", handlers.ErrAccessDenied)
-			})
-			recorder := publishRequest(t, route, handlerOf(handler), "production", "1", `{"message":"why","updateId":"1"}`)
-			require.Equal(t, http.StatusForbidden, recorder.Code)
-			require.Contains(t, recorder.Body.String(), "protected branch")
-			require.Equal(t, "production", guardedBranch)
-		})
-		t.Run(route+" undecidable", func(t *testing.T) {
-			// A guard that could not decide is a 500, never a pass: the branch
-			// it failed to classify may be the protected one.
-			handler := NewUpdateHandler(nil, nil)
-			handler.SetProtectedBranchGuard(func(_ *http.Request, _ string, _ string) error {
-				return errors.New("database is down")
-			})
-			recorder := publishRequest(t, route, handlerOf(handler), "production", "1", `{"message":"why","updateId":"1"}`)
-			require.Equal(t, http.StatusInternalServerError, recorder.Code)
-		})
-	}
 }
 
 func TestCreateRollbackHandlerRejectsBadRequests(t *testing.T) {

@@ -83,21 +83,9 @@ func mustParseUpdateID(value string) int64 {
 	return parsed
 }
 
-// ProtectedBranchGuard answers whether this request may publish on this
-// branch. It is the enterprise seam of the two publish routes: branch
-// protection is an enterprise feature, so the community build has nobody to
-// ask and every branch is open to whoever passed the route's permission.
-//
-// A refusal wraps handlers.ErrAccessDenied; anything else is a
-// failure to decide, which is a 500 and never a pass.
-type ProtectedBranchGuard func(r *http.Request, appID string, branchName string) error
-
 type UpdateHandler struct {
 	updateService     *services.UpdateService
 	deploymentService *services.DeploymentService
-	// protectedBranchGuard is nil until the composition root plugs the
-	// enterprise check in; see SetProtectedBranchGuard.
-	protectedBranchGuard ProtectedBranchGuard
 }
 
 func NewUpdateHandler(updateService *services.UpdateService, deploymentService *services.DeploymentService) *UpdateHandler {
@@ -105,31 +93,6 @@ func NewUpdateHandler(updateService *services.UpdateService, deploymentService *
 		updateService:     updateService,
 		deploymentService: deploymentService,
 	}
-}
-
-// SetProtectedBranchGuard plugs the enterprise protected-branch check (see
-// SetOnAuditEvent for the pattern). Nil-safe: without it the publish routes
-// treat every branch alike, which is the community behavior.
-func (h *UpdateHandler) SetProtectedBranchGuard(guard ProtectedBranchGuard) {
-	h.protectedBranchGuard = guard
-}
-
-// authorizeBranchPublish runs the guard and renders its refusal. Returns false
-// when the response has been written and the caller must stop.
-func (h *UpdateHandler) authorizeBranchPublish(w http.ResponseWriter, r *http.Request, appId string, branchName string) bool {
-	if h.protectedBranchGuard == nil {
-		return true
-	}
-	if err := h.protectedBranchGuard(r, appId, branchName); err != nil {
-		if errors.Is(err, handlers.ErrAccessDenied) {
-			handlers.RenderError(w, http.StatusForbidden, err.Error())
-			return false
-		}
-		log.Printf("Could not verify branch protection on %s: %v", branchName, err)
-		handlers.RenderError(w, http.StatusInternalServerError, "Could not verify branch protection")
-		return false
-	}
-	return true
 }
 
 func (h *UpdateHandler) GetUpdateDetailsHandler(w http.ResponseWriter, r *http.Request) {
@@ -290,18 +253,12 @@ func validateBranchAndRuntime(w http.ResponseWriter, branchName string, runtimeV
 // command (internal/handlers/rollback_handler.go), with one difference: the
 // platform is optional here and empty means both, because the dashboard has no
 // per-platform invocation to repeat.
-//
-// Protected branches ask for more than the route's permission, the same way
-// they ask more of an API key: see SetProtectedBranchGuard.
 func (h *UpdateHandler) CreateRollbackHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
 	runtimeVersion := vars["RUNTIME_VERSION"]
 	if !validateBranchAndRuntime(w, branchName, runtimeVersion) {
-		return
-	}
-	if !h.authorizeBranchPublish(w, r, appId, branchName) {
 		return
 	}
 
@@ -365,17 +322,12 @@ func (h *UpdateHandler) CreateRollbackHandler(w http.ResponseWriter, r *http.Req
 //
 // The new rows are clones of the source, so neither the platform nor the commit
 // hash is taken from the request: see DeploymentService.RepublishUpdateByID.
-// Protected branches ask for more than the route's permission, as in
-// CreateRollbackHandler.
 func (h *UpdateHandler) RepublishUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
 	runtimeVersion := vars["RUNTIME_VERSION"]
 	if !validateBranchAndRuntime(w, branchName, runtimeVersion) {
-		return
-	}
-	if !h.authorizeBranchPublish(w, r, appId, branchName) {
 		return
 	}
 

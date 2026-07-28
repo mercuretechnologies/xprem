@@ -23,7 +23,6 @@ export type Permission =
   | 'channel-rollout:manage'
   | 'update-rollout:manage'
   | 'update:publish'
-  | 'update:publish-protected'
   | 'apikeys:manage'
   | 'identity:manage'
   | 'identity:read'

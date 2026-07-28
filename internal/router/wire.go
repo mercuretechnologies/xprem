@@ -291,14 +291,6 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
-	// The dashboard's rollback and republish routes are how an account reaches
-	// a branch without ever holding an API key, so they answer branch
-	// protection the way a key does. Enterprise: unplugged, every branch is
-	// open to whoever holds update:publish.
-	updateHandler := dashhandlers.NewUpdateHandler(updateService, deploymentService)
-	updateHandler.SetProtectedBranchGuard(
-		rbac.NewProtectedBranchGuard(rbacService, apiKeyRestrictionService, rbac.PermUpdatePublishProtected))
-
 	container := &AppContainer{
 		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService),
 		DashboardAuthService:        dashboardAuthService,
@@ -319,7 +311,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		RolloutHandler:              dashhandlers.NewRolloutHandler(rolloutService, updateService),
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
 		SSOHandler:                  sso.NewSSOHandler(ssoService),
-		UpdateHandler:               updateHandler,
+		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
 		UploadHandler:               handlers.NewUploadHandler(cliAuthService, deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService),
 		UserRepo:                    userRepo,

@@ -78,17 +78,6 @@ const (
 	// acts on a publish someone is already watching, while this acts on any
 	// update in the history.
 	PermUpdatePublish Permission = "update:publish"
-	// PermUpdatePublishProtected is PermUpdatePublish on a PROTECTED branch,
-	// and it is required on top of it rather than instead of it. Protection
-	// marks the branches a real fleet is on, so this is the dashboard
-	// counterpart of an API key's can_access_protected_branches: a member can
-	// be trusted to roll staging back without being trusted to roll production
-	// back.
-	//
-	// It only ever applies while protection is enforced, which means with a
-	// valid enterprise license. Without one no branch is protected, and this
-	// permission gates nothing.
-	PermUpdatePublishProtected Permission = "update:publish-protected"
 )
 
 // AllPermissions is the catalog, in the order the dashboard displays it.
@@ -105,7 +94,6 @@ var AllPermissions = []Permission{
 	PermChannelRolloutManage,
 	PermUpdateRolloutManage,
 	PermUpdatePublish,
-	PermUpdatePublishProtected,
 	PermApiKeysManage,
 	PermIdentityManage,
 	PermIdentityRead,

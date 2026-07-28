@@ -131,9 +131,6 @@ func registerAppRoutes(
 	// publishes that need no working copy, so they are the two an operator can
 	// run from a browser during an incident. One permission covers both, since
 	// each of them changes what the whole branch runs at the next update check.
-	// On a PROTECTED branch they ask for update:publish-protected on top, which
-	// the handler checks itself because it depends on the branch in the body of
-	// the request rather than on the route (see SetProtectedBranchGuard).
 	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollback", container.UpdateHandler.CreateRollbackHandler,
 		NeedsPermission(rbac.PermUpdatePublish, rbac.FallbackAdminOnly))
 	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/republish", container.UpdateHandler.RepublishUpdateHandler,

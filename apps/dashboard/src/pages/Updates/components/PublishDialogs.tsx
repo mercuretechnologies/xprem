@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ShieldAlert, Undo2 } from 'lucide-react';
+import { AlertTriangle, Undo2 } from 'lucide-react';
 import { api, describeApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
@@ -51,15 +51,11 @@ const platformOptions = [
 export const RollbackDialog = ({
   open,
   onClose,
-  canPublishProtected,
   defaultBranch = '',
   defaultRuntimeVersion = '',
 }: {
   open: boolean;
   onClose: () => void;
-  // Holding update:publish-protected. Protected branches are refused without
-  // it server-side; saying so here beats a 403 after the reason was typed.
-  canPublishProtected: boolean;
   defaultBranch?: string;
   defaultRuntimeVersion?: string;
 }) => {
@@ -101,11 +97,7 @@ export const RollbackDialog = ({
     .map(item => ({ value: item.runtimeVersion, label: item.runtimeVersion }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  const isBranchProtected = !!(branchesQuery.data ?? []).find(item => item.branchName === branch)
-    ?.protected;
-  const isBlockedByProtection = isBranchProtected && !canPublishProtected;
-  const canSubmit =
-    !!branch && !!runtimeVersion && !!message.trim() && !isBusy && !isBlockedByProtection;
+  const canSubmit = !!branch && !!runtimeVersion && !!message.trim() && !isBusy;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -161,15 +153,6 @@ export const RollbackDialog = ({
                 if (value !== branch) setRuntimeVersion('');
               }}
             />
-            {isBlockedByProtection && (
-              <p className="flex items-start gap-1.5 text-xs text-destructive">
-                <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
-                <span>
-                  {branch} is a protected branch. Ask an admin for the permission to republish and
-                  roll back protected branches.
-                </span>
-              </p>
-            )}
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs font-medium text-foreground">Runtime version</Label>
