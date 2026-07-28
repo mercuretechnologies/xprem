@@ -179,16 +179,22 @@ func TestChangingThePasswordRevokesEverySessionOfTheAccount(t *testing.T) {
 }
 
 // Nothing else enforces the revocation a password change performs: no flag
-// changes and the row stays enabled. A store that cannot record it must
-// therefore fail the call, rather than leave the old sessions live behind a
-// new password.
-func TestChangingThePasswordFailsWhenSessionsCannotBeRevoked(t *testing.T) {
+// changes and the row stays enabled, so the session version is the only thing
+// ending the old sessions. The store therefore moves both in one write, and a
+// failure must leave neither: a committed password with surviving sessions is
+// the exact hole this ticket closes.
+func TestAFailedPasswordWriteRevokesNothing(t *testing.T) {
 	fixture := newRevocationFixture(t)
-	failing := &bumpFailingUserRepo{fakeUserRepo: fixture.repo}
-	userService := NewUserService(failing)
+	failing := &passwordWriteFailingUserRepo{fakeUserRepo: fixture.repo}
 
-	err := userService.ChangePassword(context.Background(), fixture.member.Id, "Sup3rSecret!", "An0therSecret!")
-	assert.ErrorContains(t, err, "could not be revoked")
+	err := NewUserService(failing).ChangePassword(
+		context.Background(), fixture.member.Id, "Sup3rSecret!", "An0therSecret!")
+	require.Error(t, err)
+
+	stored, getErr := fixture.repo.GetUserByID(context.Background(), fixture.member.Id)
+	require.NoError(t, getErr)
+	assert.EqualValues(t, 0, stored.SessionVersion, "no password, no revocation")
+	assertSessionAlive(t, fixture.auth, fixture.memberSession)
 }
 
 func TestDeletingAnAccountRevokesItsLiveSession(t *testing.T) {
@@ -397,12 +403,13 @@ func TestStatelessRefreshStillWorksWithoutALedger(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// bumpFailingUserRepo accepts every write except the revocation itself.
-type bumpFailingUserRepo struct {
+// passwordWriteFailingUserRepo refuses the one statement that carries both the
+// new password and the revocation.
+type passwordWriteFailingUserRepo struct {
 	*fakeUserRepo
 }
 
-func (r *bumpFailingUserRepo) BumpUserSessionVersion(context.Context, string) error {
+func (r *passwordWriteFailingUserRepo) UpdateUserPassword(context.Context, string, string) error {
 	return errors.New("database is on fire")
 }
 

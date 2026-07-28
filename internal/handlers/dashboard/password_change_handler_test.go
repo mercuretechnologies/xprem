@@ -31,9 +31,6 @@ import (
 // path shows up as a failure instead of as a plausible-looking answer.
 type fakePasswordUserRepo struct {
 	user store.User
-	// bumpFailed makes the revocation fail, the case where the server must not
-	// pretend the sessions are gone.
-	bumpFailed bool
 }
 
 func (r *fakePasswordUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
@@ -43,15 +40,14 @@ func (r *fakePasswordUserRepo) GetUserByID(_ context.Context, id string) (store.
 	return r.user, nil
 }
 
+// Mirrors the SQL: the new password and the revocation land in one statement.
 func (r *fakePasswordUserRepo) UpdateUserPassword(_ context.Context, _ string, passwordHash string) error {
 	r.user.PasswordHash = passwordHash
+	r.user.SessionVersion++
 	return nil
 }
 
 func (r *fakePasswordUserRepo) BumpUserSessionVersion(_ context.Context, _ string) error {
-	if r.bumpFailed {
-		return assert.AnError
-	}
 	r.user.SessionVersion++
 	return nil
 }
@@ -165,18 +161,6 @@ func TestChangePasswordAnswers204WhenNoReplacementCanBeIssued(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 	assert.Empty(t, recorder.Body.String())
 	assert.EqualValues(t, 1, fixture.repo.user.SessionVersion, "the revocation still happened")
-}
-
-// A revocation that fails is different: nothing else retires the credentials
-// minted under the old password, so the caller has to learn about it.
-func TestChangePasswordSurfacesAFailedRevocation(t *testing.T) {
-	fixture := newPasswordFixture(t)
-	fixture.repo.bumpFailed = true
-
-	recorder := changePassword(t, fixture.handler, fixture.principal,
-		`{"currentPassword":"Sup3rSecret!","newPassword":"An0therSecret!"}`)
-
-	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
 }
 
 func TestChangePasswordRejectsAWrongCurrentPassword(t *testing.T) {
