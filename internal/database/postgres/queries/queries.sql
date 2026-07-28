@@ -986,10 +986,6 @@ WHERE id = $1;
 DELETE FROM roles
 WHERE id = $1;
 
--- name: CountGrantsByRole :one
-SELECT COUNT(*) FROM user_app_grants
-WHERE role_id = $1;
-
 -- name: ListUserAppGrants :many
 -- The member's grants with their role resolved, one row per granted app.
 SELECT g.user_id, g.app_id, g.role_id, g.extra_permissions,

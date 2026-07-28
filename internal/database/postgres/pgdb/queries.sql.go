@@ -205,18 +205,6 @@ func (q *Queries) CountDevicesOnUpdate(ctx context.Context, arg CountDevicesOnUp
 	return count, err
 }
 
-const countGrantsByRole = `-- name: CountGrantsByRole :one
-SELECT COUNT(*) FROM user_app_grants
-WHERE role_id = $1
-`
-
-func (q *Queries) CountGrantsByRole(ctx context.Context, roleID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countGrantsByRole, roleID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countGrantsPerUser = `-- name: CountGrantsPerUser :many
 SELECT user_id, COUNT(*) AS grant_count
 FROM user_app_grants
