@@ -198,6 +198,14 @@ export type UpdateFeedPage = {
   nextCursor?: string;
 };
 
+// What a republish or a rollback created: one row per platform it acted on.
+// `publishGroup` is the new group a group republish minted for its rows, absent
+// everywhere else.
+export type PublishResult = {
+  updates: { updateId: string; branch: string; runtimeVersion: string }[];
+  publishGroup?: string;
+};
+
 // One active per-update rollout row (eoas publishes one per platform, so a
 // single rollout on a runtime version can have up to two rows).
 export type UpdateRolloutInfo = {
@@ -1242,6 +1250,43 @@ export class ApiClient {
       method: 'GET',
     });
   }
+  // Sends a branch and runtime version back to the bundle embedded in the app.
+  // Omitting `platform` rolls back both, the same as running the CLI's rollback
+  // command once per platform. The message is required: it is what the update
+  // row shows afterwards.
+  public async createRollback(
+    branch: string,
+    runtimeVersion: string,
+    payload: { message: string; platform?: string }
+  ) {
+    return this.request<PublishResult>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/rollback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  // Puts a past update back at the head of its branch. Pass `updateId` for a
+  // single update (both storage modes) or `publishGroup` to republish every
+  // per-platform member of one publish group at once (control plane only).
+  public async republishUpdate(
+    branch: string,
+    runtimeVersion: string,
+    payload: { updateId: string } | { publishGroup: string }
+  ) {
+    return this.request<PublishResult>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/republish`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
   public async getUpdateHealth(updateUUIDs: string[]) {
     return this.request<{ updates: Record<string, UpdateHealthRecord> }>(
       `${this.appScope()}/identity/update-health?ids=${encodeURIComponent(updateUUIDs.join(','))}`,

@@ -112,6 +112,22 @@ func (s *ApiKeyRestrictionService) GetRestrictionsByApp(ctx context.Context, app
 	return s.repo.GetRestrictionsByAppID(ctx, appID)
 }
 
+// IsBranchProtected reports whether protection is currently ENFORCED on the
+// branch, which is not the same question as whether the flag is set: the flag
+// stays in the row when a license lapses, and this answers false then, exactly
+// like AuthorizeCliRequest stops refusing API keys. A branch that does not
+// exist yet is not protected.
+//
+// This is the read the dashboard's own protected-branch gate needs
+// (rbac.RequirePermissionOnProtectedBranch), which is why it is a service
+// method and not just a repository one.
+func (s *ApiKeyRestrictionService) IsBranchProtected(ctx context.Context, appID string, branchName string) (bool, error) {
+	if s.repo == nil || !s.licenseValid() {
+		return false, nil
+	}
+	return s.repo.IsBranchProtected(ctx, appID, branchName)
+}
+
 // SetRestrictions replaces the restrictions of one API key. CIDR entries are
 // normalized (bare addresses become /32 or /128, host bits are masked off)
 // because the postgres cidr type rejects unmasked values.

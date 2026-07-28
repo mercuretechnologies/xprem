@@ -113,8 +113,8 @@ func (s *BucketUpdateStore) MarkUpdateAsChecked(ctx context.Context, update type
 }
 
 // updateMetadataReader marshals the update-metadata.json body, the file holding
-// what the updates table keeps in columns. message is omitted when empty — a
-// rollback never carries one.
+// what the updates table keeps in columns. message is omitted when empty, which
+// is the case for every publish that gave none and for the CLI rollback.
 func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, error) {
 	fileUpdateMetadata := map[string]string{
 		"platform":   platform,
@@ -298,7 +298,7 @@ func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, updat
 // backends stamp the id the service generated — the Postgres store already
 // inserts the id it is handed, and minting a second one here made the two
 // backends disagree about who owns update identity.
-func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
 	update := types.Update{
 		AppId:          appId,
 		UpdateId:       update2.ConvertUpdateTimestampToString(updateId),
@@ -306,7 +306,7 @@ func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, up
 		RuntimeVersion: runtimeVersion,
 		CreatedAt:      helpers.NormalizeTimestampToDuration(updateId),
 	}
-	metadataReader, err := updateMetadataReader(platform, commitHash, "")
+	metadataReader, err := updateMetadataReader(platform, commitHash, message)
 	if err != nil {
 		return nil, err
 	}

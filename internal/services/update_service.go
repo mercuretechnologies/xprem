@@ -31,7 +31,10 @@ type UpdateRepository interface {
 	// the bucket store ignores it entirely (no grouping in stateless mode).
 	CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error)
 	CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error)
-	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string) (*types.Update, error)
+	// message is the reason the rollback was created. Empty for the CLI and
+	// for the rollout revert, which have none to give; the dashboard requires
+	// one so the row says why the fleet was sent back to the embedded bundle.
+	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error)
 	// GetUpdatesByPublishGroup resolves the checked members of one publish
 	// group on (branch, runtime version), for the group republish.
 	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.

@@ -42,6 +42,16 @@ func RenderJSON(w http.ResponseWriter, status int, payload interface{}) {
 // rollout. The republish and rollback commands print it verbatim.
 const activeRolloutConflictMessage = "A progressive rollout is already active for this branch and runtime version. Finish or revert it from the dashboard first."
 
+// ErrAccessDenied is an authorization refusal a handler raised itself, rather
+// than one the route's permission middleware raised before reaching it. It
+// lives here, next to the renderers, because it exists for exactly one reason:
+// letting a handler answer 403 to a refusal it cannot inspect.
+//
+// Enterprise code wraps it (the protected-branch guard on the publish routes)
+// so the community handler stays free of any notion of roles or licenses, the
+// same shape as ErrCliAccessDenied on the CLI side.
+var ErrAccessDenied = errors.New("access denied")
+
 // RenderCliAuthError distinguishes a credential that failed to authenticate
 // (401, generic message so nothing leaks about why) from one that
 // authenticated but is blocked by per-key access restrictions (403, with the

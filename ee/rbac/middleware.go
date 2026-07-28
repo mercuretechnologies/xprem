@@ -30,27 +30,52 @@ type UserLookup interface {
 // (or deleted user) must lose access immediately, not at the next refresh.
 // On failure it writes the response and returns ok=false.
 func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Subject, bool) {
-	principal := services.PrincipalFromContext(r.Context())
-	if principal == nil {
-		handlers.RenderError(w, http.StatusForbidden, "This action requires a dashboard session")
-		return Subject{}, false
-	}
-	if s.userLookup == nil {
-		// Stateless mode: the single ADMIN_EMAIL account is always an admin
-		return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}, true
-	}
-	user, err := s.userLookup.GetUserByID(r.Context(), principal.UserId)
+	subject, err := s.subjectFromContext(r.Context())
 	if err != nil {
-		// Only a missing row means the account is gone; an infrastructure
-		// failure must not read as a dead session.
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		switch {
+		case errors.Is(err, ErrNoDashboardSession):
+			handlers.RenderError(w, http.StatusForbidden, "This action requires a dashboard session")
+		case errors.Is(err, errAccountGone):
 			handlers.RenderError(w, http.StatusUnauthorized, "Invalid token")
-		} else {
+		default:
 			handlers.RenderError(w, http.StatusInternalServerError, "Could not verify the account")
 		}
 		return Subject{}, false
 	}
-	return Subject{UserID: principal.UserId, IsAdmin: user.IsAdmin}, true
+	return subject, true
+}
+
+var (
+	// ErrNoDashboardSession is the request that carries no dashboard principal
+	// (a CLI credential, or nothing at all).
+	ErrNoDashboardSession = errors.New("this action requires a dashboard session")
+	// errAccountGone is the account whose row is missing: deleted since the
+	// token was minted. Kept apart from an infrastructure failure, which must
+	// not read as a dead session.
+	errAccountGone = errors.New("account no longer exists")
+)
+
+// subjectFromContext is resolveSubject without the rendering, for the callers
+// that are not middlewares. It is the whole "who is asking" rule, so the ones
+// that need a Subject outside the middleware chain share it rather than
+// reimplementing the fresh admin read.
+func (s *RBACService) subjectFromContext(ctx context.Context) (Subject, error) {
+	principal := services.PrincipalFromContext(ctx)
+	if principal == nil {
+		return Subject{}, ErrNoDashboardSession
+	}
+	if s.userLookup == nil {
+		// Stateless mode: the single ADMIN_EMAIL account is always an admin
+		return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}, nil
+	}
+	user, err := s.userLookup.GetUserByID(ctx, principal.UserId)
+	if err != nil {
+		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+			return Subject{}, errAccountGone
+		}
+		return Subject{}, err
+	}
+	return Subject{UserID: principal.UserId, IsAdmin: user.IsAdmin}, nil
 }
 
 // RequirePermission guards one app-scoped dashboard action: admins pass,

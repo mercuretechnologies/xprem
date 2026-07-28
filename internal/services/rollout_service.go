@@ -359,7 +359,7 @@ func (s *RolloutService) revertSingleRolloutUpdate(ctx context.Context, appId st
 	if activeRollout.ControlUpdateId == nil {
 		// First update of the branch: there is nothing to return to, so out-of-bucket
 		// devices were on the embedded update. Revert recreates that state.
-		_, err := s.deploymentService.createRollbackInternal(ctx, appId, activeRollout.Platform, "", runtimeVersion, branchName)
+		_, err := s.deploymentService.createRollbackInternal(ctx, appId, activeRollout.Platform, "", runtimeVersion, branchName, "")
 		return err
 	}
 	controlUpdate, err := s.updateRepo.GetUpdate(ctx, appId, branchName, runtimeVersion, *activeRollout.ControlUpdateId)
@@ -376,7 +376,7 @@ func (s *RolloutService) revertSingleRolloutUpdate(ctx context.Context, appId st
 	// A rollback control cannot be republished (it has no files); recreating a
 	// rollback-to-embedded restores the same state for every device.
 	if controlType == types.Rollback {
-		_, err = s.deploymentService.createRollbackInternal(ctx, appId, activeRollout.Platform, "", runtimeVersion, branchName)
+		_, err = s.deploymentService.createRollbackInternal(ctx, appId, activeRollout.Platform, "", runtimeVersion, branchName, "")
 		return err
 	}
 	_, err = s.deploymentService.republishUpdateInternal(ctx, controlUpdate, activeRollout.Platform, "", nil)

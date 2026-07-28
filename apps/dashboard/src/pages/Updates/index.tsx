@@ -11,6 +11,7 @@ import {
   Loader2,
   Search,
   SlidersHorizontal,
+  Undo2,
   X,
 } from 'lucide-react';
 import { useSearchParams } from 'react-router';
@@ -39,6 +40,11 @@ import {
   ManagedUpdateRollout,
   UpdateRolloutManagerSheet,
 } from '@/pages/Updates/components/UpdateRolloutManagerSheet';
+import {
+  RepublishDialog,
+  RepublishTarget,
+  RollbackDialog,
+} from '@/pages/Updates/components/PublishDialogs';
 import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
@@ -162,9 +168,13 @@ const BranchLabel = ({ branch }: { branch: string }) => (
 export const Updates = () => {
   const { selectedAppId } = useSelectedApp();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
+  const canPublishUpdate = useAppPermission('update:publish', 'admin-only');
+  const canPublishProtected = useAppPermission('update:publish-protected', 'admin-only');
   const [searchParams, setSearchParams] = useSearchParams();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [managedRollout, setManagedRollout] = useState<ManagedUpdateRollout | null>(null);
+  const [isRollbackOpen, setIsRollbackOpen] = useState(false);
+  const [republishTarget, setRepublishTarget] = useState<RepublishTarget | null>(null);
   const sheetRef = useRef<UpdateDetailsRef>(null);
 
   const filters: FeedFilters = {
@@ -393,6 +403,16 @@ export const Updates = () => {
       ['to', 'To', filters.to],
     ] as const
   ).filter(([, , value]) => value);
+  const columnCount = canPublishUpdate ? 9 : 8;
+  // Which branches the server will refuse a republish on without
+  // update:publish-protected. Empty whenever protection is not enforced, since
+  // the listing reports every branch unprotected then.
+  const protectedBranches = new Set(
+    (branchesQuery.data ?? []).filter(branch => branch.protected).map(branch => branch.branchName)
+  );
+  // A rollback marker has no bundle to publish again, and both stores name it
+  // with this literal in place of a UUID.
+  const isRollbackRow = (update: UpdateFeedRecord) => update.updateUUID === 'Rollback to embedded';
   const toggleGroup = (key: string) => {
     setExpandedGroups(current => {
       const next = new Set(current);
@@ -404,13 +424,31 @@ export const Updates = () => {
 
   return (
     <div className="w-full">
-      <PageHeader title="Updates" />
+      <PageHeader
+        title="Updates"
+        actions={
+          canPublishUpdate && (
+            <Button variant="outline" onClick={() => setIsRollbackOpen(true)}>
+              <Undo2 className="h-4 w-4" />
+              Create rollback
+            </Button>
+          )
+        }
+      />
       <UpdateDetailsSheet ref={sheetRef} />
       <UpdateRolloutManagerSheet
         rollout={managedRollout}
         onClose={() => setManagedRollout(null)}
         canManageRollout={canManageUpdateRollout}
       />
+      <RollbackDialog
+        open={isRollbackOpen}
+        onClose={() => setIsRollbackOpen(false)}
+        canPublishProtected={canPublishProtected}
+        defaultBranch={filters.branch}
+        defaultRuntimeVersion={filters.runtimeVersion}
+      />
+      <RepublishDialog target={republishTarget} onClose={() => setRepublishTarget(null)} />
       {!!query.error && <ApiError error={query.error} />}
       {!!healthError && <ApiError error={healthError} />}
 
@@ -600,21 +638,22 @@ export const Updates = () => {
         <Table className="min-w-[1250px] table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[30%]">Update</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[26%]' : 'w-[30%]'}>Update</TableHead>
               <TableHead className="w-[11%]">Branch</TableHead>
               <TableHead className="w-[12%]">Runtime</TableHead>
               <TableHead className="w-[7%]">Platform</TableHead>
               <TableHead className="w-[8%] text-right">Devices</TableHead>
               <TableHead className="w-[9%]">Health</TableHead>
               <TableHead className="w-[9%]">Commit</TableHead>
-              <TableHead className="w-[14%]">Published</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[12%]' : 'w-[14%]'}>Published</TableHead>
+              {canPublishUpdate && <TableHead className="w-[6%]" />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {query.isLoading &&
               Array.from({ length: 8 }).map((_, index) => (
                 <TableRow key={index}>
-                  {Array.from({ length: 8 }).map((__, cell) => (
+                  {Array.from({ length: columnCount }).map((__, cell) => (
                     <TableCell key={cell}>
                       <Skeleton className="h-4 w-full" />
                     </TableCell>
@@ -707,6 +746,41 @@ export const Updates = () => {
                       <TableCell>
                         <TimestampCell dateString={primary.createdAt} />
                       </TableCell>
+                      {canPublishUpdate && (
+                        <TableCell className="text-right">
+                          {/* A group republishes as a group: its members are
+                              the per-platform halves of one publish, and
+                              putting back only one of them would leave the
+                              branch serving two different builds. */}
+                          {!group.updates.every(isRollbackRow) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={
+                                protectedBranches.has(primary.branch) && !canPublishProtected
+                              }
+                              title={
+                                protectedBranches.has(primary.branch) && !canPublishProtected
+                                  ? `${primary.branch} is protected: republishing it needs a further permission`
+                                  : 'Republish'
+                              }
+                              onClick={event => {
+                                event.stopPropagation();
+                                setRepublishTarget({
+                                  branch: primary.branch,
+                                  runtimeVersion: primary.runtimeVersion,
+                                  label: primary.message || `Update ${primary.updateId}`,
+                                  platforms,
+                                  ...(isGroup
+                                    ? { publishGroup: group.publishGroup as string }
+                                    : { updateId: primary.updateId }),
+                                });
+                              }}>
+                              <Undo2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </TableCell>
+                      )}
                     </TableRow>
                     {isGroup &&
                       expanded &&
@@ -764,6 +838,8 @@ export const Updates = () => {
                           <TableCell>
                             <TimestampCell dateString={update.createdAt} />
                           </TableCell>
+                          {/* No per-member republish: see the group row. */}
+                          {canPublishUpdate && <TableCell />}
                         </TableRow>
                       ))}
                   </Fragment>
@@ -771,7 +847,7 @@ export const Updates = () => {
               })}
             {!query.isLoading && groups.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="h-28 text-center text-muted-foreground">
+                <TableCell colSpan={columnCount} className="h-28 text-center text-muted-foreground">
                   {hasFilters ? 'No updates match these filters.' : 'No updates published yet.'}
                 </TableCell>
               </TableRow>

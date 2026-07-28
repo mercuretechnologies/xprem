@@ -388,7 +388,7 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	}, nil
 }
 
-func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName string) (*types.Update, error) {
+func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
 	hasActiveRollout, err := s.updateRepo.HasActiveRolloutUpdate(ctx, appId, branchName, runtimeVersion)
 	if err != nil {
 		return nil, err
@@ -396,15 +396,44 @@ func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform,
 	if hasActiveRollout {
 		return nil, ErrActiveRolloutBlocksPublish
 	}
-	rollback, err := s.createRollbackInternal(ctx, appId, platform, commitHash, runtimeVersion, branchName)
+	rollback, err := s.createRollbackInternal(ctx, appId, platform, commitHash, runtimeVersion, branchName, message)
 	if err != nil {
 		return nil, err
 	}
-	// Only the CLI-facing rollback records here: RolloutService's revert goes
+	// Only the caller-facing rollback records here: RolloutService's revert goes
 	// through the internal variant and reports as update_rollout.reverted.
-	s.recordDeliveryEvent(ctx, auditlog.ActionUpdateRollback, *rollback,
-		map[string]any{"platform": platform, "commit_hash": commitHash})
+	metadata := map[string]any{"platform": platform, "commit_hash": commitHash}
+	// Absent rather than empty when the caller gave none (the CLI), so the
+	// entries of a path that can never carry one stay free of a dead key.
+	if message != "" {
+		metadata["message"] = message
+	}
+	s.recordDeliveryEvent(ctx, auditlog.ActionUpdateRollback, *rollback, metadata)
 	return rollback, nil
+}
+
+// RepublishUpdateByID republishes a single update the caller names by id only.
+// Where the CLI path stamps the run's own platform and commit hash, both are
+// read back from the stored update here: the dashboard has no working copy, a
+// republish is by definition the same code as its source, and a platform taken
+// from the request body would only ever be the source's own (the service
+// refuses a mismatch) or a 400.
+//
+// Works on both backends: the metadata read goes through the repo, so it is the
+// updates row in control-plane mode and update-metadata.json in stateless mode.
+func (s *DeploymentService) RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
+	previousUpdate, err := s.updateRepo.GetUpdate(ctx, appId, branchName, runtimeVersion, updateId)
+	if err != nil {
+		return nil, &RepublishError{Status: http.StatusBadRequest, Message: "Error getting update"}
+	}
+	if previousUpdate == nil {
+		return nil, &RepublishError{Status: http.StatusNotFound, Message: "No update found"}
+	}
+	metadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, *previousUpdate)
+	if err != nil || metadata == nil {
+		return nil, &RepublishError{Status: http.StatusNotFound, Message: "No stored metadata found for update"}
+	}
+	return s.RepublishUpdate(ctx, previousUpdate, metadata.Platform, metadata.CommitHash, nil)
 }
 
 // GroupOperationResult carries the outcome of a publish-group-wide republish:
@@ -449,9 +478,9 @@ func (s *DeploymentService) RepublishPublishGroup(ctx context.Context, appId, br
 // createRollbackInternal is CreateRollback without the active-rollout guard; the
 // guard-free path exists for RolloutService, whose revert legitimately writes while
 // the rollout is still active.
-func (s *DeploymentService) createRollbackInternal(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName string) (*types.Update, error) {
+func (s *DeploymentService) createRollbackInternal(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
 	updateId := update2.GenerateUpdateTimestamp(platform)
-	rollback, err := s.updateRepo.CreateRollback(ctx, appId, updateId, branchName, runtimeVersion, platform, commitHash)
+	rollback, err := s.updateRepo.CreateRollback(ctx, appId, updateId, branchName, runtimeVersion, platform, commitHash, message)
 	if err != nil {
 		return nil, err
 	}

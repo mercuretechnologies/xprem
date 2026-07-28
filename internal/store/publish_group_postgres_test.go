@@ -38,7 +38,7 @@ func TestPublishGroupPersistencePostgres(t *testing.T) {
 
 	// Rollbacks are branch-level operations, never grouped: the marker row
 	// must list with no publish group.
-	rollback, err := fixture.updates.CreateRollback(ctx, fixture.appId, 400, rolloutTestDefaultBranch, rolloutTestRuntime, "android", "abc123")
+	rollback, err := fixture.updates.CreateRollback(ctx, fixture.appId, 400, rolloutTestDefaultBranch, rolloutTestRuntime, "android", "abc123", "")
 	require.NoError(t, err)
 	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *rollback))
 

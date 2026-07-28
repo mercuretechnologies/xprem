@@ -55,7 +55,8 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	commitHash := r.URL.Query().Get("commitHash")
-	rollback, err := h.deploymentService.CreateRollback(r.Context(), appId, platform, commitHash, runtimeVersion, branchName)
+	// No message: the CLI rollback command has no field for one.
+	rollback, err := h.deploymentService.CreateRollback(r.Context(), appId, platform, commitHash, runtimeVersion, branchName, "")
 	if err != nil {
 		if errors.Is(err, services.ErrActiveRolloutBlocksPublish) {
 			log.Printf("[RequestID: %s] Rollback blocked by active rollout: %v", requestID, err)

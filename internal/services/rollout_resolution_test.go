@@ -259,7 +259,7 @@ func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _ string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.appendRowLocked(appId, updateId, branchName, runtimeVersion, platform, types.Rollback)
@@ -828,7 +828,7 @@ func TestPublishRepublishRollbackBlockedDuringActiveRollout(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, ErrActiveRolloutBlocksPublish)
 
-	_, err = h.deploymentService.CreateRollback(ctx, h.appId, "ios", "", "1", "main")
+	_, err = h.deploymentService.CreateRollback(ctx, h.appId, "ios", "", "1", "main", "")
 	assert.ErrorIs(t, err, ErrActiveRolloutBlocksPublish)
 
 	_, err = h.deploymentService.RepublishUpdate(ctx, &control, "ios", "", nil)
@@ -836,7 +836,7 @@ func TestPublishRepublishRollbackBlockedDuringActiveRollout(t *testing.T) {
 
 	// A branch without an active rollout is not affected by the guard.
 	h.seed(seedRow{branch: "other", rtv: "1", platform: "ios", id: 100, checked: true})
-	_, err = h.deploymentService.CreateRollback(ctx, h.appId, "ios", "", "1", "other")
+	_, err = h.deploymentService.CreateRollback(ctx, h.appId, "ios", "", "1", "other", "")
 	assert.NoError(t, err)
 }
 

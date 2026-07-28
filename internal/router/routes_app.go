@@ -127,6 +127,17 @@ func registerAppRoutes(
 		AnyViewer())
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates/{UPDATE_ID}", container.UpdateHandler.GetUpdateDetailsHandler,
 		AnyViewer())
+	// The dashboard half of the CLI's rollback and republish commands: the two
+	// publishes that need no working copy, so they are the two an operator can
+	// run from a browser during an incident. One permission covers both, since
+	// each of them changes what the whole branch runs at the next update check.
+	// On a PROTECTED branch they ask for update:publish-protected on top, which
+	// the handler checks itself because it depends on the branch in the body of
+	// the request rather than on the route (see SetProtectedBranchGuard).
+	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/rollback", container.UpdateHandler.CreateRollbackHandler,
+		NeedsPermission(rbac.PermUpdatePublish, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/republish", container.UpdateHandler.RepublishUpdateHandler,
+		NeedsPermission(rbac.PermUpdatePublish, rbac.FallbackAdminOnly))
 
 	// API tokens. Minting and revoking one is publishing power over the app;
 	// the list stays readable because it only carries names and hints.

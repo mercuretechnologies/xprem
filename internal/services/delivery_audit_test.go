@@ -69,7 +69,7 @@ func TestCliRollbackAndRepublishEmitAuditEvents(t *testing.T) {
 	h.deploymentService.SetOnAuditEvent(recorder.Record)
 	h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
 
-	rollback, err := h.deploymentService.CreateRollback(cliPublishCtx(), h.appId, "ios", "abc1234", "1", "main")
+	rollback, err := h.deploymentService.CreateRollback(cliPublishCtx(), h.appId, "ios", "abc1234", "1", "main", "")
 	require.NoError(t, err)
 	require.Len(t, recorder.events, 1)
 	rolledBack := recorder.events[0]

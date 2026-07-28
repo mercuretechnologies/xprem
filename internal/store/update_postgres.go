@@ -566,8 +566,12 @@ func (s *PostgresUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId
 	}, nil
 }
 
-func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string) (*types.Update, error) {
+func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
 	pgAppID := ToPgUUID(appId)
+	var messageParam *string
+	if message != "" {
+		messageParam = &message
+	}
 	row, err := s.engine.InsertUpdate(ctx, pgdb.InsertUpdateParams{
 		AppID:      pgAppID,
 		ID:         updateId,
@@ -576,7 +580,7 @@ func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, 
 		UpdateType: int32(types.Rollback),
 		Platform:   platform,
 		CommitHash: commitHash,
-		Message:    nil,
+		Message:    messageParam,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert rollback update into database: %w", err)
