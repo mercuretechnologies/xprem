@@ -32,7 +32,7 @@ func TestLoginSuccessEmitsAuditEvent(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	recorder := &fakeAuditRecorder{}
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	authService.SetOnAuditEvent(recorder.Record)
 	user := seededPasswordUser(t, repo, "axel@example.com", "Sup3rSecret!", true)
 
@@ -53,7 +53,7 @@ func TestLoginFailuresEmitAuditEvents(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	recorder := &fakeAuditRecorder{}
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	authService.SetOnAuditEvent(recorder.Record)
 	seededPasswordUser(t, repo, "pending@example.com", "Sup3rSecret!", false)
 
@@ -100,7 +100,7 @@ func TestRefreshEmitsNoAuditEvent(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	recorder := &fakeAuditRecorder{}
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	authService.SetOnAuditEvent(recorder.Record)
 	seededPasswordUser(t, repo, "axel@example.com", "Sup3rSecret!", true)
 

@@ -6,6 +6,8 @@ import (
 	"expo-open-ota/internal/auditlog"
 	"expo-open-ota/internal/crypto"
 	"expo-open-ota/internal/store"
+	"fmt"
+	"log"
 	"net/mail"
 
 	"github.com/google/uuid"
@@ -27,6 +29,10 @@ type UserRepository interface {
 	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
 	UpdateUserIsAdmin(ctx context.Context, id string, isAdmin bool) error
 	UpdateUserEnabled(ctx context.Context, id string, enabled bool) error
+	// BumpUserSessionVersion revokes every session the account holds. Called
+	// whenever its security state changes under its own sessions: disabled,
+	// demoted, password changed.
+	BumpUserSessionVersion(ctx context.Context, id string) error
 	TouchUserLastConnected(ctx context.Context, id string) error
 }
 
@@ -205,6 +211,14 @@ func (s *UserService) SetUserAdmin(ctx context.Context, actorUserId string, targ
 	if targetErr == nil && target.IsAdmin == isAdmin {
 		return nil
 	}
+	if !isAdmin {
+		// A demoted admin must not keep browsing admin routes on the session
+		// it already holds. Belt and braces: every authenticated request also
+		// re-reads the flag, so the demotion is effective either way, which is
+		// why a failure to revoke is logged rather than failing the demotion
+		// that already happened.
+		s.revokeSessions(ctx, targetUserId)
+	}
 	if targetErr != nil {
 		target = store.User{Id: targetUserId, Email: targetUserId}
 	}
@@ -239,6 +253,12 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 	if targetErr == nil && target.Enabled == enabled {
 		return nil
 	}
+	if !enabled {
+		// Same reasoning as the demotion above: the per-request check already
+		// refuses a disabled account, this makes the revocation explicit
+		// instead of a side effect of where the enabled flag happens to be read.
+		s.revokeSessions(ctx, targetUserId)
+	}
 	if targetErr != nil {
 		target = store.User{Id: targetUserId, Email: targetUserId}
 	}
@@ -250,6 +270,18 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 		s.recordUserEvent(ctx, auditlog.ActionUserUpdated, target, map[string]any{"enabled": false})
 	}
 	return nil
+}
+
+// revokeSessions retires every token the account holds. Best-effort by
+// design: its two callers (disabling, demoting) are already enforced on every
+// authenticated request by re-reading the account, so this makes the
+// revocation explicit rather than carrying it alone, and a failure must not
+// undo a state change that already succeeded. ChangePassword is the one case
+// where nothing else enforces it, and it propagates the error itself.
+func (s *UserService) revokeSessions(ctx context.Context, targetUserId string) {
+	if err := s.userRepo.BumpUserSessionVersion(ctx, targetUserId); err != nil {
+		log.Printf("failed to revoke the sessions of user %s: %v", targetUserId, err)
+	}
 }
 
 // ChangePassword re-checks the current password even though the caller holds a
@@ -275,6 +307,13 @@ func (s *UserService) ChangePassword(ctx context.Context, userId string, current
 	}
 	if err := s.userRepo.UpdateUserPassword(ctx, userId, passwordHash); err != nil {
 		return err
+	}
+	// Unlike a disable or a demotion, nothing else notices a rotated password:
+	// the session version is the only thing that retires the credentials minted
+	// under the old one, so this failure is the caller's to see. The password
+	// has already changed, and it is the sessions that survived.
+	if err := s.userRepo.BumpUserSessionVersion(ctx, userId); err != nil {
+		return fmt.Errorf("the password was changed but the existing sessions could not be revoked: %w", err)
 	}
 	if s.onAuditEvent != nil {
 		s.onAuditEvent(ctx, auditlog.Event{

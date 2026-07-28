@@ -20,7 +20,7 @@ func seededSSOUser(id string, email string) store.InsertUserParameters {
 func TestPasswordLoginRejectsEmptyHashAccounts(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	ctx := context.Background()
 
 	_, err := repo.InsertUser(ctx, seededSSOUser("sso-user", "sso-member@example.com"))
@@ -35,7 +35,7 @@ func TestPasswordLoginRejectsEmptyHashAccounts(t *testing.T) {
 func TestIssueSessionMintsAValidPair(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	ctx := context.Background()
 
 	user, err := repo.InsertUser(ctx, seededSSOUser("sso-user", "sso-member@example.com"))
@@ -60,7 +60,7 @@ func TestIssueSessionMintsAValidPair(t *testing.T) {
 	assert.NotNil(t, stored.LastConnectedAt)
 
 	// Stateless mode has no database accounts to issue sessions for.
-	statelessService := NewDashboardAuthService(nil)
+	statelessService := NewDashboardAuthService(nil, nil)
 	_, err = statelessService.IssueSession(ctx, user)
 	assert.Error(t, err)
 }
@@ -72,7 +72,7 @@ func TestDisabledAccountCannotSignInOrRefresh(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	userService := NewUserService(repo)
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	ctx := context.Background()
 
 	admin, err := userService.CreateUser(ctx, "admin@example.com", "Sup3rSecret!", true)
@@ -110,7 +110,7 @@ func TestSSOEnforcementOnPasswordLogin(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	userService := NewUserService(repo)
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	ctx := context.Background()
 
 	_, err := userService.CreateUser(ctx, "admin@example.com", "Sup3rSecret!", true)

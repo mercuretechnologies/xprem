@@ -20,7 +20,7 @@ import (
 func runAuthMiddleware(t *testing.T, configure func(r *http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
 	router := mux.NewRouter()
-	router.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil), services.NewCliAuthService(nil, nil)))
+	router.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(nil, nil)))
 	router.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
 		// Surface the principal so tests can assert the middleware propagated
 		// it to the handler, not just that authentication passed.
@@ -54,7 +54,7 @@ func TestAuthMiddleware(t *testing.T) {
 	})
 
 	t.Run("valid dashboard session is accepted", func(t *testing.T) {
-		session, err := services.NewDashboardAuthService(nil).LoginWithEmailPassword(context.Background(), "admin@example.com", "test-password")
+		session, err := services.NewDashboardAuthService(nil, nil).LoginWithEmailPassword(context.Background(), "admin@example.com", "test-password")
 		if err != nil {
 			t.Fatalf("login failed: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestAuthMiddlewareCliBranchStampsMarker(t *testing.T) {
 
 	router := mux.NewRouter()
 	appRouter := router.PathPrefix("/{APP_ID}").Subrouter()
-	appRouter.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil), services.NewCliAuthService(fakeCliAuthRepo{}, nil)))
+	appRouter.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(fakeCliAuthRepo{}, nil)))
 	appRouter.HandleFunc("/branches", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Cli-App", services.CliAuthAppFromContext(r.Context()))
 		if services.PrincipalFromContext(r.Context()) != nil {

@@ -78,6 +78,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// Stays nil in stateless mode: user accounts only exist on the control
 	// plane, the flat-env dashboard authenticates against ADMIN_EMAIL/ADMIN_PASSWORD.
 	var userRepo services.UserRepository
+	// The refresh-token rotation ledger, nil in stateless mode for the same
+	// reason: it is a table, and there is no database to hold it. Refresh
+	// tokens are then not rotated and a replay cannot be detected.
+	var refreshTokenRepo services.RefreshTokenRepository
 	// Nil in stateless mode as well: progressive rollouts are a control-plane
 	// feature, and every consumer guards the nil.
 	var rolloutRepo services.RolloutRepository
@@ -158,6 +162,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		authRepo = store.NewPostgresAuthStore(dbEngine)
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
+		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
 		apiKeyRestrictionRepo = apikeyrestrictions.NewPostgresApiKeyRestrictionStore(dbEngine)
@@ -261,7 +266,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// their AppVisibilityFilter: they filter what a member sees without their
 	// package ever importing ee/rbac.
 	visibleApps := rbacService.VisibleAppsForPrincipal
-	dashboardAuthService := services.NewDashboardAuthService(userRepo)
+	dashboardAuthService := services.NewDashboardAuthService(userRepo, refreshTokenRepo)
 	// The restriction service doubles as the CLI access policy: every CLI
 	// request runs through its enforcement after authenticating.
 	cliAuthService := services.NewCliAuthService(authRepo, apiKeyRestrictionService)
@@ -319,7 +324,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
 		UploadHandler:               handlers.NewUploadHandler(cliAuthService, deploymentService),
-		UsersHandler:                dashhandlers.NewUsersHandler(userService, rateLimiter),
+		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
 		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory, stateHistory),

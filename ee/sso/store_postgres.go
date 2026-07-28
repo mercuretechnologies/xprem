@@ -193,6 +193,12 @@ func userFromPgdbRow(row pgdb.User) store.User {
 		IsAdmin:      row.IsAdmin,
 		Enabled:      row.Enabled,
 		CreatedAt:    row.CreatedAt.Time,
+		// Load-bearing: this row feeds IssueSession, which stamps the account's
+		// security generation into both JWTs. Dropping it here would mint every
+		// returning SSO session at generation 0, and any account whose sessions
+		// were ever revoked would sign in successfully and then be refused on
+		// its very next request, forever.
+		SessionVersion: row.SessionVersion,
 	}
 	if row.LastConnectedAt.Valid {
 		lastConnected := row.LastConnectedAt.Time

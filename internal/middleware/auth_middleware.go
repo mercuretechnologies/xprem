@@ -83,8 +83,18 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				http.Error(w, "No Authorization header provided", http.StatusUnauthorized)
 				return
 			}
-			principal, err := dashboardAuthService.ValidateSession(bearerToken)
+			// Not just "is this token authentic": the account behind it is
+			// re-read here, so a session dies the moment the account is
+			// deleted, disabled or revoked, instead of surviving up to the
+			// token's two hours.
+			principal, err := dashboardAuthService.AuthenticateSession(r.Context(), bearerToken)
 			if err != nil {
+				// A database outage must not read as a dead session, or a blip
+				// would sign every account out at once.
+				if errors.Is(err, services.ErrAuthUnavailable) {
+					http.Error(w, "Could not verify the account", http.StatusInternalServerError)
+					return
+				}
 				http.Error(w, "Invalid token", http.StatusUnauthorized)
 				return
 			}
@@ -128,11 +138,14 @@ func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
 // only accepts dashboard sessions — a CLI credential is app-scoped publishing
 // access, not an account, so it never reaches admin-gated routes.
 //
-// The flag is re-read from the users table on every call rather than trusted
-// from the JWT: a session token lives 2 hours, and a revoked admin (or deleted
-// user) must lose these routes immediately, not at the next refresh. userRepo
-// is nil in stateless mode, where the single ADMIN_EMAIL account is always an
-// admin and the claim alone is authoritative.
+// The flag is re-read from the users table here even though the principal now
+// carries a fresh one: NewAuthMiddleware resolves the account on every request,
+// so this read agrees with it by construction. It is kept because this gate is
+// the last thing between a member and the administration surface, and a gate
+// that reads its own decision's input is one that cannot be defeated by a
+// future change to how principals are built. userRepo is nil in stateless mode,
+// where the single ADMIN_EMAIL account is always an admin and the claim alone
+// is authoritative.
 func NewAdminMiddleware(userRepo services.UserRepository) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -124,6 +124,18 @@ func (q *Queries) ApplyIdentityValueStats(ctx context.Context, arg ApplyIdentity
 	return err
 }
 
+const bumpUserSessionVersion = `-- name: BumpUserSessionVersion :execresult
+UPDATE users
+SET session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+`
+
+// Invalidates every token the account holds at once: both the per-request
+// check and the refresh path compare the JWT's sv claim to this column.
+func (q *Queries) BumpUserSessionVersion(ctx context.Context, id pgtype.UUID) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, bumpUserSessionVersion, id)
+}
+
 const clearUpdateRollout = `-- name: ClearUpdateRollout :execrows
 UPDATE updates
 SET rollout_percentage = NULL
@@ -150,6 +162,39 @@ func (q *Queries) ClearUpdateRollout(ctx context.Context, arg ClearUpdateRollout
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const consumeRefreshToken = `-- name: ConsumeRefreshToken :one
+UPDATE refresh_tokens
+SET used_at = CURRENT_TIMESTAMP, replaced_by = $1
+WHERE id = $2
+  AND used_at IS NULL
+  AND expires_at > CURRENT_TIMESTAMP
+RETURNING id, user_id, family_id, created_at, expires_at, used_at, replaced_by
+`
+
+type ConsumeRefreshTokenParams struct {
+	ReplacedBy pgtype.UUID `json:"replaced_by"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// Single-use claim, atomic on purpose: two requests presenting the same token
+// concurrently must not both succeed, or rotation would hand out two live
+// successors and replay detection would never fire. The loser gets no row and
+// goes look at why (see GetRefreshToken).
+func (q *Queries) ConsumeRefreshToken(ctx context.Context, arg ConsumeRefreshTokenParams) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, consumeRefreshToken, arg.ReplacedBy, arg.ID)
+	var i RefreshToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.FamilyID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.ReplacedBy,
+	)
+	return i, err
 }
 
 const countAuditLogEvents = `-- name: CountAuditLogEvents :one
@@ -472,6 +517,19 @@ func (q *Queries) DeleteEnterpriseLicense(ctx context.Context) error {
 	return err
 }
 
+const deleteExpiredRefreshTokensForUser = `-- name: DeleteExpiredRefreshTokensForUser :exec
+DELETE FROM refresh_tokens
+WHERE user_id = $1
+  AND expires_at <= CURRENT_TIMESTAMP
+`
+
+// Runs whenever the account is issued a token, which bounds the table to the
+// live tokens of accounts that still sign in, without a background job.
+func (q *Queries) DeleteExpiredRefreshTokensForUser(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteExpiredRefreshTokensForUser, userID)
+	return err
+}
+
 const deleteIdentitySchemaKey = `-- name: DeleteIdentitySchemaKey :execresult
 DELETE FROM identity_schema
 WHERE app_id = $1 AND key = $2
@@ -501,6 +559,16 @@ type DeleteIdentityValueStatsForKeyParams struct {
 // values already merged into device_identity.metadata are left in place.
 func (q *Queries) DeleteIdentityValueStatsForKey(ctx context.Context, arg DeleteIdentityValueStatsForKeyParams) error {
 	_, err := q.db.Exec(ctx, deleteIdentityValueStatsForKey, arg.AppID, arg.Key)
+	return err
+}
+
+const deleteRefreshTokenFamily = `-- name: DeleteRefreshTokenFamily :exec
+DELETE FROM refresh_tokens
+WHERE family_id = $1
+`
+
+func (q *Queries) DeleteRefreshTokenFamily(ctx context.Context, familyID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRefreshTokenFamily, familyID)
 	return err
 }
 
@@ -1497,6 +1565,51 @@ func (q *Queries) GetLatestUpdateWithRollout(ctx context.Context, arg GetLatestU
 	return i, err
 }
 
+const getRefreshToken = `-- name: GetRefreshToken :one
+SELECT id, user_id, family_id, created_at, expires_at, used_at, replaced_by,
+       (used_at IS NOT NULL AND used_at > CURRENT_TIMESTAMP - $1::interval) AS used_recently
+FROM refresh_tokens
+WHERE id = $2
+`
+
+type GetRefreshTokenParams struct {
+	ReplayGrace pgtype.Interval `json:"replay_grace"`
+	ID          pgtype.UUID     `json:"id"`
+}
+
+type GetRefreshTokenRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	FamilyID     pgtype.UUID        `json:"family_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	UsedAt       pgtype.Timestamptz `json:"used_at"`
+	ReplacedBy   pgtype.UUID        `json:"replaced_by"`
+	UsedRecently *bool              `json:"used_recently"`
+}
+
+// used_recently answers "was this token rotated within the replay grace" using
+// the DATABASE clock on both sides. Comparing used_at (stamped by
+// CURRENT_TIMESTAMP) against the application's clock would straddle two
+// machines: a database running ahead would make the window always true and
+// silently disable replay detection, one running behind would read every
+// legitimate concurrent refresh as a replay.
+func (q *Queries) GetRefreshToken(ctx context.Context, arg GetRefreshTokenParams) (GetRefreshTokenRow, error) {
+	row := q.db.QueryRow(ctx, getRefreshToken, arg.ReplayGrace, arg.ID)
+	var i GetRefreshTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.FamilyID,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.ReplacedBy,
+		&i.UsedRecently,
+	)
+	return i, err
+}
+
 const getRoleByID = `-- name: GetRoleByID :one
 SELECT id, name, permissions, created_at, updated_at FROM roles
 WHERE id = $1 LIMIT 1
@@ -2150,7 +2263,7 @@ func (q *Queries) GetUserAppGrant(ctx context.Context, arg GetUserAppGrantParams
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, is_admin, created_at, updated_at, last_connected_at, enabled FROM users
+SELECT id, email, password_hash, is_admin, created_at, updated_at, last_connected_at, enabled, session_version FROM users
 WHERE email = $1 LIMIT 1
 `
 
@@ -2166,12 +2279,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.UpdatedAt,
 		&i.LastConnectedAt,
 		&i.Enabled,
+		&i.SessionVersion,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, is_admin, created_at, updated_at, last_connected_at, enabled FROM users
+SELECT id, email, password_hash, is_admin, created_at, updated_at, last_connected_at, enabled, session_version FROM users
 WHERE id = $1 LIMIT 1
 `
 
@@ -2187,12 +2301,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.UpdatedAt,
 		&i.LastConnectedAt,
 		&i.Enabled,
+		&i.SessionVersion,
 	)
 	return i, err
 }
 
 const getUserBySSOSubject = `-- name: GetUserBySSOSubject :one
-SELECT u.id, u.email, u.password_hash, u.is_admin, u.created_at, u.updated_at, u.last_connected_at, u.enabled FROM users u
+SELECT u.id, u.email, u.password_hash, u.is_admin, u.created_at, u.updated_at, u.last_connected_at, u.enabled, u.session_version FROM users u
 JOIN sso_identities si ON si.user_id = u.id
 WHERE si.issuer = $1 AND si.subject = $2
 `
@@ -2214,6 +2329,7 @@ func (q *Queries) GetUserBySSOSubject(ctx context.Context, arg GetUserBySSOSubje
 		&i.UpdatedAt,
 		&i.LastConnectedAt,
 		&i.Enabled,
+		&i.SessionVersion,
 	)
 	return i, err
 }
@@ -2484,6 +2600,28 @@ func (q *Queries) InsertChannelRollout(ctx context.Context, arg InsertChannelRol
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertRefreshToken = `-- name: InsertRefreshToken :exec
+INSERT INTO refresh_tokens (id, user_id, family_id, expires_at)
+VALUES ($1, $2, $3, $4)
+`
+
+type InsertRefreshTokenParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	FamilyID  pgtype.UUID        `json:"family_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
+	_, err := q.db.Exec(ctx, insertRefreshToken,
+		arg.ID,
+		arg.UserID,
+		arg.FamilyID,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const insertRole = `-- name: InsertRole :one

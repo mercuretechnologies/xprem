@@ -183,6 +183,17 @@ func TestSSOIdentityLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found.Enabled)
 
+	// The account's security generation must survive this lookup too. It is
+	// what IssueSession stamps into both JWTs, so reading it back as 0 for an
+	// account whose sessions were ever revoked would mint a session that the
+	// very next request refuses: a sign-in that succeeds and then bounces
+	// straight back to the login page, with no way out but a manual UPDATE.
+	_, err = pool.Exec(ctx, "UPDATE users SET session_version = 3 WHERE id = $1", memberID)
+	require.NoError(t, err)
+	found, err = ssoStore.FindUserBySubject(ctx, issuer, "subject-1")
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, found.SessionVersion)
+
 	// Unknown subject answers the typed not-found error.
 	_, err = ssoStore.FindUserBySubject(ctx, issuer, "unknown-subject")
 	notFoundErr := (*store.ErrResourceNotFound)(nil)

@@ -26,6 +26,12 @@ type User struct {
 	CreatedAt time.Time
 	// Nil until the account's first successful sign-in.
 	LastConnectedAt *time.Time
+	// SessionVersion is the account's security generation. Every dashboard JWT
+	// carries the value it was minted with, and a mismatch means the session
+	// was revoked (the account was disabled, demoted or changed its password
+	// since). Only the lookups that authenticate populate it. GetUsers does
+	// not: a listing has no session to check.
+	SessionVersion int32
 }
 
 type InsertUserParameters struct {
@@ -187,6 +193,20 @@ func (s *PostgresUserStore) UpdateUserEnabled(ctx context.Context, id string, en
 	return nil
 }
 
+// BumpUserSessionVersion revokes every session the account currently holds:
+// each of its live JWTs carries the previous generation and stops validating
+// on its next use, access tokens included.
+func (s *PostgresUserStore) BumpUserSessionVersion(ctx context.Context, id string) error {
+	commandTag, err := s.engine.Queries.BumpUserSessionVersion(ctx, ToPgUUID(id))
+	if err != nil {
+		return fmt.Errorf("failed to bump user session version in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "user", Identifier: id}
+	}
+	return nil
+}
+
 func (s *PostgresUserStore) TouchUserLastConnected(ctx context.Context, id string) error {
 	if err := s.engine.Queries.TouchUserLastConnectedAt(ctx, ToPgUUID(id)); err != nil {
 		return fmt.Errorf("failed to touch user last connection in database: %w", err)
@@ -203,6 +223,7 @@ func userFromRow(row pgdb.User) User {
 		Enabled:         row.Enabled,
 		CreatedAt:       row.CreatedAt.Time,
 		LastConnectedAt: timestamptzToPtr(row.LastConnectedAt),
+		SessionVersion:  row.SessionVersion,
 	}
 }
 

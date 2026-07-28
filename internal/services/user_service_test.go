@@ -107,6 +107,16 @@ func (r *fakeUserRepo) UpdateUserEnabled(_ context.Context, id string, enabled b
 	return nil
 }
 
+func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) error {
+	user, ok := r.users[id]
+	if !ok {
+		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+	}
+	user.SessionVersion++
+	r.users[id] = user
+	return nil
+}
+
 func (r *fakeUserRepo) TouchUserLastConnected(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
@@ -293,7 +303,7 @@ func TestDashboardAuthServiceWithUserRepo(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	repo := newFakeUserRepo()
 	userService := NewUserService(repo)
-	authService := NewDashboardAuthService(repo)
+	authService := NewDashboardAuthService(repo, newFakeRefreshTokenRepo())
 	ctx := context.Background()
 
 	user, err := userService.CreateUser(ctx, "admin@example.com", "Sup3rSecret!", true)
@@ -350,7 +360,7 @@ func TestStatelessLoginRequiresAdminEmail(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("ADMIN_EMAIL", "")
 	t.Setenv("ADMIN_PASSWORD", "admin")
-	authService := NewDashboardAuthService(nil)
+	authService := NewDashboardAuthService(nil, nil)
 
 	_, err := authService.LoginWithEmailPassword(context.Background(), "admin@example.com", "admin")
 	assert.True(t, errors.Is(err, ErrAdminEmailNotSet))

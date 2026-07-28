@@ -161,6 +161,16 @@ type IdentityValueStat struct {
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type RefreshToken struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	FamilyID   pgtype.UUID        `json:"family_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	UsedAt     pgtype.Timestamptz `json:"used_at"`
+	ReplacedBy pgtype.UUID        `json:"replaced_by"`
+}
+
 type Role struct {
 	ID          pgtype.UUID        `json:"id"`
 	Name        string             `json:"name"`
@@ -228,6 +238,7 @@ type User struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	LastConnectedAt pgtype.Timestamptz `json:"last_connected_at"`
 	Enabled         bool               `json:"enabled"`
+	SessionVersion  int32              `json:"session_version"`
 }
 
 type UserAppGrant struct {

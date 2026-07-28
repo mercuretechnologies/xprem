@@ -104,6 +104,16 @@ func (r *fakeUserRepo) UpdateUserEnabled(_ context.Context, id string, enabled b
 	return nil
 }
 
+func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) error {
+	user, ok := r.users[id]
+	if !ok {
+		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+	}
+	user.SessionVersion++
+	r.users[id] = user
+	return nil
+}
+
 func (r *fakeUserRepo) TouchUserLastConnected(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
@@ -292,7 +302,7 @@ func newTestService(t *testing.T, repo SSORepository, users *fakeUserRepo) (*SSO
 	t.Helper()
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("BASE_URL", "http://localhost:3000")
-	sessions := services.NewDashboardAuthService(users)
+	sessions := services.NewDashboardAuthService(users, nil)
 	service := NewSSOService(repo, users, sessions)
 	service.licenseValid = func() bool { return true }
 	return service, sessions

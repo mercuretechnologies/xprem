@@ -66,7 +66,7 @@ func TestCliAuthPassesTheRouteBranchToTheAccessPolicy(t *testing.T) {
 
 	router := mux.NewRouter()
 	api := router.PathPrefix("/api").Subrouter()
-	api.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil), cliAuth))
+	api.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), cliAuth))
 	api.HandleFunc("/apps/{APP_ID}/branch/{BRANCH}/runtimeVersions",
 		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }).
 		Methods(http.MethodGet)
@@ -93,7 +93,7 @@ func TestCliAuthPassesNoBranchWhenTheRouteHasNone(t *testing.T) {
 
 	router := mux.NewRouter()
 	api := router.PathPrefix("/api").Subrouter()
-	api.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil), cliAuth))
+	api.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), cliAuth))
 	api.HandleFunc("/apps/{APP_ID}/updates",
 		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }).
 		Methods(http.MethodGet)

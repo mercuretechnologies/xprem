@@ -563,6 +563,52 @@ WHERE users.id = $1
        OR users.id NOT IN (SELECT id FROM admins)
        OR (SELECT COUNT(*) FROM admins) > 1);
 
+-- name: BumpUserSessionVersion :execresult
+-- Invalidates every token the account holds at once: both the per-request
+-- check and the refresh path compare the JWT's sv claim to this column.
+UPDATE users
+SET session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
+WHERE id = $1;
+
+-- name: InsertRefreshToken :exec
+INSERT INTO refresh_tokens (id, user_id, family_id, expires_at)
+VALUES ($1, $2, $3, $4);
+
+-- name: ConsumeRefreshToken :one
+-- Single-use claim, atomic on purpose: two requests presenting the same token
+-- concurrently must not both succeed, or rotation would hand out two live
+-- successors and replay detection would never fire. The loser gets no row and
+-- goes look at why (see GetRefreshToken).
+UPDATE refresh_tokens
+SET used_at = CURRENT_TIMESTAMP, replaced_by = sqlc.arg(replaced_by)
+WHERE id = sqlc.arg(id)
+  AND used_at IS NULL
+  AND expires_at > CURRENT_TIMESTAMP
+RETURNING *;
+
+-- name: GetRefreshToken :one
+-- used_recently answers "was this token rotated within the replay grace" using
+-- the DATABASE clock on both sides. Comparing used_at (stamped by
+-- CURRENT_TIMESTAMP) against the application's clock would straddle two
+-- machines: a database running ahead would make the window always true and
+-- silently disable replay detection, one running behind would read every
+-- legitimate concurrent refresh as a replay.
+SELECT *,
+       (used_at IS NOT NULL AND used_at > CURRENT_TIMESTAMP - sqlc.arg(replay_grace)::interval) AS used_recently
+FROM refresh_tokens
+WHERE id = sqlc.arg(id);
+
+-- name: DeleteRefreshTokenFamily :exec
+DELETE FROM refresh_tokens
+WHERE family_id = $1;
+
+-- name: DeleteExpiredRefreshTokensForUser :exec
+-- Runs whenever the account is issued a token, which bounds the table to the
+-- live tokens of accounts that still sign in, without a background job.
+DELETE FROM refresh_tokens
+WHERE user_id = $1
+  AND expires_at <= CURRENT_TIMESTAMP;
+
 -- name: MigrateLegacyApp :exec
 INSERT INTO apps (
     id, 

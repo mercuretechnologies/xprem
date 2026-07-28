@@ -779,16 +779,34 @@ export class ApiClient {
       headers.set('Authorization', `Bearer ${token}`);
     }
   }
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  // Every endpoint answers JSON except the certificate route, which serves a
+  // PEM. That one exception used to justify a second fetch site with its own
+  // copy of the auth handling below; naming the body format here keeps the
+  // retry, the token refresh and the error mapping in one place.
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit = {},
+    parse: 'json' | 'text' = 'json'
+  ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    const headers = new Headers(options.headers);
-    this.populateHeaders(headers);
+    // Rebuilt per attempt, so the retry below picks up the token the refresh
+    // just stored rather than the one that was already refused.
+    const send = () => {
+      const headers = new Headers(options.headers);
+      this.populateHeaders(headers);
+      return fetch(url, { ...options, headers });
+    };
 
-    const response = await fetch(url, { ...options, headers });
+    let response = await send();
     const refreshToken = getRefreshToken();
     if (response.status === 401 && refreshToken) {
       await this.refreshTokens(refreshToken);
-      return this.request<T>(endpoint, options);
+      // Exactly one retry, and it is the shape of the code that says so rather
+      // than a counter. It has to be bounded: a refresh that fails on an
+      // unreachable server deliberately keeps the tokens (see performRefresh),
+      // so a loop conditioned on "a token is present" would spin forever
+      // against a server that is down.
+      response = await send();
     }
 
     if (!response.ok) {
@@ -805,13 +823,31 @@ export class ApiClient {
     }
 
     if (response.status === 204) {
-      return {} as T;
+      return (parse === 'text' ? '' : {}) as T;
     }
 
-    return response.json() as Promise<T>;
+    return (parse === 'text' ? response.text() : response.json()) as Promise<T>;
   }
 
+  // Refresh tokens are single-use on the server: presenting one retires it and
+  // returns a successor. A page typically has several requests in flight, so
+  // an access token expiring produces a burst of 401s that would each spend
+  // the same refresh token — the server tolerates that for a few seconds, but
+  // relying on its tolerance is not a design. This collapses the burst into
+  // one call every waiter shares.
+  private pendingRefresh: Promise<void> | null = null;
+
   private async refreshTokens(refreshToken: string) {
+    if (this.pendingRefresh) {
+      return this.pendingRefresh;
+    }
+    this.pendingRefresh = this.performRefresh(refreshToken).finally(() => {
+      this.pendingRefresh = null;
+    });
+    return this.pendingRefresh;
+  }
+
+  private async performRefresh(refreshToken: string) {
     try {
       const form = new URLSearchParams();
       form.append('refreshToken', refreshToken);
@@ -822,18 +858,42 @@ export class ApiClient {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to refresh token');
+        // Only the server saying "this credential is no longer valid" ends the
+        // session. A 500 means it could not reach its database and a 429 means
+        // it is throttling — /auth/refreshToken distinguishes them precisely so
+        // that a blip or a shared office IP does not throw away a perfectly
+        // good refresh token. Keep it and let the caller surface the failure.
+        if (response.status !== 401 && response.status !== 403) {
+          throw new Error(`Refresh unavailable (${response.status})`);
+        }
+        this.endSession(refreshToken);
+        return;
       }
 
       const data = await response.json();
       setTokens(data.token, data.refreshToken);
-
-      localStorage.setItem('accessToken', data.token);
-      localStorage.setItem('refreshToken', data.refreshToken);
     } catch (error) {
+      // A network failure is the same story as a 5xx: unreachable, not revoked.
       console.error('Failed to refresh token:', error);
-      logout();
     }
+  }
+
+  // endSession is what a revocation looks like from the client: the account was
+  // disabled, deleted, demoted, changed its password elsewhere, or a replay was
+  // detected. All of those now arrive mid-session, so clearing the tokens is
+  // not enough — nothing in the app re-reads them, and the tab would otherwise
+  // keep rendering a dashboard whose every request 401s. A full navigation is
+  // the only thing that drops the in-memory state along with the credential.
+  //
+  // spentToken guards a race between tabs: they share localStorage, so a tab
+  // whose refresh is rejected must not delete the pair a sibling has just
+  // stored (a password change, or its own successful rotation).
+  private endSession(spentToken: string) {
+    if (getRefreshToken() !== spentToken) {
+      return;
+    }
+    logout();
+    window.location.assign('/login');
   }
 
   public async login(email: string, password: string) {
@@ -870,12 +930,24 @@ export class ApiClient {
     });
   }
 
+  // Changing the password revokes every session the account held, this one
+  // included, so the server hands back a replacement pair. A 204 means it
+  // could not, and the only way forward is signing in again.
   public async changeMyPassword(payload: { currentPassword: string; newPassword: string }) {
-    return this.request<void>(`/api/me/password`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const session = await this.request<{ token?: string; refreshToken?: string }>(
+      `/api/me/password`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (session?.token && session?.refreshToken) {
+      setTokens(session.token, session.refreshToken);
+      return true;
+    }
+    logout();
+    return false;
   }
 
   public async getUsers() {
@@ -1144,20 +1216,13 @@ export class ApiClient {
     );
   }
 
+  // The one route that answers something other than JSON.
   public async downloadAppCertificate(appId: string): Promise<string> {
-    const url = `${this.baseUrl}/api/apps/${encodeURIComponent(appId)}/certificate`;
-    const headers = new Headers();
-    this.populateHeaders(headers);
-    const response = await fetch(url, { method: 'GET', headers });
-    const refreshToken = getRefreshToken();
-    if (response.status === 401 && refreshToken) {
-      await this.refreshTokens(refreshToken);
-      return this.downloadAppCertificate(appId);
-    }
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    return response.text();
+    return this.request<string>(
+      `/api/apps/${encodeURIComponent(appId)}/certificate`,
+      { method: 'GET' },
+      'text'
+    );
   }
 
   public async getChannels() {

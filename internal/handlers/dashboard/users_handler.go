@@ -7,6 +7,7 @@ import (
 	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
+	"log"
 	"net/http"
 	"time"
 
@@ -15,13 +16,17 @@ import (
 
 type UsersHandler struct {
 	userService *services.UserService
-	limiter     *ratelimit.Limiter
+	// dashboardAuthService mints the replacement session handed back when an
+	// account changes its own password, which revokes every session it held.
+	dashboardAuthService *services.DashboardAuthService
+	limiter              *ratelimit.Limiter
 }
 
-func NewUsersHandler(userService *services.UserService, limiter *ratelimit.Limiter) *UsersHandler {
+func NewUsersHandler(userService *services.UserService, dashboardAuthService *services.DashboardAuthService, limiter *ratelimit.Limiter) *UsersHandler {
 	return &UsersHandler{
-		userService: userService,
-		limiter:     limiter,
+		userService:          userService,
+		dashboardAuthService: dashboardAuthService,
+		limiter:              limiter,
 	}
 }
 
@@ -149,6 +154,24 @@ func (h *UsersHandler) ChangeMyPasswordHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.limiter.RecordPasswordChangeSuccess(principal.UserId)
+	// Changing the password revoked every session the account held, including
+	// the one that just made this call. Handing back a fresh pair keeps the
+	// person who typed the password signed in, while every OTHER session stays
+	// dead: the forgotten laptop, the attacker's stolen token. Doing it here
+	// rather than in the service keeps the account rules and the session
+	// plumbing apart.
+	user, err := h.userService.GetMe(r.Context(), principal.UserId, principal.Email)
+	if err == nil {
+		var session *services.DashboardSession
+		if session, err = h.dashboardAuthService.IssueSession(r.Context(), user); err == nil {
+			handlers.RenderJSON(w, http.StatusOK, session)
+			return
+		}
+	}
+	// The password DID change, so answering an error would tell the client the
+	// opposite of what happened. 204 is the same success with no renewed
+	// session attached, which sends the client to the sign-in page.
+	log.Printf("password changed for user %s but the session could not be renewed: %v", principal.UserId, err)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, describeApiError } from '@/lib/api';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
@@ -16,6 +17,7 @@ export const Account = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const { user } = useCurrentUser();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -31,13 +33,23 @@ export const Account = () => {
     if (!canSubmit) return;
     setIsSubmitting(true);
     try {
-      await api.changeMyPassword({ currentPassword, newPassword });
+      const stillSignedIn = await api.changeMyPassword({ currentPassword, newPassword });
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      if (!stillSignedIn) {
+        // The password changed, but no replacement session came back: every
+        // session the account held is gone, this tab included.
+        toast({
+          title: 'Password updated',
+          description: 'Sign in again with your new password.',
+        });
+        navigate('/login');
+        return;
+      }
       toast({
         title: 'Password updated',
-        description: 'Use your new password the next time you sign in.',
+        description: 'Your other sessions have been signed out.',
       });
     } catch (error) {
       toast({ ...describeApiError(error, 'Error updating password'), variant: 'destructive' });
