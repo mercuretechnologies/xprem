@@ -18,7 +18,6 @@ export type UpdateGroup = {
   message: string;
   shortId: string;
   rolloutPercentage: number | null;
-  healthRelevant: boolean;
 };
 
 // A publish message carries a whole commit body. The subject line is what
@@ -88,7 +87,6 @@ export const buildUpdateGroups = (items: UpdateFeedRecord[]): UpdateGroup[] => {
         message: item.message ?? '',
         shortId: (item.publishGroup || item.updateUUID).slice(0, 8),
         rolloutPercentage: item.rolloutPercentage ?? null,
-        healthRelevant: item.healthRelevant,
       });
       continue;
     }
@@ -99,7 +97,6 @@ export const buildUpdateGroups = (items: UpdateFeedRecord[]): UpdateGroup[] => {
     if (createdAt > existing.createdAt) existing.createdAt = createdAt;
     if (!existing.message && item.message) existing.message = item.message;
     if (item.rolloutPercentage != null) existing.rolloutPercentage = item.rolloutPercentage;
-    existing.healthRelevant = existing.healthRelevant || item.healthRelevant;
   }
   return Array.from(byKey.values()).sort(
     (left, right) => right.createdAt.getTime() - left.createdAt.getTime()

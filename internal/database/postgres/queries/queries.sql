@@ -239,32 +239,7 @@ ORDER BY u.created_at DESC;
 SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash,
        u.platform, u.message, u.rollout_percentage, u.control_update_id,
        u.publish_group, u.branch_id, b.name AS branch_name,
-       rv.version AS runtime_version,
-       CASE WHEN
-         -- The newest checked update is the current candidate. During a
-         -- progressive rollout, its explicitly captured control remains
-         -- current for the out-of-bucket cohort too.
-         u.id = (
-           SELECT current_update.id
-           FROM updates current_update
-           WHERE current_update.branch_id = u.branch_id
-             AND current_update.runtime_version_id = u.runtime_version_id
-             AND current_update.platform = u.platform
-             AND current_update.checked_at IS NOT NULL
-           ORDER BY current_update.id DESC
-           LIMIT 1
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM updates candidate
-           WHERE candidate.branch_id = u.branch_id
-             AND candidate.runtime_version_id = u.runtime_version_id
-             AND candidate.platform = u.platform
-             AND candidate.checked_at IS NOT NULL
-             AND candidate.rollout_percentage IS NOT NULL
-             AND candidate.control_update_id = u.id
-         )
-       THEN TRUE ELSE FALSE END AS health_relevant
+       rv.version AS runtime_version
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id

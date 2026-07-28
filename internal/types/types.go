@@ -58,7 +58,6 @@ type UpdateFeedItem struct {
 	UpdateItem
 	Branch         string    `json:"branch"`
 	RuntimeVersion string    `json:"runtimeVersion"`
-	HealthRelevant bool      `json:"healthRelevant"`
 	BranchID       int64     `json:"-"`
 	FeedCreatedAt  time.Time `json:"-"`
 }

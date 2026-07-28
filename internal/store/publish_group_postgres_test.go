@@ -150,34 +150,6 @@ func TestGetUpdateFeedPostgres(t *testing.T) {
 	assert.NotEqual(t, firstPage[1].UpdateId, secondPage[0].UpdateId)
 }
 
-func TestGetUpdateFeedMarksCurrentAndRolloutControlForHealth(t *testing.T) {
-	fixture := newRolloutFixture(t)
-	ctx := context.Background()
-
-	fixture.checkedUpdate(t, 100, "ios", nil)
-	fixture.checkedUpdate(t, 200, "ios", nil)
-	candidate, err := fixture.updates.CreateUpdateWithRollout(
-		ctx, fixture.appId, 300, rolloutTestDefaultBranch, rolloutTestRuntime,
-		"ios", "candidate", "", 10, nil,
-	)
-	require.NoError(t, err)
-	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *candidate))
-	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *candidate, uuid.NewString()))
-
-	items, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, types.UpdateFeedQuery{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, items, 3)
-	byID := make(map[string]types.UpdateFeedItem, len(items))
-	for _, item := range items {
-		byID[item.UpdateId] = item
-	}
-	superseded, ok := byID["100"]
-	require.True(t, ok, "superseded update is present")
-	assert.False(t, superseded.HealthRelevant, "superseded update is historical")
-	assert.True(t, byID["200"].HealthRelevant, "active rollout control keeps live health")
-	assert.True(t, byID["300"].HealthRelevant, "active rollout candidate keeps live health")
-}
-
 // TestPublishGroupRolloutActivationPostgres pins the sequential worst case of
 // one grouped rollout publish against the real SQL guards: iOS's rollout is
 // already active (checked) when Android's stamp runs. Both the conditional

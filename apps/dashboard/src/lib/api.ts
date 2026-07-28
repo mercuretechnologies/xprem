@@ -178,9 +178,6 @@ export type UpdateRecord = {
 export type UpdateFeedRecord = UpdateRecord & {
   branch: string;
   runtimeVersion: string;
-  // Current candidate, or the control still serving the out-of-bucket cohort
-  // of an active progressive rollout. Historical updates are false.
-  healthRelevant: boolean;
 };
 
 export type UpdateFeedQuery = {
