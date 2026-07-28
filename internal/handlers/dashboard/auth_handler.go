@@ -60,12 +60,6 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			handlers.RenderError(w, http.StatusInternalServerError, "Could not verify the credentials — try again later")
 			return
 		}
-		// Everything below this line is a credential the server actually
-		// rejected, so it counts. The two cases above are infrastructure and
-		// must not: a database that goes down for a few minutes would
-		// otherwise throttle every account in the deployment on its way out.
-		// This is the same line the audit log draws in recordLoginFailure.
-		ah.limiter.RecordLoginFailure(email, clientIP)
 		// The password was correct but SSO is enforced for this account: the
 		// actionable message sends the member to the SSO button.
 		if errors.Is(err, services.ErrPasswordLoginDisabledBySSO) {
@@ -79,6 +73,7 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			handlers.RenderError(w, http.StatusForbidden, err.Error())
 			return
 		}
+		ah.limiter.RecordLoginFailure(email, clientIP)
 		handlers.RenderError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}

@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"expo-open-ota/internal/cache"
+	"expo-open-ota/internal/store"
 	"net/netip"
 	"strings"
 	"sync"
@@ -59,6 +60,55 @@ func TestRefusalIsIdenticalForAnUnknownAccount(t *testing.T) {
 
 	require.Equal(t, limiter.CheckLogin(known, ip), limiter.CheckLogin(unknown, ip))
 	require.False(t, limiter.CheckLogin(unknown, ip).Allowed)
+}
+
+// Case and surrounding whitespace do not make a new account, so they must not
+// make a new counter. Both login paths resolve the account through
+// store.NormalizeEmail, so without this an attacker walks past the per-account
+// limit by respelling the address on each guess, and the per-account limit is
+// the only one that catches a distributed attack.
+func TestSpellingTheSameAccountDifferentlySharesTheCounter(t *testing.T) {
+	limiter := newTestLimiter(3, 1000)
+	ip := addr(t, "198.51.100.1")
+
+	limiter.RecordLoginFailure("axel@example.com", ip)
+	limiter.RecordLoginFailure("Axel@Example.com", ip)
+	limiter.RecordLoginFailure("  AXEL@EXAMPLE.COM  ", ip)
+
+	require.False(t, limiter.CheckLogin("axel@example.com", ip).Allowed,
+		"case and whitespace variants opened separate counters, the per-account limit is bypassable")
+}
+
+// A success on one spelling clears the counter for every spelling, for the same
+// reason: they are one account.
+func TestASuccessClearsTheCounterWhateverTheSpelling(t *testing.T) {
+	limiter := newTestLimiter(2, 1000)
+	ip := addr(t, "198.51.100.1")
+
+	limiter.RecordLoginFailure("axel@example.com", ip)
+	limiter.RecordLoginFailure("axel@example.com", ip)
+	require.False(t, limiter.CheckLogin("axel@example.com", ip).Allowed)
+
+	limiter.RecordLoginSuccess("Axel@Example.com")
+
+	require.True(t, limiter.CheckLogin("axel@example.com", ip).Allowed)
+}
+
+// The normalization here is a copy of store.NormalizeEmail, kept separate so
+// this package does not depend on the database store. This test is what stops
+// the copy from drifting: it is the only place the two definitions meet.
+func TestNormalizationMatchesTheAccountLookup(t *testing.T) {
+	for _, raw := range []string{
+		"axel@example.com",
+		"Axel@Example.com",
+		"  AXEL@EXAMPLE.COM  ",
+		"\taxel@example.com\n",
+		"",
+		"Ünïcode@Example.COM",
+	} {
+		require.Equal(t, store.NormalizeEmail(raw), normalizeEmail(raw),
+			"normalizeEmail drifted from store.NormalizeEmail for %q", raw)
+	}
 }
 
 func TestCountersAreSeparatePerAccount(t *testing.T) {

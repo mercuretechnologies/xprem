@@ -22,6 +22,7 @@ import (
 	"expo-open-ota/internal/metrics"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -104,7 +105,7 @@ func New(c cache.Cache) *Limiter {
 // would make the difference in behavior an oracle for enumerating them, which
 // is the reason this is keyed the way it is.
 func (l *Limiter) CheckLogin(email string, ip netip.Addr) Decision {
-	if decision := l.check(scopeLoginAccount, email, l.accountLimit()); !decision.Allowed {
+	if decision := l.check(scopeLoginAccount, normalizeEmail(email), l.accountLimit()); !decision.Allowed {
 		return decision
 	}
 	return l.checkIP(scopeLoginIP, ip, l.ipLimit())
@@ -118,7 +119,7 @@ func (l *Limiter) CheckLogin(email string, ip netip.Addr) Decision {
 // those would let an infrastructure blip lock every account in the deployment.
 // This mirrors what the audit log already does in DashboardAuthService.
 func (l *Limiter) RecordLoginFailure(email string, ip netip.Addr) {
-	l.record(scopeLoginAccount, email, l.accountLimit())
+	l.record(scopeLoginAccount, normalizeEmail(email), l.accountLimit())
 	l.recordIP(scopeLoginIP, ip, l.ipLimit())
 }
 
@@ -129,7 +130,7 @@ func (l *Limiter) RecordLoginFailure(email string, ip netip.Addr) {
 // The address counter is deliberately left alone: one valid account is
 // otherwise all an attacker needs to wipe the address counter between rounds.
 func (l *Limiter) RecordLoginSuccess(email string) {
-	l.reset(scopeLoginAccount, email)
+	l.reset(scopeLoginAccount, normalizeEmail(email))
 }
 
 // CheckRefresh and RecordRefreshFailure bound guessing at refresh tokens. There
@@ -169,6 +170,10 @@ func (l *Limiter) CheckSSOCallback(ip netip.Addr) Decision {
 
 func (l *Limiter) RecordSSOCallbackFailure(ip netip.Addr) {
 	l.recordIP(scopeSSOCallbackIP, ip, l.ipLimit())
+}
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // accountLimit and ipLimit exist so a nil Limiter never has a field read off
