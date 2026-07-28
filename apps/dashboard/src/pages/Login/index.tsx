@@ -38,8 +38,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
     'Your account has been created and is waiting for an administrator to approve it. You will be able to sign in once it is approved.',
   sso_failed:
     'SSO sign-in failed. Try again, and contact your administrator if it keeps happening.',
-  sso_throttled:
-    'Too many sign-in attempts from your network. Wait a few minutes and try again.',
+  sso_throttled: 'Too many sign-in attempts from your network. Wait a few minutes and try again.',
 };
 
 export const Login = () => {
@@ -82,6 +81,18 @@ export const Login = () => {
     }
     setSignInNotice(SSO_ERROR_MESSAGES[errorCode ?? ''] ?? SSO_ERROR_MESSAGES.sso_failed);
   }, [navigate]);
+
+  // Changing a password revokes every session of the account. When the server
+  // could not hand back a replacement, the Account page lands here with a full
+  // navigation, which discards any toast it might have shown: this notice is
+  // the only thing left to say the change did go through.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('notice') !== 'password_changed') {
+      return;
+    }
+    window.history.replaceState(null, '', window.location.pathname);
+    setSignInNotice('Your password was changed. Sign in again with the new one.');
+  }, []);
 
   const onSubmit = useCallback(
     async (data: z.infer<typeof FormSchema>) => {

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { api, describeApiError } from '@/lib/api';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
@@ -17,7 +16,6 @@ export const Account = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const { user } = useCurrentUser();
   const { toast } = useToast();
-  const navigate = useNavigate();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -39,12 +37,11 @@ export const Account = () => {
       setConfirmPassword('');
       if (!stillSignedIn) {
         // The password changed, but no replacement session came back: every
-        // session the account held is gone, this tab included.
-        toast({
-          title: 'Password updated',
-          description: 'Sign in again with your new password.',
-        });
-        navigate('/login');
+        // session the account held is gone, this tab included. A full
+        // navigation rather than a router transition, for the reason endSession
+        // gives in lib/api.ts: the state held above the router never re-reads
+        // the cleared tokens, and would keep issuing unauthenticated requests.
+        window.location.assign('/login?notice=password_changed');
         return;
       }
       toast({
