@@ -193,8 +193,9 @@ func (h *UpdateHandler) GetUpdatesHandler(w http.ResponseWriter, r *http.Request
 }
 
 // publishResponse is the shared body of both write routes below: the rows that
-// were created, newest publish first. PublishGroup is set only by a group
-// republish, which mints one for the rows it creates.
+// were created, in the order they were created (one per platform acted on).
+// PublishGroup is set only by a group republish, which mints one for the rows
+// it creates.
 type publishResponse struct {
 	Updates      []types.Update `json:"updates"`
 	PublishGroup string         `json:"publishGroup,omitempty"`

@@ -422,15 +422,25 @@ func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform,
 // Works on both backends: the metadata read goes through the repo, so it is the
 // updates row in control-plane mode and update-metadata.json in stateless mode.
 func (s *DeploymentService) RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
+	// Absence and failure are kept apart on both reads below, because both
+	// stores already distinguish them and collapsing the two answers "no such
+	// update" to an operator whose database is simply down, during the incident
+	// they are republishing to fix. A nil result is the absence signal
+	// everywhere: Postgres maps no-rows to it, and every bucket backend returns
+	// (nil, nil) for a missing object. A non-nil error is therefore always
+	// infrastructure, and it travels unwrapped so the handler answers 500.
 	previousUpdate, err := s.updateRepo.GetUpdate(ctx, appId, branchName, runtimeVersion, updateId)
 	if err != nil {
-		return nil, &RepublishError{Status: http.StatusBadRequest, Message: "Error getting update"}
+		return nil, fmt.Errorf("failed to read the update to republish: %w", err)
 	}
 	if previousUpdate == nil {
 		return nil, &RepublishError{Status: http.StatusNotFound, Message: "No update found"}
 	}
 	metadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, *previousUpdate)
-	if err != nil || metadata == nil {
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the stored metadata of the update to republish: %w", err)
+	}
+	if metadata == nil {
 		return nil, &RepublishError{Status: http.StatusNotFound, Message: "No stored metadata found for update"}
 	}
 	return s.RepublishUpdate(ctx, previousUpdate, metadata.Platform, metadata.CommitHash, nil)
