@@ -530,19 +530,35 @@ WHERE users.id = $1
   AND (users.id NOT IN (SELECT id FROM admins) OR (SELECT COUNT(*) FROM admins) > 1);
 
 -- name: UpdateUserPasswordByID :execresult
+-- The session version moves with the password, in the same statement. A second
+-- call could fail after this one committed, which would leave the sessions
+-- minted under the old password alive behind the new one. Nothing else retires
+-- them: the account stays enabled and keeps its admin flag, so the version is
+-- the only thing that ends those sessions.
 UPDATE users
-SET password_hash = $2, updated_at = CURRENT_TIMESTAMP
+SET password_hash = $2,
+    session_version = session_version + 1,
+    updated_at = CURRENT_TIMESTAMP
 WHERE id = $1;
 
 -- name: UpdateUserIsAdminByID :execresult
 -- Same admin-row lock as DeleteUserByID: demoting the last remaining admin
 -- matches no row. Promotions ($2 true) always pass the guard but still take
 -- the lock, so they serialize with concurrent demotions.
+--
+-- Losing the admin flag also ends the account's sessions, in this statement so
+-- that the revocation cannot be skipped by a stale read or lost to a failure
+-- between two calls. The CASE reads users.is_admin, which in a SET expression
+-- is the value BEFORE the update: the version therefore moves only on a real
+-- demotion, never on a promotion and never on an idempotent PATCH.
 WITH admins AS (
     SELECT id FROM users WHERE is_admin AND enabled ORDER BY id FOR UPDATE
 )
 UPDATE users
-SET is_admin = $2, updated_at = CURRENT_TIMESTAMP
+SET is_admin = $2,
+    session_version = session_version
+        + CASE WHEN users.is_admin AND NOT $2::boolean THEN 1 ELSE 0 END,
+    updated_at = CURRENT_TIMESTAMP
 WHERE users.id = $1
   AND ($2::boolean
        OR users.id NOT IN (SELECT id FROM admins)
@@ -553,11 +569,18 @@ WHERE users.id = $1
 -- admin matches no row, so approving/revoking accounts can never lock the
 -- dashboard out. Enabling ($2 true) always passes the guard but still takes
 -- the lock, so it serializes with concurrent disables.
+--
+-- Losing access also ends the account's sessions, same reasoning and same
+-- shape as UpdateUserIsAdminByID: the version moves only when an enabled
+-- account is being disabled, so approving one never signs anybody out.
 WITH admins AS (
     SELECT id FROM users WHERE is_admin AND enabled ORDER BY id FOR UPDATE
 )
 UPDATE users
-SET enabled = $2, updated_at = CURRENT_TIMESTAMP
+SET enabled = $2,
+    session_version = session_version
+        + CASE WHEN users.enabled AND NOT $2::boolean THEN 1 ELSE 0 END,
+    updated_at = CURRENT_TIMESTAMP
 WHERE users.id = $1
   AND ($2::boolean
        OR users.id NOT IN (SELECT id FROM admins)
