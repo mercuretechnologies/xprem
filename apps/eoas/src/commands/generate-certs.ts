@@ -5,12 +5,16 @@ import {
   generateSelfSignedCodeSigningCertificate,
 } from '@expo/code-signing-certificates';
 import { Command } from '@oclif/core';
-import { ensureDirSync, writeFile } from 'fs-extra';
+import { ensureDirSync, existsSync, remove, writeFile } from 'fs-extra';
 import path from 'path';
 
 import Log from '../lib/log';
-import { promptAsync } from '../lib/prompts';
+import { confirmAsync, promptAsync } from '../lib/prompts';
 import { ensurePrivateKeyIgnored } from '../lib/utils';
+
+// Owner read/write only: the private key signs every update served by the OTA
+// server.
+const PRIVATE_KEY_MODE = 0o600;
 
 export default class GenerateCerts extends Command {
   static override args = {};
@@ -50,6 +54,20 @@ export default class GenerateCerts extends Command {
         }
       },
     });
+    const keyOutput = path.resolve(process.cwd(), keyOutputDir);
+    const privateKeyPath = path.join(keyOutput, 'private-key.pem');
+    if (existsSync(privateKeyPath)) {
+      const overwrite = await confirmAsync({
+        message: `${privateKeyPath} already exists. Overwrite it? Updates signed with the current key will no longer be accepted by apps embedding the matching certificate.`,
+        name: 'overwritePrivateKey',
+        type: 'confirm',
+        initial: false,
+      });
+      if (!overwrite) {
+        Log.warn('Aborted: no certificate or key was written.');
+        return;
+      }
+    }
     const { certificateCommonName } = await promptAsync({
       message: 'Please enter your Organization name',
       name: 'certificateCommonName',
@@ -70,7 +88,6 @@ export default class GenerateCerts extends Command {
     });
     const validityDurationYears = Math.floor(Number(certificateValidityDurationYears));
     const certificateOutput = path.resolve(process.cwd(), certificateOutputDir);
-    const keyOutput = path.resolve(process.cwd(), keyOutputDir);
     const validityNotBefore = new Date();
     const validityNotAfter = new Date();
     validityNotAfter.setFullYear(validityNotAfter.getFullYear() + validityDurationYears);
@@ -86,9 +103,13 @@ export default class GenerateCerts extends Command {
     // Before the key touches the disk, so there is no window where it exists
     // uncovered by the ignore rule.
     ensurePrivateKeyIgnored(process.cwd());
+    // Removed first: writeFile only applies the mode when it creates the file,
+    // so overwriting an existing key would keep its (possibly world readable)
+    // permissions.
+    await remove(privateKeyPath);
     await Promise.all([
       writeFile(path.join(keyOutput, 'public-key.pem'), keyPairPEM.publicKeyPEM),
-      writeFile(path.join(keyOutput, 'private-key.pem'), keyPairPEM.privateKeyPEM),
+      writeFile(privateKeyPath, keyPairPEM.privateKeyPEM, { mode: PRIVATE_KEY_MODE }),
       writeFile(path.join(certificateOutput, 'certificate.pem'), certificatePEM),
     ]);
     Log.succeed(
