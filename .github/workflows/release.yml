@@ -112,10 +112,16 @@ jobs:
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org"
 
+      # REF_NAME goes through env rather than a ${{ }} interpolation inside the
+      # script: git allows quotes and semicolons in tag names, so interpolating
+      # one straight into the shell would let whoever pushes the tag run
+      # arbitrary commands in this job, which holds the npm publishing identity.
       - name: Publish NPM package
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           cd apps/eoas
-          VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+          VERSION=$(echo "$REF_NAME" | sed 's/^v//')
           npm ci
           npm run build
           npm version "$VERSION" --no-git-tag-version

@@ -11,6 +11,12 @@ on:
         description: "Stable release tag to promote (e.g. v3.0.0)"
         required: true
 
+# The GHCR push authenticates with its own token, so this workflow never needs
+# anything from GITHUB_TOKEN. Stated explicitly rather than inherited from the
+# org-wide default.
+permissions:
+  contents: read
+
 jobs:
   promote:
     runs-on: ubuntu-latest
