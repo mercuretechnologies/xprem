@@ -4,17 +4,21 @@ import (
 	"errors"
 	"expo-open-ota/internal/dashboard"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/helpers"
+	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"net/http"
 )
 
 type AuthHandler struct {
 	dashboardAuthService *services.DashboardAuthService
+	limiter              *ratelimit.Limiter
 }
 
-func NewAuthHandler(dashboardAuthService *services.DashboardAuthService) *AuthHandler {
+func NewAuthHandler(dashboardAuthService *services.DashboardAuthService, limiter *ratelimit.Limiter) *AuthHandler {
 	return &AuthHandler{
 		dashboardAuthService: dashboardAuthService,
+		limiter:              limiter,
 	}
 }
 
@@ -34,6 +38,15 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		handlers.RenderError(w, http.StatusBadRequest, "Password is empty")
 		return
 	}
+	// Before the password is verified, not after. Verifying it is deliberately
+	// expensive, so an attempt that is going to be refused anyway must not be
+	// allowed to spend that CPU: otherwise the limit removes the point of an
+	// attack while leaving its cost.
+	clientIP := helpers.ClientIP(r)
+	if decision := ah.limiter.CheckLogin(email, clientIP); !decision.Allowed {
+		handlers.RenderThrottled(w, decision.RetryAfter)
+		return
+	}
 	session, err := ah.dashboardAuthService.LoginWithEmailPassword(r.Context(), email, password)
 	if err != nil {
 		// A missing ADMIN_EMAIL is the operator's misconfiguration, not the
@@ -47,6 +60,12 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			handlers.RenderError(w, http.StatusInternalServerError, "Could not verify the credentials — try again later")
 			return
 		}
+		// Everything below this line is a credential the server actually
+		// rejected, so it counts. The two cases above are infrastructure and
+		// must not: a database that goes down for a few minutes would
+		// otherwise throttle every account in the deployment on its way out.
+		// This is the same line the audit log draws in recordLoginFailure.
+		ah.limiter.RecordLoginFailure(email, clientIP)
 		// The password was correct but SSO is enforced for this account: the
 		// actionable message sends the member to the SSO button.
 		if errors.Is(err, services.ErrPasswordLoginDisabledBySSO) {
@@ -64,6 +83,8 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ah.limiter.RecordLoginSuccess(email)
+
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"token":"` + session.Token + `","refreshToken":"` + session.RefreshToken + `"}`))
 	w.WriteHeader(http.StatusOK)
@@ -80,14 +101,23 @@ func (ah *AuthHandler) RefreshTokenHandler(w http.ResponseWriter, r *http.Reques
 		handlers.RenderError(w, http.StatusBadRequest, "Refresh token is empty")
 		return
 	}
+	// Nothing identifies the caller until the token is validated, so the
+	// address is the only subject to count against here.
+	clientIP := helpers.ClientIP(r)
+	if decision := ah.limiter.CheckRefresh(clientIP); !decision.Allowed {
+		handlers.RenderThrottled(w, decision.RetryAfter)
+		return
+	}
 	session, err := ah.dashboardAuthService.RefreshSession(r.Context(), refreshToken)
 	if err != nil {
 		// A database outage must not read as an expired session — the client
 		// would drop a perfectly valid refresh token and force a re-login.
+		// It is not a rejected token either, so it is not counted.
 		if errors.Is(err, services.ErrAuthUnavailable) {
 			handlers.RenderError(w, http.StatusInternalServerError, "Error refreshing token")
 			return
 		}
+		ah.limiter.RecordRefreshFailure(clientIP)
 		handlers.RenderError(w, http.StatusUnauthorized, "Error refreshing token")
 		return
 	}

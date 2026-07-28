@@ -18,6 +18,7 @@ import (
 	"expo-open-ota/internal/database/postgres/migrations"
 	"expo-open-ota/internal/handlers"
 	dashhandlers "expo-open-ota/internal/handlers/dashboard"
+	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
 	"log"
@@ -291,8 +292,13 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
+	// One limiter shared by every endpoint that accepts a credential. It holds
+	// no state of its own, the counters live in the cache, so the same value is
+	// safe across handlers and, with Redis configured, across replicas.
+	rateLimiter := ratelimit.New(cache.GetCache())
+
 	container := &AppContainer{
-		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService),
+		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService, rateLimiter),
 		DashboardAuthService:        dashboardAuthService,
 		CliAuthService:              cliAuthService,
 		ApiKeyHandler:               dashhandlers.NewApiKeyHandler(cliAuthService),
@@ -310,10 +316,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		RollbackHandler:             handlers.NewRollbackHandler(cliAuthService, deploymentService),
 		RolloutHandler:              dashhandlers.NewRolloutHandler(rolloutService, updateService),
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
-		SSOHandler:                  sso.NewSSOHandler(ssoService),
+		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
 		UploadHandler:               handlers.NewUploadHandler(cliAuthService, deploymentService),
-		UsersHandler:                dashhandlers.NewUsersHandler(userService),
+		UsersHandler:                dashhandlers.NewUsersHandler(userService, rateLimiter),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
 		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory, stateHistory),

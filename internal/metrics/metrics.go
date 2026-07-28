@@ -46,13 +46,51 @@ var (
 		},
 		[]string{"appId", "platform", "runtime", "branch", "update"},
 	)
+
+	// Authentication throttling (internal/ratelimit). The only label is the
+	// scope, a fixed set of five constants. Labelling by email or by client
+	// address is the first thing an operator will ask for and is exactly what
+	// must not happen: the cardinality is unbounded, so one credential-stuffing
+	// run invents a time series per address and takes the scrape down with it,
+	// and it writes personal data into a store rarely treated as holding any.
+	// Who was throttled is a question for the audit log, which records it.
+	authThrottledVec = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "auth_throttled_attempts_total",
+			Help: "Total number of authentication attempts refused because the subject was over its rate limit, per scope",
+		},
+		[]string{"scope"},
+	)
+
+	// The denominator for the counter above. Without it a throttle count has no
+	// scale, and there is no telling a limit that is working from one set so
+	// low it is throttling ordinary mistyped passwords.
+	authFailedVec = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "auth_failed_attempts_total",
+			Help: "Total number of rejected authentication credentials counted against a rate limit, per scope",
+		},
+		[]string{"scope"},
+	)
 )
+
+// TrackAuthThrottled counts one request refused by the rate limiter.
+func TrackAuthThrottled(scope string) {
+	authThrottledVec.WithLabelValues(scope).Inc()
+}
+
+// TrackAuthFailure counts one rejected credential.
+func TrackAuthFailure(scope string) {
+	authFailedVec.WithLabelValues(scope).Inc()
+}
 
 func InitMetrics() {
 	prometheus.MustRegister(activeUsersVec)
 	prometheus.MustRegister(updateDownloadsVec)
 	prometheus.MustRegister(updateErrorUsersVec)
 	prometheus.MustRegister(globalActiveUsersVec)
+	prometheus.MustRegister(authThrottledVec)
+	prometheus.MustRegister(authFailedVec)
 }
 
 func CleanupMetrics() {
@@ -60,6 +98,8 @@ func CleanupMetrics() {
 	prometheus.Unregister(updateDownloadsVec)
 	prometheus.Unregister(updateErrorUsersVec)
 	prometheus.Unregister(globalActiveUsersVec)
+	prometheus.Unregister(authThrottledVec)
+	prometheus.Unregister(authFailedVec)
 }
 
 func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update string) {

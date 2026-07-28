@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
 	"net/http"
@@ -14,11 +15,13 @@ import (
 
 type UsersHandler struct {
 	userService *services.UserService
+	limiter     *ratelimit.Limiter
 }
 
-func NewUsersHandler(userService *services.UserService) *UsersHandler {
+func NewUsersHandler(userService *services.UserService, limiter *ratelimit.Limiter) *UsersHandler {
 	return &UsersHandler{
 		userService: userService,
+		limiter:     limiter,
 	}
 }
 
@@ -126,11 +129,26 @@ func (h *UsersHandler) ChangeMyPasswordHandler(w http.ResponseWriter, r *http.Re
 		handlers.RenderError(w, http.StatusBadRequest, "currentPassword and newPassword are required")
 		return
 	}
+	// This route is behind authentication, so the attacker it guards against
+	// already holds a session and is trying to turn it into the password
+	// itself, which is what would survive revoking that session.
+	if decision := h.limiter.CheckPasswordChange(principal.UserId); !decision.Allowed {
+		handlers.RenderThrottled(w, decision.RetryAfter)
+		return
+	}
 	err := h.userService.ChangePassword(r.Context(), principal.UserId, requestBody.CurrentPassword, requestBody.NewPassword)
 	if err != nil {
+		// Only a wrong current password counts. The other failures here are
+		// validation of the NEW password and infrastructure, and throttling
+		// someone for choosing a password that is too short would lock them
+		// out of the fix.
+		if errors.Is(err, services.ErrInvalidCurrentPassword) {
+			h.limiter.RecordPasswordChangeFailure(principal.UserId)
+		}
 		renderUserServiceError(w, err)
 		return
 	}
+	h.limiter.RecordPasswordChangeSuccess(principal.UserId)
 	w.WriteHeader(http.StatusNoContent)
 }
 

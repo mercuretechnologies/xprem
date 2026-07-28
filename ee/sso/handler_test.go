@@ -24,7 +24,9 @@ func newTestHandler(t *testing.T, repo SSORepository, users *fakeUserRepo) (*SSO
 	t.Helper()
 	t.Setenv("USE_DASHBOARD", "true")
 	service, sessions := newTestService(t, repo, users)
-	return NewSSOHandler(service), service, sessions
+	// nil limiter: every method is nil-safe and allows the request, which keeps
+	// these tests about the SSO flow rather than about throttling.
+	return NewSSOHandler(service, nil), service, sessions
 }
 
 func flowCookieFrom(t *testing.T, response *http.Response) *http.Cookie {

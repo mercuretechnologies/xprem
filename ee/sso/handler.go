@@ -10,6 +10,8 @@ import (
 	"expo-open-ota/config"
 	"expo-open-ota/internal/dashboard"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/helpers"
+	"expo-open-ota/internal/ratelimit"
 	"log"
 	"net/http"
 	"net/url"
@@ -30,14 +32,16 @@ const (
 	ssoErrForbidden       = "sso_forbidden"
 	ssoErrPending         = "sso_pending"
 	ssoErrFailed          = "sso_failed"
+	ssoErrThrottled       = "sso_throttled"
 )
 
 type SSOHandler struct {
 	service *SSOService
+	limiter *ratelimit.Limiter
 }
 
-func NewSSOHandler(service *SSOService) *SSOHandler {
-	return &SSOHandler{service: service}
+func NewSSOHandler(service *SSOService, limiter *ratelimit.Limiter) *SSOHandler {
+	return &SSOHandler{service: service, limiter: limiter}
 }
 
 // renderSSOServiceError maps the service's business errors onto explicit
@@ -156,6 +160,15 @@ func (h *SSOHandler) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// The flow token is single-use: whatever happens next, the cookie dies here.
 	http.SetCookie(w, flowCookie("", -1))
+	// The state parameter is already single-use, so this is not about guessing
+	// a secret, it is about the volume of failed round-trips one address can
+	// force the server to run: every one of them costs a token exchange and a
+	// userinfo call against the identity provider.
+	clientIP := helpers.ClientIP(r)
+	if decision := h.limiter.CheckSSOCallback(clientIP); !decision.Allowed {
+		redirectWithError(w, r, ssoErrThrottled)
+		return
+	}
 	query := r.URL.Query()
 	if idpError := query.Get("error"); idpError != "" {
 		log.Printf("[SSO] the identity provider returned an error: %s (%s)", sanitizeForLog(idpError), sanitizeForLog(query.Get("error_description")))
@@ -169,18 +182,21 @@ func (h *SSOHandler) CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(flowCookieName)
 	if err != nil || cookie.Value == "" {
 		log.Printf("[SSO] callback received without a flow cookie (sign-in took longer than %s, or cookies are blocked)", flowTTL)
+		h.limiter.RecordSSOCallbackFailure(clientIP)
 		redirectWithError(w, r, ssoErrFailed)
 		return
 	}
 	state, code := query.Get("state"), query.Get("code")
 	if state == "" || code == "" {
 		log.Printf("[SSO] callback received without a state or code parameter")
+		h.limiter.RecordSSOCallbackFailure(clientIP)
 		redirectWithError(w, r, ssoErrFailed)
 		return
 	}
 	session, err := h.service.CompleteLogin(r.Context(), cookie.Value, state, code)
 	if err != nil {
 		log.Printf("[SSO] sign-in failed: %v", err)
+		h.limiter.RecordSSOCallbackFailure(clientIP)
 		redirectWithError(w, r, ssoErrorCode(err))
 		return
 	}

@@ -38,6 +38,8 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
     'Your account has been created and is waiting for an administrator to approve it. You will be able to sign in once it is approved.',
   sso_failed:
     'SSO sign-in failed. Try again, and contact your administrator if it keeps happening.',
+  sso_throttled:
+    'Too many sign-in attempts from your network. Wait a few minutes and try again.',
 };
 
 export const Login = () => {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"expo-open-ota/internal/services"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 type APIError struct {
@@ -22,6 +24,23 @@ func RenderError(w http.ResponseWriter, status int, detail string) {
 		Status: status,
 		Detail: detail,
 	})
+}
+
+// RenderThrottled is the single response every rate-limited endpoint gives, and
+// it says nothing beyond "too many, wait".
+//
+// The wording is fixed on purpose. It must not vary with which limit was
+// reached, nor with whether the account named exists, because a caller able to
+// tell those apart can enumerate accounts by watching how the refusal changes.
+// One message for every case is what makes the counters unobservable from
+// outside.
+func RenderThrottled(w http.ResponseWriter, retryAfter time.Duration) {
+	seconds := int(retryAfter.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	RenderError(w, http.StatusTooManyRequests, "Too many attempts. Try again later.")
 }
 
 // RenderJSON writes payload as a JSON body with the given status. The success
