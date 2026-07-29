@@ -151,8 +151,11 @@ const AccessForm = ({
       if (pattern.includes('/') || pattern.includes('\\')) {
         return `“${pattern}” cannot contain a slash: a branch name is a single segment.`;
       }
-      if (seen.has(pattern)) return `“${pattern}” appears twice. Merge the two rules into one.`;
-      seen.add(pattern);
+      // Duplicates are judged on the collapsed form, like the server: "a*"
+      // and "a**" name the same set of branches.
+      const collapsed = pattern.replace(/\*+/g, '*');
+      if (seen.has(collapsed)) return `“${pattern}” appears twice. Merge the two rules into one.`;
+      seen.add(collapsed);
       if (rule.actions.length === 0) {
         return `“${pattern}” grants nothing. Pick an action, or remove the rule.`;
       }

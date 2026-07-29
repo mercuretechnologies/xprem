@@ -17,13 +17,11 @@ import (
 )
 
 type UploadHandler struct {
-	cliAuthService    *services.CliAuthService
 	deploymentService *services.DeploymentService
 }
 
-func NewUploadHandler(cliAuthService *services.CliAuthService, deploymentService *services.DeploymentService) *UploadHandler {
+func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHandler {
 	return &UploadHandler{
-		cliAuthService:    cliAuthService,
 		deploymentService: deploymentService,
 	}
 }

@@ -12,15 +12,15 @@ import (
 	"fmt"
 )
 
-type PostgresApiKeyRestrictionStore struct {
+type PostgresApiKeyAccessStore struct {
 	engine *database.Engine
 }
 
-func NewPostgresApiKeyRestrictionStore(engine *database.Engine) *PostgresApiKeyRestrictionStore {
-	return &PostgresApiKeyRestrictionStore{engine: engine}
+func NewPostgresApiKeyAccessStore(engine *database.Engine) *PostgresApiKeyAccessStore {
+	return &PostgresApiKeyAccessStore{engine: engine}
 }
 
-func (s *PostgresApiKeyRestrictionStore) GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error) {
+func (s *PostgresApiKeyAccessStore) GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error) {
 	return s.engine.Queries.GetApiKeyNameByID(ctx, pgdb.GetApiKeyNameByIDParams{
 		ID:    apiKeyID,
 		AppID: store.ToPgUUID(appID),
@@ -30,7 +30,7 @@ func (s *PostgresApiKeyRestrictionStore) GetApiKeyName(ctx context.Context, appI
 // GetAccess is the enforcement read for one authenticated key; no app check
 // is repeated here since the key was already validated against its app.
 // Zero rows means the key is gone; a key with no rule still yields one row.
-func (s *PostgresApiKeyRestrictionStore) GetAccess(ctx context.Context, apiKeyID int64) (ApiKeyAccess, error) {
+func (s *PostgresApiKeyAccessStore) GetAccess(ctx context.Context, apiKeyID int64) (ApiKeyAccess, error) {
 	rows, err := s.engine.Queries.GetApiKeyAccess(ctx, apiKeyID)
 	if err != nil {
 		return ApiKeyAccess{}, fmt.Errorf("failed to read api key access: %w", err)
@@ -53,7 +53,7 @@ func (s *PostgresApiKeyRestrictionStore) GetAccess(ctx context.Context, apiKeyID
 
 // GetAccessByAppID returns the access of every live key of one app, including
 // keys still at their default.
-func (s *PostgresApiKeyRestrictionStore) GetAccessByAppID(ctx context.Context, appID string) ([]ApiKeyAccess, error) {
+func (s *PostgresApiKeyAccessStore) GetAccessByAppID(ctx context.Context, appID string) ([]ApiKeyAccess, error) {
 	rows, err := s.engine.Queries.GetApiKeyAccessByAppID(ctx, store.ToPgUUID(appID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read api key access: %w", err)
@@ -87,7 +87,7 @@ func foldAccessRows(rows []pgdb.GetApiKeyAccessByAppIDRow) []ApiKeyAccess {
 // SetAccess replaces one key's whole access, the IP allow-list and the rule
 // list, in one transaction; rules are deleted then re-inserted rather than
 // diffed.
-func (s *PostgresApiKeyRestrictionStore) SetAccess(ctx context.Context, appID string, access ApiKeyAccess) error {
+func (s *PostgresApiKeyAccessStore) SetAccess(ctx context.Context, appID string, access ApiKeyAccess) error {
 	return s.engine.WithTx(ctx, func(q *pgdb.Queries) error {
 		updated, err := q.UpdateApiKeyAccess(ctx, pgdb.UpdateApiKeyAccessParams{
 			AllowedIps: access.AllowedIps,

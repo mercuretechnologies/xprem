@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupAccessStore(t *testing.T) (*PostgresApiKeyRestrictionStore, *pgxpool.Pool) {
+func setupAccessStore(t *testing.T) (*PostgresApiKeyAccessStore, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -49,7 +49,7 @@ func setupAccessStore(t *testing.T) (*PostgresApiKeyRestrictionStore, *pgxpool.P
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
-	return NewPostgresApiKeyRestrictionStore(&database.Engine{Queries: pgdb.New(pool), DB: pool}), pool
+	return NewPostgresApiKeyAccessStore(&database.Engine{Queries: pgdb.New(pool), DB: pool}), pool
 }
 
 func insertTestApp(t *testing.T, pool *pgxpool.Pool) string {

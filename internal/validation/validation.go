@@ -21,6 +21,11 @@ const maxNameLen = 128
 // are never path segments, so the limit is only about sane storage/UI bounds.
 const maxDisplayNameLen = 255
 
+// maxPatternLen caps branch patterns, matching the VARCHAR(255) of
+// api_key_branch_rules.pattern. Wider than maxNameLen so a rule can name a
+// legacy branch that predates the maxNameLen cap.
+const maxPatternLen = 255
+
 // Error is a validation failure on user-supplied input. Handlers detect it with
 // errors.As and map it to HTTP 400, surfacing Message to the caller, while
 // unrecognized errors stay a 500.
@@ -72,26 +77,26 @@ func Name(field, value string) error {
 	if strings.Contains(value, "*") {
 		return fail(field, "must not contain %q, which is reserved as the wildcard of API key access rules", "*")
 	}
-	return namePattern(field, value)
+	return namePattern(field, value, maxNameLen)
 }
 
 // NamePattern validates a branch pattern used in an API key's access rules: a
 // branch name, or a name with "*" standing for any run of characters, empty
-// included ("pr-*", "*-staging", "*"). Every other rule of Name applies, so a
-// pattern without a wildcard is exactly a branch name and matches only that
-// branch.
+// included ("pr-*", "*-staging", "*"). Every other rule of Name applies except
+// the length cap (maxPatternLen), so a pattern without a wildcard is exactly a
+// branch name and matches only that branch.
 func NamePattern(field, value string) error {
-	return namePattern(field, value)
+	return namePattern(field, value, maxPatternLen)
 }
 
-// namePattern is Name without the wildcard rule, which is the only thing the
-// two differ by.
-func namePattern(field, value string) error {
+// namePattern is Name without the wildcard rule and with a caller-chosen
+// length cap, which is all the two differ by.
+func namePattern(field, value string, maxLen int) error {
 	if value == "" {
 		return fail(field, "must not be empty")
 	}
-	if len(value) > maxNameLen {
-		return fail(field, "exceeds max length %d", maxNameLen)
+	if len(value) > maxLen {
+		return fail(field, "exceeds max length %d", maxLen)
 	}
 	if strings.ContainsAny(value, "/\\") {
 		return fail(field, "must not contain path separators")

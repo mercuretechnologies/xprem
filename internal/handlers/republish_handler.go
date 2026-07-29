@@ -13,13 +13,11 @@ import (
 )
 
 type RepublishHandler struct {
-	cliAuthService    *services.CliAuthService
 	deploymentService *services.DeploymentService
 }
 
-func NewRepublishHandler(cliAuthService *services.CliAuthService, deploymentService *services.DeploymentService) *RepublishHandler {
+func NewRepublishHandler(deploymentService *services.DeploymentService) *RepublishHandler {
 	return &RepublishHandler{
-		cliAuthService:    cliAuthService,
 		deploymentService: deploymentService,
 	}
 }

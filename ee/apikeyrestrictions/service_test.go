@@ -32,7 +32,11 @@ func (f *fakeAccessRepo) GetAccessByAppID(_ context.Context, _ string) ([]ApiKey
 }
 
 func (f *fakeAccessRepo) GetAccess(_ context.Context, apiKeyID int64) (ApiKeyAccess, error) {
-	return f.access[apiKeyID], nil
+	access, ok := f.access[apiKeyID]
+	if !ok {
+		return ApiKeyAccess{}, ErrApiKeyNotFound
+	}
+	return access, nil
 }
 
 func (f *fakeAccessRepo) SetAccess(_ context.Context, _ string, access ApiKeyAccess) error {

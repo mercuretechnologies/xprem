@@ -12,13 +12,11 @@ import (
 )
 
 type RollbackHandler struct {
-	cliAuthService    *services.CliAuthService
 	deploymentService *services.DeploymentService
 }
 
-func NewRollbackHandler(cliAuthService *services.CliAuthService, deploymentService *services.DeploymentService) *RollbackHandler {
+func NewRollbackHandler(deploymentService *services.DeploymentService) *RollbackHandler {
 	return &RollbackHandler{
-		cliAuthService:    cliAuthService,
 		deploymentService: deploymentService,
 	}
 }

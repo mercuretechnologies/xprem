@@ -45,8 +45,9 @@ func TestName_Rejects(t *testing.T) {
 }
 
 func TestNamePattern_AcceptsWildcards(t *testing.T) {
-	// Everything Name accepts, plus the wildcard forms.
-	for _, v := range []string{"staging", "*", "pr-*", "*-eu", "pr-*-eu", "a*b*c"} {
+	// Everything Name accepts, plus the wildcard forms and the wider length
+	// cap that lets a rule name a legacy branch longer than maxNameLen.
+	for _, v := range []string{"staging", "*", "pr-*", "*-eu", "pr-*-eu", "a*b*c", strings.Repeat("a", maxPatternLen)} {
 		assert.NoError(t, NamePattern("pattern", v), "expected %q to be valid", v)
 	}
 }
@@ -54,7 +55,7 @@ func TestNamePattern_AcceptsWildcards(t *testing.T) {
 func TestNamePattern_RejectsWhatNameRejects(t *testing.T) {
 	for name, value := range map[string]string{
 		"empty":        "",
-		"too long":     strings.Repeat("a", maxNameLen+1),
+		"too long":     strings.Repeat("a", maxPatternLen+1),
 		"slash":        "feature/*",
 		"dotdot":       "..",
 		"control char": "bad\nname",

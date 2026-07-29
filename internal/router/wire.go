@@ -132,7 +132,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
-		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyRestrictionStore(dbEngine)
+		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyAccessStore(dbEngine)
 		branchProtectionRepo = branchprotection.NewPostgresStore(dbEngine)
 		rbacRepo = rbac.NewPostgresRBACStore(dbEngine)
 		auditRepo = audit.NewPostgresAuditStore(dbEngine)
@@ -256,13 +256,13 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		AuditHandler:                audit.NewAuditHandler(auditService),
 		RBACHandler:                 rbac.NewRBACHandler(rbacService),
 		RBACService:                 rbacService,
-		RepublishHandler:            handlers.NewRepublishHandler(cliAuthService, deploymentService),
-		RollbackHandler:             handlers.NewRollbackHandler(cliAuthService, deploymentService),
+		RepublishHandler:            handlers.NewRepublishHandler(deploymentService),
+		RollbackHandler:             handlers.NewRollbackHandler(deploymentService),
 		RolloutHandler:              dashhandlers.NewRolloutHandler(rolloutService, updateService),
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
-		UploadHandler:               handlers.NewUploadHandler(cliAuthService, deploymentService),
+		UploadHandler:               handlers.NewUploadHandler(deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),

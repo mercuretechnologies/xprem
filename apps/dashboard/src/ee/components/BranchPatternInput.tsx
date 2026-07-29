@@ -43,15 +43,18 @@ export const BranchPatternInput = ({
   }, [branches, value]);
 
   return (
-    <div className="relative">
+    <div
+      className="relative"
+      onBlur={event => {
+        // Focus moving to a suggestion keeps the list open (keyboard nav).
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        // Let a click on a suggestion land before the list unmounts.
+        blurTimer.current = window.setTimeout(() => setIsOpen(false), 120);
+      }}>
       <Input
         value={value}
         onChange={event => onChange(event.target.value)}
         onFocus={() => setIsOpen(true)}
-        onBlur={() => {
-          // Let a click on a suggestion land before the list unmounts.
-          blurTimer.current = window.setTimeout(() => setIsOpen(false), 120);
-        }}
         disabled={disabled}
         spellCheck={false}
         placeholder="production, or pr-*"
