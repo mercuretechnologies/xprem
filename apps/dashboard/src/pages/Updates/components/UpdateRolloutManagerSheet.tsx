@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { Gauge } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
@@ -36,13 +36,34 @@ export const UpdateRolloutManagerSheet = ({
     queryFn: () => api.getUpdateRollout(rollout!.branch, rollout!.runtimeVersion),
     enabled: !!selectedAppId && !!rollout,
   });
-  const updatesQuery = useQuery({
-    queryKey: ['updates', selectedAppId, rollout?.branch, rollout?.runtimeVersion],
-    queryFn: () => api.getUpdates(rollout!.branch, rollout!.runtimeVersion),
-    enabled: !!selectedAppId && !!rollout,
-  });
   const activeUpdates = rolloutQuery.data?.active ? rolloutQuery.data.updates : [];
-  const updatesByID = new Map((updatesQuery.data ?? []).map(update => [update.updateId, update]));
+  const updateIDs = [
+    ...new Set(
+      activeUpdates.flatMap(update =>
+        update.controlUpdateId ? [update.updateId, update.controlUpdateId] : [update.updateId]
+      )
+    ),
+  ];
+  const updateDetailsQueries = useQueries({
+    queries: updateIDs.map(updateId => ({
+      queryKey: [
+        'update-details',
+        selectedAppId,
+        rollout?.branch,
+        rollout?.runtimeVersion,
+        updateId,
+      ],
+      queryFn: () =>
+        api.getUpdateDetails(rollout!.branch, rollout!.runtimeVersion, updateId),
+      enabled: !!selectedAppId && !!rollout,
+    })),
+  });
+  const updatesByID = new Map(
+    updateDetailsQueries.flatMap((query, index) =>
+      query.data ? [[updateIDs[index], query.data] as const] : []
+    )
+  );
+  const updateDetailsError = updateDetailsQueries.find(query => query.error)?.error;
   const rolloutUpdateUUIDs = activeUpdates
     .map(update => updatesByID.get(update.updateId)?.updateUUID)
     .filter((updateUUID): updateUUID is string => !!updateUUID && isUuid(updateUUID));
@@ -81,7 +102,7 @@ export const UpdateRolloutManagerSheet = ({
             </div>
           )}
           {!!rolloutQuery.error && <ApiError error={rolloutQuery.error} />}
-          {!!updatesQuery.error && <ApiError error={updatesQuery.error} />}
+          {!!updateDetailsError && <ApiError error={updateDetailsError} />}
           {!rolloutQuery.isLoading && !rolloutQuery.error && activeUpdates.length === 0 && (
             <div className="rounded-lg border border-dashed p-6 text-center">
               <p className="font-medium text-foreground">This rollout has ended</p>
