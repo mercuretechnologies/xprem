@@ -8,7 +8,7 @@ import (
 	"context"
 	"strings"
 
-	"expo-open-ota/internal/cache"
+	"xprem/internal/cache"
 )
 
 // BranchResolver names the branch an update belongs to and the publish it came

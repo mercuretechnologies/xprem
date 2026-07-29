@@ -1,6 +1,7 @@
 import { AppSidebar } from '@/components/app-sidebar';
+import { XpremMark } from '@/components/xprem-mark';
 import { useEffect, useState } from 'react';
-import { Menu, Radio } from 'lucide-react';
+import { Menu } from 'lucide-react';
 import { useLocation } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -34,11 +35,9 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
         <main className="min-w-0 flex-1">
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/80 bg-background/95 px-4 backdrop-blur lg:hidden">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
-                <Radio className="h-4 w-4" />
-              </div>
+              <XpremMark className="h-8 w-8 rounded-lg" />
               <span className="font-display text-sm font-semibold text-foreground">
-                expo-open-ota
+                xprem
               </span>
             </div>
             <Button

@@ -1,11 +1,11 @@
 package test
 
 import (
-	infrastructure "expo-open-ota/internal/router"
 	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	infrastructure "xprem/internal/router"
 )
 
 func TestDashboardServesStaticFile(t *testing.T) {

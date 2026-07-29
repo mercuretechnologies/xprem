@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/types"
+	"xprem/internal/bucket"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"

@@ -6,10 +6,10 @@ package rbac
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"testing"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -2,8 +2,6 @@ package bucket
 
 import (
 	"bytes"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"xprem/config"
+	"xprem/internal/types"
 )
 
 var s3KeyPrefixDeprecationOnce sync.Once

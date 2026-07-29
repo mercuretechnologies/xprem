@@ -11,19 +11,19 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "homepage": "https://github.com/mercuretechnologies/expo-open-ota/tree/main/eoas",
+  "homepage": "https://github.com/mercuretechnologies/xprem/tree/main/eoas",
   "keywords": [
-    "expo-open-ota",
+    "xprem",
     "expo",
     "eas",
     "cli"
   ],
   "author": "Axel Marciano",
   "license": "MIT",
-  "description": "A CLI tool to manage publishing and OTA updates for expo-open-OTA self-hosted server. This is not an official tool from Expo but an open-source project (https://github.com/mercuretechnologies/expo-open-ota)",
+  "description": "A CLI tool to manage publishing and OTA updates for the xprem self-hosted server. This is not an official tool from Expo but an open-source project (https://github.com/mercuretechnologies/xprem)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mercuretechnologies/expo-open-ota.git"
+    "url": "git+https://github.com/mercuretechnologies/xprem.git"
   },
   "dependencies": {
     "@expo/code-signing-certificates": "^0.0.5",

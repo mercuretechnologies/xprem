@@ -1,14 +1,14 @@
 package infrastructure
 
 import (
-	"expo-open-ota/config"
-	dashutils "expo-open-ota/internal/dashboard"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"xprem/config"
+	dashutils "xprem/internal/dashboard"
 
 	"github.com/gorilla/mux"
 )

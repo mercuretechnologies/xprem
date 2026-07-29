@@ -3,10 +3,10 @@ package services
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/store"
 	"net/mail"
+	"xprem/internal/auditlog"
+	"xprem/internal/crypto"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	infrastructure "expo-open-ota/internal/router"
+	infrastructure "xprem/internal/router"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -6,10 +6,10 @@ package licensing
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
 	"testing"
 	"time"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -10,7 +10,7 @@ import (
 	"log"
 	"time"
 
-	"expo-open-ota/internal/database/postgres"
+	"xprem/internal/database/postgres"
 )
 
 const (

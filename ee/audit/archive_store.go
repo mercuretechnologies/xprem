@@ -6,10 +6,10 @@ package audit
 
 import (
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
 	"fmt"
 	"path/filepath"
+	"xprem/config"
+	"xprem/internal/bucket"
 )
 
 // GetAuditLogsObjectStore resolves the dedicated audit archive destination

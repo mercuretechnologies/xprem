@@ -17,13 +17,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/metrics"
 	"net/netip"
 	"strconv"
 	"strings"
 	"time"
+	"xprem/config"
+	"xprem/internal/cache"
+	"xprem/internal/metrics"
 )
 
 // The scopes a counter can belong to. They are separate namespaces: a failure

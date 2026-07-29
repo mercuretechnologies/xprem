@@ -2,13 +2,13 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/store"
-	"expo-open-ota/internal/types"
 	"testing"
+	"xprem/config"
+	"xprem/internal/auditlog"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/providers/expo"
+	"xprem/internal/store"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,12 +1,12 @@
 package cdn
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
 	"log"
 	"net/url"
 	"strings"
 	"sync"
+	"xprem/config"
+	"xprem/internal/bucket"
 )
 
 var s3CDNPrefixDeprecationOnce sync.Once

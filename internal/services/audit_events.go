@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
+	"xprem/internal/auditlog"
 )
 
 // auditActorFromContext resolves the audit actor of the request: the

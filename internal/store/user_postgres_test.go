@@ -17,10 +17,10 @@ import (
 	"sync"
 	"testing"
 
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/store"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"

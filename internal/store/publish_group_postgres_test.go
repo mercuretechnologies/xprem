@@ -5,9 +5,9 @@ package store_test
 
 import (
 	"context"
-	"expo-open-ota/internal/types"
 	"strconv"
 	"testing"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"

@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"crypto"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/keyStore"
 	"fmt"
 	"strings"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucket"
+	"xprem/internal/keyStore"
 
 	"github.com/aws/aws-sdk-go-v2/feature/cloudfront/sign"
 )

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/clickhouse"
-	"expo-open-ota/internal/database/postgres"
-	"expo-open-ota/internal/database/postgres/pgdb"
+	"xprem/internal/database"
+	"xprem/internal/database/clickhouse"
+	"xprem/internal/database/postgres"
+	"xprem/internal/database/postgres/pgdb"
 
 	"github.com/google/uuid"
 )

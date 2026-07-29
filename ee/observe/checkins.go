@@ -6,15 +6,15 @@ package observe
 
 import (
 	"context"
-	"expo-open-ota/ee/identity"
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/handlers"
 	"hash/fnv"
 	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"xprem/ee/identity"
+	"xprem/internal/cache"
+	"xprem/internal/handlers"
 
 	"github.com/google/uuid"
 )

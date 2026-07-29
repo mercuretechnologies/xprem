@@ -17,12 +17,12 @@ import (
 	"testing"
 	"time"
 
-	"expo-open-ota/config"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/rollout"
-	"expo-open-ota/internal/store"
-	"expo-open-ota/internal/types"
+	"xprem/config"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/providers/expo"
+	"xprem/internal/rollout"
+	"xprem/internal/store"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"

@@ -1,7 +1,7 @@
 name: Promote release to latest
 
 # Manually promotes an already-released version to the "latest" Docker tag,
-# in both the mercuretechnologies and the legacy axelmarciano namespaces.
+# across the canonical xprem image and the deprecated expo-open-ota paths.
 # The release workflow never touches "latest" anymore.
 
 on:
@@ -36,8 +36,10 @@ jobs:
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.DOCKER_GITHUB_CONTAINER_REGISTRY_TOKEN }}" | docker login ghcr.io -u axelmarciano --password-stdin
 
-      - name: Tag Docker image as latest in both namespaces
+      - name: Tag Docker image as latest in every namespace
         run: |
-          for REPO in "ghcr.io/${{ github.repository_owner }}/expo-open-ota" "ghcr.io/axelmarciano/expo-open-ota"; do
+          for REPO in "ghcr.io/${{ github.repository_owner }}/xprem" \
+                      "ghcr.io/${{ github.repository_owner }}/expo-open-ota" \
+                      "ghcr.io/axelmarciano/expo-open-ota"; do
             docker buildx imagetools create -t "$REPO:latest" "$REPO:$TAG"
           done

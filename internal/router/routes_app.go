@@ -1,9 +1,9 @@
 package infrastructure
 
 import (
-	"expo-open-ota/ee/rbac"
-	"expo-open-ota/internal/middleware"
 	"net/http"
+	"xprem/ee/rbac"
+	"xprem/internal/middleware"
 
 	"github.com/gorilla/mux"
 )

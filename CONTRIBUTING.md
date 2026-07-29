@@ -1,4 +1,4 @@
-# Contributing to Expo Open OTA
+# Contributing to xprem
 
 Thank you for taking the time to contribute. This document explains how contributions work here, and — importantly — how the open-source and commercial sides of the project fit together, so you never invest effort into something that can't be merged.
 
@@ -10,7 +10,7 @@ For anything significant (a new feature, a behavior change, a refactor), **pleas
 
 ## Open core policy
 
-Expo Open OTA is an open-core project. The complete OTA workflow is MIT-licensed and will stay that way: publishing updates, release channels, branches, rollbacks, storage backends, CDN integrations, the dashboard, Prometheus metrics, and A/B testing.
+xprem is an open-core project. The complete OTA workflow is MIT-licensed and will stay that way: publishing updates, release channels, branches, rollbacks, storage backends, CDN integrations, the dashboard, Prometheus metrics, and A/B testing.
 
 Advanced and organization-level capabilities are commercial. They live in `ee/` directories under a separate license (see [ee/LICENSE](./ee/LICENSE)) and are currently planned or built as enterprise features:
 

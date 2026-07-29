@@ -7,16 +7,16 @@ package sso
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/dashboard"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/ratelimit"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"xprem/config"
+	"xprem/internal/dashboard"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
+	"xprem/internal/ratelimit"
 )
 
 const flowCookieName = "eoo_sso_flow"

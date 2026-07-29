@@ -2,12 +2,12 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/validation"
 	"fmt"
 	"strconv"
+	"xprem/internal/auditlog"
+	"xprem/internal/providers/expo"
+	"xprem/internal/types"
+	"xprem/internal/validation"
 )
 
 type ChannelService struct {

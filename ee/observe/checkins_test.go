@@ -7,15 +7,15 @@ package observe
 import (
 	"context"
 	"errors"
-	"expo-open-ota/ee/identity"
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/handlers"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
+	"xprem/ee/identity"
+	"xprem/internal/cache"
+	"xprem/internal/handlers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

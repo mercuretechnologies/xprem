@@ -17,7 +17,7 @@ CREATE INDEX idx_device_identity_current_update ON device_identity (app_id, curr
 --                   launch (Expo-Recent-Failed-Update-IDs) and the device
 --                   ROLLED BACK, so it is no longer counted in the update's
 --                   current-device cohort.
---   'runtime_issue' the documented expo_open_ota_js_crash observe event: a
+--   'runtime_issue' the documented xprem_js_crash observe event: a
 --                   JS crash while RUNNING the update. expo-updates never
 --                   reports those, so the device keeps running the update
 --                   and stays in its current-device cohort.

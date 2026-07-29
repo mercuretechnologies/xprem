@@ -7,11 +7,11 @@ package rbac
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"net/http"
+	"xprem/internal/auditlog"
+	"xprem/internal/handlers"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )

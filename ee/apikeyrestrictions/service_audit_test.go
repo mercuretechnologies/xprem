@@ -6,9 +6,9 @@ package apikeyrestrictions
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
 	"testing"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

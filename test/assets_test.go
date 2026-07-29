@@ -3,10 +3,6 @@ package test
 import (
 	"bytes"
 	"compress/gzip"
-	"expo-open-ota/internal/assets"
-	"expo-open-ota/internal/cdn"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/update"
 	"github.com/andybalholm/brotli"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/internal/assets"
+	"xprem/internal/cdn"
+	"xprem/internal/types"
+	"xprem/internal/update"
 )
 
 func TestEmptyAssetNameForAssets(t *testing.T) {

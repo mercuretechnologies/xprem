@@ -1,11 +1,11 @@
 package cdn
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/providers/azure"
 	"fmt"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucket"
+	"xprem/internal/providers/azure"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
 )

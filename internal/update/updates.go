@@ -3,18 +3,18 @@ package update
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/version"
 	"fmt"
 	"mime"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucket"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/crypto"
+	"xprem/internal/types"
+	"xprem/internal/version"
 )
 
 var ErrUpdateMetadataMissing = errors.New("metadata.json missing from storage")

@@ -2,8 +2,6 @@ package test
 
 import (
 	"encoding/json"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/update"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -14,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/internal/types"
+	"xprem/internal/update"
 )
 
 func createRepublishRequest(branch, runtimeVersion, headerKey, headerValue, platform, commitHash, updateId string) (*httptest.ResponseRecorder, *mux.Router, *mux.Route, *http.Request) {

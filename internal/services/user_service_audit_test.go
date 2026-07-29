@@ -3,9 +3,9 @@ package services
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/store"
 	"testing"
+	"xprem/internal/auditlog"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

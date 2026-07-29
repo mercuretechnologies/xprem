@@ -1,11 +1,11 @@
 package cdn
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/providers/gcp"
 	"fmt"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucket"
+	"xprem/internal/providers/gcp"
 )
 
 type GCSDirectCDN struct{}

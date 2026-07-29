@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/ratelimit"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/crypto"
+	"xprem/internal/ratelimit"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

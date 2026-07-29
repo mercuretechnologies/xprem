@@ -4,11 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,6 +17,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xprem/config"
+	"xprem/internal/crypto"
+	"xprem/internal/helpers"
+	"xprem/internal/providers/expo"
+	"xprem/internal/types"
 
 	"github.com/golang-jwt/jwt/v5"
 )

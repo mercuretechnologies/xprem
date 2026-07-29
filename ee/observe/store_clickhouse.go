@@ -6,7 +6,7 @@ package observe
 
 import (
 	"context"
-	"expo-open-ota/internal/database/clickhouse"
+	"xprem/internal/database/clickhouse"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )

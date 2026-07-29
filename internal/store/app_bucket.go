@@ -2,9 +2,9 @@ package store
 
 import (
 	"context"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/providers/expo"
+	"xprem/config"
+	"xprem/internal/bucket"
+	"xprem/internal/providers/expo"
 
 	"fmt"
 )

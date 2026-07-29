@@ -15,7 +15,7 @@ import { ensurePrivateKeyIgnored, isValidUpdateUrl } from '../lib/utils';
 
 export default class Init extends Command {
   static override args = {};
-  static override description = 'Configure your existing expo project with Expo Open OTA';
+  static override description = 'Configure your existing expo project with xprem';
   static override examples = ['<%= config.bin %> <%= command.id %>'];
   static override flags = {};
   public async run(): Promise<void> {

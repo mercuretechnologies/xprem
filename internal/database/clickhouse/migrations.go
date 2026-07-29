@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"expo-open-ota/internal/database/postgres"
 	"io/fs"
 	"log"
+	"xprem/internal/database/postgres"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2" // registers the "clickhouse" database/sql driver
 	"github.com/pressly/goose/v3"

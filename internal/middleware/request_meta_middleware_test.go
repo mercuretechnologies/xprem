@@ -2,10 +2,10 @@ package middleware
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"xprem/internal/auditlog"
 
 	"github.com/stretchr/testify/require"
 )

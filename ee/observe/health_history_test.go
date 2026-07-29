@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"expo-open-ota/ee/identity"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/clickhouse"
-	"expo-open-ota/internal/database/postgres"
-	"expo-open-ota/internal/database/postgres/pgdb"
+	"xprem/ee/identity"
+	"xprem/internal/database"
+	"xprem/internal/database/clickhouse"
+	"xprem/internal/database/postgres"
+	"xprem/internal/database/postgres/pgdb"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"

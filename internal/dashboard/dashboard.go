@@ -1,9 +1,9 @@
 package dashboard
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/version"
 	"fmt"
+	"xprem/config"
+	"xprem/internal/version"
 )
 
 func IsDashboardEnabled() bool {

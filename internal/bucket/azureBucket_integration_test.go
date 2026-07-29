@@ -9,8 +9,8 @@ import (
 	testing2 "testing"
 	"time"
 
-	azureprovider "expo-open-ota/internal/providers/azure"
-	"expo-open-ota/internal/types"
+	azureprovider "xprem/internal/providers/azure"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

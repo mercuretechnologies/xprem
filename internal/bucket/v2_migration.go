@@ -2,7 +2,6 @@ package bucket
 
 import (
 	"context"
-	"expo-open-ota/internal/providers/aws"
 	"fmt"
 	"log"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"xprem/internal/providers/aws"
 
 	"cloud.google.com/go/storage"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"

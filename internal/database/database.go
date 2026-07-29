@@ -3,13 +3,13 @@ package database
 import (
 	"context"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/database/postgres/pgdb"
 	"fmt"
 	"log"
 	"net/url"
 	"strconv"
 	"time"
+	"xprem/config"
+	"xprem/internal/database/postgres/pgdb"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

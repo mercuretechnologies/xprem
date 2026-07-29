@@ -2,17 +2,17 @@ package test
 
 import (
 	"encoding/json"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/cdn"
-	infrastructure "expo-open-ota/internal/router"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/types"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"xprem/config"
+	"xprem/internal/cdn"
+	infrastructure "xprem/internal/router"
+	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +44,7 @@ func TestLoginInvalidPassword(t *testing.T) {
 	defer teardown()
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	router.ServeHTTP(respRec, loginRequest("admin@expo-open-ota.dev", "wrongpassword"))
+	router.ServeHTTP(respRec, loginRequest("admin@xprem.dev", "wrongpassword"))
 	assert.Equal(t, http.StatusUnauthorized, respRec.Code)
 }
 
@@ -53,7 +53,7 @@ func TestLoginInvalidEmail(t *testing.T) {
 	defer teardown()
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	router.ServeHTTP(respRec, loginRequest("someone-else@expo-open-ota.dev", "admin"))
+	router.ServeHTTP(respRec, loginRequest("someone-else@xprem.dev", "admin"))
 	assert.Equal(t, http.StatusUnauthorized, respRec.Code)
 }
 
@@ -63,7 +63,7 @@ func TestShouldRejectLoginIfAdminPasswordNotSet(t *testing.T) {
 	os.Setenv("ADMIN_PASSWORD", "")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	router.ServeHTTP(respRec, loginRequest("admin@expo-open-ota.dev", "admin"))
+	router.ServeHTTP(respRec, loginRequest("admin@xprem.dev", "admin"))
 	assert.Equal(t, http.StatusUnauthorized, respRec.Code)
 }
 
@@ -75,7 +75,7 @@ func TestShouldExplainLoginIfAdminEmailNotSet(t *testing.T) {
 	os.Setenv("ADMIN_EMAIL", "")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	router.ServeHTTP(respRec, loginRequest("admin@expo-open-ota.dev", "admin"))
+	router.ServeHTTP(respRec, loginRequest("admin@xprem.dev", "admin"))
 	assert.Equal(t, http.StatusInternalServerError, respRec.Code)
 	assert.Contains(t, respRec.Body.String(), "ADMIN_EMAIL is not set")
 }
@@ -86,7 +86,7 @@ func TestLoginValidCredentials(t *testing.T) {
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
 	// Email matching is case-insensitive.
-	router.ServeHTTP(respRec, loginRequest("Admin@Expo-Open-OTA.dev", "admin"))
+	router.ServeHTTP(respRec, loginRequest("Admin@XPrem.dev", "admin"))
 	assert.Equal(t, http.StatusOK, respRec.Code)
 	// Retrieve token & refreshToken from response
 	body := respRec.Body.String()
@@ -101,7 +101,7 @@ func TestLoginValidCredentials(t *testing.T) {
 func login() services.DashboardSession {
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
-	router.ServeHTTP(respRec, loginRequest("admin@expo-open-ota.dev", "admin"))
+	router.ServeHTTP(respRec, loginRequest("admin@xprem.dev", "admin"))
 	body := respRec.Body.String()
 	var response services.DashboardSession
 	_ = json.Unmarshal([]byte(body), &response)
@@ -119,7 +119,7 @@ func TestGetMeStateless(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, `{"id":"","email":"admin@expo-open-ota.dev","isAdmin":true,"enabled":true}`, strings.TrimSpace(respRec.Body.String()))
+	assert.Equal(t, `{"id":"","email":"admin@xprem.dev","isAdmin":true,"enabled":true}`, strings.TrimSpace(respRec.Body.String()))
 }
 
 // User management is a control-plane feature: in stateless mode the routes

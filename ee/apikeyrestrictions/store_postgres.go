@@ -6,11 +6,11 @@ package apikeyrestrictions
 
 import (
 	"context"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/store"
 	"fmt"
 	"net/netip"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 )
 
 type PostgresApiKeyRestrictionStore struct {

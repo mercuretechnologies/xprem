@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"testing"
 
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/types"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/gorilla/mux"
 )

@@ -3,13 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/ratelimit"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"log"
 	"net/http"
 	"time"
+	"xprem/internal/handlers"
+	"xprem/internal/ratelimit"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )

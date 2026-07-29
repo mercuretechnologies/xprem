@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing"
 
-	"expo-open-ota/internal/bucket"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/update"
+	"xprem/internal/bucket"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/crypto"
+	"xprem/internal/update"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"

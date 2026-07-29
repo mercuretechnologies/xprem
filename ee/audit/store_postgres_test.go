@@ -16,14 +16,14 @@ package audit
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
 	"os"
 	"testing"
 	"time"
+	"xprem/internal/auditlog"
 
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres"
-	"expo-open-ota/internal/database/postgres/pgdb"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres"
+	"xprem/internal/database/postgres/pgdb"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"

@@ -7,9 +7,9 @@ package licensing
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/handlers"
 	"net/http"
 	"time"
+	"xprem/internal/handlers"
 )
 
 type LicenseHandler struct {

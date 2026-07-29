@@ -2,12 +2,12 @@ package handlers
 
 import (
 	"errors"
-	"expo-open-ota/internal/dashboard"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/ratelimit"
-	"expo-open-ota/internal/services"
 	"net/http"
+	"xprem/internal/dashboard"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
+	"xprem/internal/ratelimit"
+	"xprem/internal/services"
 )
 
 type AuthHandler struct {

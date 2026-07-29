@@ -3,11 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/services"
-	types2 "expo-open-ota/internal/types"
 	"log"
 	"net/http"
+	"xprem/internal/helpers"
+	"xprem/internal/services"
+	types2 "xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"

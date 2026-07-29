@@ -3,13 +3,13 @@ package services
 import (
 	"context"
 	"errors"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/store"
 	"fmt"
 	"log"
 	"time"
+	"xprem/config"
+	"xprem/internal/auditlog"
+	"xprem/internal/crypto"
+	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -496,14 +496,14 @@ func (a *DashboardAuthService) AuthenticateSession(ctx context.Context, tokenStr
 // RefreshSession trades a refresh token for a new pair and spends the old one.
 // The whole flow is here, in order, because it is one story:
 //
-//	1. Is the token ours, and is it a refresh token?
-//	2. Does the account still exist, is it still enabled, and are these
-//	   credentials still current? A deleted, disabled, demoted or
-//	   password-changed account cannot refresh its way back in.
-//	3. Spend the token and write its successor, in one transaction.
-//	4. If it could not be spent, find out why. Three answers mean "sign in
-//	   again", one means "this same client already asked", and one means the
-//	   token leaked.
+//  1. Is the token ours, and is it a refresh token?
+//  2. Does the account still exist, is it still enabled, and are these
+//     credentials still current? A deleted, disabled, demoted or
+//     password-changed account cannot refresh its way back in.
+//  3. Spend the token and write its successor, in one transaction.
+//  4. If it could not be spent, find out why. Three answers mean "sign in
+//     again", one means "this same client already asked", and one means the
+//     token leaked.
 //
 // Step 2 runs before step 3 so a database outage leaves the caller's token
 // intact. Spending it first would burn a good credential over a blip, and the

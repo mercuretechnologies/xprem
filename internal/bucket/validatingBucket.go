@@ -1,8 +1,8 @@
 package bucket
 
 import (
-	"expo-open-ota/internal/types"
 	"io"
+	"xprem/internal/types"
 )
 
 // validatingBucket is a decorator around any Bucket implementation that

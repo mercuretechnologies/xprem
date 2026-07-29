@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"expo-open-ota/internal/metrics"
+	"xprem/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

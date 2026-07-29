@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/services"
 	"net/http"
+	"xprem/config"
+	"xprem/internal/handlers"
+	"xprem/internal/services"
 
 	"github.com/gorilla/mux"
 )

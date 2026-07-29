@@ -3,15 +3,15 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/dashboard"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
-	"expo-open-ota/internal/validation"
 	"net/http"
 	"strconv"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/dashboard"
+	"xprem/internal/handlers"
+	"xprem/internal/providers/expo"
+	"xprem/internal/services"
+	"xprem/internal/store"
+	"xprem/internal/validation"
 
 	"github.com/gorilla/mux"
 )

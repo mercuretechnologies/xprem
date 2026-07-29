@@ -16,8 +16,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
-	"expo-open-ota/ee/identity"
-	"expo-open-ota/internal/handlers"
+	"xprem/ee/identity"
+	"xprem/internal/handlers"
 )
 
 var (

@@ -11,11 +11,11 @@ package audit
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/auditlog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+	"xprem/internal/auditlog"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

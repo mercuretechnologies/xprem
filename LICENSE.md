@@ -1,4 +1,4 @@
-# Expo Open OTA licensing
+# xprem licensing
 
 This repository contains two categories of code:
 

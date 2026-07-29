@@ -1,10 +1,10 @@
 package infrastructure
 
 import (
-	"expo-open-ota/ee/observe"
-	"expo-open-ota/internal/middleware"
 	"net/http"
 	"time"
+	"xprem/ee/observe"
+	"xprem/internal/middleware"
 
 	"github.com/gorilla/mux"
 )

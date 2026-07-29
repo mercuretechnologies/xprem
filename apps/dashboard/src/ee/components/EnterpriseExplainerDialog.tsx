@@ -43,7 +43,7 @@ export const EnterpriseExplainerDialog = ({
         </div>
         <DialogTitle>{feature ? feature.name : 'Unlock Enterprise features'}</DialogTitle>
         <DialogDescription>
-          This feature is part of the Enterprise edition of Expo Open OTA. Your deployment currently
+          This feature is part of the Enterprise edition of xprem. Your deployment currently
           runs the community edition, so it stays visible here but locked.
         </DialogDescription>
       </DialogHeader>

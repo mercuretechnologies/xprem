@@ -7,12 +7,12 @@ package apikeyrestrictions
 import (
 	"context"
 	"errors"
-	"expo-open-ota/ee/licensing"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
 	"fmt"
 	"net/netip"
 	"strconv"
+	"xprem/ee/licensing"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
 )
 
 // ApiKeyRestrictions is the enterprise access restrictions attached to one

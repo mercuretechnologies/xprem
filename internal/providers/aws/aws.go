@@ -2,10 +2,10 @@ package aws
 
 import (
 	"context"
-	"expo-open-ota/config"
 	"fmt"
 	"log"
 	"sync"
+	"xprem/config"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"

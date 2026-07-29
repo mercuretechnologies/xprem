@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "expo-open-ota.fullname" . }}
+  name: {{ include "xprem.fullname" . }}
   labels:
-    {{- include "expo-open-ota.labels" . | nindent 4 }}
+    {{- include "xprem.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
       protocol: TCP
   selector:
-    {{- include "expo-open-ota.selectorLabels" . | nindent 4 }}
+    {{- include "xprem.selectorLabels" . | nindent 4 }}

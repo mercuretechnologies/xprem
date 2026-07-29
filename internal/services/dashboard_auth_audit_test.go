@@ -2,10 +2,10 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/store"
 	"testing"
+	"xprem/internal/auditlog"
+	"xprem/internal/crypto"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

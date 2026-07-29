@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/img/cover.svg" alt="Expo Open OTA" />
+  <img src=".github/img/cover.svg" alt="xprem" />
 </p>
 
 <h3 align="center">Self-hosted over-the-air updates for Expo apps, built for production at scale.</h3>
@@ -10,33 +10,33 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mercuretechnologies/expo-open-ota/releases"><img src="https://img.shields.io/github/v/release/mercuretechnologies/expo-open-ota?label=release" alt="Latest release" /></a>
+  <a href="https://github.com/mercuretechnologies/xprem/releases"><img src="https://img.shields.io/github/v/release/mercuretechnologies/xprem?label=release" alt="Latest release" /></a>
   <a href="https://www.npmjs.com/package/eoas"><img src="https://img.shields.io/npm/v/eoas?label=eoas%20CLI" alt="eoas on npm" /></a>
-  <a href="https://github.com/mercuretechnologies/expo-open-ota/actions"><img src="https://img.shields.io/github/actions/workflow/status/mercuretechnologies/expo-open-ota/push.yml?label=CI" alt="CI status" /></a>
+  <a href="https://github.com/mercuretechnologies/xprem/actions"><img src="https://img.shields.io/github/actions/workflow/status/mercuretechnologies/xprem/push.yml?label=CI" alt="CI status" /></a>
   <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Enterprise-blue" alt="License" /></a>
 </p>
 
 <p align="center">
-  <a href="https://mercure-technologies.gitbook.io/expo-open-ota">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://github.com/mercuretechnologies/expo-open-ota/issues">Issues</a> · <a href="mailto:contact@mercuretechnologies.com">Contact</a>
+  <a href="https://mercure-technologies.gitbook.io/expo-open-ota">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@mercuretechnologies.com">Contact</a>
 </p>
 
 <p align="center">
-  <a href="https://cursor.com/en/install-mcp?name=expo-open-ota-docs&config=eyJ1cmwiOiJodHRwczovL21lcmN1cmUtdGVjaG5vbG9naWVzLmdpdGJvb2suaW8vZXhwby1vcGVuLW90YS9%2BZ2l0Ym9vay9tY3AifQ%3D%3D"><img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install the docs MCP server in Cursor" height="28" /></a>
-  <a href="https://insiders.vscode.dev/redirect/mcp/install?name=expo-open-ota-docs&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmercure-technologies.gitbook.io%2Fexpo-open-ota%2F~gitbook%2Fmcp%22%7D"><img src="https://img.shields.io/badge/VS_Code-Install_docs_MCP-0098FF?logo=githubcopilot&logoColor=white" alt="Install the docs MCP server in VS Code" height="28" /></a>
+  <a href="https://cursor.com/en/install-mcp?name=xprem-docs&config=eyJ1cmwiOiJodHRwczovL21lcmN1cmUtdGVjaG5vbG9naWVzLmdpdGJvb2suaW8vZXhwby1vcGVuLW90YS9%2BZ2l0Ym9vay9tY3AifQ%3D%3D"><img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install the docs MCP server in Cursor" height="28" /></a>
+  <a href="https://insiders.vscode.dev/redirect/mcp/install?name=xprem-docs&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmercure-technologies.gitbook.io%2Fexpo-open-ota%2F~gitbook%2Fmcp%22%7D"><img src="https://img.shields.io/badge/VS_Code-Install_docs_MCP-0098FF?logo=githubcopilot&logoColor=white" alt="Install the docs MCP server in VS Code" height="28" /></a>
 </p>
 <p align="center">
   <sub>The documentation is exposed as an <a href="#ask-the-docs-from-your-ai-assistant">MCP server</a>: plug it into Cursor, VS Code, Claude Code or any MCP client.</sub>
 </p>
 
 <p align="center">
-  <sub>Expo Open OTA is an independent open-source project. It is not affiliated with, endorsed or supported by <a href="https://expo.dev/">Expo</a>.</sub>
+  <sub>xprem is an independent open-source project. It is not affiliated with, endorsed or supported by <a href="https://expo.dev/">Expo</a>.</sub>
 </p>
 
 <p align="center">
-  <img src=".github/img/dashboard-rollout.jpg" alt="The Expo Open OTA dashboard showing a production branch with a progressive rollout in progress at 25%" />
+  <img src=".github/img/dashboard-rollout.jpg" alt="The xprem dashboard showing a production branch with a progressive rollout in progress at 25%" />
 </p>
 
-> **Battle-tested in production.** Expo Open OTA has been serving over-the-air updates in production since early 2025, to apps totaling more than a million monthly active users.
+> **Battle-tested in production.** xprem has been serving over-the-air updates in production since early 2025, to apps totaling more than a million monthly active users.
 
 ## Why self-host your OTA updates?
 
@@ -115,7 +115,7 @@ The full walkthrough for both modes is in the documentation: [stateless mode](ht
 
 ### Ask the docs from your AI assistant
 
-The documentation is exposed as an MCP server, so your AI tools can answer questions about Expo Open OTA with the docs as their source:
+The documentation is exposed as an MCP server, so your AI tools can answer questions about xprem with the docs as their source:
 
 ```
 https://mercure-technologies.gitbook.io/expo-open-ota/~gitbook/mcp
@@ -124,7 +124,7 @@ https://mercure-technologies.gitbook.io/expo-open-ota/~gitbook/mcp
 Use the install buttons at the top of this page for Cursor and VS Code. For Claude Code:
 
 ```bash
-claude mcp add --transport http expo-open-ota-docs https://mercure-technologies.gitbook.io/expo-open-ota/~gitbook/mcp
+claude mcp add --transport http xprem-docs https://mercure-technologies.gitbook.io/expo-open-ota/~gitbook/mcp
 ```
 
 Any other MCP-compatible client (ChatGPT connectors included) can be pointed at the same URL.
@@ -149,11 +149,11 @@ The enterprise code lives in public `ee/` directories you can read before you bu
 
 ## Contributing
 
-Contributions are welcome! For anything beyond a small fix, please open an issue before writing code. Expo Open OTA is an open-core project and some advanced features are reserved for the commercial edition; the boundary is documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
+Contributions are welcome! For anything beyond a small fix, please open an issue before writing code. xprem is an open-core project and some advanced features are reserved for the commercial edition; the boundary is documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Disclaimer
 
-Expo Open OTA is **not officially supported or affiliated with [Expo](https://expo.dev/)**. This is an independent open-source project.
+xprem is **not officially supported or affiliated with [Expo](https://expo.dev/)**. This is an independent open-source project.
 
 ## License
 

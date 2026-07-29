@@ -1,4 +1,4 @@
-module expo-open-ota
+module xprem
 
 go 1.25.0
 

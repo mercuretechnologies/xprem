@@ -2,11 +2,11 @@ package store
 
 import (
 	"context"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/types"
 	"fmt"
+	"xprem/internal/bucket"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/providers/expo"
+	"xprem/internal/types"
 )
 
 type BucketAuthStore struct {

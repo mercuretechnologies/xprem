@@ -1,9 +1,9 @@
 package infrastructure
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/metrics"
 	"net/http"
+	"xprem/config"
+	"xprem/internal/metrics"
 
 	"github.com/gorilla/mux"
 )

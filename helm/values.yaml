@@ -1,11 +1,11 @@
-# Default values for expo-open-ota.
+# Default values for xprem.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
 replicaCount: 1 # Do not use more than 1 replica if storageMode is set to local
 
 image:
-  repository: ghcr.io/mercuretechnologies/expo-open-ota
+  repository: ghcr.io/mercuretechnologies/xprem
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -21,9 +21,9 @@ serviceAccount:
     # eks.amazonaws.com/role-arn: "arn:aws:iam::..."
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
-  name: "expo-open-ota-sa"
+  name: "xprem-sa"
 
-secretName: "expo-open-ota-secrets" # If set, environment variables will be read from this secret, else they will be read from the values.yaml file or passed in via the helm command line
+secretName: "xprem-secrets" # If set, environment variables will be read from this secret, else they will be read from the values.yaml file or passed in via the helm command line
 storageMode: "s3"
 keysStorageType: "aws-secrets-manager"
 useCloudfrontRedirect: "false"
@@ -57,7 +57,7 @@ archiveAuditLogs: "false"
 # flat-env app. Requires DB_URL and exactly one control-plane master key (see
 # the env vars below). When "false" the server is single-app (stateless) and
 # the flat EXPO_APP_ID / EXPO_ACCESS_TOKEN / key vars are used.
-# See https://github.com/mercuretechnologies/expo-open-ota/blob/main/apps/docs/docs/advanced/multi-app.mdx
+# See https://github.com/mercuretechnologies/xprem/blob/main/apps/docs/docs/advanced/multi-app.mdx
 controlPlane: "false"
 # Where the DB keys master key comes from when controlPlane="true": "environment"
 # renders DB_KEYS_MASTER_KEY_B64, "aws-secrets-manager" renders

@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	_ "expo-open-ota/internal/database/postgres/migrations"
 	"log"
 	"time"
+	_ "xprem/internal/database/postgres/migrations"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"

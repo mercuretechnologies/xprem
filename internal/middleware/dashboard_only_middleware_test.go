@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"expo-open-ota/internal/services"
+	"xprem/internal/services"
 
 	"github.com/gorilla/mux"
 )
@@ -53,7 +53,7 @@ func TestDashboardOnlyRefusesAValidatedCliCredential(t *testing.T) {
 func TestDashboardOnlyRefusesACliCredentialEvenBesideAPrincipal(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request {
 		ctx := services.WithPrincipal(r.Context(), &services.DashboardPrincipal{
-			Email: "admin@expo-open-ota.dev", IsAdmin: true,
+			Email: "admin@xprem.dev", IsAdmin: true,
 		})
 		return r.WithContext(services.WithCliAuth(ctx, services.CliCredential{
 			AppID: "test-app-id", KeyID: "key-1", KeyName: "ci",
@@ -67,7 +67,7 @@ func TestDashboardOnlyRefusesACliCredentialEvenBesideAPrincipal(t *testing.T) {
 func TestDashboardOnlyLetsASignedInAccountThrough(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request {
 		return r.WithContext(services.WithPrincipal(r.Context(), &services.DashboardPrincipal{
-			Email: "admin@expo-open-ota.dev", IsAdmin: true,
+			Email: "admin@xprem.dev", IsAdmin: true,
 		}))
 	})
 	if recorder.Code != http.StatusOK {

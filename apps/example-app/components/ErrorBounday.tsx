@@ -22,7 +22,7 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    Observe.logEvent('expo_open_ota_js_crash', {
+    Observe.logEvent('xprem_js_crash', {
       attributes: {
         message: error.message,
       },

@@ -15,7 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"expo-open-ota/internal/database/postgres/pgdb"
+	"xprem/internal/database/postgres/pgdb"
 )
 
 // CheckInQuery is deliberately not an ExplorerQuery: the registry only knows a
@@ -189,7 +189,7 @@ func (e *Explorer) runLocations(
 // ReadCheckIns serves the live feed of the map: the same city aggregate as the
 // static layer, over the few seconds since the caller's cursor instead of over
 // the period. It reads the registry only, so the map keeps beating on a
-// deployment that runs expo-open-ota without telemetry at all.
+// deployment that runs xprem without telemetry at all.
 func (e *Explorer) ReadCheckIns(ctx context.Context, appID string, query CheckInQuery) (CheckInFeed, error) {
 	// Stamped before the query so a check-in written while it runs falls in
 	// the next window instead of vanishing between the two.

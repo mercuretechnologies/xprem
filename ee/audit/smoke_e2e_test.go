@@ -6,13 +6,13 @@ package audit
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"xprem/internal/auditlog"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"

@@ -2,15 +2,15 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/validation"
 	"fmt"
 	"net/netip"
 	"strconv"
 	"time"
+	"xprem/internal/auditlog"
+	"xprem/internal/crypto"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/types"
+	"xprem/internal/validation"
 )
 
 var ErrUnauthorized = fmt.Errorf("unauthorized")

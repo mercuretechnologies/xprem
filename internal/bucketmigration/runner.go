@@ -1,11 +1,11 @@
 package bucketmigration
 
 import (
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/cache"
 	"fmt"
 	"log"
 	"time"
+	"xprem/internal/bucket"
+	"xprem/internal/cache"
 )
 
 const (

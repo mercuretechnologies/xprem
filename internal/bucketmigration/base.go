@@ -1,8 +1,8 @@
 package bucketmigration
 
 import (
-	"expo-open-ota/internal/bucket"
 	"time"
+	"xprem/internal/bucket"
 )
 
 type BaseMigration struct {

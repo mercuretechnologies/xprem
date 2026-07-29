@@ -1,9 +1,9 @@
 package _0250417_persist_uuid
 
 import (
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/bucketmigration"
 	"time"
+	"xprem/internal/bucket"
+	"xprem/internal/bucketmigration"
 )
 
 // 20250417_persist_uuid was written against the v1 single-app bucket layout

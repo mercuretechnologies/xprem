@@ -2,10 +2,10 @@ package clickhouse
 
 import (
 	"context"
-	"expo-open-ota/internal/database/postgres/pgtest"
 	"os"
 	"sync"
 	"testing"
+	"xprem/internal/database/postgres/pgtest"
 
 	"github.com/stretchr/testify/require"
 )

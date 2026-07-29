@@ -3,12 +3,12 @@ package migrations
 import (
 	"context"
 	"database/sql"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/store"
 	"fmt"
 	"log"
 	"net/mail"
 	"os"
+	"xprem/internal/crypto"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/pressly/goose/v3"

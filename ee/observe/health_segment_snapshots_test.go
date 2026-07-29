@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"expo-open-ota/internal/database/clickhouse"
+	"xprem/internal/database/clickhouse"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"

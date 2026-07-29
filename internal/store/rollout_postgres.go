@@ -2,12 +2,12 @@ package store
 
 import (
 	"context"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"strconv"
 	"time"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/types"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

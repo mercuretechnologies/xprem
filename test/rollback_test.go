@@ -3,7 +3,6 @@ package test
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"xprem/internal/types"
 )
 
 func createRollbackRequest(projectRoot, branch, runtimeVersion, headerKey, headerValue, platform, commitHash string) (*httptest.ResponseRecorder, *mux.Router, *mux.Route, *http.Request) {

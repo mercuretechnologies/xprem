@@ -1,5 +1,5 @@
 apiVersion: v2
-name: expo-open-ota
+name: xprem
 icon: https://avatars.githubusercontent.com/u/12605993?v=4
 description: An open-source Go implementation of the Expo Updates protocol, designed for production with support for cloud storage like S3 and CDN integration, delivering fast and reliable OTA updates for React Native apps.
 

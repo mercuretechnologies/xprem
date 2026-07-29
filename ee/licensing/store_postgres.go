@@ -6,8 +6,8 @@ package licensing
 
 import (
 	"context"
-	"expo-open-ota/internal/database"
 	"fmt"
+	"xprem/internal/database"
 )
 
 type PostgresLicenseStore struct {

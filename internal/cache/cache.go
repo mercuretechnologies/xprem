@@ -1,9 +1,9 @@
 package cache
 
 import (
-	"expo-open-ota/config"
 	"strings"
 	"sync"
+	"xprem/config"
 )
 
 type Cache interface {

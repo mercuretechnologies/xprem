@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"errors"
-	"expo-open-ota/internal/compression"
-	"expo-open-ota/internal/services"
 	"log"
 	"net/http"
+	"xprem/internal/compression"
+	"xprem/internal/services"
 
 	"github.com/google/uuid"
 )

@@ -21,7 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
-	"expo-open-ota/ee/identity"
+	"xprem/ee/identity"
 )
 
 type recordingExplorer struct {

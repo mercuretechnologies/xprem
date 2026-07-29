@@ -2,12 +2,12 @@ package azure
 
 import (
 	"errors"
-	"expo-open-ota/config"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+	"xprem/config"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"

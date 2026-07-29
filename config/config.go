@@ -1,12 +1,12 @@
 package config
 
 import (
-	"expo-open-ota/internal/helpers"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"xprem/internal/helpers"
 
 	"github.com/joho/godotenv"
 )

@@ -2,18 +2,18 @@ package main
 
 import (
 	"context"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucketmigration"
-	"expo-open-ota/internal/metrics"
-	infrastructure "expo-open-ota/internal/router"
 	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucketmigration"
+	"xprem/internal/metrics"
+	infrastructure "xprem/internal/router"
 
 	"github.com/gorilla/handlers"
 
-	_ "expo-open-ota/internal/bucketmigrations"
+	_ "xprem/internal/bucketmigrations"
 )
 
 func init() {
@@ -51,8 +51,8 @@ func main() {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			(*handler.Load()).ServeHTTP(w, r)
 		}),
-		ReadHeaderTimeout:  10 * time.Second,
-		IdleTimeout:        120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	// Bind the port before running migrations so /hc answers from the very
 	// first probe; ListenAndServe only returns on failure.

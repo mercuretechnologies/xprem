@@ -3,15 +3,15 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/rollout"
-	"expo-open-ota/internal/types"
-	update2 "expo-open-ota/internal/update"
-	"expo-open-ota/internal/validation"
 	"fmt"
 	"log"
+	"xprem/internal/bucket"
+	"xprem/internal/cache"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/rollout"
+	"xprem/internal/types"
+	update2 "xprem/internal/update"
+	"xprem/internal/validation"
 )
 
 type UpdateRepository interface {

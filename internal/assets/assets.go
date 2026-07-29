@@ -2,13 +2,13 @@ package assets
 
 import (
 	"errors"
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/cdn"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/update"
 	"log"
 	"mime"
 	"net/http"
+	"xprem/internal/bucket"
+	"xprem/internal/cdn"
+	"xprem/internal/types"
+	"xprem/internal/update"
 )
 
 type AssetsRequest struct {

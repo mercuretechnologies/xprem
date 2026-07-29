@@ -8,7 +8,7 @@ body:
         Thanks for suggesting a feature! Two things before you start:
 
         - Significant features should be discussed here **before** any code is written — please wait for a maintainer's go-ahead before opening a PR.
-        - Check the [open core policy](https://github.com/mercuretechnologies/expo-open-ota/blob/main/CONTRIBUTING.md#open-core-policy): some advanced capabilities (analytics, advanced targeting, SSO, audit logs, IP whitelisting…) are reserved for the commercial edition and won't be merged into the MIT core.
+        - Check the [open core policy](https://github.com/mercuretechnologies/xprem/blob/main/CONTRIBUTING.md#open-core-policy): some advanced capabilities (analytics, advanced targeting, SSO, audit logs, IP whitelisting…) are reserved for the commercial edition and won't be merged into the MIT core.
   - type: textarea
     id: problem
     attributes:

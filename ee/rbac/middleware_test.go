@@ -6,11 +6,11 @@ package rbac
 
 import (
 	"context"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"

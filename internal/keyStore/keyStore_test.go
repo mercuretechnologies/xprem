@@ -2,11 +2,11 @@ package keyStore
 
 import (
 	"encoding/base64"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/crypto"
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/config"
+	"xprem/internal/crypto"
 
 	"github.com/stretchr/testify/assert"
 )

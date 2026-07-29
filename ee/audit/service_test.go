@@ -7,9 +7,9 @@ package audit
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
 	"testing"
 	"time"
+	"xprem/internal/auditlog"
 
 	"github.com/stretchr/testify/require"
 )

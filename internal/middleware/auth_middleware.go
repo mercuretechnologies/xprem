@@ -2,11 +2,11 @@ package middleware
 
 import (
 	"errors"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"net/http"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )

@@ -1,4 +1,5 @@
-import { Radio, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
+import { XpremMark } from '@/components/xprem-mark';
 import { Input } from '@/components/ui/input.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import { Label } from '@/components/ui/label.tsx';
@@ -127,12 +128,10 @@ export const Login = () => {
       <div className="w-full max-w-sm">
         <div className="rounded-lg border bg-card p-8 shadow-elevated">
           <div className="mb-8 flex flex-col items-center gap-3 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
-              <Radio className="h-5 w-5" strokeWidth={2} />
-            </div>
+            <XpremMark className="h-11 w-11 rounded-lg" />
             <div className="space-y-1">
               <h1 className="font-display text-lg font-semibold tracking-tight text-foreground">
-                Expo Open OTA
+                xprem
                 <span
                   aria-hidden
                   className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary"

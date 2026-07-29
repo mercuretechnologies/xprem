@@ -8,12 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/handlers"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"xprem/internal/handlers"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -483,7 +483,7 @@ type updateHealthResponse struct {
 	// never as addends.
 	UpdateIssues int64 `json:"updateIssues"`
 	// RuntimeIssues: JS crash while running the update, reported by the
-	// documented expo_open_ota_js_crash observe event; the device is
+	// documented xprem_js_crash observe event; the device is
 	// (usually) still running the update.
 	RuntimeIssues int64 `json:"runtimeIssues"`
 	// HealthPercent is healthy/attempts over devices that actually attempted

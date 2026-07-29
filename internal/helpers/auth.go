@@ -1,10 +1,10 @@
 package helpers
 
 import (
-	"expo-open-ota/internal/types"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"xprem/internal/types"
 )
 
 func GetAuth(r *http.Request) types.Auth {

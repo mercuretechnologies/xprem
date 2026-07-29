@@ -8,15 +8,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"expo-open-ota/ee/identity"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"sort"
 	"time"
+	"xprem/ee/identity"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -502,14 +502,14 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 // launch at all), so a JS crash while running an update is invisible to the
 // manifest path; apps report it explicitly from their error boundary:
 //
-//	Observe.logEvent('expo_open_ota_js_crash', { attributes: { message } });
+//	Observe.logEvent('xprem_js_crash', { attributes: { message } });
 //	Observe.dispatchEvents();
 //
 // The resource attributes of such a record carry the running (= crashing)
 // update id, projected into device_update_failures as a runtime_issue. The
 // device keeps running the update (no rollback), unlike the manifest path.
 const (
-	JSCrashEventName    = "expo_open_ota_js_crash"
+	JSCrashEventName    = "xprem_js_crash"
 	AppStartedEventName = "app_started"
 )
 

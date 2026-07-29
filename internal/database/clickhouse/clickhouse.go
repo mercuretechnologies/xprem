@@ -35,7 +35,7 @@ func NewClickHouseEngine(ctx context.Context, dsn string) (*Engine, error) {
 	// an explicit dedicated one keeps our schema (and its future drops)
 	// clearly fenced from anything else the operator runs on that server.
 	if options.Auth.Database == "" {
-		return nil, fmt.Errorf("CLICKHOUSE_URL must target a dedicated database (e.g. clickhouse://user:password@host:9000/expo_open_ota)")
+		return nil, fmt.Errorf("CLICKHOUSE_URL must target a dedicated database (e.g. clickhouse://user:password@host:9000/xprem)")
 	}
 
 	conn, err := ch.Open(options)

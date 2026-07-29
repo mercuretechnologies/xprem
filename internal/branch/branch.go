@@ -1,8 +1,8 @@
 package branch
 
 import (
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/providers/expo"
+	"xprem/internal/helpers"
+	"xprem/internal/providers/expo"
 )
 
 func UpsertBranch(appId, branch string) error {

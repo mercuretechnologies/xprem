@@ -1,12 +1,12 @@
 package _0260422_v2_scope_data_under_appid
 
 import (
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/types"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/internal/bucket"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

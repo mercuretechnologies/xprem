@@ -1,9 +1,9 @@
 package test
 
 import (
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/update"
 	"testing"
+	"xprem/internal/types"
+	"xprem/internal/update"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

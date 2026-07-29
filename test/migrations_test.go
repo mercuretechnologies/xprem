@@ -1,12 +1,12 @@
 package test
 
 import (
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/bucketmigration"
-	"expo-open-ota/internal/types"
 	"io"
 	"testing"
 	"time"
+	"xprem/internal/bucket"
+	"xprem/internal/bucketmigration"
+	"xprem/internal/types"
 )
 
 type dummyMigrationsBucket struct {

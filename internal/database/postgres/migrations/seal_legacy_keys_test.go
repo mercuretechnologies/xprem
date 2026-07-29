@@ -2,15 +2,15 @@ package migrations
 
 import (
 	"encoding/base64"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/keyStore"
-	"expo-open-ota/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"xprem/config"
+	"xprem/internal/crypto"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/keyStore"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )

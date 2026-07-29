@@ -3,13 +3,13 @@ package store
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"strconv"
 	"time"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/providers/expo"
+	"xprem/internal/types"
 
 	"github.com/jackc/pgx/v5"
 )

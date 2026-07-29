@@ -1,7 +1,7 @@
 # Enterprise Edition (`ee/`)
 
 This directory — and every other directory named `ee/` in this repository, such
-as `apps/dashboard/src/ee/` — contains the source code of Expo Open OTA
+as `apps/dashboard/src/ee/` — contains the source code of xprem
 Enterprise Edition.
 
 ## License

@@ -2,11 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/dashboard.svg" />
+    <link rel="icon" type="image/svg+xml" href="/xprem.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
       (() => {
-        const stored = localStorage.getItem('expo-open-ota-theme');
+        const stored = localStorage.getItem('xprem-theme');
         const preference = ['light', 'system', 'dark'].includes(stored) ? stored : 'system';
         const theme =
           preference === 'system'
@@ -19,7 +19,7 @@
       })();
     </script>
     <script type="module" src="/env.js"></script>
-    <title>Expo Open OTA</title>
+    <title>xprem</title>
   </head>
   <body>
     <div id="root"></div>

@@ -2,14 +2,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "expo-open-ota.fullname" . }}
+  name: {{ include "xprem.fullname" . }}
   labels:
-    {{- include "expo-open-ota.labels" . | nindent 4 }}
+    {{- include "xprem.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "expo-open-ota.fullname" . }}
+    name: {{ include "xprem.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

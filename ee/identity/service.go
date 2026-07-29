@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"expo-open-ota/ee/licensing"
+	"xprem/ee/licensing"
 )
 
 // Op is one identity operation as carried on the wire (the log event name).
@@ -61,7 +61,7 @@ type IdentityMutator interface {
 //
 //	FailureTypeUpdate   manifest error-recovery headers: crash at launch,
 //	                    the device ROLLED BACK off the update.
-//	FailureTypeRuntime  the expo_open_ota_js_crash observe event: a JS crash
+//	FailureTypeRuntime  the xprem_js_crash observe event: a JS crash
 //	                    while running the update, which expo-updates never
 //	                    reports; the device KEEPS RUNNING the update.
 type FailureType string
@@ -236,7 +236,7 @@ func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID str
 }
 
 // RecordUpdateFailures is the failure sink for both sources (manifest error
-// recovery, expo_open_ota_js_crash events): failures land in Postgres so
+// recovery, xprem_js_crash events): failures land in Postgres so
 // update health works with no ClickHouse and no SDK.
 func (s *Service) RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error {
 	return s.store.RecordUpdateFailures(ctx, appID, easClientID, updateIDs, fatalError, failureType)

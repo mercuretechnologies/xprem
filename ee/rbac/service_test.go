@@ -9,8 +9,8 @@ import (
 	"errors"
 	"testing"
 
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/require"
 )

@@ -1,6 +1,6 @@
 package migrations
 
-import "expo-open-ota/internal/database"
+import "xprem/internal/database"
 
 // dbEngine is the shared database engine used by Go-based migrations. It is set
 // once from wire.go (via SetEngine) before goose runs, and read by any

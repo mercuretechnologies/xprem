@@ -3,16 +3,6 @@ package test
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/cdn"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/metrics"
-	infrastructure "expo-open-ota/internal/router"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
-	"expo-open-ota/internal/types"
 	"github.com/jarcoal/httpmock"
 	"net/http"
 	"os"
@@ -20,6 +10,16 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"xprem/config"
+	"xprem/internal/bucket"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/cdn"
+	"xprem/internal/handlers"
+	"xprem/internal/metrics"
+	infrastructure "xprem/internal/router"
+	"xprem/internal/services"
+	"xprem/internal/store"
+	"xprem/internal/types"
 )
 
 func setup(t *testing.T) func() {
@@ -475,7 +475,7 @@ func SetValidConfiguration() {
 	os.Setenv("CLOUDFRONT_DOMAIN", "")
 	os.Setenv("CLOUDFRONT_KEY_PAIR_ID", "")
 	os.Setenv("USE_DASHBOARD", "true")
-	os.Setenv("ADMIN_EMAIL", "admin@expo-open-ota.dev")
+	os.Setenv("ADMIN_EMAIL", "admin@xprem.dev")
 	os.Setenv("ADMIN_PASSWORD", "admin")
 
 	// v2 single-app flat-env config: a test-app-id entry pointing at the

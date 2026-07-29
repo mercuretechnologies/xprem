@@ -7,10 +7,10 @@ package rbac
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/store"
 	"net/http"
 	"time"
+	"xprem/internal/handlers"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )

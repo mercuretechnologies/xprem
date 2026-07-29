@@ -1,11 +1,11 @@
 package bucket
 
 import (
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/types"
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/internal/helpers"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -3,14 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/cdn"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/version"
 	"net/http"
+	"xprem/config"
+	"xprem/internal/cdn"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
+	"xprem/internal/providers/expo"
+	"xprem/internal/services"
+	"xprem/internal/version"
 )
 
 type SettingsHandler struct {

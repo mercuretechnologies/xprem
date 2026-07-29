@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"expo-open-ota/internal/services"
+	"xprem/internal/services"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"

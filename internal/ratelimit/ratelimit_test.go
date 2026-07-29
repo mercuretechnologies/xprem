@@ -1,13 +1,13 @@
 package ratelimit
 
 import (
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/store"
 	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"xprem/internal/cache"
+	"xprem/internal/store"
 
 	"github.com/stretchr/testify/require"
 )

@@ -3,13 +3,13 @@ package services
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/store"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/validation"
 	"fmt"
 	"net/http"
 	"strings"
+	"xprem/internal/auditlog"
+	"xprem/internal/store"
+	"xprem/internal/types"
+	"xprem/internal/validation"
 
 	"github.com/google/uuid"
 )

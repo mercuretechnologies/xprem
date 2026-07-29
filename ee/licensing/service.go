@@ -7,10 +7,10 @@ package licensing
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
 	"log"
 	"time"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
 )
 
 // StoredLicense is the persisted license key row, plus when it was last

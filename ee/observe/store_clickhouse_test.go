@@ -7,9 +7,9 @@ package observe
 import (
 	"bytes"
 	"context"
-	"expo-open-ota/internal/database/clickhouse"
 	"testing"
 	"time"
+	"xprem/internal/database/clickhouse"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"

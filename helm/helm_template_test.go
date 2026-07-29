@@ -18,7 +18,7 @@ func TestRedisSentinelModeRendersRedisAuthAndTLSEnvVars(t *testing.T) {
 	cmd := exec.Command(
 		"helm",
 		"template",
-		"expo-open-ota",
+		"xprem",
 		".",
 		"--set-string",
 		"cacheMode=redis-sentinel",
@@ -75,7 +75,7 @@ func TestControlPlaneModeStillRendersLegacyFlatEnvVars(t *testing.T) {
 	cmd := exec.Command(
 		"helm",
 		"template",
-		"expo-open-ota",
+		"xprem",
 		".",
 		"--set-string",
 		"controlPlane=true",
@@ -137,7 +137,7 @@ func TestStatelessModeRequiresFlatEnvVars(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 
-	cmd := exec.Command("helm", "template", "expo-open-ota", ".")
+	cmd := exec.Command("helm", "template", "xprem", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -163,7 +163,7 @@ func TestOptionalTuningVarsAreRendered(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 
-	cmd := exec.Command("helm", "template", "expo-open-ota", ".")
+	cmd := exec.Command("helm", "template", "xprem", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -192,7 +192,7 @@ func TestGenericCDNVarsRenderOptionalUnderToggle(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 
-	cmd := exec.Command("helm", "template", "expo-open-ota", ".")
+	cmd := exec.Command("helm", "template", "xprem", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -204,7 +204,7 @@ func TestGenericCDNVarsRenderOptionalUnderToggle(t *testing.T) {
 		}
 	}
 
-	cmd = exec.Command("helm", "template", "expo-open-ota", ".", "--set", "useGenericCDN=true")
+	cmd = exec.Command("helm", "template", "xprem", ".", "--set", "useGenericCDN=true")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -224,7 +224,7 @@ func TestAzureStorageVarsRenderUnderAzureMode(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 
-	cmd := exec.Command("helm", "template", "expo-open-ota", ".")
+	cmd := exec.Command("helm", "template", "xprem", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -236,7 +236,7 @@ func TestAzureStorageVarsRenderUnderAzureMode(t *testing.T) {
 		}
 	}
 
-	cmd = exec.Command("helm", "template", "expo-open-ota", ".", "--set", "storageMode=azure")
+	cmd = exec.Command("helm", "template", "xprem", ".", "--set", "storageMode=azure")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
@@ -267,7 +267,7 @@ func TestProbePaths(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 
-	cmd := exec.Command("helm", "template", "expo-open-ota", ".")
+	cmd := exec.Command("helm", "template", "xprem", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)

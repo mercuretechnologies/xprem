@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"expo-open-ota/internal/handlers"
+	"xprem/internal/handlers"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"

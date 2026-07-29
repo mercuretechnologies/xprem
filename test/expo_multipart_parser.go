@@ -8,13 +8,13 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/keyStore"
 	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"strings"
+	"xprem/config"
+	"xprem/internal/keyStore"
 )
 
 // This is a reimplementation of the @expo/multipart-body-parser[https://www.npmjs.com/package/@expo/multipart-body-parser] in Go to test manifest response

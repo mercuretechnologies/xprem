@@ -7,11 +7,11 @@ package rbac
 import (
 	"context"
 	"errors"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/store"
 	"fmt"
 	"strings"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"

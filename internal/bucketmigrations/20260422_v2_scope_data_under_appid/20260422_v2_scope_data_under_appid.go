@@ -1,12 +1,12 @@
 package _0260422_v2_scope_data_under_appid
 
 import (
-	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/bucketmigration"
 	"fmt"
 	"log"
 	"os"
 	"time"
+	"xprem/internal/bucket"
+	"xprem/internal/bucketmigration"
 )
 
 // 20260422_v2_scope_data_under_appid moves v1 bucket data into the v2

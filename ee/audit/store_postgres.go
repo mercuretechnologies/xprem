@@ -7,12 +7,12 @@ package audit
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres"
-	"expo-open-ota/internal/database/postgres/pgdb"
 	"fmt"
 	"log"
 	"time"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres"
+	"xprem/internal/database/postgres/pgdb"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

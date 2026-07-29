@@ -2,8 +2,8 @@ package services
 
 import (
 	"context"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/rollout"
+	"xprem/internal/providers/expo"
+	"xprem/internal/rollout"
 )
 
 // BranchResolutionRequest carries everything a rule needs to decide which branches a

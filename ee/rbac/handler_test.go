@@ -7,12 +7,12 @@ package rbac
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"expo-open-ota/ee/identity"
+	"xprem/ee/identity"
 )
 
 type LogsQuery struct {

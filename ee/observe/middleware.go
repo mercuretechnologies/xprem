@@ -5,10 +5,10 @@
 package observe
 
 import (
-	"expo-open-ota/config"
-	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/services"
 	"net/http"
+	"xprem/config"
+	"xprem/internal/cache"
+	"xprem/internal/services"
 
 	"github.com/gorilla/mux"
 )

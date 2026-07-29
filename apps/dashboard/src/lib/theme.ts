@@ -3,7 +3,7 @@ import { createContext, useContext } from 'react';
 export type ThemePreference = 'light' | 'system' | 'dark';
 export type ResolvedTheme = Exclude<ThemePreference, 'system'>;
 
-const STORAGE_KEY = 'expo-open-ota-theme';
+const STORAGE_KEY = 'xprem-theme';
 export const SYSTEM_DARK_QUERY = '(prefers-color-scheme: dark)';
 
 const isThemePreference = (value: string | null): value is ThemePreference =>

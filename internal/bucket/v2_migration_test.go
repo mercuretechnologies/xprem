@@ -271,7 +271,7 @@ func TestLocalBucket_MoveRootEntriesUnder_RespectsKeyPrefix(t *testing.T) {
 	// When KeyPrefix is set, the bucket root is {BasePath}/{KeyPrefix}/.
 	// The re-path must happen inside that subtree, never at the outer
 	// BasePath — otherwise a multi-tenant host that co-locates two
-	// Expo Open OTA instances under the same BasePath would have them
+	// xprem instances under the same BasePath would have them
 	// stomp each other.
 	base := t.TempDir()
 	writeFile(t, filepath.Join(base, "myapp", "branch-a", "1", "12345", ".check"))

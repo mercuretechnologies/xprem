@@ -5,18 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	bucket2 "expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/helpers"
-	"expo-open-ota/internal/types"
+	bucket2 "xprem/internal/bucket"
+	"xprem/internal/crypto"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/helpers"
+	"xprem/internal/types"
 
-	update2 "expo-open-ota/internal/update"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	update2 "xprem/internal/update"
 )
 
 type BucketUpdateStore struct {

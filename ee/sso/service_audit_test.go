@@ -6,10 +6,10 @@ package sso
 
 import (
 	"context"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"testing"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"

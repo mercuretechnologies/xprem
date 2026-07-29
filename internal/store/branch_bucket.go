@@ -3,15 +3,15 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/branch"
-	bucket2 "expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/providers/expo"
-	"expo-open-ota/internal/types"
 	"fmt"
 	"sort"
 	"time"
+	"xprem/config"
+	"xprem/internal/branch"
+	bucket2 "xprem/internal/bucket"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/providers/expo"
+	"xprem/internal/types"
 )
 
 type BucketBranchStore struct {

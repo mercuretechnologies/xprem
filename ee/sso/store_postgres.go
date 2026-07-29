@@ -6,12 +6,12 @@ package sso
 
 import (
 	"context"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/database"
-	"expo-open-ota/internal/database/postgres/pgdb"
-	"expo-open-ota/internal/keyStore"
-	"expo-open-ota/internal/store"
 	"fmt"
+	"xprem/internal/crypto"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/keyStore"
+	"xprem/internal/store"
 )
 
 // clientSecretAAD binds the sealed client secret blob to its context as

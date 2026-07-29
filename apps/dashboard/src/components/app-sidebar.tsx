@@ -16,7 +16,6 @@ import {
   Monitor,
   Moon,
   Plus,
-  Radio,
   Search,
   Settings,
   ShieldCheck,
@@ -27,6 +26,7 @@ import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { Combobox } from '@/components/Combobox';
+import { XpremMark } from '@/components/xprem-mark';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { CreateAppModal } from '@/components/app-creation-modal';
 import { useSettings } from '@/lib/SettingsContext';
@@ -280,11 +280,9 @@ export function AppSidebar({
           mobile ? 'flex w-full' : 'sticky top-0 hidden lg:flex'
         )}>
         <div className="flex items-center gap-2.5 px-5 pb-2 pt-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
-            <Radio className="h-4 w-4" strokeWidth={2} />
-          </div>
+          <XpremMark className="h-8 w-8 rounded-lg" />
           <span className="font-display text-[15px] font-semibold tracking-tight text-foreground">
-            expo-open-ota
+            xprem
             <span
               aria-hidden
               className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary align-baseline"

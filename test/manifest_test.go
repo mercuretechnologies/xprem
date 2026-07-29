@@ -3,13 +3,6 @@ package test
 import (
 	"context"
 	"encoding/json"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/bucket"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/update"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"net/http"
@@ -17,6 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"xprem/config"
+	"xprem/internal/bucket"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/handlers"
+	"xprem/internal/services"
+	"xprem/internal/types"
+	"xprem/internal/update"
 )
 
 func TestNotValidChannelForManifest(t *testing.T) {

@@ -7,14 +7,14 @@ package rbac
 import (
 	"context"
 	"errors"
-	"expo-open-ota/ee/licensing"
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/services"
-	"expo-open-ota/internal/store"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
+	"xprem/ee/licensing"
+	"xprem/internal/auditlog"
+	"xprem/internal/services"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )

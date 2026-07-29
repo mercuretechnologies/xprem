@@ -11,8 +11,8 @@
 # Usage: ./scripts/test-docker-nonroot.sh [image-tag]
 set -eu
 
-IMAGE="${1:-expo-open-ota:nonroot-test}"
-CONTAINER="expo-open-ota-nonroot-test"
+IMAGE="${1:-xprem:nonroot-test}"
+CONTAINER="xprem-nonroot-test"
 
 fail() { echo "FAIL: $1" >&2; docker logs "$CONTAINER" 2>&1 | tail -5 >&2 || true; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; exit 1; }
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }

@@ -1,13 +1,13 @@
 package test
 
 import (
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/providers/expo"
-	infrastructure "expo-open-ota/internal/router"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/providers/expo"
+	infrastructure "xprem/internal/router"
 
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"

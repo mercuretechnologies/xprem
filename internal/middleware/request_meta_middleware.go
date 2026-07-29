@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"expo-open-ota/internal/auditlog"
-	"expo-open-ota/internal/helpers"
 	"net/http"
+	"xprem/internal/auditlog"
+	"xprem/internal/helpers"
 )
 
 // RequestMetaMiddleware stamps the client IP (proxy-aware, see

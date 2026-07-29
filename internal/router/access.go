@@ -1,10 +1,10 @@
 package infrastructure
 
 import (
-	"expo-open-ota/ee/rbac"
-	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/services"
 	"net/http"
+	"xprem/ee/rbac"
+	"xprem/internal/handlers"
+	"xprem/internal/services"
 
 	"github.com/gorilla/mux"
 )

@@ -2,14 +2,14 @@ package keyStore
 
 import (
 	"encoding/base64"
-	"expo-open-ota/config"
-	"expo-open-ota/internal/crypto"
-	"expo-open-ota/internal/providers/aws"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"sync"
+	"xprem/config"
+	"xprem/internal/crypto"
+	"xprem/internal/providers/aws"
 )
 
 // GetPublicExpoKey returns the PEM-encoded Expo public signing key for the

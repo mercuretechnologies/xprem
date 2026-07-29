@@ -6,14 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"expo-open-ota/config"
-	cache2 "expo-open-ota/internal/cache"
-	"expo-open-ota/internal/types"
-	"expo-open-ota/internal/version"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"xprem/config"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/types"
+	"xprem/internal/version"
 )
 
 // The "operationName" header values below are a contract with the test mocks

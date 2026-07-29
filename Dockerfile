@@ -23,7 +23,7 @@ COPY keys ./keys
 COPY config ./config
 COPY updates ./updates
 RUN GOOS=linux GOARCH=${TARGETARCH} go build \
-    -ldflags "-X expo-open-ota/internal/version.Version=${VERSION}" \
+    -ldflags "-X xprem/internal/version.Version=${VERSION}" \
     -o main ./cmd/api
 
 FROM alpine:latest
