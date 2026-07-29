@@ -90,8 +90,11 @@ func AllowsBranch(rules []BranchRule, branchName string, action Action) bool {
 	if len(rules) == 0 {
 		return true
 	}
+	if branchName == "" {
+		return false
+	}
 	for _, rule := range rules {
-		if branchName != "" && rule.Allows(branchName, action) {
+		if rule.Allows(branchName, action) {
 			return true
 		}
 	}

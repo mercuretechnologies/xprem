@@ -147,11 +147,12 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 					handlers.RenderError(w, http.StatusForbidden, "This route requires a dashboard session")
 					return
 				}
-				authorized, ok := authorizeCliRequest(g.apiKeyAccess, w, r, *credential, access.tokenAction, mux.Vars(r)[branchVarName])
-				if !ok {
+				// The credential is already on the context, put there by the
+				// authentication middleware, so nothing has to be stamped back.
+				if !authorizeCliRequest(g.apiKeyAccess, w, r, *credential, access.tokenAction, mux.Vars(r)[branchVarName]) {
 					return
 				}
-				gated.ServeHTTP(w, authorized)
+				gated.ServeHTTP(w, r)
 				return
 			}
 			gated.ServeHTTP(w, r)
@@ -159,9 +160,10 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 	}
 }
 
-// authorizeCliRequest runs the enterprise access decision and puts the
-// credential on the request context. It answers (request, false) when the
-// request was refused, having already written the response.
+// authorizeCliRequest runs the enterprise access decision. It answers false
+// when the request was refused, having already written the response, and it
+// touches nothing else: putting the credential on the context belongs to
+// whichever group needs to, which is only the publish group.
 //
 // This is the only place the decision is taken, and nothing downstream repeats
 // it: a handler trusts it exactly as it trusts the RBAC permission middleware
@@ -174,14 +176,25 @@ func authorizeCliRequest(
 	credential services.CliCredential,
 	action apikeyrestrictions.Action,
 	branchName string,
-) (*http.Request, bool) {
-	// An empty branchName is not special-cased here. route() already refuses
-	// to register a token route without one, and where it can still happen
-	// (an upload token that carries no branch claim) the rules answer it
-	// correctly on their own: a scoped key matches nothing and is refused, an
-	// unscoped key was never claiming anything and passes, which is what a
-	// community deployment must keep doing.
+) bool {
+	// No branch, no decision. A token route always names one, and route()
+	// refuses at boot to register one that does not, so this is unreachable
+	// through the declaration path. It is checked anyway, because the
+	// alternative is a request judged on an empty branch whose only safeguard
+	// then lives in another package (AllowsBranch refusing a scoped key), and
+	// borrowed safety is how a bypass arrives through a refactor that looked
+	// unrelated. A resolver that cannot name a branch has not authorized
+	// anything, whatever the rules would have said.
 	//
+	// It also covers the one resolver that legitimately answers nothing,
+	// uploadTokenBranch, when the token is absent, expired, foreign-signed or
+	// predates the branch claim. Refusing here rather than downstream costs a
+	// broken upload token a 403 instead of the handler's 400, which is the same
+	// failure with a clearer cause.
+	if branchName == "" {
+		handlers.RenderError(w, http.StatusForbidden, "This route requires a branch")
+		return false
+	}
 	// A key id of 0 is stateless mode: no API key exists, so there is nothing
 	// to carry access rules and nothing to enforce.
 	if credential.KeyID != 0 {
@@ -194,11 +207,8 @@ func authorizeCliRequest(
 		})
 		if err != nil {
 			handlers.RenderCliAuthError(w, err)
-			return nil, false
+			return false
 		}
 	}
-	// Stamped for the audit trail and for the app-visibility gate, which read
-	// the credential downstream. On the app routes the middleware already put
-	// it there; on the publish routes this guard is what puts it there at all.
-	return r.WithContext(services.WithCliAuth(r.Context(), credential)), true
+	return true
 }

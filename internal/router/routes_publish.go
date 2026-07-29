@@ -134,11 +134,13 @@ func (g publishGroup) guard(action apikeyrestrictions.Action, resolveBranch bran
 				handlers.RenderCliAuthError(w, err)
 				return
 			}
-			authorized, ok := authorizeCliRequest(g.apiKeyAccess, w, r, credential, action, resolveBranch(r))
-			if !ok {
+			if !authorizeCliRequest(g.apiKeyAccess, w, r, credential, action, resolveBranch(r)) {
 				return
 			}
-			next.ServeHTTP(w, authorized)
+			// This group has no authentication middleware in front of it, so
+			// this is what puts the credential on the context: the audit trail
+			// reads it as the actor of every publish.
+			next.ServeHTTP(w, r.WithContext(services.WithCliAuth(r.Context(), credential)))
 		})
 	}
 }

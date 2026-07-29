@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
 
 	"expo-open-ota/ee/apikeyrestrictions"
@@ -100,6 +101,40 @@ func TestRegisteredPublishRoutesDeclareTheRightAction(t *testing.T) {
 	// TestUploadTokenBranchResolution checks it.
 }
 
+// A resolver that names no branch has authorized nothing, and the guard says so
+// itself rather than leaving the access rules to work it out. This is what a
+// path variable renamed out from under the lookup would look like, and it must
+// refuse rather than judge the request on an empty branch.
+func TestGuardRefusesARequestWithNoResolvedBranch(t *testing.T) {
+	policy := &recordingPolicy{}
+	router := mux.NewRouter()
+	group := publishGroup{
+		router:       router.PathPrefix("/{APP_ID}").Subrouter(),
+		cliAuth:      services.NewCliAuthService(acceptingCliRepo{}),
+		apiKeyAccess: policy,
+	}
+	// Registered through the guard directly, since both route() and
+	// uploadTokenRoute() refuse to produce this shape.
+	emptyResolver := func(*http.Request) string { return "" }
+	group.router.Handle("/publishSomething",
+		group.guard(apikeyrestrictions.ActionPublish, emptyResolver)(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Error("the handler must not run without an authorized branch")
+			}))).Methods(http.MethodPost)
+
+	r := httptest.NewRequest(http.MethodPost, "/app-1/publishSomething", nil)
+	r.Header.Set("Authorization", "Bearer eoo_key")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(policy.requests) != 0 {
+		t.Fatal("a request with no branch must be refused without asking the access policy")
+	}
+}
+
 // A publish route must name a branch, and must name a known action. Both are
 // refused at boot rather than at the first request.
 func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
@@ -127,9 +162,10 @@ func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
 	}
 }
 
-// uploadLocalFile names no branch: the guard reads it from the signed token.
-// A missing, malformed or foreign-signed token yields no branch, which the
-// access rules refuse for a scoped key.
+// uploadLocalFile names no branch: the guard reads it from the signed token,
+// through the same validation the handler runs. A token that does not survive
+// that validation names nothing, and a request that names no branch is refused
+// before the access rules are consulted at all.
 func TestUploadTokenBranchResolution(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("BASE_URL", "http://localhost:3000")
@@ -138,11 +174,17 @@ func TestUploadTokenBranchResolution(t *testing.T) {
 	valid := mintUploadToken(t, "app-1", "production")
 	for name, tc := range map[string]struct {
 		query string
-		want  string
+		// branch is what the policy must be handed; empty means the request
+		// must be refused without the policy being asked.
+		branch string
+		status int
 	}{
-		"valid token":   {"?token=" + valid, "production"},
-		"no token":      {"", ""},
-		"garbage token": {"?token=not-a-jwt", ""},
+		"valid token":   {"?token=" + valid, "production", http.StatusOK},
+		"no token":      {"", "", http.StatusForbidden},
+		"garbage token": {"?token=not-a-jwt", "", http.StatusForbidden},
+		// Signed with another secret: the claim is unreadable, so it names
+		// nothing, exactly like a token that carries no claim at all.
+		"foreign token": {"?token=" + mintForeignUploadToken(t, "app-1", "production"), "", http.StatusForbidden},
 	} {
 		t.Run(name, func(t *testing.T) {
 			policy := &recordingPolicy{}
@@ -158,19 +200,41 @@ func TestUploadTokenBranchResolution(t *testing.T) {
 
 			r := httptest.NewRequest(http.MethodPut, "/app-1/uploadLocalFile"+tc.query, nil)
 			r.Header.Set("Authorization", "Bearer eoo_key")
-			router.ServeHTTP(httptest.NewRecorder(), r)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
 
+			if w.Code != tc.status {
+				t.Fatalf("expected %d, got %d: %s", tc.status, w.Code, w.Body.String())
+			}
+			if tc.branch == "" {
+				if len(policy.requests) != 0 {
+					t.Fatalf("a token naming no branch must be refused without asking the policy, got %d calls",
+						len(policy.requests))
+				}
+				return
+			}
 			if len(policy.requests) != 1 {
 				t.Fatalf("expected one access decision, got %d", len(policy.requests))
 			}
-			if got := policy.requests[0].Branch; got != tc.want {
-				t.Fatalf("expected branch %q, got %q", tc.want, got)
+			if got := policy.requests[0].Branch; got != tc.branch {
+				t.Fatalf("expected branch %q, got %q", tc.branch, got)
 			}
 			if got := policy.requests[0].Action; got != apikeyrestrictions.ActionPublish {
 				t.Fatalf("expected the upload to be judged as a publish, got %q", got)
 			}
 		})
 	}
+}
+
+// mintForeignUploadToken produces a well-formed upload token signed with a
+// different secret, which is the shape an attacker can actually build.
+func mintForeignUploadToken(t *testing.T, appId, branch string) string {
+	t.Helper()
+	original := os.Getenv("JWT_SECRET")
+	t.Setenv("JWT_SECRET", "not-the-servers-secret")
+	token := mintUploadToken(t, appId, branch)
+	t.Setenv("JWT_SECRET", original)
+	return token
 }
 
 // acceptingCliRepo authenticates any credential and reports a key id, which is
