@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 type fakeOAuthUserRepo struct {
@@ -137,8 +138,8 @@ func TestOAuthMiddlewareRejections(t *testing.T) {
 			if res.Code != http.StatusUnauthorized {
 				t.Fatalf("expected 401, got %d", res.Code)
 			}
-			if challenge := res.Header().Get("WWW-Authenticate"); !strings.Contains(challenge, `error="invalid_token"`) {
-				t.Errorf("expected error=\"invalid_token\" in WWW-Authenticate, got %q", challenge)
+			if challenge := res.Header().Get("WWW-Authenticate"); !strings.Contains(challenge, "resource_metadata") {
+				t.Errorf("the 401 must carry the discovery challenge, got %q", challenge)
 			}
 		})
 	}
@@ -173,5 +174,28 @@ func TestOAuthMiddlewareDatabaseOutage(t *testing.T) {
 	}
 	if res.Header().Get("WWW-Authenticate") != "" {
 		t.Error("a 500 must not carry WWW-Authenticate, the client would restart the flow")
+	}
+	if strings.Contains(res.Body.String(), "connection refused") {
+		t.Error("the response body must not leak the underlying database error")
+	}
+}
+
+func TestOAuthMiddlewareBindsSessionUser(t *testing.T) {
+	repo := &fakeOAuthUserRepo{user: enabledUser()}
+	service, _, _ := oauthTestSetup(t, repo)
+	token, err := service.IssueAccessToken(services.DashboardPrincipal{UserId: "user-1", SessionVersion: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The streamable transport pins sessions to TokenInfo.UserID; assert the
+	// middleware actually plants it where the SDK reads it.
+	var seenInfo *auth.TokenInfo
+	handler := NewOAuthMiddleware(service)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenInfo = auth.TokenInfoFromContext(r.Context())
+	}))
+	doMCPRequest(handler, token)
+	if seenInfo == nil || seenInfo.UserID != "user-1" {
+		t.Fatalf("TokenInfo.UserID must reach the transport, got %+v", seenInfo)
 	}
 }

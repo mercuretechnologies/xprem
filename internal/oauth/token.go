@@ -51,38 +51,42 @@ func (s *OAuthService) IssueAccessToken(principal services.DashboardPrincipal) (
 // AuthenticateMCPToken validates an access token and re-reads the account
 // behind it, mirroring what AuthenticateSession does for dashboard JWTs: the
 // signature proves the token was valid when minted, the user row says whether
-// it still is.
-func (s *OAuthService) AuthenticateMCPToken(ctx context.Context, tokenString string) (*services.DashboardPrincipal, error) {
+// it still is. The returned time is the token's expiration.
+func (s *OAuthService) AuthenticateMCPToken(ctx context.Context, tokenString string) (*services.DashboardPrincipal, time.Time, error) {
 	claims := jwt.MapClaims{}
 	if _, err := crypto.DecodeAndExtractJWTToken(s.secret, tokenString, &claims); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if claims["sub"] != mcpSubject {
-		return nil, errors.New("invalid token subject")
+		return nil, time.Time{}, errors.New("invalid token subject")
 	}
 	if audience, _ := claims.GetAudience(); len(audience) != 1 || audience[0] != ResourceURL() {
-		return nil, errors.New("invalid token audience")
+		return nil, time.Time{}, errors.New("invalid token audience")
+	}
+	expiresAt, err := claims.GetExpirationTime()
+	if err != nil || expiresAt == nil {
+		return nil, time.Time{}, errors.New("invalid token expiration")
 	}
 	userId, _ := claims["userId"].(string)
 	if userId == "" {
-		return nil, services.ErrSessionRevoked
+		return nil, time.Time{}, services.ErrSessionRevoked
 	}
 	sessionVersion, _ := claims["sv"].(float64)
 
 	user, err := s.userRepo.GetUserByID(ctx, userId)
 	if err != nil {
 		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			return nil, services.ErrSessionRevoked
+			return nil, time.Time{}, services.ErrSessionRevoked
 		}
-		return nil, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
+		return nil, time.Time{}, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
 	}
 	if !user.Enabled || user.SessionVersion != int32(sessionVersion) {
-		return nil, services.ErrSessionRevoked
+		return nil, time.Time{}, services.ErrSessionRevoked
 	}
 	return &services.DashboardPrincipal{
 		UserId:         user.Id,
 		Email:          user.Email,
 		IsAdmin:        user.IsAdmin,
 		SessionVersion: user.SessionVersion,
-	}, nil
+	}, expiresAt.Time, nil
 }

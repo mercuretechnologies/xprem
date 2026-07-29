@@ -1,50 +1,68 @@
 package middleware
 
 import (
+	"context"
 	"errors"
-	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/oauth"
 	"expo-open-ota/internal/services"
-	"fmt"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
+// principalExtraKey carries the resolved principal through the SDK's
+// TokenInfo.Extra, from the verifier to the inner middleware.
+const principalExtraKey = "principal"
+
 // NewOAuthMiddleware guards the MCP endpoint behind an OAuth access token.
-// Every refusal carries the WWW-Authenticate header pointing at the resource
-// metadata; that header is how a client that has never seen this server
-// discovers where to authenticate, so the 401 is part of the protocol, not
-// just an error.
+// It wraps the SDK's RequireBearerToken rather than checking the header
+// itself: that is the only way to plant the TokenInfo the streamable
+// transport pins sessions to (session hijacking prevention), and it also
+// answers refusals with the WWW-Authenticate challenge clients discover the
+// authorization flow through.
 func NewOAuthMiddleware(oauthService *oauth.OAuthService) mux.MiddlewareFunc {
+	verifier := func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+		principal, expiresAt, err := oauthService.AuthenticateMCPToken(ctx, token)
+		if err != nil {
+			// A database outage must not read as a dead token (500, not
+			// 401), the client would throw away a valid credential and
+			// restart the flow. Bare errors on both paths: the SDK writes
+			// the error message into the response body.
+			if errors.Is(err, services.ErrAuthUnavailable) {
+				return nil, services.ErrAuthUnavailable
+			}
+			return nil, auth.ErrInvalidToken
+		}
+		return &auth.TokenInfo{
+			UserID:     principal.UserId,
+			Scopes:     []string{oauth.ScopeMCP},
+			Expiration: expiresAt,
+			Extra:      map[string]any{principalExtraKey: principal},
+		}, nil
+	}
+	requireBearer := auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL: oauth.ResourceMetadataURL(),
+	})
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			bearerToken, err := helpers.GetBearerToken(r)
-			if err != nil {
-				renderUnauthorized(w, "")
-				return
-			}
-			principal, err := oauthService.AuthenticateMCPToken(r.Context(), bearerToken)
-			if err != nil {
-				// A database outage must not read as a dead token, the client
-				// would throw away a valid credential and restart the flow.
-				if errors.Is(err, services.ErrAuthUnavailable) {
-					http.Error(w, "Could not verify the account", http.StatusInternalServerError)
-					return
-				}
-				renderUnauthorized(w, "invalid_token")
-				return
-			}
-			next.ServeHTTP(w, r.WithContext(services.WithPrincipal(r.Context(), principal)))
-		})
+		return requireBearer(principalFromTokenInfo(next))
 	}
 }
 
-func renderUnauthorized(w http.ResponseWriter, errorCode string) {
-	challenge := fmt.Sprintf("Bearer resource_metadata=%q", oauth.ResourceMetadataURL())
-	if errorCode != "" {
-		challenge += fmt.Sprintf(", error=%q", errorCode)
-	}
-	w.Header().Set("WWW-Authenticate", challenge)
-	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+// principalFromTokenInfo copies the principal minted by the verifier into the
+// context key the rest of the codebase reads.
+func principalFromTokenInfo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := auth.TokenInfoFromContext(r.Context())
+		if info == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		principal, _ := info.Extra[principalExtraKey].(*services.DashboardPrincipal)
+		if principal == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(services.WithPrincipal(r.Context(), principal)))
+	})
 }
