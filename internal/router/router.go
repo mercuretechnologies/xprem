@@ -11,6 +11,13 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// branchVarName/branchVar is the only path variable a publishing token may be
+// scoped on.
+const (
+	branchVarName = "BRANCH"
+	branchVar     = "{" + branchVarName + "}"
+)
+
 // NewRouter builds the whole routing table, one registerX call per audience:
 // infra, publish, ingest, client, pre-auth, dashboard assets, then the
 // authenticated account and app routes.

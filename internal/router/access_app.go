@@ -13,13 +13,6 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// branchVarName/branchVar is the only path variable a publishing token may be
-// scoped on.
-const (
-	branchVarName = "BRANCH"
-	branchVar     = "{" + branchVarName + "}"
-)
-
 // Access is a route's declaration of who may call it: whether a publishing
 // token may reach it, and what a member needs when RBAC is enforced or not.
 type Access struct {
