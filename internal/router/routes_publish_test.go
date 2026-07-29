@@ -70,30 +70,6 @@ func TestPublishRoutesDeclareTheirAction(t *testing.T) {
 	}
 }
 
-// TestRegisteredPublishRoutesDeclareTheRightAction reads the declarations
-// from publishRouteTable, the same table the router registers from.
-func TestRegisteredPublishRoutesDeclareTheRightAction(t *testing.T) {
-	expected := map[string]apikeyrestrictions.Action{
-		"/requestUploadUrl/{BRANCH}":     apikeyrestrictions.ActionPublish,
-		"/markUpdateAsUploaded/{BRANCH}": apikeyrestrictions.ActionPublish,
-		"/rollback/{BRANCH}":             apikeyrestrictions.ActionRollback,
-		"/republish/{BRANCH}":            apikeyrestrictions.ActionRollback,
-	}
-	if len(publishRouteTable) != len(expected) {
-		t.Fatalf("the publish table holds %d routes, this test knows %d; a new route needs a declaration here too",
-			len(publishRouteTable), len(expected))
-	}
-	for _, declaration := range publishRouteTable {
-		want, known := expected[declaration.path]
-		if !known {
-			t.Fatalf("undeclared publish route %q", declaration.path)
-		}
-		if declaration.action != want {
-			t.Fatalf("%s: expected action %q, got %q", declaration.path, want, declaration.action)
-		}
-	}
-}
-
 // TestGuardRefusesARequestWithNoResolvedBranch checks that a resolver naming
 // no branch is refused rather than judged on an empty branch.
 func TestGuardRefusesARequestWithNoResolvedBranch(t *testing.T) {

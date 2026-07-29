@@ -26,7 +26,7 @@ func (p *recordingPolicy) Authorize(_ context.Context, req apikeyrestrictions.Cl
 
 // serveTokenRequest registers one route through appGroup and sends a CLI
 // credential at it.
-func serveTokenRequest(t *testing.T, path, requestPath string, access Access, policy cliAccessPolicy) (*httptest.ResponseRecorder, *services.CliCredential) {
+func serveTokenRequest(t *testing.T, path, requestPath string, access AppAccess, policy cliAccessPolicy) (*httptest.ResponseRecorder, *services.CliCredential) {
 	t.Helper()
 	router := mux.NewRouter()
 	group := appGroup{router: router.PathPrefix("/apps/{APP_ID}").Subrouter(), apiKeyAccess: policy}
@@ -141,7 +141,7 @@ func TestStatelessCredentialSkipsThePolicy(t *testing.T) {
 }
 
 // TestUndeclaredAccessIsRefusedAtBoot checks that a route registered without
-// an Access declaration panics.
+// an AppAccess declaration panics.
 func TestUndeclaredAccessIsRefusedAtBoot(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -149,5 +149,5 @@ func TestUndeclaredAccessIsRefusedAtBoot(t *testing.T) {
 		}
 	}()
 	group := appGroup{router: mux.NewRouter(), apiKeyAccess: &recordingPolicy{}}
-	group.route(http.MethodGet, "/branches", func(http.ResponseWriter, *http.Request) {}, Access{})
+	group.route(http.MethodGet, "/branches", func(http.ResponseWriter, *http.Request) {}, AppAccess{})
 }

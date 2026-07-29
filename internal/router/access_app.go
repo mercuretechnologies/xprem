@@ -5,7 +5,6 @@ import (
 	"expo-open-ota/ee/apikeyrestrictions"
 	"expo-open-ota/ee/rbac"
 	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/services"
 	"net/http"
 	"strings"
@@ -13,9 +12,9 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Access is a route's declaration of who may call it: whether a publishing
+// AppAccess is a route's declaration of who may call it: whether a publishing
 // token may reach it, and what a member needs when RBAC is enforced or not.
-type Access struct {
+type AppAccess struct {
 	token       bool
 	tokenAction apikeyrestrictions.Action
 	perm        rbac.Permission
@@ -25,29 +24,29 @@ type Access struct {
 }
 
 // AnyViewer allows any account that may see the app.
-func AnyViewer() Access {
-	return Access{declared: true, perm: rbac.NoPermission}
+func AnyViewer() AppAccess {
+	return AppAccess{declared: true, perm: rbac.NoPermission}
 }
 
 // AnyViewerOrToken is AnyViewer, plus a publishing credential authorized for
 // action on the route's {BRANCH}.
-func AnyViewerOrToken(action apikeyrestrictions.Action) Access {
+func AnyViewerOrToken(action apikeyrestrictions.Action) AppAccess {
 	if !apikeyrestrictions.IsValidAction(string(action)) {
 		panic("router: AnyViewerOrToken called with an unknown action " + string(action))
 	}
-	return Access{declared: true, perm: rbac.NoPermission, token: true, tokenAction: action}
+	return AppAccess{declared: true, perm: rbac.NoPermission, token: true, tokenAction: action}
 }
 
 // NeedsPermission gates the route behind perm once roles are enforced, and
 // behind fallback when they are not.
-func NeedsPermission(perm rbac.Permission, fallback rbac.Fallback) Access {
+func NeedsPermission(perm rbac.Permission, fallback rbac.Fallback) AppAccess {
 	if perm == rbac.NoPermission {
 		panic("router: NeedsPermission called with NoPermission, which gates nothing; use AnyViewer() if that is the intent")
 	}
 	if fallback != rbac.FallbackAdminOnly && fallback != rbac.FallbackAnyMember {
 		panic("router: NeedsPermission called without a Fallback; say what a member gets when roles are not enforced")
 	}
-	return Access{declared: true, perm: perm, fallback: fallback}
+	return AppAccess{declared: true, perm: perm, fallback: fallback}
 }
 
 // cliAccessPolicy is the access decision the guard asks for a CLI request.
@@ -62,9 +61,9 @@ type appGroup struct {
 	apiKeyAccess cliAccessPolicy
 }
 
-func (g appGroup) route(method, path string, handler http.HandlerFunc, access Access) {
+func (g appGroup) route(method, path string, handler http.HandlerFunc, access AppAccess) {
 	if !access.declared {
-		panic("router: " + method + " " + path + " was registered without an Access declaration")
+		panic("router: " + method + " " + path + " was registered without an AppAccess declaration")
 	}
 	if access.token && !strings.Contains(path, branchVar) {
 		panic("router: " + method + " " + path + " lets a publishing token in but names no " + branchVar +
@@ -73,8 +72,8 @@ func (g appGroup) route(method, path string, handler http.HandlerFunc, access Ac
 	g.router.Handle(path, g.guard(access)(handler)).Methods(method)
 }
 
-// guard turns one Access into the middleware that enforces it.
-func (g appGroup) guard(access Access) mux.MiddlewareFunc {
+// guard turns one AppAccess into the middleware that enforces it.
+func (g appGroup) guard(access AppAccess) mux.MiddlewareFunc {
 	var permission mux.MiddlewareFunc
 	if access.perm != rbac.NoPermission {
 		permission = rbac.RequirePermission(g.rbacService, access.perm, access.fallback)
@@ -100,35 +99,4 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 			gated.ServeHTTP(w, r)
 		})
 	}
-}
-
-// authorizeCliRequest runs the enterprise access decision for a CLI request,
-// writing the response and returning false when the request is refused.
-func authorizeCliRequest(
-	policy cliAccessPolicy,
-	w http.ResponseWriter,
-	r *http.Request,
-	credential services.CliCredential,
-	action apikeyrestrictions.Action,
-	branchName string,
-) bool {
-	if branchName == "" {
-		handlers.RenderError(w, http.StatusForbidden, "This route requires a branch")
-		return false
-	}
-	// KeyID 0 is stateless mode: no API key exists to carry access rules.
-	if credential.KeyID != 0 {
-		err := policy.Authorize(r.Context(), apikeyrestrictions.CliRequest{
-			AppID:    credential.AppID,
-			APIKeyID: credential.KeyID,
-			Branch:   branchName,
-			Action:   action,
-			ClientIP: helpers.ClientIP(r),
-		})
-		if err != nil {
-			handlers.RenderCliAuthError(w, err)
-			return false
-		}
-	}
-	return true
 }
