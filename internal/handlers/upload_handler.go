@@ -160,11 +160,8 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		http.Error(w, "Error validating upload token", http.StatusBadRequest)
 		return
 	}
-	// No RequireAuthorizedBranch here, unlike the four handlers that take a
-	// {BRANCH} from their path: this route names no branch, the router judged
-	// the one this token claims, and ValidateUploadTokenAndResolveFilePath is
-	// what guarantees filePath lies inside that same branch. Asserting the
-	// branch claim against itself here would prove nothing.
+	// No branch check here: the router already judged the branch this token
+	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
 
 	fileName := filepath.Base(filePath)
 	file, _, err := r.FormFile(fileName)
