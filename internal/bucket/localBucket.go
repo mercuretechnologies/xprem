@@ -299,10 +299,13 @@ func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId
 	// them agreeing: an access rule granting a key one branch must not admit a
 	// file written into another.
 	//
-	// Skipped when the claim is absent, which only happens for a token minted
-	// by a server older than it; those expire ten minutes after they were
-	// handed out, and the access rules already refuse them for a scoped key.
-	if branch != "" && !uploadPathIsInBranch(filePath, appId, branch) {
+	// A token with no branch claim is refused rather than waved through. It
+	// can only come from a server older than this claim, and the alternative
+	// was a check whose safety was borrowed from another package (the access
+	// rules happen to refuse a scoped key on an empty branch). The cost is a
+	// publish that fails during a rolling deploy, in local-bucket mode, which
+	// does not survive several replicas anyway.
+	if !uploadPathIsInBranch(filePath, appId, branch) {
 		return "", "", "", errors.New("upload token path does not match its branch")
 	}
 	return filePath, appId, branch, nil

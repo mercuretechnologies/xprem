@@ -104,10 +104,11 @@ func routeBranch(r *http.Request) string {
 	return mux.Vars(r)[branchVarName]
 }
 
-// uploadTokenBranch reads the branch out of the upload token. An unreadable or
-// claimless token yields "", which the guard refuses for a scoped key: the
-// only tokens without the claim are ones minted by a server older than this
-// release, and they expire ten minutes after they were handed out.
+// uploadTokenBranch reads the branch out of the upload token, through the same
+// validation the handler runs, so the two cannot disagree about what a valid
+// upload token is. Anything unreadable, expired, foreign-signed or claimless
+// yields "", which the access rules refuse for a scoped key; the handler then
+// refuses the same token on its own.
 func uploadTokenBranch(r *http.Request) string {
 	branchName, err := bucket.ResolveUploadTokenBranch(r.URL.Query().Get("token"))
 	if err != nil {
