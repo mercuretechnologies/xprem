@@ -53,8 +53,8 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       },
       {
         value: 'branch:protect',
-        label: 'Lock branches',
-        description: 'Turn the deletion lock of a branch on and off.',
+        label: 'Protect branches',
+        description: 'Turn branch protection on and off. A protected branch cannot be deleted.',
       },
     ],
   },

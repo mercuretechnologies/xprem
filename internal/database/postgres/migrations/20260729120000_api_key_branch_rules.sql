@@ -28,12 +28,6 @@ CREATE TABLE api_key_branch_rules (
     CONSTRAINT uq_api_key_branch_rule UNIQUE (api_key_id, pattern)
 );
 
--- Whether the key may publish to a branch that does not exist yet, which is
--- how the CLI creates one. TRUE keeps what every key could always do; an
--- admin turns it off for a token that must stay on branches someone else set
--- up.
-ALTER TABLE api_keys ADD COLUMN allow_branch_creation BOOLEAN NOT NULL DEFAULT TRUE;
-
 -- Data migration, from one bit to rules.
 --
 -- A key that COULD access protected branches reached every branch of its app,
@@ -78,7 +72,6 @@ ALTER TABLE api_keys DROP COLUMN can_access_protected_branches;
 -- key comes back at FALSE, the restrictive end, including those that used to
 -- hold TRUE.
 ALTER TABLE api_keys ADD COLUMN can_access_protected_branches BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE api_keys DROP COLUMN IF EXISTS allow_branch_creation;
 DROP TABLE IF EXISTS api_key_branch_rules;
 
 -- +goose StatementEnd

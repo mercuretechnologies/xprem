@@ -40,11 +40,7 @@ func (s *PostgresApiKeyRestrictionStore) GetAccess(ctx context.Context, apiKeyID
 	if len(rows) == 0 {
 		return ApiKeyAccess{}, ErrApiKeyNotFound
 	}
-	access := ApiKeyAccess{
-		ApiKeyID:            apiKeyID,
-		AllowedIps:          rows[0].AllowedIps,
-		AllowBranchCreation: rows[0].AllowBranchCreation,
-	}
+	access := ApiKeyAccess{ApiKeyID: apiKeyID, AllowedIps: rows[0].AllowedIps}
 	for _, row := range rows {
 		if row.Pattern == nil {
 			continue
@@ -78,11 +74,7 @@ func foldAccessRows(rows []pgdb.GetApiKeyAccessByAppIDRow) []ApiKeyAccess {
 	result := make([]ApiKeyAccess, 0, len(rows))
 	for _, row := range rows {
 		if len(result) == 0 || result[len(result)-1].ApiKeyID != row.ID {
-			result = append(result, ApiKeyAccess{
-				ApiKeyID:            row.ID,
-				AllowedIps:          row.AllowedIps,
-				AllowBranchCreation: row.AllowBranchCreation,
-			})
+			result = append(result, ApiKeyAccess{ApiKeyID: row.ID, AllowedIps: row.AllowedIps})
 		}
 		if row.Pattern == nil {
 			continue
@@ -99,17 +91,16 @@ func foldAccessRows(rows []pgdb.GetApiKeyAccessByAppIDRow) []ApiKeyAccess {
 	return result
 }
 
-// SetAccess replaces one key's whole access: the IP allow-list, the
-// branch-creation flag and the rule list, in one transaction. Rules are
+// SetAccess replaces one key's whole access: the IP allow-list and the rule
+// list, in one transaction. Rules are
 // deleted then re-inserted rather than diffed, because a rule has no identity
 // worth preserving and a diff would be a second way to be wrong.
 func (s *PostgresApiKeyRestrictionStore) SetAccess(ctx context.Context, appID string, access ApiKeyAccess) error {
 	return s.engine.WithTx(ctx, func(q *pgdb.Queries) error {
 		updated, err := q.UpdateApiKeyAccess(ctx, pgdb.UpdateApiKeyAccessParams{
-			AllowedIps:          access.AllowedIps,
-			AllowBranchCreation: access.AllowBranchCreation,
-			ID:                  access.ApiKeyID,
-			AppID:               store.ToPgUUID(appID),
+			AllowedIps: access.AllowedIps,
+			ID:         access.ApiKeyID,
+			AppID:      store.ToPgUUID(appID),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update api key access: %w", err)
@@ -133,17 +124,6 @@ func (s *PostgresApiKeyRestrictionStore) SetAccess(ctx context.Context, appID st
 		}
 		return nil
 	})
-}
-
-func (s *PostgresApiKeyRestrictionStore) BranchExists(ctx context.Context, appID string, branchName string) (bool, error) {
-	exists, err := s.engine.Queries.BranchExists(ctx, pgdb.BranchExistsParams{
-		AppID: store.ToPgUUID(appID),
-		Name:  branchName,
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to read branch: %w", err)
-	}
-	return exists, nil
 }
 
 // The action catalog is validated in Go before anything is written, so the

@@ -52,10 +52,9 @@ type branchRulePayload struct {
 // strings, like ApiKeyMetadata.ID. An empty branchRules means the key reaches
 // every branch.
 type ApiKeyAccessResponse struct {
-	ApiKeyID            string              `json:"apiKeyId"`
-	AllowBranchCreation bool                `json:"allowBranchCreation"`
-	BranchRules         []branchRulePayload `json:"branchRules"`
-	AllowedIps          []string            `json:"allowedIps"`
+	ApiKeyID    string              `json:"apiKeyId"`
+	BranchRules []branchRulePayload `json:"branchRules"`
+	AllowedIps  []string            `json:"allowedIps"`
 }
 
 func renderApiKeyAccessServiceError(w http.ResponseWriter, err error) {
@@ -92,10 +91,9 @@ func (h *ApiKeyAccessHandler) GetApiKeyAccessHandler(w http.ResponseWriter, r *h
 	response := make([]ApiKeyAccessResponse, 0, len(accesses))
 	for _, access := range accesses {
 		entry := ApiKeyAccessResponse{
-			ApiKeyID:            strconv.FormatInt(access.ApiKeyID, 10),
-			AllowBranchCreation: access.AllowBranchCreation,
-			BranchRules:         make([]branchRulePayload, 0, len(access.BranchRules)),
-			AllowedIps:          make([]string, 0, len(access.AllowedIps)),
+			ApiKeyID:    strconv.FormatInt(access.ApiKeyID, 10),
+			BranchRules: make([]branchRulePayload, 0, len(access.BranchRules)),
+			AllowedIps:  make([]string, 0, len(access.AllowedIps)),
 		}
 		for _, rule := range access.BranchRules {
 			entry.BranchRules = append(entry.BranchRules, branchRulePayload{
@@ -126,9 +124,8 @@ func (h *ApiKeyAccessHandler) SetApiKeyAccessHandler(w http.ResponseWriter, r *h
 		return
 	}
 	var req struct {
-		AllowBranchCreation bool                `json:"allowBranchCreation"`
-		BranchRules         []branchRulePayload `json:"branchRules"`
-		AllowedIps          []string            `json:"allowedIps"`
+		BranchRules []branchRulePayload `json:"branchRules"`
+		AllowedIps  []string            `json:"allowedIps"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAccessBodyBytes)).Decode(&req); err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "Invalid request body")
@@ -142,7 +139,7 @@ func (h *ApiKeyAccessHandler) SetApiKeyAccessHandler(w http.ResponseWriter, r *h
 		}
 		rules = append(rules, BranchRule{Pattern: payload.Pattern, Actions: actions})
 	}
-	if err := h.service.SetAccess(r.Context(), appId, apiKeyID, req.AllowBranchCreation, rules, req.AllowedIps); err != nil {
+	if err := h.service.SetAccess(r.Context(), appId, apiKeyID, rules, req.AllowedIps); err != nil {
 		renderApiKeyAccessServiceError(w, err)
 		return
 	}

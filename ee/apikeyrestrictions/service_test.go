@@ -17,12 +17,10 @@ import (
 )
 
 type fakeAccessRepo struct {
-	access   map[int64]ApiKeyAccess
-	branches map[string]bool
+	access map[int64]ApiKeyAccess
 
-	setAccess         ApiKeyAccess
-	setCalls          int
-	branchExistsCalls int
+	setAccess ApiKeyAccess
+	setCalls  int
 }
 
 func (f *fakeAccessRepo) GetAccessByAppID(_ context.Context, _ string) ([]ApiKeyAccess, error) {
@@ -41,11 +39,6 @@ func (f *fakeAccessRepo) SetAccess(_ context.Context, _ string, access ApiKeyAcc
 	f.setCalls++
 	f.setAccess = access
 	return nil
-}
-
-func (f *fakeAccessRepo) BranchExists(_ context.Context, _ string, branchName string) (bool, error) {
-	f.branchExistsCalls++
-	return f.branches[branchName], nil
 }
 
 func (f *fakeAccessRepo) GetApiKeyName(_ context.Context, _ string, apiKeyID int64) (string, error) {
@@ -81,7 +74,7 @@ func TestStatelessModeAnswersControlPlaneError(t *testing.T) {
 	if _, err := service.GetAccessByApp(context.Background(), "app"); !errors.Is(err, ErrRequiresControlPlane) {
 		t.Fatalf("expected ErrRequiresControlPlane, got %v", err)
 	}
-	if err := service.SetAccess(context.Background(), "app", 1, true, nil, nil); !errors.Is(err, ErrRequiresControlPlane) {
+	if err := service.SetAccess(context.Background(), "app", 1, nil, nil); !errors.Is(err, ErrRequiresControlPlane) {
 		t.Fatalf("expected ErrRequiresControlPlane, got %v", err)
 	}
 	// Enforcement is a no-op in stateless mode, never an error.
@@ -93,7 +86,7 @@ func TestStatelessModeAnswersControlPlaneError(t *testing.T) {
 func TestMutationsRequireValidLicense(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, false)
-	if err := service.SetAccess(context.Background(), "app", 1, true, nil, nil); !errors.Is(err, ErrRequiresValidLicense) {
+	if err := service.SetAccess(context.Background(), "app", 1, nil, nil); !errors.Is(err, ErrRequiresValidLicense) {
 		t.Fatalf("expected ErrRequiresValidLicense, got %v", err)
 	}
 	if repo.setCalls != 0 {
@@ -120,15 +113,12 @@ func TestGetAccessDoesNotRequireLicense(t *testing.T) {
 func TestSetAccessPersistsNormalizedInput(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
-	err := service.SetAccess(context.Background(), "app", 1, false,
+	err := service.SetAccess(context.Background(), "app", 1,
 		[]BranchRule{{Pattern: "staging", Actions: []Action{ActionRollback, ActionRead}}},
 		[]string{"192.168.1.5/24", "::ffff:10.1.2.3"},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if repo.setAccess.AllowBranchCreation {
-		t.Fatal("expected allowBranchCreation to be persisted as false")
 	}
 	expectedIps := []netip.Prefix{
 		netip.MustParsePrefix("192.168.1.0/24"),
@@ -148,13 +138,13 @@ func TestSetAccessRejectsInvalidInput(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
 
-	err := service.SetAccess(context.Background(), "app", 1, true, nil, []string{"not-an-ip"})
+	err := service.SetAccess(context.Background(), "app", 1, nil, []string{"not-an-ip"})
 	if !errors.Is(err, ErrInvalidCidr) {
 		t.Fatalf("expected ErrInvalidCidr, got %v", err)
 	}
 	// A malformed rule is caller input too, and must reach the handler as a
 	// validation error so it answers 400 rather than 500.
-	err = service.SetAccess(context.Background(), "app", 1, true,
+	err = service.SetAccess(context.Background(), "app", 1,
 		[]BranchRule{{Pattern: "feature/x", Actions: []Action{ActionRead}}}, nil)
 	if !validation.IsValidationError(err) {
 		t.Fatalf("expected a validation error, got %v", err)
@@ -169,7 +159,7 @@ func TestSetAccessRejectsInvalidInput(t *testing.T) {
 func TestSetAccessEmptyAllowlistIsNil(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
-	if err := service.SetAccess(context.Background(), "app", 1, true, nil, []string{"", "  "}); err != nil {
+	if err := service.SetAccess(context.Background(), "app", 1, nil, []string{"", "  "}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.setAccess.AllowedIps != nil {
@@ -180,9 +170,8 @@ func TestSetAccessEmptyAllowlistIsNil(t *testing.T) {
 func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 	repo := &fakeAccessRepo{
 		access: map[int64]ApiKeyAccess{1: {
-			ApiKeyID:            1,
-			AllowBranchCreation: true,
-			AllowedIps:          []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+			ApiKeyID:   1,
+			AllowedIps: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		}},
 	}
 	service := serviceWith(repo, true)
@@ -223,7 +212,7 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{}}
 	service := serviceWith(repo, true)
-	err := service.SetAccess(context.Background(), "app", 1, true, nil,
+	err := service.SetAccess(context.Background(), "app", 1, nil,
 		[]string{"::ffff:203.0.113.7", "::ffff:10.0.0.0/104"},
 	)
 	if err != nil {
@@ -231,7 +220,7 @@ func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 	}
 	// The fake repository does not wire Set to Get; feed the stored prefixes
 	// back so Authorize evaluates exactly what was persisted.
-	repo.access[1] = ApiKeyAccess{ApiKeyID: 1, AllowBranchCreation: true, AllowedIps: repo.setAccess.AllowedIps}
+	repo.access[1] = ApiKeyAccess{ApiKeyID: 1, AllowedIps: repo.setAccess.AllowedIps}
 
 	for _, caller := range []string{"203.0.113.7", "::ffff:203.0.113.7", "10.20.30.40"} {
 		request := publishOn("main")
@@ -252,7 +241,7 @@ func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 // A key with no rule reaches every branch: the state every community
 // deployment is in, and the default of a fresh key.
 func TestAuthorizeAllowsEverythingWithoutRules(t *testing.T) {
-	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: true}}}
+	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1}}}
 	service := serviceWith(repo, true)
 	for _, action := range AllActions {
 		request := publishOn("production")
@@ -266,8 +255,7 @@ func TestAuthorizeAllowsEverythingWithoutRules(t *testing.T) {
 func TestAuthorizeEnforcesBranchRules(t *testing.T) {
 	repo := &fakeAccessRepo{
 		access: map[int64]ApiKeyAccess{1: {
-			ApiKeyID:            1,
-			AllowBranchCreation: true,
+			ApiKeyID: 1,
 			BranchRules: []BranchRule{
 				{Pattern: "production", Actions: []Action{ActionRead}},
 				{Pattern: "pr-*", Actions: []Action{ActionPublish}},
@@ -307,8 +295,8 @@ func TestAuthorizeEnforcesBranchRules(t *testing.T) {
 func TestAuthorizeRefusesBranchlessRequestForScopedKey(t *testing.T) {
 	repo := &fakeAccessRepo{
 		access: map[int64]ApiKeyAccess{
-			1: {ApiKeyID: 1, AllowBranchCreation: true, BranchRules: []BranchRule{{Pattern: "*", Actions: []Action{ActionPublish}}}},
-			2: {ApiKeyID: 2, AllowBranchCreation: true},
+			1: {ApiKeyID: 1, BranchRules: []BranchRule{{Pattern: "*", Actions: []Action{ActionPublish}}}},
+			2: {ApiKeyID: 2},
 		},
 	}
 	service := serviceWith(repo, true)
@@ -322,48 +310,6 @@ func TestAuthorizeRefusesBranchlessRequestForScopedKey(t *testing.T) {
 	unscoped.APIKeyID = 2
 	if err := service.Authorize(context.Background(), unscoped); err != nil {
 		t.Fatalf("unexpected error for an unscoped key: %v", err)
-	}
-}
-
-func TestAuthorizeEnforcesBranchCreation(t *testing.T) {
-	repo := &fakeAccessRepo{
-		access:   map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: false}},
-		branches: map[string]bool{"staging": true},
-	}
-	service := serviceWith(repo, true)
-
-	if err := service.Authorize(context.Background(), publishOn("staging")); err != nil {
-		t.Fatalf("publishing to an existing branch must pass: %v", err)
-	}
-	err := service.Authorize(context.Background(), publishOn("brand-new"))
-	if !errors.Is(err, services.ErrCliAccessDenied) {
-		t.Fatalf("expected a CLI access denial, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "brand-new") {
-		t.Fatalf("expected the branch in the message, got %q", err.Error())
-	}
-	// Rolling back never creates a branch, so it never asks the question.
-	before := repo.branchExistsCalls
-	rollback := publishOn("brand-new")
-	rollback.Action = ActionRollback
-	if err := service.Authorize(context.Background(), rollback); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if repo.branchExistsCalls != before {
-		t.Fatal("a rollback must not pay for the branch existence lookup")
-	}
-}
-
-// The default costs nothing: a key allowed to create branches never reads the
-// branches table on the publish path.
-func TestAuthorizeSkipsExistenceLookupWhenCreationIsAllowed(t *testing.T) {
-	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: true}}}
-	service := serviceWith(repo, true)
-	if err := service.Authorize(context.Background(), publishOn("brand-new")); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if repo.branchExistsCalls != 0 {
-		t.Fatalf("expected no existence lookup, got %d", repo.branchExistsCalls)
 	}
 }
 

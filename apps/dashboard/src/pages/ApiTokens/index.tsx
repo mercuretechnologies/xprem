@@ -57,9 +57,6 @@ export const ApiTokens = () => {
     if (ruleCount > 0) {
       parts.push(`${ruleCount} branch rule${ruleCount > 1 ? 's' : ''}`);
     }
-    if (access && !access.allowBranchCreation) {
-      parts.push('no new branches');
-    }
     if (access?.allowedIps.length) {
       parts.push(`${access.allowedIps.length} IP${access.allowedIps.length > 1 ? 's' : ''}`);
     }

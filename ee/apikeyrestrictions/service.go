@@ -16,15 +16,19 @@ import (
 )
 
 // ApiKeyAccess is everything one API key is allowed to do: the branches it
-// reaches and what it may do there, whether it may publish to a branch that
-// does not exist yet, and the source networks it may be used from. An empty
-// BranchRules means every branch of the app, which is what a key has always
-// been able to do and all a community deployment ever sees.
+// reaches, what it may do there, and the source networks it may be used from.
+// An empty BranchRules means every branch of the app, which is what a key has
+// always been able to do and all a community deployment ever sees.
+//
+// There is no separate say over creating a branch. Publishing to a branch that
+// does not exist yet is how the CLI opens one, so a rule that admits the name
+// admits the creation: a key scoped to "pr-*" opens pr-482 by publishing to it.
+// The alternative was a second axis that did nothing at all for a key whose
+// rules are plain names, since an absent branch is out of scope anyway.
 type ApiKeyAccess struct {
-	ApiKeyID            int64
-	AllowedIps          []netip.Prefix
-	AllowBranchCreation bool
-	BranchRules         []BranchRule
+	ApiKeyID    int64
+	AllowedIps  []netip.Prefix
+	BranchRules []BranchRule
 }
 
 // CliRequest is one authenticated CLI request, in the terms the access
@@ -38,13 +42,12 @@ type CliRequest struct {
 	ClientIP netip.Addr
 }
 
-// ApiKeyAccessRepository persists per-key access. GetAccess and BranchExists
-// are the enforcement reads on the CLI request hot path.
+// ApiKeyAccessRepository persists per-key access. GetAccess is the enforcement
+// read on the CLI request hot path.
 type ApiKeyAccessRepository interface {
 	GetAccessByAppID(ctx context.Context, appID string) ([]ApiKeyAccess, error)
 	GetAccess(ctx context.Context, apiKeyID int64) (ApiKeyAccess, error)
 	SetAccess(ctx context.Context, appID string, access ApiKeyAccess) error
-	BranchExists(ctx context.Context, appID string, branchName string) (bool, error)
 	// GetApiKeyName resolves the key's display name for the audit trail.
 	GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error)
 }
@@ -76,10 +79,6 @@ func unjudged(err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: %w", services.ErrCliAuthUnavailable, err)
-}
-
-func branchCreationDeniedError(branchName string) error {
-	return fmt.Errorf("%w: branch %q does not exist and this API key is not allowed to create branches", services.ErrCliAccessDenied, branchName)
 }
 
 // ApiKeyAccessService owns the management and the enforcement of per-key
@@ -118,7 +117,7 @@ func (s *ApiKeyAccessService) GetAccessByApp(ctx context.Context, appID string) 
 // normalized (bare addresses become /32 or /128, host bits are masked off)
 // because the postgres cidr type rejects unmasked values; rules are validated
 // and reordered by NormalizeBranchRules.
-func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKeyID int64, allowBranchCreation bool, rules []BranchRule, cidrs []string) error {
+func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKeyID int64, rules []BranchRule, cidrs []string) error {
 	if s.repo == nil {
 		return ErrRequiresControlPlane
 	}
@@ -134,10 +133,9 @@ func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKe
 		return err
 	}
 	access := ApiKeyAccess{
-		ApiKeyID:            apiKeyID,
-		AllowedIps:          allowedIps,
-		AllowBranchCreation: allowBranchCreation,
-		BranchRules:         normalizedRules,
+		ApiKeyID:    apiKeyID,
+		AllowedIps:  allowedIps,
+		BranchRules: normalizedRules,
 	}
 	if err := s.repo.SetAccess(ctx, appID, access); err != nil {
 		return err
@@ -160,9 +158,8 @@ func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKe
 	s.recordAccessEvent(ctx, auditlog.ActionAPIKeyRestrictionsUpdated,
 		"api_key", strconv.FormatInt(apiKeyID, 10), targetDisplay, appID,
 		map[string]any{
-			"branch_rules":          describeBranchRules(normalizedRules),
-			"allow_branch_creation": allowBranchCreation,
-			"allowed_cidrs":         normalizedCidrs,
+			"branch_rules":  describeBranchRules(normalizedRules),
+			"allowed_cidrs": normalizedCidrs,
 		})
 	return nil
 }
@@ -171,10 +168,10 @@ func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKe
 // Enforcement is an enterprise feature, so without a control plane or an
 // active license nothing is enforced and every request passes.
 //
-// The order of the checks is the order of the answers an operator needs: the
-// address first, then whether the key reaches this branch at all, then whether
-// the branch has to be created. A key scoped to staging that aims at
-// production hears "not allowed on production", not "cannot create branches".
+// Two checks, in the order the answers are useful: the address first, then
+// whether the key may do this on this branch. The branch is matched by name,
+// existing or not, which is what makes a rule cover the branches it will open
+// as well as the ones already there.
 func (s *ApiKeyAccessService) Authorize(ctx context.Context, req CliRequest) error {
 	if s.repo == nil || !s.licenseValid() {
 		return nil
@@ -189,18 +186,10 @@ func (s *ApiKeyAccessService) Authorize(ctx context.Context, req CliRequest) err
 	if !AllowsBranch(access.BranchRules, req.Branch, req.Action) {
 		return deniedError(req.Action, req.Branch)
 	}
-	// Only publishing creates a branch (deployment_service.go upserts it on
-	// the upload-url request and again when the update is sealed), and only a
-	// key denied creation pays for the lookup.
-	if req.Action == ActionPublish && !access.AllowBranchCreation {
-		exists, err := s.repo.BranchExists(ctx, req.AppID, req.Branch)
-		if err != nil {
-			return unjudged(err)
-		}
-		if !exists {
-			return branchCreationDeniedError(req.Branch)
-		}
-	}
+	// Nothing else to ask. A publish to a branch that does not exist creates it
+	// (deployment_service.go upserts on the upload-url request and again when
+	// the update is sealed), and the rule that admitted the name is what
+	// admitted that too.
 	return nil
 }
 

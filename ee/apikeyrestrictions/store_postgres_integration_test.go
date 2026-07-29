@@ -94,18 +94,15 @@ func TestAccessRoundTripsThroughPostgres(t *testing.T) {
 	appID := insertTestApp(t, pool)
 	apiKeyID := insertTestApiKey(t, pool, appID, "ci")
 
-	// A fresh key is unrestricted, and the migration's default lets it open
-	// branches. One row comes back, with no rule.
+	// A fresh key is unrestricted: one row comes back, with no rule.
 	access, err := store.GetAccess(ctx, apiKeyID)
 	require.NoError(t, err)
-	assert.True(t, access.AllowBranchCreation)
 	assert.Empty(t, access.BranchRules)
 	assert.Empty(t, access.AllowedIps)
 
 	require.NoError(t, store.SetAccess(ctx, appID, ApiKeyAccess{
-		ApiKeyID:            apiKeyID,
-		AllowBranchCreation: false,
-		AllowedIps:          []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		ApiKeyID:   apiKeyID,
+		AllowedIps: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		BranchRules: []BranchRule{
 			{Pattern: "production", Actions: []Action{ActionRead}},
 			{Pattern: "pr-*", Actions: []Action{ActionRead, ActionPublish}},
@@ -114,7 +111,6 @@ func TestAccessRoundTripsThroughPostgres(t *testing.T) {
 
 	access, err = store.GetAccess(ctx, apiKeyID)
 	require.NoError(t, err)
-	assert.False(t, access.AllowBranchCreation)
 	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, access.AllowedIps)
 	require.Len(t, access.BranchRules, 2)
 	assert.ElementsMatch(t,
@@ -123,9 +119,8 @@ func TestAccessRoundTripsThroughPostgres(t *testing.T) {
 
 	// Rules are replaced wholesale, not merged: the two above are gone.
 	require.NoError(t, store.SetAccess(ctx, appID, ApiKeyAccess{
-		ApiKeyID:            apiKeyID,
-		AllowBranchCreation: true,
-		BranchRules:         []BranchRule{{Pattern: "staging", Actions: []Action{ActionPublish}}},
+		ApiKeyID:    apiKeyID,
+		BranchRules: []BranchRule{{Pattern: "staging", Actions: []Action{ActionPublish}}},
 	}))
 	access, err = store.GetAccess(ctx, apiKeyID)
 	require.NoError(t, err)
@@ -144,8 +139,7 @@ func TestGetAccessByAppIDFoldsRealRows(t *testing.T) {
 	defaultID := insertTestApiKey(t, pool, appID, "default")
 
 	require.NoError(t, store.SetAccess(ctx, appID, ApiKeyAccess{
-		ApiKeyID:            scopedID,
-		AllowBranchCreation: true,
+		ApiKeyID: scopedID,
 		BranchRules: []BranchRule{
 			{Pattern: "a", Actions: []Action{ActionRead}},
 			{Pattern: "b", Actions: []Action{ActionPublish}},
@@ -232,29 +226,6 @@ func TestDeletingAKeyCascadesToItsRules(t *testing.T) {
 	assert.Zero(t, remaining)
 }
 
-func TestBranchExistsAgainstPostgres(t *testing.T) {
-	store, pool := setupAccessStore(t)
-	ctx := context.Background()
-	appID := insertTestApp(t, pool)
-	otherAppID := insertTestApp(t, pool)
-	insertTestBranch(t, pool, appID, "staging")
-
-	exists, err := store.BranchExists(ctx, appID, "staging")
-	require.NoError(t, err)
-	assert.True(t, exists)
-
-	exists, err = store.BranchExists(ctx, appID, "production")
-	require.NoError(t, err)
-	assert.False(t, exists)
-
-	// Scoped to the app: another app's branch of the same name is not this
-	// app's branch.
-	insertTestBranch(t, pool, otherAppID, "production")
-	exists, err = store.BranchExists(ctx, appID, "production")
-	require.NoError(t, err)
-	assert.False(t, exists)
-}
-
 // The whole decision, service included, over the real schema. This is what the
 // CLI actually goes through on a licensed deployment.
 func TestAuthorizeAgainstPostgres(t *testing.T) {
@@ -265,7 +236,7 @@ func TestAuthorizeAgainstPostgres(t *testing.T) {
 	insertTestBranch(t, pool, appID, "staging")
 
 	service := serviceWith(store, true)
-	require.NoError(t, service.SetAccess(ctx, appID, apiKeyID, false,
+	require.NoError(t, service.SetAccess(ctx, appID, apiKeyID,
 		[]BranchRule{
 			{Pattern: "production", Actions: []Action{ActionRead}},
 			{Pattern: "pr-*", Actions: []Action{ActionPublish}},
@@ -297,14 +268,8 @@ func TestAuthorizeAgainstPostgres(t *testing.T) {
 	err = service.Authorize(ctx, request("develop", ActionPublish, "10.1.2.3"))
 	require.ErrorIs(t, err, services.ErrCliAccessDenied)
 
-	// Refused: the pattern covers pr-482, but the branch does not exist and
-	// this key was denied branch creation.
-	err = service.Authorize(ctx, request("pr-482", ActionPublish, "10.1.2.3"))
-	require.ErrorIs(t, err, services.ErrCliAccessDenied)
-	assert.Contains(t, err.Error(), "does not exist")
-
-	// The same publish passes once the branch is there.
-	insertTestBranch(t, pool, appID, "pr-482")
+	// Allowed although pr-482 does not exist: the rule admits the name, and
+	// publishing to a name that is not there yet is how the CLI opens it.
 	require.NoError(t, service.Authorize(ctx, request("pr-482", ActionPublish, "10.1.2.3")))
 
 	// Refused: right branch, right action, wrong address.

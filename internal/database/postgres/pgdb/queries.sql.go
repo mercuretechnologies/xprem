@@ -124,25 +124,6 @@ func (q *Queries) ApplyIdentityValueStats(ctx context.Context, arg ApplyIdentity
 	return err
 }
 
-const branchExists = `-- name: BranchExists :one
-SELECT EXISTS (SELECT 1 FROM branches WHERE app_id = $1 AND name = $2)
-`
-
-type BranchExistsParams struct {
-	AppID pgtype.UUID `json:"app_id"`
-	Name  string      `json:"name"`
-}
-
-// Asked before a publish, and only for the keys an admin took branch creation
-// away from: publishing to a branch that is not there yet is how the CLI
-// creates one.
-func (q *Queries) BranchExists(ctx context.Context, arg BranchExistsParams) (bool, error) {
-	row := q.db.QueryRow(ctx, branchExists, arg.AppID, arg.Name)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const bumpUserSessionVersion = `-- name: BumpUserSessionVersion :execresult
 UPDATE users
 SET session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
@@ -803,17 +784,16 @@ func (q *Queries) GetActiveRolloutUpdates(ctx context.Context, arg GetActiveRoll
 
 const getApiKeyAccess = `-- name: GetApiKeyAccess :many
 
-SELECT k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+SELECT k.allowed_ips, r.pattern, r.actions
 FROM api_keys k
 LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
 WHERE k.id = $1 AND k.revoked_at IS NULL
 `
 
 type GetApiKeyAccessRow struct {
-	AllowedIps          []netip.Prefix `json:"allowed_ips"`
-	AllowBranchCreation bool           `json:"allow_branch_creation"`
-	Pattern             *string        `json:"pattern"`
-	Actions             []string       `json:"actions"`
+	AllowedIps []netip.Prefix `json:"allowed_ips"`
+	Pattern    *string        `json:"pattern"`
+	Actions    []string       `json:"actions"`
 }
 
 // The queries below back the Enterprise Edition per-key access restrictions
@@ -838,12 +818,7 @@ func (q *Queries) GetApiKeyAccess(ctx context.Context, id int64) ([]GetApiKeyAcc
 	var items []GetApiKeyAccessRow
 	for rows.Next() {
 		var i GetApiKeyAccessRow
-		if err := rows.Scan(
-			&i.AllowedIps,
-			&i.AllowBranchCreation,
-			&i.Pattern,
-			&i.Actions,
-		); err != nil {
+		if err := rows.Scan(&i.AllowedIps, &i.Pattern, &i.Actions); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -855,7 +830,7 @@ func (q *Queries) GetApiKeyAccess(ctx context.Context, id int64) ([]GetApiKeyAcc
 }
 
 const getApiKeyAccessByAppID = `-- name: GetApiKeyAccessByAppID :many
-SELECT k.id, k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+SELECT k.id, k.allowed_ips, r.pattern, r.actions
 FROM api_keys k
 LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
 WHERE k.app_id = $1 AND k.revoked_at IS NULL
@@ -863,11 +838,10 @@ ORDER BY k.id, r.id
 `
 
 type GetApiKeyAccessByAppIDRow struct {
-	ID                  int64          `json:"id"`
-	AllowedIps          []netip.Prefix `json:"allowed_ips"`
-	AllowBranchCreation bool           `json:"allow_branch_creation"`
-	Pattern             *string        `json:"pattern"`
-	Actions             []string       `json:"actions"`
+	ID         int64          `json:"id"`
+	AllowedIps []netip.Prefix `json:"allowed_ips"`
+	Pattern    *string        `json:"pattern"`
+	Actions    []string       `json:"actions"`
 }
 
 // Same shape for the dashboard, over every live key of one app. Ordered so
@@ -884,7 +858,6 @@ func (q *Queries) GetApiKeyAccessByAppID(ctx context.Context, appID pgtype.UUID)
 		if err := rows.Scan(
 			&i.ID,
 			&i.AllowedIps,
-			&i.AllowBranchCreation,
 			&i.Pattern,
 			&i.Actions,
 		); err != nil {
@@ -5157,24 +5130,18 @@ func (q *Queries) TouchUserLastConnectedAt(ctx context.Context, id pgtype.UUID) 
 
 const updateApiKeyAccess = `-- name: UpdateApiKeyAccess :execrows
 UPDATE api_keys
-SET allowed_ips = $1, allow_branch_creation = $2
-WHERE id = $3 AND app_id = $4 AND revoked_at IS NULL
+SET allowed_ips = $1
+WHERE id = $2 AND app_id = $3 AND revoked_at IS NULL
 `
 
 type UpdateApiKeyAccessParams struct {
-	AllowedIps          []netip.Prefix `json:"allowed_ips"`
-	AllowBranchCreation bool           `json:"allow_branch_creation"`
-	ID                  int64          `json:"id"`
-	AppID               pgtype.UUID    `json:"app_id"`
+	AllowedIps []netip.Prefix `json:"allowed_ips"`
+	ID         int64          `json:"id"`
+	AppID      pgtype.UUID    `json:"app_id"`
 }
 
 func (q *Queries) UpdateApiKeyAccess(ctx context.Context, arg UpdateApiKeyAccessParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateApiKeyAccess,
-		arg.AllowedIps,
-		arg.AllowBranchCreation,
-		arg.ID,
-		arg.AppID,
-	)
+	result, err := q.db.Exec(ctx, updateApiKeyAccess, arg.AllowedIps, arg.ID, arg.AppID)
 	if err != nil {
 		return 0, err
 	}

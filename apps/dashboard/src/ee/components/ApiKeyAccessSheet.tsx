@@ -18,7 +18,6 @@ import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
 import {
   Sheet,
   SheetContent,
@@ -122,9 +121,6 @@ const AccessForm = ({
   // No rule stored means every branch, which is what a fresh token holds.
   const [isScoped, setIsScoped] = useState(initialRules.length > 0);
   const [rules, setRules] = useState<BranchRuleRecord[]>(initialRules);
-  const [allowBranchCreation, setAllowBranchCreation] = useState(
-    initialAccess?.allowBranchCreation ?? true
-  );
   const [allowedIpsText, setAllowedIpsText] = useState(
     (initialAccess?.allowedIps ?? []).join('\n')
   );
@@ -176,7 +172,6 @@ const AccessForm = ({
         .map(line => line.trim())
         .filter(Boolean);
       await api.setApiKeyAccess(apiKey.id, {
-        allowBranchCreation,
         // Unscoped is stored as an empty list, which the server reads as every
         // branch. The rules kept in local state are not sent in that case.
         branchRules: isScoped ? rules.map(rule => ({ ...rule, pattern: rule.pattern.trim() })) : [],
@@ -284,22 +279,6 @@ const AccessForm = ({
           </Button>
         </div>
       )}
-
-      <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border px-3 py-2.5">
-        <span>
-          <span className="block text-sm font-medium">Can open new branches</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">
-            Publishing to a branch that does not exist yet is how the CLI creates one. Turned off,
-            the token only reaches branches someone else set up. It stays bound to the rules above
-            either way.
-          </span>
-        </span>
-        <Switch
-          checked={allowBranchCreation}
-          onCheckedChange={setAllowBranchCreation}
-          disabled={isSaving}
-        />
-      </label>
 
       <div className="space-y-2">
         <p className="text-sm font-medium">IP allowlist</p>

@@ -29,7 +29,7 @@ func TestAccessChangesEmitAuditEvents(t *testing.T) {
 
 	// Unmasked input on purpose: the entry must carry the normalized form the
 	// database persists and enforces, not what the admin typed.
-	require.NoError(t, service.SetAccess(ctx, "app-1", 42, false,
+	require.NoError(t, service.SetAccess(ctx, "app-1", 42,
 		[]BranchRule{{Pattern: "pr-*", Actions: []Action{ActionPublish, ActionRead}}},
 		[]string{"10.0.0.5/8"}))
 	require.Len(t, recorder.events, 1)
@@ -42,9 +42,8 @@ func TestAccessChangesEmitAuditEvents(t *testing.T) {
 	assert.Equal(t, "app-1", restricted.AppID)
 	// Rules land in the form the dashboard shows, and in catalog order.
 	assert.Equal(t, map[string]any{
-		"branch_rules":          []string{"pr-*:read+publish"},
-		"allow_branch_creation": false,
-		"allowed_cidrs":         []string{"10.0.0.0/8"},
+		"branch_rules":  []string{"pr-*:read+publish"},
+		"allowed_cidrs": []string{"10.0.0.0/8"},
 	}, restricted.Metadata)
 
 }
@@ -54,7 +53,7 @@ func TestUnlicensedAccessChangesEmitNothing(t *testing.T) {
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
 
-	err := service.SetAccess(context.Background(), "app-1", 42, true, nil, nil)
+	err := service.SetAccess(context.Background(), "app-1", 42, nil, nil)
 	require.ErrorIs(t, err, ErrRequiresValidLicense)
 	require.Empty(t, recorder.events)
 }

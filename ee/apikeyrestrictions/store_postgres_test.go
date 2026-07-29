@@ -20,20 +20,20 @@ func TestFoldAccessRows(t *testing.T) {
 	allowed := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	rows := []pgdb.GetApiKeyAccessByAppIDRow{
 		// A scoped key: two rules, so two rows repeating the key's columns.
-		{ID: 1, AllowedIps: allowed, AllowBranchCreation: true, Pattern: pattern("production"), Actions: []string{"read"}},
-		{ID: 1, AllowedIps: allowed, AllowBranchCreation: true, Pattern: pattern("pr-*"), Actions: []string{"read", "publish"}},
+		{ID: 1, AllowedIps: allowed, Pattern: pattern("production"), Actions: []string{"read"}},
+		{ID: 1, AllowedIps: allowed, Pattern: pattern("pr-*"), Actions: []string{"read", "publish"}},
 		// A key at its default, between two scoped ones: one row, NULL pattern.
-		{ID: 2, AllowBranchCreation: false},
-		{ID: 3, AllowBranchCreation: true, Pattern: pattern("staging"), Actions: []string{"rollback"}},
+		{ID: 2},
+		{ID: 3, Pattern: pattern("staging"), Actions: []string{"rollback"}},
 	}
 
 	expected := []ApiKeyAccess{
-		{ApiKeyID: 1, AllowedIps: allowed, AllowBranchCreation: true, BranchRules: []BranchRule{
+		{ApiKeyID: 1, AllowedIps: allowed, BranchRules: []BranchRule{
 			{Pattern: "production", Actions: []Action{ActionRead}},
 			{Pattern: "pr-*", Actions: []Action{ActionRead, ActionPublish}},
 		}},
-		{ApiKeyID: 2, AllowBranchCreation: false},
-		{ApiKeyID: 3, AllowBranchCreation: true, BranchRules: []BranchRule{
+		{ApiKeyID: 2},
+		{ApiKeyID: 3, BranchRules: []BranchRule{
 			{Pattern: "staging", Actions: []Action{ActionRollback}},
 		}},
 	}

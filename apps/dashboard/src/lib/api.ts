@@ -117,8 +117,9 @@ export type BranchRecord = {
   branchId: string;
   releaseChannel?: string | null;
   createdAt: string | null;
-  // A deletion lock and nothing else: a protected branch refuses to be
-  // deleted. Always false in stateless mode.
+  // Branch protection: a protected branch refuses to be deleted. It says
+  // nothing about what may be published on it, which is decided per API token.
+  // Always false in stateless mode.
   protected: boolean;
   currentUpdate?: BranchUpdateState | null;
 };
@@ -602,9 +603,12 @@ export type CreateApiKeyResponse = {
 // An empty branchRules means the token reaches EVERY branch, which is the
 // default of a fresh token and the only state a community deployment sees.
 // Empty allowedIps means it can be used from any source address.
+//
+// There is no separate say over creating a branch: publishing to a branch that
+// does not exist is how the CLI opens one, so a rule that admits the name
+// admits the creation.
 export type ApiKeyAccessRecord = {
   apiKeyId: string;
-  allowBranchCreation: boolean;
   branchRules: BranchRuleRecord[];
   allowedIps: string[];
 };
@@ -1221,7 +1225,6 @@ export class ApiClient {
   public async setApiKeyAccess(
     apiKeyId: string,
     access: {
-      allowBranchCreation: boolean;
       branchRules: BranchRuleRecord[];
       allowedIps: string[];
     }
