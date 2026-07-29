@@ -1,3 +1,5 @@
+// node-fetch's Response, not the DOM one: that is what fetchWithRetries resolves to.
+import type { Response } from 'node-fetch';
 import { describe, expect, it, vi } from 'vitest';
 
 import { activeRolloutConflictMessage, requestUploadUrls } from '../assets';
@@ -55,6 +57,92 @@ describe('requestUploadUrls publish group wire contract', () => {
     respondWith({ updateId: '1', uploadRequests: [] });
     const result = await requestUploadUrls({ ...baseParams(), publishGroup: 'group-a' });
     expect(result.publishGroup).toBeUndefined();
+  });
+});
+
+describe('requestUploadUrls response schema', () => {
+  const validItem = {
+    requestUploadUrl: 'https://storage.example.com/upload/bundle.js',
+    fileName: 'bundle.js',
+    filePath: 'bundle.js',
+  };
+
+  it('accepts a well-formed response and its optional headers', async () => {
+    respondWith({
+      updateId: '1',
+      uploadRequests: [{ ...validItem, headers: { 'x-ms-blob-type': 'BlockBlob' } }],
+    });
+    const result = await requestUploadUrls(baseParams());
+    expect(result.uploadRequests[0].headers).toEqual({ 'x-ms-blob-type': 'BlockBlob' });
+  });
+
+  it('accepts the numeric updateId the Go server actually marshals', async () => {
+    // services.RequestUploadURLResponse.UpdateID is an int64, so the wire value
+    // is a JSON number. Normalized to a string for the markUpdateAsUploaded query.
+    respondWith({ updateId: 1753800000000, uploadRequests: [validItem] });
+    const result = await requestUploadUrls(baseParams());
+    expect(result.updateId).toBe('1753800000000');
+  });
+
+  it('still accepts a string updateId', async () => {
+    respondWith({ updateId: '1753800000000', uploadRequests: [validItem] });
+    const result = await requestUploadUrls(baseParams());
+    expect(result.updateId).toBe('1753800000000');
+  });
+
+  it('accepts an empty header value', async () => {
+    // Joi.string() rejects '' by default, which would abort a publish over a
+    // header the CLI only ever forwards.
+    respondWith({ updateId: '1', uploadRequests: [{ ...validItem, headers: { 'x-a': '' } }] });
+    await expect(requestUploadUrls(baseParams())).resolves.toBeDefined();
+  });
+
+  it('tolerates unknown fields so a newer server does not break the CLI', async () => {
+    // Both levels: a new top-level field and a new field inside an entry.
+    respondWith({
+      updateId: '1',
+      uploadRequests: [{ ...validItem, expiresAt: '2026-01-01' }],
+      somethingNew: true,
+    });
+    await expect(requestUploadUrls(baseParams())).resolves.toBeDefined();
+  });
+
+  it.each([
+    ['a missing updateId', { uploadRequests: [] }],
+    ['a missing uploadRequests', { updateId: '1' }],
+    ['an updateId that is neither string nor number', { updateId: {}, uploadRequests: [] }],
+    ['uploadRequests that is not an array', { updateId: '1', uploadRequests: {} }],
+    ['an entry that is not an object', { updateId: '1', uploadRequests: ['bundle.js'] }],
+    [
+      'a non-string filePath',
+      { updateId: '1', uploadRequests: [{ ...validItem, filePath: ['bundle.js'] }] },
+    ],
+    [
+      'a missing requestUploadUrl',
+      { updateId: '1', uploadRequests: [{ fileName: 'bundle.js', filePath: 'bundle.js' }] },
+    ],
+    [
+      'a non-http upload URL',
+      { updateId: '1', uploadRequests: [{ ...validItem, requestUploadUrl: 'file:///etc/passwd' }] },
+    ],
+    [
+      'headers that are not strings',
+      { updateId: '1', uploadRequests: [{ ...validItem, headers: { 'x-a': { nested: 1 } } }] },
+    ],
+    [
+      'a header value smuggling a CRLF',
+      {
+        updateId: '1',
+        uploadRequests: [{ ...validItem, headers: { 'x-a': 'v\r\nAuthorization: Bearer x' } }],
+      },
+    ],
+    [
+      'a header name that is not a token',
+      { updateId: '1', uploadRequests: [{ ...validItem, headers: { 'x a': 'v' } }] },
+    ],
+  ])('rejects %s', async (_label, payload) => {
+    respondWith(payload);
+    await expect(requestUploadUrls(baseParams())).rejects.toThrow(/invalid upload response/);
   });
 });
 

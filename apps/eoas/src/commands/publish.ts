@@ -12,6 +12,7 @@ import {
   activeRolloutConflictMessage,
   computeFilesRequests,
   requestUploadUrls,
+  resolveUploadRequests,
 } from '../lib/assets';
 import { getAuthHeaders, retrieveCredentials, validateCredentials } from '../lib/auth';
 import {
@@ -332,46 +333,57 @@ export default class Publish extends Command {
           };
         })
       );
-      const allItems = uploadUrls.flatMap(({ uploadRequests }) => uploadRequests);
+      // Every path and URL the server handed back is checked here, before a
+      // single file is opened. A server that forges a filePath would otherwise
+      // make the CLI read arbitrary files off this machine and PUT them wherever
+      // it likes. Validated per response: each platform gets its own upload URLs
+      // for the same files.
+      const resolvedUploads = (
+        await Promise.all(
+          uploadUrls.map(({ uploadRequests }) =>
+            resolveUploadRequests({
+              uploadRequests,
+              exportDir: path.join(projectDir, outputDir),
+              manifest: files,
+            })
+          )
+        )
+      ).flat();
       await Promise.all(
-        allItems.map(async itm => {
+        resolvedUploads.map(async ({ item: itm, absolutePath, manifestEntry }) => {
           const isLocalBucketFileUpload = itm.requestUploadUrl.startsWith(
             `${serverUrl}/${appId}/uploadLocalFile`
           );
-          const formData = new FormData();
-          let file: fs.ReadStream;
-          try {
-            file = fs.createReadStream(path.join(projectDir, outputDir, itm.filePath));
-          } catch {
-            throw new Error(`Failed to read file ${itm.filePath}`);
-          }
-          formData.append(itm.fileName, file);
           if (isLocalBucketFileUpload) {
-            const response = await fetchWithRetries(itm.requestUploadUrl, {
-              method: 'PUT',
-              headers: {
-                ...formData.getHeaders(),
-                ...getAuthHeaders(credentials),
-              },
-              body: formData,
-            });
-            if (!response.ok) {
-              Log.error('Failed to upload file', await response.text());
-              throw new Error('Failed to upload file');
+            const formData = new FormData();
+            const file = fs.createReadStream(absolutePath);
+            formData.append(itm.fileName, file);
+            try {
+              const response = await fetchWithRetries(itm.requestUploadUrl, {
+                method: 'PUT',
+                headers: {
+                  ...formData.getHeaders(),
+                  ...getAuthHeaders(credentials),
+                },
+                body: formData,
+                // The URL was validated as a string; following a redirect would
+                // send these bytes to an origin nothing ever checked.
+                redirect: 'error',
+              });
+              if (!response.ok) {
+                Log.error('Failed to upload file', await response.text());
+                throw new Error('Failed to upload file');
+              }
+            } finally {
+              file.close();
             }
-            file.close();
             return;
           }
-          const findFile = files.find(f => f.path === itm.filePath || f.name === itm.fileName);
-          if (!findFile) {
-            Log.error(`File ${itm.filePath} not found`);
-            throw new Error(`File ${itm.filePath} not found`);
-          }
-          let contentType = mime.getType(findFile.ext);
+          let contentType = mime.getType(manifestEntry.ext);
           if (!contentType) {
             contentType = 'application/octet-stream';
           }
-          const buffer = await fs.readFile(path.join(projectDir, outputDir, itm.filePath));
+          const buffer = await fs.readFile(absolutePath);
           const response = await fetchWithRetries(itm.requestUploadUrl, {
             method: 'PUT',
             headers: {
@@ -380,12 +392,17 @@ export default class Publish extends Command {
               ...(itm.headers ?? {}),
             },
             body: buffer,
+            // Only the URL string was validated. node-fetch follows up to 20
+            // redirects by default with no protocol or host check, so a server
+            // handing back a valid https URL that 302s to http://internal-host
+            // would exfiltrate the bundle in cleartext to an origin of its
+            // choosing. Nothing legitimate redirects an upload PUT.
+            redirect: 'error',
           });
           if (!response.ok) {
             Log.error('❌ File upload failed', await response.text());
             process.exit(1);
           }
-          file.close();
         })
       );
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
