@@ -91,9 +91,18 @@ func (g publishGroup) route(method, path string, handler http.HandlerFunc, actio
 	g.router.Handle(path, g.guard(action, routeBranch)(handler)).Methods(method)
 }
 
-// uploadTokenRoute is route() for the one publish route whose branch comes
-// from its signed upload token rather than its path.
+// uploadTokenRoute is route() for the one publish route whose branch comes from
+// its signed upload token rather than its path.
+//
+// It is the door that skips route()'s "a publish route names a branch" check,
+// so it refuses a path that does carry one: the two doors are mutually
+// exclusive by construction, and a route registered through the wrong one
+// would be judged on a token claim it does not have.
 func (g publishGroup) uploadTokenRoute(method, path string, handler http.HandlerFunc) {
+	if strings.Contains(path, branchVar) {
+		panic("router: " + method + " " + path + " names a " + branchVar +
+			", so it must be registered with route(), which judges that branch rather than a token claim")
+	}
 	g.router.Handle(path, g.guard(apikeyrestrictions.ActionPublish, uploadTokenBranch)(handler)).Methods(method)
 }
 

@@ -97,3 +97,26 @@ func TestDeleteBranchStillReportsMissingBranch(t *testing.T) {
 	require.True(t, errors.As(err, &notFoundErr), "expected ErrResourceNotFound, got %v", err)
 	require.True(t, branchExists(t, pool, appId, "staging"))
 }
+
+// The listing has to carry the flag, not a constant. It used to say false for
+// every branch because the mapping had silently dropped the column, and the
+// deletion still worked, so nothing failed: the dashboard just showed an
+// unlocked branch that refused to be deleted.
+func TestGetBranchesCarriesTheProtectionFlag(t *testing.T) {
+	branchStore, pool := setupBranchStore(t)
+	appId := insertAppWithBranch(t, pool, "production", true)
+	_, err := pool.Exec(context.Background(),
+		"INSERT INTO branches (app_id, name, protected) VALUES ($1, $2, FALSE)", appId, "staging")
+	require.NoError(t, err)
+
+	branches, err := branchStore.GetBranches(context.Background(), appId)
+	require.NoError(t, err)
+
+	byName := map[string]bool{}
+	for _, branch := range branches {
+		byName[branch.BranchName] = branch.Protected
+	}
+	require.Len(t, byName, 2)
+	require.True(t, byName["production"], "a protected branch must be reported as protected")
+	require.False(t, byName["staging"], "an unprotected branch must not be reported as protected")
+}

@@ -110,6 +110,11 @@ func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
 		"unknown action": func(g publishGroup) {
 			g.route(http.MethodPost, "/rollback/{BRANCH}", nil, apikeyrestrictions.Action("delete"))
 		},
+		// The other door skips the branch requirement, so it has to refuse a
+		// path that carries one rather than judge it on an absent token claim.
+		"branch in the path of an upload-token route": func(g publishGroup) {
+			g.uploadTokenRoute(http.MethodPut, "/uploadLocalFile/{BRANCH}", nil)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
