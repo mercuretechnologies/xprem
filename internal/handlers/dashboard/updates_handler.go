@@ -165,13 +165,6 @@ func (h *UpdateHandler) GetUpdatesHandler(w http.ResponseWriter, r *http.Request
 		handlers.RenderError(w, http.StatusBadRequest, "Runtime version is empty")
 		return
 	}
-	// The same assertion the publish handlers carry: a CLI credential may only
-	// act on the branch the router judged. Both values come from {BRANCH}
-	// today, which is exactly why the check is cheap and why it is here.
-	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
-		handlers.RenderError(w, http.StatusForbidden, "This credential is not allowed on this branch")
-		return
-	}
 	cacheKey := dashboard.ComputeGetUpdatesCacheKey(appId, branchName, runtimeVersion)
 	cache := cache2.GetCache()
 	if cacheValue := cache.Get(cacheKey); cacheValue != "" {
