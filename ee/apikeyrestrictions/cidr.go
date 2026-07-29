@@ -10,12 +10,6 @@ import (
 	"strings"
 )
 
-// This file holds both halves of the allowlist normalization contract: what
-// an admin enters (parseCidrs) and what a caller is matched against
-// (ipAllowed). The canonical form on both sides is the unmapped address, the
-// same form helpers.ClientIP resolves; if one half changes the other must
-// follow.
-
 // ipAllowed reports whether the caller's address falls in one of the
 // allowlisted ranges. An unresolvable address never passes an allowlist.
 func ipAllowed(clientIP netip.Addr, allowed []netip.Prefix) bool {
@@ -48,11 +42,9 @@ func parseCidrs(entries []string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q", ErrInvalidCidr, entry)
 			}
-			// An IPv4-mapped ::ffff: prefix is stored in IPv4 form: ipAllowed
-			// compares callers unmapped, so an IPv6-family prefix would never
-			// match them. The first 96 bits are the mapped block itself, the
-			// rest is the IPv4 part; a prefix wider than /96 leaks outside
-			// the block and has no IPv4 equivalent.
+			// An IPv4-mapped ::ffff: prefix is stored in IPv4 form since callers
+			// are compared unmapped; a prefix wider than /96 leaks outside the
+			// IPv4-mapped block and has no IPv4 equivalent.
 			if parsed.Addr().Is4In6() {
 				if parsed.Bits() < 96 {
 					return nil, fmt.Errorf("%w: %q", ErrInvalidCidr, entry)
@@ -65,8 +57,7 @@ func parseCidrs(entries []string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q", ErrInvalidCidr, entry)
 			}
-			// Unmap so ::ffff:10.1.2.3 and 10.1.2.3 collapse into the same
-			// single-host entry, in the form the unmapped caller will carry.
+			// Unmap so ::ffff:10.1.2.3 and 10.1.2.3 collapse into the same entry.
 			addr = addr.Unmap()
 			prefix = netip.PrefixFrom(addr, addr.BitLen())
 		}

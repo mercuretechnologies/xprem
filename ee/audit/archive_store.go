@@ -12,14 +12,8 @@ import (
 	"path/filepath"
 )
 
-// GetAuditLogsObjectStore resolves the dedicated audit archive destination
-// for the deployment's STORAGE_MODE. Each provider has its own variable
-// (S3_BUCKET_AUDIT_LOGS_NAME, GCS_BUCKET_AUDIT_LOGS_NAME,
-// AZURE_BLOB_AUDIT_LOGS_CONTAINER_NAME, LOCAL_AUDIT_LOGS_BASE_PATH), and the
-// destination must differ from the updates bucket: reusing it would put
-// security-sensitive logs behind the update assets' access rules. The provider
-// structs live in internal/bucket (generic storage capability); knowing which
-// destination the audit archive uses is enterprise logic, so it lives here.
+// GetAuditLogsObjectStore resolves the dedicated audit archive destination for the deployment's STORAGE_MODE.
+// It must be a bucket or directory distinct from the updates store.
 func GetAuditLogsObjectStore() (ObjectPutter, error) {
 	switch bucket.ResolveBucketType() {
 	case bucket.S3BucketType:

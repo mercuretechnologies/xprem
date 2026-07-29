@@ -22,10 +22,8 @@ func NewBucketAuthStore(bucket bucket.Bucket) *BucketAuthStore {
 // ValidateCliCredential returns 0 as the key id: stateless mode has no API
 // key rows, so there is no per-key identity to enforce restrictions on.
 func (s *BucketAuthStore) ValidateCliCredential(ctx context.Context, appId string, auth types.Auth) (int64, error) {
-	// ValidateExpoAuth(appId, ...) enforces that the caller's Expo session
-	// matches the app identified by APP_ID; without the appId check,
-	// FetchExpoUserAccountInformations alone would accept any authenticated
-	// Expo user against any app (cross-tenant authz bypass).
+	// expo.ValidateAuth checks the caller's Expo session against appId; without
+	// it, any authenticated Expo user could act on any app.
 	expoAccount, err := expo.ValidateAuth(appId, auth)
 	if err != nil || expoAccount == nil {
 		return 0, fmt.Errorf("Error validating expo auth: %w", err)

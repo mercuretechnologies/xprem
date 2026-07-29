@@ -115,12 +115,8 @@ func (s *PostgresUpdateStore) GetUpdateType(ctx context.Context, update types.Up
 	return types.UpdateType(updateTypeInt), nil
 }
 
-// IsUpdateValid reports whether an update is complete. checked_at is the DB
-// equivalent of the bucket backend's ".check" sentinel: the row is inserted when
-// the upload URLs are handed out, and only stamped once the uploaded files have
-// been verified, so a row without it is an upload that never finished — its
-// bucket folder may be missing the bundle or assets the metadata references.
-// Presence in the database is therefore not enough to call an update valid.
+// IsUpdateValid reports whether an update is complete, based on whether
+// checked_at is set.
 func (s *PostgresUpdateStore) IsUpdateValid(ctx context.Context, update types.Update) (bool, error) {
 	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
 	if err != nil {
@@ -156,8 +152,7 @@ func (s *PostgresUpdateStore) MarkUpdateAsChecked(ctx context.Context, update ty
 	}
 	if rows == 0 {
 		// The conditional stamp refused: disambiguate on the row's own rollout state.
-		// A missing row keeps the pre-guard behavior (silent success) so legacy
-		// callers with an unknown id are unaffected.
+		// A missing row keeps the pre-guard silent-success behavior.
 		row, lookupErr := s.engine.GetUpdateByBranchNameAndRuntime(ctx, pgdb.GetUpdateByBranchNameAndRuntimeParams{
 			AppID:   pgAppID,
 			ID:      updateIdInt,
@@ -326,9 +321,7 @@ func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx contex
 }
 
 // escapeLikePattern neutralizes the ILIKE escape character in user-supplied
-// search terms: a term ending in "\" makes Postgres reject the whole pattern
-// ("LIKE pattern must not end with escape character"), surfacing as a 500.
-// "%" and "_" stay live wildcards on purpose (search semantics).
+// search terms; "%" and "_" stay live wildcards on purpose.
 func escapeLikePattern(term string) string {
 	return strings.ReplaceAll(term, `\`, `\\`)
 }
@@ -454,10 +447,8 @@ func (s *PostgresUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, upd
 	return nil
 }
 
-// GetLatestUpdateWithRollout returns the newest checked update for the platform along
-// with its per-update rollout state and its resolved control (via the explicit
-// control_update_id pointer). Both RolloutPercentage and Control stay nil for a plain
-// update. Returns nil when the branch has no checked update for (rtv, platform).
+// GetLatestUpdateWithRollout returns the newest checked update for the platform
+// along with its rollout state and resolved control, or nil if none exists.
 func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
 	row, err := s.engine.Queries.GetLatestUpdateWithRollout(ctx, pgdb.GetLatestUpdateWithRolloutParams{
 		AppID:    ToPgUUID(appId),
@@ -506,8 +497,8 @@ func (s *PostgresUpdateStore) HasActiveRolloutUpdate(ctx context.Context, appId 
 	})
 }
 
-// GetUpdateByUUID resolves a checked update by its persistent UUID, app-scoped. Returns
-// nil when no checked update matches. Backs the /assets rollout fix.
+// GetUpdateByUUID resolves a checked update by its persistent UUID, app-scoped.
+// Returns nil when no checked update matches.
 func (s *PostgresUpdateStore) GetUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error) {
 	var pgUUID pgtype.UUID
 	if err := pgUUID.Scan(updateUUID); err != nil {
@@ -594,11 +585,8 @@ func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, 
 	}, nil
 }
 
-// GetUpdateOriginByUUID resolves both dimensions the observe flattener
-// denormalizes onto every row: the branch of an update and the publish it came
-// from. Both are permanent properties of the update, so one cached lookup
-// covers the batch. An empty group is data, not an error: older CLIs and
-// rollback markers have none.
+// GetUpdateOriginByUUID resolves the branch and publish group an update belongs to.
+// An empty group is not an error: older CLIs and rollback markers have none.
 func (s *PostgresUpdateStore) GetUpdateOriginByUUID(ctx context.Context, appID string, updateUUID string) (string, string, error) {
 	row, err := s.engine.GetUpdateOriginByUUID(ctx, pgdb.GetUpdateOriginByUUIDParams{
 		AppID:      ToPgUUID(appID),

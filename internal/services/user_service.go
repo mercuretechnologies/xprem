@@ -11,30 +11,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// UserRepository is the users table. It has no bucket implementation on
-// purpose: user accounts only exist on the control plane, stateless mode
-// authenticates against ADMIN_EMAIL/ADMIN_PASSWORD and never touches a store.
+// UserRepository is the users table. It has no bucket implementation: user
+// accounts only exist on the control plane.
 type UserRepository interface {
 	InsertUser(ctx context.Context, params store.InsertUserParameters) (store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (store.User, error)
 	GetUserByID(ctx context.Context, id string) (store.User, error)
 	GetUsers(ctx context.Context) ([]store.User, error)
 	// DeleteUserByID, UpdateUserIsAdmin and UpdateUserEnabled enforce the "at
-	// least one enabled admin" invariant atomically
-	// (store.ErrWouldLeaveNoAdmin): a check-then-write at this level would race
-	// with concurrent demotions/deletions/disables.
+	// least one enabled admin" invariant atomically (store.ErrWouldLeaveNoAdmin).
 	DeleteUserByID(ctx context.Context, id string) error
-	// The three writes below also retire the account's sessions, in the same
-	// statement, whenever the change is one its live sessions must not survive:
-	// always for a new password, and on the losing direction only for the two
-	// flags. Doing it in the statement is what makes the revocation impossible
-	// to skip on a stale read or lose to a failure between two calls.
+	// These three writes also retire the account's sessions in the same
+	// statement whenever the change is one its live sessions must not survive.
 	UpdateUserPassword(ctx context.Context, id string, passwordHash string) error
 	UpdateUserIsAdmin(ctx context.Context, id string, isAdmin bool) error
 	UpdateUserEnabled(ctx context.Context, id string, enabled bool) error
-	// BumpUserSessionVersion retires them on their own, with no other change to
-	// the account. Only the replay response needs that: it has proof a
-	// credential leaked, and nothing about the row itself is wrong.
+	// BumpUserSessionVersion retires sessions on their own, for the replay
+	// response, with no other change to the account.
 	BumpUserSessionVersion(ctx context.Context, id string) error
 	TouchUserLastConnected(ctx context.Context, id string) error
 }
@@ -60,31 +53,26 @@ type ValidationError struct {
 func (e *ValidationError) Error() string { return e.Reason.Error() }
 func (e *ValidationError) Unwrap() error { return e.Reason }
 
-// UserService owns dashboard user accounts and the two invariants around the
-// admin flag: nobody can change their own, and the last admin can neither be
-// demoted nor deleted — so the dashboard can never lock itself out.
+// UserService owns dashboard user accounts and the invariant that the last
+// admin can neither be demoted nor deleted, so the dashboard can never lock
+// itself out.
 type UserService struct {
 	userRepo UserRepository
-	// ssoEnforced reports whether SSO is currently active (configured, enabled
-	// and licensed). Injected by the enterprise wiring; nil means never
-	// enforced. While enforced, accounts arrive through SSO provisioning and
-	// manual creation is refused.
+	// ssoEnforced is nil unless the enterprise wiring injects it, meaning SSO
+	// is never enforced. While enforced, manual account creation is refused.
 	ssoEnforced func(context.Context) bool
-	// onAuditEvent is the audit emission seam; nil (community) means account
-	// changes leave no events.
+	// onAuditEvent is nil in community edition, where account changes leave no
+	// events.
 	onAuditEvent auditlog.RecordFunc
 }
 
-// SetOnAuditEvent plugs the audit emission seam (see SetSSOEnforced for the
-// pattern). Nil-safe.
+// SetOnAuditEvent plugs the audit emission seam. Nil-safe.
 func (s *UserService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
 // recordUserEvent reports one account mutation. The actor comes from the
-// request context (see auditActorFromContext); the actorUserId parameters
-// some methods still take exist for their business rules, never for the
-// audit trail.
+// request context, never from the actorUserId parameters some methods take.
 func (s *UserService) recordUserEvent(ctx context.Context, action auditlog.Action, target store.User, metadata map[string]any) {
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        action,
@@ -103,7 +91,7 @@ func NewUserService(userRepo UserRepository) *UserService {
 	}
 }
 
-// SetSSOEnforced injects the live "SSO is active" signal (see the field doc).
+// SetSSOEnforced injects the live "SSO is active" signal.
 func (s *UserService) SetSSOEnforced(enforced func(context.Context) bool) {
 	s.ssoEnforced = enforced
 }
@@ -137,9 +125,8 @@ func (s *UserService) CreateUser(ctx context.Context, email string, password str
 		return store.User{}, ErrUserCreationDisabledBySSO
 	}
 	normalizedEmail := store.NormalizeEmail(email)
-	// The addr comparison rejects mailbox forms like "Jane <jane@acme.dev>":
-	// ParseAddress accepts them, but the stored string would never match a
-	// login lookup.
+	// The addr comparison rejects mailbox forms like "Jane <jane@acme.dev>",
+	// which ParseAddress accepts but a login lookup would never match.
 	if addr, err := mail.ParseAddress(normalizedEmail); err != nil || addr.Address != normalizedEmail {
 		return store.User{}, &ValidationError{Reason: errors.New("invalid email address")}
 	}
@@ -155,9 +142,7 @@ func (s *UserService) CreateUser(ctx context.Context, email string, password str
 		Email:        normalizedEmail,
 		PasswordHash: passwordHash,
 		IsAdmin:      isAdmin,
-		// An admin creating an account by hand is the approval: nothing to
-		// validate afterwards.
-		Enabled: true,
+		Enabled:      true,
 	})
 	if err != nil {
 		return store.User{}, err
@@ -173,8 +158,7 @@ func (s *UserService) DeleteUser(ctx context.Context, actorUserId string, target
 	if actorUserId == targetUserId {
 		return ErrCannotDeleteOwnAccount
 	}
-	// Read before the delete: afterwards there is no row left to name in the
-	// audit entry. Best-effort, like the entry itself.
+	// Read before the delete, since there is no row left to name afterwards.
 	target, targetErr := s.userRepo.GetUserByID(ctx, targetUserId)
 	if err := s.userRepo.DeleteUserByID(ctx, targetUserId); err != nil {
 		if errors.Is(err, store.ErrWouldLeaveNoAdmin) {
@@ -193,8 +177,6 @@ func (s *UserService) SetUserAdmin(ctx context.Context, actorUserId string, targ
 	if err := s.requireControlPlane(); err != nil {
 		return err
 	}
-	// Covers "you cannot remove your own admin flag": granting yourself a flag
-	// you already hold is the only other case, and it is a no-op anyway.
 	if actorUserId == targetUserId {
 		return ErrCannotChangeOwnAdminFlag
 	}
@@ -205,12 +187,9 @@ func (s *UserService) SetUserAdmin(ctx context.Context, actorUserId string, targ
 		}
 		return err
 	}
-	// An idempotent PATCH is not a privilege change: no event. Unknown
-	// previous state records anyway — losing an escalation would be worse
-	// than a duplicate. The compare races concurrent admins editing the same
-	// account: a stale pre-read can mislabel a real transition as a no-op.
-	// Accepted: the window is two humans on the same row within milliseconds,
-	// and closing it would need the store to return the previous value.
+	// An idempotent PATCH is not a privilege change worth an event. Unknown
+	// previous state records anyway, since losing an escalation is worse than
+	// a duplicate.
 	if targetErr == nil && target.IsAdmin == isAdmin {
 		return nil
 	}
@@ -232,9 +211,6 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 	if err := s.requireControlPlane(); err != nil {
 		return err
 	}
-	// Same reasoning as SetUserAdmin: enabling an account you are signed in
-	// with is a no-op, so the only meaningful self-target is locking yourself
-	// out.
 	if actorUserId == targetUserId {
 		return ErrCannotDisableOwnAccount
 	}
@@ -251,8 +227,6 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 	if targetErr != nil {
 		target = store.User{Id: targetUserId, Email: targetUserId}
 	}
-	// Approving a pending account has its own name in the catalog; revoking
-	// access is a plain update carrying the new state.
 	if enabled {
 		s.recordUserEvent(ctx, auditlog.ActionUserApproved, target, nil)
 	} else {
@@ -282,9 +256,7 @@ func (s *UserService) ChangePassword(ctx context.Context, userId string, current
 	if err != nil {
 		return err
 	}
-	// The store retires every session of the account in the same statement, so
-	// the new password and the death of the sessions minted under the old one
-	// either both land or neither does.
+	// The store retires every session of the account in the same statement.
 	if err := s.userRepo.UpdateUserPassword(ctx, userId, passwordHash); err != nil {
 		return err
 	}

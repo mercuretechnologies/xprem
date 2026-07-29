@@ -36,8 +36,7 @@ func TestMatchBranchPattern(t *testing.T) {
 		{"ab*ba", "abba", true},
 		{"a*b*c", "azzbzzc", true},
 		{"a*b*c", "azzc", false},
-		// A literal "[" is a branch name, not a character class: path.Match
-		// would answer ErrBadPattern here.
+		// A literal "[" is a branch name, not a character class.
 		{"beta[eu]", "beta[eu]", true},
 	}
 	for _, tc := range cases {
@@ -48,8 +47,6 @@ func TestMatchBranchPattern(t *testing.T) {
 }
 
 func TestAllowsBranch_NoRulesMeansEveryBranch(t *testing.T) {
-	// The default a key has always had, and the only state a community
-	// deployment ever sees.
 	for _, action := range AllActions {
 		assert.True(t, AllowsBranch(nil, "production", action))
 		assert.True(t, AllowsBranch([]BranchRule{}, "production", action))
@@ -75,9 +72,6 @@ func TestAllowsBranch_ScopedKey(t *testing.T) {
 }
 
 func TestAllowsBranch_WriteImpliesRead(t *testing.T) {
-	// eoas lists a branch's runtime versions and updates before publishing to
-	// it, so a publish grant that did not carry the read would fail halfway
-	// through the command.
 	rules := []BranchRule{{Pattern: "staging", Actions: []Action{ActionPublish}}}
 	assert.True(t, AllowsBranch(rules, "staging", ActionRead))
 
@@ -87,18 +81,11 @@ func TestAllowsBranch_WriteImpliesRead(t *testing.T) {
 }
 
 func TestAllowsBranch_ScopedKeyIsRefusedWithoutABranch(t *testing.T) {
-	// A request naming no branch cannot be matched against branch rules, and
-	// on an allow-list that reads as "no".
 	rules := []BranchRule{{Pattern: "*", Actions: []Action{ActionPublish}}}
 	assert.False(t, AllowsBranch(rules, "", ActionPublish))
-	// Unscoped keys keep passing: nothing was ever claimed about them.
 	assert.True(t, AllowsBranch(nil, "", ActionPublish))
 }
 
-// Implies must look at what is granted, not only at what is asked. Written the
-// short way ("a == b || b == ActionRead") any string at all would grant read,
-// and the only thing standing between that and a real grant would be the
-// store's filtering, in another package.
 func TestImplies_UnknownActionGrantsNothing(t *testing.T) {
 	rules := []BranchRule{{Pattern: "production", Actions: []Action{"delete"}}}
 	for _, action := range AllActions {
@@ -154,8 +141,7 @@ func TestNormalizeBranchRules_AcceptsWildcards(t *testing.T) {
 	assert.Len(t, normalized, 2)
 }
 
-// "*" and "**" are the same set of branches, so they must not be storable as
-// two rules: the duplicate check compares the normalized form.
+// "*" and "**" are the same set of branches, so they collapse to one rule.
 func TestNormalizeBranchRules_CollapsesWildcardRuns(t *testing.T) {
 	normalized, err := NormalizeBranchRules([]BranchRule{
 		{Pattern: "a**b", Actions: []Action{ActionRead}},

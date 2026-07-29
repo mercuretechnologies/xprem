@@ -94,8 +94,7 @@ func TestMutationsRequireValidLicense(t *testing.T) {
 	}
 }
 
-// Reads stay open without a license so the dashboard can always show what a
-// key is allowed to do.
+// Reads stay open even without a valid license.
 func TestGetAccessDoesNotRequireLicense(t *testing.T) {
 	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{7: {ApiKeyID: 7}}}
 	service := serviceWith(repo, false)
@@ -108,8 +107,7 @@ func TestGetAccessDoesNotRequireLicense(t *testing.T) {
 	}
 }
 
-// SetAccess runs entries through parseCidrs (its edge cases are covered in
-// cidr_test.go) and persists the normalized result together with the rules.
+// SetAccess persists CIDR entries and rules in normalized form.
 func TestSetAccessPersistsNormalizedInput(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
@@ -142,8 +140,7 @@ func TestSetAccessRejectsInvalidInput(t *testing.T) {
 	if !errors.Is(err, ErrInvalidCidr) {
 		t.Fatalf("expected ErrInvalidCidr, got %v", err)
 	}
-	// A malformed rule is caller input too, and must reach the handler as a
-	// validation error so it answers 400 rather than 500.
+	// A malformed rule must also surface as a validation error, not a 500.
 	err = service.SetAccess(context.Background(), "app", 1,
 		[]BranchRule{{Pattern: "feature/x", Actions: []Action{ActionRead}}}, nil)
 	if !validation.IsValidationError(err) {
@@ -154,8 +151,7 @@ func TestSetAccessRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// An empty allowlist must reach the repository as nil so the column stores
-// NULL (no restriction) instead of an empty array.
+// An empty allowlist must reach the repository as nil.
 func TestSetAccessEmptyAllowlistIsNil(t *testing.T) {
 	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
@@ -181,8 +177,7 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 	if err := service.Authorize(context.Background(), request); err != nil {
 		t.Fatalf("allowlisted address rejected: %v", err)
 	}
-	// The rejection names the resolved caller IP so an operator can debug the
-	// allowlist, while staying an ErrIpNotAllowed (mapped to a 403).
+	// The rejection names the resolved caller IP and still wraps ErrIpNotAllowed.
 	request.ClientIP = mustAddr(t, "203.0.113.9")
 	err := service.Authorize(context.Background(), request)
 	if !errors.Is(err, ErrIpNotAllowed) {
@@ -194,8 +189,7 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 	if !strings.Contains(err.Error(), "203.0.113.9") {
 		t.Fatalf("expected the rejected IP in the message, got %q", err.Error())
 	}
-	// An allowlist with an unresolvable caller address never passes, and the
-	// message hints at the proxy configuration that usually causes it.
+	// An unresolvable caller address never passes; the message hints at proxy config.
 	request.ClientIP = netip.Addr{}
 	err = service.Authorize(context.Background(), request)
 	if !errors.Is(err, ErrIpNotAllowed) {
@@ -206,9 +200,8 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 	}
 }
 
-// Regression for the parse/enforce mismatch: an allowlist entered in mapped
-// form must actually admit the caller it designates, whether that caller
-// arrives as plain IPv4 or in mapped form, and still exclude everyone else.
+// Regression: an allowlist entered in mapped form must admit the caller in
+// either mapped or plain IPv4 form.
 func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{}}
 	service := serviceWith(repo, true)
@@ -218,8 +211,7 @@ func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The fake repository does not wire Set to Get; feed the stored prefixes
-	// back so Authorize evaluates exactly what was persisted.
+	// The fake repo does not wire Set to Get, so feed the stored prefixes back manually.
 	repo.access[1] = ApiKeyAccess{ApiKeyID: 1, AllowedIps: repo.setAccess.AllowedIps}
 
 	for _, caller := range []string{"203.0.113.7", "::ffff:203.0.113.7", "10.20.30.40"} {
@@ -238,8 +230,7 @@ func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
 	}
 }
 
-// A key with no rule reaches every branch: the state every community
-// deployment is in, and the default of a fresh key.
+// A key with no rule reaches every branch.
 func TestAuthorizeAllowsEverythingWithoutRules(t *testing.T) {
 	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1}}}
 	service := serviceWith(repo, true)
@@ -268,8 +259,7 @@ func TestAuthorizeEnforcesBranchRules(t *testing.T) {
 	if err := service.Authorize(context.Background(), publishOn("pr-482")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// In scope, but the action is not granted. The message names both ends so
-	// the operator knows which one to fix.
+	// In scope, but the action is not granted.
 	err := service.Authorize(context.Background(), publishOn("production"))
 	if !errors.Is(err, services.ErrCliAccessDenied) {
 		t.Fatalf("expected a CLI access denial, got %v", err)
@@ -281,8 +271,7 @@ func TestAuthorizeEnforcesBranchRules(t *testing.T) {
 	if err := service.Authorize(context.Background(), publishOn("staging")); !errors.Is(err, services.ErrCliAccessDenied) {
 		t.Fatalf("expected a CLI access denial, got %v", err)
 	}
-	// Reading production is what the rule does grant, and eoas reads a branch
-	// before it publishes.
+	// Reading production is granted by the rule.
 	read := publishOn("production")
 	read.Action = ActionRead
 	if err := service.Authorize(context.Background(), read); err != nil {
@@ -290,8 +279,7 @@ func TestAuthorizeEnforcesBranchRules(t *testing.T) {
 	}
 }
 
-// A scoped key is refused on a request that names no branch: nothing matches
-// rules that are all about branches.
+// A scoped key is refused on a request that names no branch.
 func TestAuthorizeRefusesBranchlessRequestForScopedKey(t *testing.T) {
 	repo := &fakeAccessRepo{
 		access: map[int64]ApiKeyAccess{
@@ -304,8 +292,7 @@ func TestAuthorizeRefusesBranchlessRequestForScopedKey(t *testing.T) {
 	if err := service.Authorize(context.Background(), publishOn("")); !errors.Is(err, services.ErrCliAccessDenied) {
 		t.Fatalf("expected a CLI access denial for a scoped key, got %v", err)
 	}
-	// An unscoped key claimed nothing, so it keeps passing: this is the
-	// local-file upload of a community deployment.
+	// An unscoped key keeps passing.
 	unscoped := publishOn("")
 	unscoped.APIKeyID = 2
 	if err := service.Authorize(context.Background(), unscoped); err != nil {

@@ -257,11 +257,8 @@ func TestAuthorizeFallsBackWithoutLicense(t *testing.T) {
 		"an expired license must never widen member access beyond community rules")
 }
 
-// Without a license there are no grants to consult, so the route's own
-// fallback is the only thing left that can decide. A route that chose
-// FallbackAnyMember keeps letting members in, which is how the reads that were
-// open before these permissions existed avoid regressing on community
-// deployments: the permission only starts biting once roles are enforced.
+// Without a license, a route that chose FallbackAnyMember keeps letting
+// members in.
 func TestAuthorizeHonorsAnyMemberFallbackWithoutLicense(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepo()
@@ -271,9 +268,8 @@ func TestAuthorizeHonorsAnyMemberFallbackWithoutLicense(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Once roles ARE enforced, the same route stops being open: the fallback is
-// about the unlicensed case only, and confusing the two would make the
-// permission decorative.
+// Once roles are enforced, the fallback no longer applies; only the
+// unlicensed case honors it.
 func TestAnyMemberFallbackStopsApplyingOnceRolesAreEnforced(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepo()
@@ -287,10 +283,8 @@ func TestAnyMemberFallbackStopsApplyingOnceRolesAreEnforced(t *testing.T) {
 	require.ErrorAs(t, err, &denied, "a granted app without the permission must still refuse")
 }
 
-// Stateless mode has exactly one account and it is an admin, so a non-admin
-// subject cannot legitimately reach the no-control-plane branch. It refuses
-// whatever the route asked for, because a branch that exists to catch a broken
-// invariant must not carry a widening.
+// A non-admin subject should never reach the no-control-plane branch; it
+// refuses regardless of fallback.
 func TestAuthorizeRefusesWithoutControlPlaneEvenOnAnyMemberFallback(t *testing.T) {
 	ctx := context.Background()
 	service := NewRBACService(nil, nil)

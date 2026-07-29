@@ -10,11 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Identity is expected to be quiet in steady state (per-session, mostly
-// no-op re-identifies); these metrics exist to see the two failure modes
-// coming: latency creep on the hot stat rows during install storms (the
-// signal to move stats to a batched aggregator), and a chronic dropped-keys
-// count (a client sending keys the operator never declared).
 var (
 	identityApplyDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -22,8 +17,6 @@ var (
 			Help:    "Duration of identity operations against the store, by operation and outcome",
 			Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
 		},
-		// outcome keeps fast-failing hostile requests from skewing the
-		// latency percentiles of legitimate operations down.
 		[]string{"op", "outcome"},
 	)
 
@@ -52,11 +45,7 @@ func observeApply(appID string, op Op, err error, droppedKeys int, elapsed time.
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
-		// The appId only becomes trustworthy once the store accepted it (the
-		// device FK guarantees a real app). On errors it may be any string a
-		// hostile client sprayed on the unauthenticated wire, and every unique
-		// label value allocates a permanent child series in the registry, so
-		// error counts are aggregated under a sentinel instead.
+		// On error, appID may be arbitrary client input; aggregate under a sentinel to bound cardinality.
 		appID = "unknown"
 	}
 	identityApplyDuration.WithLabelValues(string(op), outcome).Observe(elapsed.Seconds())

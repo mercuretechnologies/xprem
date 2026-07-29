@@ -14,8 +14,8 @@ import (
 
 func pattern(value string) *string { return &value }
 
-// The LEFT JOIN yields one row per rule, and a key with no rule yields one
-// null-extended row. Folding that back is the only logic in the store.
+// The LEFT JOIN yields one row per rule; a key with no rule yields one
+// null-extended row.
 func TestFoldAccessRows(t *testing.T) {
 	allowed := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	rows := []pgdb.GetApiKeyAccessByAppIDRow{
@@ -48,10 +48,8 @@ func TestFoldAccessRowsOnNoRows(t *testing.T) {
 	}
 }
 
-// An action string the catalog does not know can only come from a hand-written
-// row. Dropping it is what keeps a future release from deciding what it means;
-// the rule survives with whatever it legitimately grants, and a rule left with
-// nothing grants nothing.
+// An unknown action can only come from a hand-written row; it is dropped and
+// the rule survives with what remains.
 func TestFoldAccessRowsDropsUnknownActions(t *testing.T) {
 	rows := []pgdb.GetApiKeyAccessByAppIDRow{
 		{ID: 1, Pattern: pattern("production"), Actions: []string{"publish", "delete"}},
@@ -65,7 +63,7 @@ func TestFoldAccessRowsDropsUnknownActions(t *testing.T) {
 	if len(folded[1].BranchRules[0].Actions) != 0 {
 		t.Fatalf("expected no action to survive, got %+v", folded[1].BranchRules[0].Actions)
 	}
-	// And a rule left with no action grants nothing, on any action.
+	// A rule left with no action grants nothing.
 	for _, action := range AllActions {
 		if AllowsBranch(folded[1].BranchRules, "staging", action) {
 			t.Fatalf("a rule with no surviving action granted %q", action)

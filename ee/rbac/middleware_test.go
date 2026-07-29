@@ -29,9 +29,7 @@ func (f *fakeUserLookup) GetUserByID(_ context.Context, id string) (store.User, 
 }
 
 // performAppRequest sends a request through the middleware on an app-scoped
-// route; the inner handler answers "200 handler executed", so that response
-// means the middleware let the request through and anything else is its
-// refusal.
+// route; a 200 means the middleware let it through.
 func performAppRequest(t *testing.T, mw mux.MiddlewareFunc, principal *services.DashboardPrincipal) *httptest.ResponseRecorder {
 	t.Helper()
 	router := mux.NewRouter()
@@ -87,8 +85,8 @@ func TestRequirePermissionStatelessTrustsClaim(t *testing.T) {
 }
 
 func TestRequirePermissionCommunityFallbackWithoutLicense(t *testing.T) {
-	// Control plane, grants in place, but no license: the grant must not
-	// widen anything, the member gets the community admin-only refusal.
+	// Control plane, grants in place, but no license: the member gets the
+	// community admin-only refusal.
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermBranchCreate}}}
 	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}

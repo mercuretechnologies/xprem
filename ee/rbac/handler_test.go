@@ -108,7 +108,7 @@ func TestGrantHandlersContract(t *testing.T) {
 	require.Equal(t, "app-2", repo.replaced["member-1"][0].AppID)
 
 	// A grants request for an account that does not exist is a 404, not an
-	// empty list that reads like a real permissionless user.
+	// empty list.
 	recorder = run(t, http.MethodGet, "/users/ghost/grants", "", nil)
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 	recorder = run(t, http.MethodPut, "/users/ghost/grants", `[]`, nil)

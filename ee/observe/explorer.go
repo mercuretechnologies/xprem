@@ -84,13 +84,10 @@ var observedMetricDefinitions = []MetricDefinition{
 type ExplorerQuery struct {
 	From time.Time
 	To   time.Time
-	// Every dimension is a set: empty means "do not filter", one value is the
-	// common case, and several is what turns a filter into a comparison.
+	// Every dimension is a set: empty means "do not filter".
 	Platform  []string
 	UpdateIDs []string
-	// UpdateGroupIDs are the groups asked for; MemberUpdateIDs are the update
-	// ids they resolve to, kept apart because rows ingested before the group
-	// column existed can only be found through their members.
+	// UpdateGroupIDs are the groups asked for; MemberUpdateIDs are what they resolve to.
 	UpdateGroupIDs  []string
 	MemberUpdateIDs []string
 	Branches        []string
@@ -101,24 +98,13 @@ type ExplorerQuery struct {
 	AppBuildNumbers []string
 	EASBuildIDs     []string
 	Environments    []string
-	// Hardware and OS dimensions. They ride on every telemetry row already
-	// (flatten.go fills them from device.model.identifier, os.name and
-	// os.version), and they are what makes "is this release slower on old
-	// Android phones" answerable.
-	OSNames      []string
-	OSVersions   []string
-	DeviceModels []string
-	// CountryCode is the country frozen on the row at ingestion, not the
-	// device's current country: filtering on it answers "where was it slow",
-	// not "where is that phone now". The rows also carry the city centroid
-	// coordinates, which nothing queries yet.
+	OSNames         []string
+	OSVersions      []string
+	DeviceModels    []string
+	// CountryCode is frozen at ingestion, not the device's current country.
 	CountryCodes   []string
 	MetadataFilter [][]byte
-	// Conditions narrows on the state the device reported for a measurement,
-	// keyed by breakdown dimension name. Deliberately apart from the dimensions
-	// above: those describe a device and hold on every row it ever sent, while a
-	// thermal state describes one measurement. Only the timing reads honor them,
-	// so a page that cannot must not offer them.
+	// Conditions narrows on the device's reported state; only timing reads honor them.
 	Conditions map[string][]string
 	Bucket     time.Duration
 }
@@ -126,10 +112,7 @@ type MetricDefinition struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Label string `json:"label"`
-	// What the timing actually measures, in one sentence, for the dashboard to
-	// show next to the chart. Written here rather than there because what a
-	// metric means is a property of the client that reports it, and a label
-	// alone ("Warm launch") does not say what was and was not counted.
+	// Description is what the timing actually measures, shown next to the chart.
 	Description string `json:"description"`
 	Unit        string `json:"unit"`
 	Category    string `json:"category"`
@@ -149,16 +132,9 @@ type MetricStats struct {
 	Max    float64 `json:"max"`
 	P90    float64 `json:"p90"`
 	P99    float64 `json:"p99"`
-	// Distinct installs behind the samples. A count of samples alone reads as
-	// a fleet-wide number when it can just as well be one device reporting a
-	// thousand times.
+	// Devices is the count of distinct installs behind the samples.
 	Devices uint64 `json:"devices"`
-	// Whether any sample carried the state the device was in. Probed on one of
-	// the framework keys rather than on "has params at all": a navigation timing
-	// carries its route params and none of the conditions, so the looser test
-	// would promise a split that comes back empty. Read from the data rather
-	// than declared per metric because which timings carry them is the client's
-	// choice and it changes with the SDK.
+	// ReportsConditions is whether any sample carried the device's state.
 	ReportsConditions bool `json:"reportsConditions"`
 }
 
@@ -185,10 +161,6 @@ type Overview struct {
 }
 
 // observeCohortLimit caps the identity cohort an attribute filter resolves to.
-// The whole list is held in memory and copied onto the ClickHouse connection
-// as an external table on every request, so it is sized to stay a few
-// megabytes rather than to cover any fleet: past it the filter is close enough
-// to "everyone" that asking for a narrower one is the better answer.
 const observeCohortLimit = 200_000
 
 type ObserveEventPoint struct {
@@ -210,8 +182,7 @@ type Events struct {
 }
 
 // Explorer queries telemetry facts from ClickHouse and the mutable geo /
-// identity dimension from PostgreSQL. ClickHouse may be nil: the map remains
-// useful while the metrics and logs views report available=false.
+// identity dimension from PostgreSQL. ClickHouse may be nil.
 type Explorer struct {
 	postgres   *database.Engine
 	clickhouse *clickhouse.Engine
@@ -256,8 +227,7 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 		AppID:       appUUID,
 		ActiveSince: pgtype.Timestamptz{Time: activeSince.UTC(), Valid: true},
 		Filters:     filters,
-		// One over the cap, so "exactly at the cap" is not mistaken for
-		// "truncated".
+		// One over the cap, so "at the cap" is not mistaken for "truncated".
 		Lim: observeCohortLimit + 1,
 	})
 	if err != nil {
@@ -278,21 +248,10 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), len(ids) == 0, nil
 }
 
-// prepareTelemetryRead runs the two preparations every ClickHouse read needs:
-// update groups are resolved to the concrete update ids the rows carry, and the
-// identity cohort behind an attribute filter is installed on the connection as
-// an external table. The bool says the filters cannot match a single row, in
-// which case the caller answers with its own empty shape rather than asking
-// ClickHouse a question with a known answer.
-//
-// Deliberately not used by ReadOverview: it reads Postgres between the two
-// steps and returns early when there is no ClickHouse at all, so going through
-// here would make it pay for a cohort lookup it never uses.
-// telemetryReadTimeout bounds a ClickHouse read. Without one a degraded
-// ClickHouse holds the HTTP goroutine and its connection for as long as the
-// caller waits, and a dashboard refreshing on a timer stacks those up. The
-// write path has had its own bound since telemetryInsertTimeout; this is the
-// same reasoning for the side that runs on every page view.
+// prepareTelemetryRead resolves update groups to concrete update ids and
+// installs the identity cohort behind an attribute filter as an external
+// table. The returned bool says the filters cannot match a single row.
+// telemetryReadTimeout bounds a ClickHouse read.
 const telemetryReadTimeout = 30 * time.Second
 
 func (e *Explorer) prepareTelemetryRead(
@@ -314,9 +273,7 @@ func (e *Explorer) prepareTelemetryRead(
 	return queryContext, resolved, emptyCohort, nil
 }
 
-// resolveUpdateGroup collects the update ids behind the requested groups. One
-// query per group: a comparison rarely holds more than a handful, and the
-// lookup is a single indexed row set each time.
+// resolveUpdateGroup collects the update ids behind the requested groups.
 func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query ExplorerQuery) (ExplorerQuery, bool, error) {
 	if len(query.UpdateGroupIDs) == 0 {
 		return query, false, nil
@@ -346,8 +303,6 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 		}
 	}
 	query.MemberUpdateIDs = members
-	// Groups that resolve to nothing at all: the answer is empty, and saying so
-	// beats a query that silently matches every row.
 	return query, len(members) == 0, nil
 }
 
@@ -355,8 +310,6 @@ func telemetryWhere(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFra
 	// app_id is prepended by callers so unions can reuse this helper cleanly.
 	where := table + ".app_id = ? AND " + table + ".timestamp >= ? AND " + table + ".timestamp <= ?"
 	args := []any{query.From.UTC(), query.To.UTC()}
-	// One value or twenty, the predicate is the same shape. IN with a single
-	// element costs nothing and keeps this readable.
 	inFilter := func(column sqlFragment, values []string) {
 		if len(values) == 0 {
 			return
@@ -368,8 +321,7 @@ func telemetryWhere(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFra
 	inFilter("update_id", query.UpdateIDs)
 	if len(query.UpdateGroupIDs) > 0 {
 		// Rows ingested before update_group_id existed carry the zero uuid, so
-		// the member ids stay in the predicate: dropping them would silently
-		// hide every sample older than the column.
+		// the member ids stay in the predicate.
 		where += " AND (" + table + ".update_group_id IN ? OR " + table + ".update_id IN ?)"
 		args = append(args, query.UpdateGroupIDs, query.MemberUpdateIDs)
 	}
@@ -455,17 +407,14 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 	if err := e.readSummary(queryContext, appID, query, cohort, &overview.Summary); err != nil {
 		return Overview{}, err
 	}
-	// Deliberately sequential: each of these already fans out across every
-	// core ClickHouse has, so issuing them together just makes them share the
-	// same cores. Measured at a million devices, concurrency here changed
-	// nothing; what the page cost was the queries themselves.
+	// Deliberately sequential: each query already fans out across every core
+	// ClickHouse has, so concurrency here would only share the same cores.
 	metrics, err := e.readMetricStats(queryContext, appID, query, cohort)
 	if err != nil {
 		return Overview{}, err
 	}
 	// Only the series that will be read: readMetricStats keeps the hundred
-	// busiest names, and without this the points query aggregated every bucket
-	// of every other name for nothing.
+	// busiest names.
 	names := make([]string, 0, len(metrics))
 	for _, metric := range metrics {
 		names = append(names, metric.Name)
@@ -481,22 +430,14 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 	return overview, nil
 }
 
-// The conditions are deliberately NOT applied here, and neither are they in
-// locations: they qualify one measurement (the state the device was in while a
-// timing was taken), and this counts devices, sessions and events across both
-// telemetry tables. observe_logs carries no such column, so narrowing the
-// metrics arm alone would answer with a number that is neither filtered nor
-// unfiltered. The summary and the map answer about the fleet; only the metric
-// series answer about measurements, and those do apply them.
+// readSummary aggregates devices, sessions and events across both telemetry
+// tables. Conditions are not applied here since they qualify one measurement,
+// not the fleet.
 func (e *Explorer) readSummary(ctx context.Context, appID string, query ExplorerQuery, cohort bool, summary *ObserveSummary) error {
 	metricsWhere, metricsArgs := telemetryWhere("m", query, cohort)
 	logsWhere, logsArgs := telemetryWhere("l", query, cohort)
 	// uniq for the two counted in the millions, uniqExact for the handful of
-	// releases, builds and updates an app has: an exact distinct count over a
-	// fleet costs more than every other figure on the page put together, and
-	// nobody reconciles "active devices" to the unit. Deduplication groups on
-	// one hashed key rather than on the ten columns it stands for, which is the
-	// difference between a page that answers and a page that spins.
+	// releases, builds and updates an app has.
 	sql := sqlf(`
 		SELECT uniq(eas_client_id),
 		       uniqExactIf(app_version, app_version != ''),
@@ -564,9 +505,7 @@ func (e *Explorer) readMetricStats(ctx context.Context, appID string, query Expl
 	where += conditionWhere
 	args = append(args, conditionArgs...)
 	source, sourceArgs := metricsSource(appID, query, "")
-	// uniq, not uniqExact: this is the "N devices" of a caption, and an exact
-	// distinct count over millions of rows costs more than the rest of the
-	// query put together for a figure nobody reconciles to the unit.
+	// uniq, not uniqExact: this is the "N devices" of a caption, not an exact count.
 	sql := sqlf(`
 		SELECT metric_name, count(), toFloat64(quantileTDigest(0.5)(value)), avg(value),
 		       min(value), max(value), toFloat64(quantileTDigest(0.9)(value)),
@@ -610,19 +549,16 @@ func (e *Explorer) readMetricStats(ctx context.Context, appID string, query Expl
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// The cards come back in the order the definitions are written, not in the
-	// order the fleet happened to report them: sorting by sample count reshuffles
-	// the page every time the data moves, and it separates timings that only
-	// make sense read next to each other. Anything unmapped keeps its place at
-	// the end, ranked by volume, since there is no declared order to give it.
+	// Cards come back in the order the definitions are written, not by sample
+	// count. Anything unmapped keeps its place at the end, ranked by volume.
 	sort.SliceStable(metrics, func(i, j int) bool {
 		return definitionOrder(metrics[i].Name) < definitionOrder(metrics[j].Name)
 	})
 	return metrics, nil
 }
 
-// definitionOrder is where a metric sits in observedMetricDefinitions, and past
-// the end for one it does not declare.
+// definitionOrder is where a metric sits in observedMetricDefinitions, or past
+// the end if it is not declared.
 func definitionOrder(name string) int {
 	for i, definition := range observedMetricDefinitions {
 		if definition.Name == name {

@@ -16,18 +16,15 @@ import (
 	"time"
 )
 
-// ObjectPutter is the one storage capability the archive needs; the wiring
-// hands in the dedicated audit destination (GetAuditLogsObjectStore).
+// ObjectPutter is the storage capability the archive exporter needs.
 type ObjectPutter interface {
 	PutObject(ctx context.Context, key string, body []byte) error
 }
 
-// exportBatchSize bounds one archive file; a variable so same-package tests
-// can exercise the multi-batch loop without thousands of rows.
+// exportBatchSize bounds one archive file; a var so tests can exercise the multi-batch loop cheaply.
 var exportBatchSize = 1000
 
-// exportLine is the NDJSON shape of one archived event: the same field names
-// as the HTTP API, so a SIEM parses one vocabulary whichever door it uses.
+// exportLine is the NDJSON shape of one archived event, mirroring the HTTP API's field names.
 type exportLine struct {
 	Id            int64          `json:"id"`
 	OccurredAt    string         `json:"occurredAt"`
@@ -64,11 +61,7 @@ func exportLineFrom(event Event) exportLine {
 	}
 }
 
-// StartArchiveFromEnv reads the archive configuration (ARCHIVE_AUDIT_LOGS,
-// AUDIT_LOGS_EXPORT_INTERVAL_SECONDS, the destination variables through
-// GetAuditLogsObjectStore) and starts the exporter when enabled. The feature
-// knowledge lives here; the composition root only decides that a returned
-// error is fatal to the boot.
+// StartArchiveFromEnv reads the archive configuration from the environment and starts the exporter when enabled.
 func (s *AuditService) StartArchiveFromEnv(ctx context.Context) error {
 	if config.GetEnv("ARCHIVE_AUDIT_LOGS") != "true" {
 		return nil
@@ -90,17 +83,12 @@ func (s *AuditService) StartArchiveFromEnv(ctx context.Context) error {
 	return nil
 }
 
-// startArchive exports the audit log to the dedicated archive destination:
-// once at boot (catching up after downtime), then on the configured interval.
-// Files are NDJSON batches keyed YYYY/MM/DD/<firstId>-<lastId>.ndjson under
-// the first event's UTC date. Purged rows live on in the archive: this is the
-// long-term retention story.
+// startArchive exports the audit log to the archive destination once at boot, then on the configured interval.
 func (s *AuditService) startArchive(ctx context.Context, interval time.Duration, putter ObjectPutter) {
 	if s.repo == nil || putter == nil {
 		return
 	}
-	// Flipped before any goroutine runs (the wiring starts the archive before
-	// the retention purge): from here on the purge spares unarchived rows.
+	// Set before the goroutine starts so the retention purge sees it and spares unarchived rows.
 	s.archiveEnabled = true
 	go func() {
 		s.runArchive(ctx, putter)
@@ -118,12 +106,10 @@ func (s *AuditService) startArchive(ctx context.Context, interval time.Duration,
 }
 
 func (s *AuditService) runArchive(ctx context.Context, putter ObjectPutter) {
-	// Bounded per tick: a huge backlog resumes at the next tick rather than
-	// running unbounded.
+	// Bounded per tick: a huge backlog resumes at the next tick instead of running unbounded.
 	archiveCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	// One exporter across the cluster: the other replicas skip their tick
-	// instead of uploading the same files and losing the cursor CAS.
+	// Only one replica exports at a time; the others skip this tick.
 	release, ok, err := s.repo.TryExportLock(archiveCtx)
 	if err != nil {
 		log.Printf("audit: archive export lock failed: %v", err)
@@ -165,11 +151,7 @@ func (s *AuditService) archiveNextBatch(ctx context.Context, putter ObjectPutter
 		exportable := exportLineFrom(event)
 		line, err := json.Marshal(exportable)
 		if err != nil {
-			// One unserializable value must not wedge the archive forever,
-			// but the cursor will advance past this event: dropping the whole
-			// line would delete it unarchived at the next purge. The facts
-			// always serialize, only the metadata annotation can fail, so the
-			// line is written without it.
+			// Metadata can fail to serialize; the event is still archived, without it.
 			log.Printf("audit: archive dropped unserializable metadata on event %d: %v", event.ID, err)
 			exportable.Metadata = nil
 			if line, err = json.Marshal(exportable); err != nil {
@@ -194,8 +176,7 @@ func (s *AuditService) archiveNextBatch(ctx context.Context, putter ObjectPutter
 		return false, err
 	}
 	if !advanced {
-		// Another replica exported this batch concurrently: same key, same
-		// content, so our upload was an idempotent overwrite. Yield to it.
+		// Another replica already exported this batch; our upload was an idempotent overwrite.
 		return false, nil
 	}
 	return len(events) == exportBatchSize, nil

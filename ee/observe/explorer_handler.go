@@ -25,10 +25,7 @@ var (
 	errInvalidObservePlatform = errors.New("invalid Observe platform")
 	errInvalidObserveFilter   = errors.New("invalid Observe filter")
 	errInvalidIdentityFilter  = errors.New("invalid Identity filter")
-	// The identity cohort behind an attribute filter is copied onto the wire
-	// as an external table on every request, so it has a hard cap. Past it the
-	// only honest answers are "narrow the filter" or a silently partial
-	// result; this is the first one.
+	// errObserveCohortTooLarge is returned instead of a silently partial result.
 	errObserveCohortTooLarge = errors.New("Observe identity cohort too large")
 )
 
@@ -38,15 +35,8 @@ const (
 	maxLogsWindow        = 31 * 24 * time.Hour
 	defaultLogsLimit     = 200
 	maxLogsLimit         = 500
-	// A check-in poll is a tail read, and its cost is the number of registry
-	// rows inside the window, not the size of the fleet as such. The recorder
-	// debounces to one write per device per minute, so a window of W seconds
-	// touches roughly (concurrently active devices * W / 60) rows: on a fleet
-	// with 500k devices online, 30 seconds is already a quarter million rows
-	// to aggregate. So the lookback is clamped hard, and a client that fell
-	// behind (backgrounded tab, slow network) skips the gap instead of paying
-	// for it. It loses nothing that matters: the missed arrivals are already
-	// counted in the overview's static layer, only their animation is gone.
+	// maxCheckInLookback clamps the tail-read window; a client that fell behind
+	// skips the gap rather than paying for an unbounded aggregate.
 	maxCheckInLookback     = 30 * time.Second
 	defaultCheckInLookback = 10 * time.Second
 )
@@ -69,9 +59,7 @@ type ExplorerHandler struct {
 }
 
 func NewExplorerHandler(reader ExplorerReader, schema IdentitySchemaReader) *ExplorerHandler {
-	// A nil *Explorer or *identity.Service stored in an interface is itself
-	// non-nil. Wiring does exactly that when ClickHouse or the control plane is
-	// disabled, so normalize both here before the handler uses the interfaces.
+	// A nil *Explorer or *identity.Service stored in an interface is itself non-nil.
 	if explorer, ok := reader.(*Explorer); ok && explorer == nil {
 		reader = nil
 	}
@@ -118,9 +106,8 @@ func observeBucket(window time.Duration) time.Duration {
 	}
 }
 
-// Repeated parameters, not a separator: an Apple hardware identifier is
-// "iPhone18,2", so splitting on a comma would turn one model into two, and any
-// other separator is a bet that no value will ever contain it.
+// splitFilterValues trims repeated query parameters rather than splitting on
+// a separator: an Apple hardware identifier is "iPhone18,2".
 func splitFilterValues(raw []string) []string {
 	values := make([]string, 0, len(raw))
 	for _, part := range raw {
@@ -162,14 +149,10 @@ func parseUUIDFilters(raw []string) ([]string, bool) {
 	return parsed, true
 }
 
-// Returns the normalized values, not the ones that came in: platform is stored
-// lowercase, so passing "IOS" straight through validates fine and then matches
-// nothing, which reads as "no data" instead of as a rejected filter.
+// parsePlatformFilters returns the normalized values, not the ones that came
+// in, since platform is stored lowercase.
 func parsePlatformFilters(raw []string) ([]string, bool) {
 	values := splitFilterValues(raw)
-	// Capped like every other dimension. The values are validated against a
-	// two-entry allowlist below, but the LIST is not: repeating ?platform=ios
-	// builds an arbitrarily long IN clause out of one legal value.
 	if len(values) > maxFilterValues {
 		return nil, false
 	}
@@ -194,10 +177,8 @@ func parsePlatform(value string) (string, bool) {
 	}
 }
 
-// Attributes arrive as `key:value` pairs. Repeating a key widens it ("plan is
-// pro or enterprise"), naming another key narrows further ("and tenant is
-// globex"), and the pair set becomes the containment documents the cohort
-// lookup runs on.
+// metadataFilter parses `key:value` attribute pairs into the containment
+// documents the identity cohort lookup runs on.
 func (h *ExplorerHandler) metadataFilter(ctx context.Context, appID string, pairs []string) ([][]byte, error) {
 	pairs, ok := parseTextFilters(pairs)
 	if !ok {
@@ -224,13 +205,8 @@ func (h *ExplorerHandler) metadataFilter(ctx context.Context, appID string, pair
 	return docs, nil
 }
 
-// boundedRead gives every telemetry read the same deadline. Without one a
-// degraded ClickHouse holds the HTTP goroutine and its connection for as long
-// as the caller waits, and a dashboard refreshing on a timer stacks those up
-// until the pool is gone. The write path has had telemetryInsertTimeout since
-// the ingestion work; this is the same reasoning for the side that runs on
-// every page view, and it covers the PostgreSQL cohort lookup that precedes
-// the ClickHouse query too.
+// boundedRead gives every telemetry read the same deadline, covering the
+// PostgreSQL cohort lookup that precedes the ClickHouse query too.
 func boundedRead(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), telemetryReadTimeout)
 }
@@ -250,9 +226,8 @@ func (h *ExplorerHandler) parseBaseQuery(r *http.Request, maximum time.Duration)
 	return query, nil
 }
 
-// The narrowing half of a query, without its window. Split out because the map
-// feed bounds itself with a cursor rather than a period, and still has to
-// honour every dimension the page is filtered on.
+// parseDimensions is the narrowing half of a query, without its window; split
+// out because the map feed bounds itself with a cursor rather than a period.
 func (h *ExplorerHandler) parseDimensions(r *http.Request) (ExplorerQuery, error) {
 	platforms, ok := parsePlatformFilters(r.URL.Query()["platform"])
 	if !ok {
@@ -263,10 +238,8 @@ func (h *ExplorerHandler) parseDimensions(r *http.Request) (ExplorerQuery, error
 		return ExplorerQuery{}, err
 	}
 
-	// One value out of range on any dimension rejects the whole request, so the
-	// failure is held and checked once. That keeps every parameter name next to
-	// the field it fills: routing them through two maps and reading them back by
-	// string key put a typo's worth of distance between the two halves.
+	// One value out of range on any dimension rejects the whole request; the
+	// failure is held and checked once.
 	invalid := false
 	uuidFilter := func(name string) []string {
 		values, ok := parseUUIDFilters(r.URL.Query()[name])
@@ -279,8 +252,6 @@ func (h *ExplorerHandler) parseDimensions(r *http.Request) (ExplorerQuery, error
 		return values
 	}
 
-	// Each condition travels under its own dimension name, so the parameter a
-	// breakdown row is split by is the parameter clicking it filters on.
 	conditions := map[string][]string{}
 	for _, name := range ConditionDimensions() {
 		if values := textFilter(name); len(values) > 0 {
@@ -314,9 +285,7 @@ func (h *ExplorerHandler) parseDimensions(r *http.Request) (ExplorerQuery, error
 }
 
 // GetConditionsHandler serves the conditions a timing can be filtered on and
-// the values each one takes. Served rather than restated in the dashboard
-// because the ranges are cut here: a bucket renamed on this side would
-// otherwise leave a picker offering a range no query can match any more.
+// the values each one takes.
 func (h *ExplorerHandler) GetConditionsHandler(w http.ResponseWriter, _ *http.Request) {
 	handlers.RenderJSON(w, http.StatusOK, ObserveConditions())
 }
@@ -384,9 +353,8 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 	handlers.RenderJSON(w, http.StatusOK, overview)
 }
 
-// GetCheckInsHandler feeds the live map. The client sends back the cursor it
-// got last time and receives everything that checked in since, so the two ends
-// never disagree about where the window starts.
+// GetCheckInsHandler feeds the live map with everything that checked in since
+// the cursor the client sent back.
 func (h *ExplorerHandler) GetCheckInsHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	since, err := parseHistoryTime(r.URL.Query().Get("since"), now.Add(-defaultCheckInLookback))
@@ -425,19 +393,15 @@ func (h *ExplorerHandler) GetCheckInsHandler(w http.ResponseWriter, r *http.Requ
 	handlers.RenderJSON(w, http.StatusOK, feed)
 }
 
-// A breakdown is the "who is this slow for" question: one metric split by one
-// dimension, ranked by volume. The dimension is validated against the reader's
-// allowlist here so an unknown value fails as a 400 rather than reaching the
-// query builder.
+// GetBreakdownHandler answers "who is this slow for": one metric split by one
+// dimension, ranked by volume.
 func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Request) {
 	base, err := h.parseBaseQuery(r, maxOverviewWindow)
 	if err != nil {
 		h.renderQueryError(w, err)
 		return
 	}
-	// One dimension, and the leading one wins when an old link still carries a
-	// comma-separated list: a split on two columns at once produces a chart
-	// nobody can read, and the same investigation is one filter plus one split.
+	// The leading value wins when an old link still carries a comma-separated list.
 	dimension := strings.TrimSpace(strings.Split(r.URL.Query().Get("dimension"), ",")[0])
 	if dimension == "" {
 		handlers.RenderError(w, http.StatusBadRequest, "'dimension' is required.")

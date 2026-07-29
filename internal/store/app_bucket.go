@@ -21,9 +21,8 @@ func NewBucketAppStore(bucket bucket.Bucket) *BucketAppStore {
 
 func (s *BucketAppStore) GetApps(ctx context.Context) ([]config.AppDescriptor, error) {
 	apps := config.ListApps()
-	// The flat env carries no display name, so without this the dashboard
-	// would label everything with the raw EXPO_APP_ID. Resolve the name from
-	// Expo instead — best-effort and cached; "" keeps the id-as-label fallback.
+	// The flat env carries no display name; resolve it from Expo instead,
+	// best-effort and cached. "" keeps the id-as-label fallback.
 	for i := range apps {
 		if apps[i].Name == "" {
 			apps[i].Name = expo.FetchAppName(ctx, apps[i].Id)
@@ -40,10 +39,8 @@ func (s *BucketAppStore) GetAppByID(ctx context.Context, id string) (config.AppC
 	if app == nil {
 		return config.AppConfig{}, fmt.Errorf("app not found")
 	}
-	// No name enrichment here: GetAppByID sits on the device-facing OTA hot
-	// path (expo_protocol_service, AppResolverMiddleware) and must never block
-	// on an Expo round-trip. The dashboard resolves display names itself
-	// (AppService.GetAppByID, GetApps above).
+	// No name enrichment here: this sits on the device-facing OTA hot path and
+	// must never block on an Expo round-trip.
 	return *app, nil
 }
 

@@ -1,10 +1,7 @@
 package services
 
-// Fake-repo coverage of the progressive rollout decision tree (plan section 9). The
-// fakes model the store contract that the Postgres integration tests pin down (an
-// active per-update rollout is a row with rollout_percentage set AND checked), so the
-// service logic runs in CI without a database. Every harness gets a fresh app id, which
-// keeps the process-global lastUpdate cache from leaking state between tests.
+// Fake-repo coverage of the progressive rollout decision tree, modeling the store
+// contract the Postgres integration tests pin down so it runs in CI without a database.
 
 import (
 	"context"
@@ -503,8 +500,7 @@ func (fakeBranchRepo) CreateRuntimeVersion(_ context.Context, _, _ string) (int6
 
 func (fakeBranchRepo) GetBranchByName(_ context.Context, _, _ string) (int64, error) { return 0, nil }
 
-// fakeRolloutBucket satisfies bucket.Bucket for the revert flow: CreateUpdateFrom hands
-// back a handle for the copied update without touching any storage.
+// fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
 type fakeRolloutBucket struct{}
 
 func (fakeRolloutBucket) GetBranches(_ string) ([]string, error) { return nil, nil }
@@ -840,9 +836,9 @@ func TestPublishRepublishRollbackBlockedDuringActiveRollout(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// An abandoned unchecked row's rollout fields must not influence device
+// resolution or block subsequent publishes.
 func TestUncheckedRolloutRowIsInert(t *testing.T) {
-	// The dedupe-406 path abandons an unchecked update row; its rollout fields must
-	// neither influence device resolution nor block subsequent publishes.
 	ctx := context.Background()
 	h := newRolloutTestHarness(t)
 	control := h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
@@ -858,15 +854,13 @@ func TestUncheckedRolloutRowIsInert(t *testing.T) {
 		assert.Equal(t, "100", resolution.Update.UpdateId)
 	}
 
-	// The publish guard stays open: the abandoned row has no active rollout.
 	_, err = h.deploymentService.RepublishUpdate(ctx, &control, "ios", "", nil)
 	assert.NoError(t, err)
 }
 
 func TestMarkUpdateAsCheckedMapsUniqueViolationToRolloutConflict(t *testing.T) {
-	// The transactional close of the publish race: a second rollout update reaching
-	// checked state on the same (branch, rtv, platform) violates the partial unique
-	// index, which must surface as the 409 sentinel rather than a raw SQL error.
+	// The partial unique index violation must surface as the 409 sentinel, not a
+	// raw SQL error.
 	ctx := context.Background()
 	h := newRolloutTestHarness(t)
 	h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
@@ -895,15 +889,10 @@ func TestRevertUpdateRollout(t *testing.T) {
 
 		events := h.events.snapshot()
 		require.Len(t, events, 3)
-		// The clear is the atomic claim: it must land before any side effect so a
-		// concurrent finish or second revert loses the race cleanly (0 rows, 409)
-		// instead of republishing the control over a state it did not read.
 		assert.Equal(t, "clearRollout", events[0], "the clear is the atomic claim and must land first")
 		assert.True(t, strings.HasPrefix(events[1], "createUpdate:"), "revert must republish the control as a plain update, got %q", events[1])
 		assert.True(t, strings.HasPrefix(events[2], "markChecked:"), "got %q", events[2])
 
-		// The republished copy is now the latest update, carries no rollout linkage,
-		// and every cohort converges on it.
 		envelope, err := h.updateRepo.GetLatestUpdateWithRollout(ctx, h.appId, "main", "1", "ios")
 		require.NoError(t, err)
 		require.NotNil(t, envelope)
@@ -1058,9 +1047,9 @@ func TestSetUpdateRolloutPercentageProgression(t *testing.T) {
 	})
 }
 
+// Stateless wiring leaves the rollout repository nil: every operation must
+// refuse with the control-plane sentinel.
 func TestRolloutServiceRequiresControlPlane(t *testing.T) {
-	// Stateless wiring leaves the rollout repository nil: every operation must refuse
-	// with the control-plane sentinel the handlers map to a 400.
 	ctx := context.Background()
 	service := NewRolloutService(nil, nil, nil, nil)
 

@@ -6,8 +6,7 @@
 //	docker run -d --name eoo-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16-alpine
 //	TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/postgres?sslmode=disable" go test ./internal/store/
 //
-// The package is store_test on purpose: an internal test would create an
-// import cycle (store -> database/postgres -> migrations -> store).
+// The package is store_test to avoid an import cycle (store -> database/postgres -> migrations -> store).
 package store_test
 
 import (
@@ -30,15 +29,12 @@ func setupBranchStore(t *testing.T) (*store.PostgresBranchStore, *pgxpool.Pool) 
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// See the same guard in user_postgres_test.go: a skip in CI is a green
-		// job that ran none of these guarded queries.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
 		t.Skip("TEST_DATABASE_URL not set — start a Postgres and set it to run the guarded-query tests")
 	}
-	// The seed migration fails fast on an empty database without the
-	// bootstrap pair.
+	// The seed migration fails fast on an empty database without the bootstrap pair.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
 	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(dbURL)
@@ -98,10 +94,8 @@ func TestDeleteBranchStillReportsMissingBranch(t *testing.T) {
 	require.True(t, branchExists(t, pool, appId, "staging"))
 }
 
-// The listing has to carry the flag, not a constant. It used to say false for
-// every branch because the mapping had silently dropped the column, and the
-// deletion still worked, so nothing failed: the dashboard just showed an
-// unlocked branch that refused to be deleted.
+// TestGetBranchesCarriesTheProtectionFlag verifies the listing reports each
+// branch's actual protected flag, not a constant.
 func TestGetBranchesCarriesTheProtectionFlag(t *testing.T) {
 	branchStore, pool := setupBranchStore(t)
 	appId := insertAppWithBranch(t, pool, "production", true)

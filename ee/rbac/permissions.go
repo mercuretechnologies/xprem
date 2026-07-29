@@ -4,16 +4,14 @@
 
 package rbac
 
-// Permission is one dashboard action a member can be granted on an app.
-// Admins never need one: the admin flag bypasses the whole permission model.
-// The strings are stored as-is in roles.permissions and
-// user_app_grants.extra_permissions, so renaming one is a data migration.
+// Permission is one dashboard action a member can be granted on an app;
+// admins bypass the whole model. The strings are stored as-is in
+// roles.permissions and user_app_grants.extra_permissions, so renaming one is
+// a data migration.
 type Permission string
 
-// NoPermission marks a route that no permission guards: any account allowed to see
-// the app may call it. It is a value rather than an absence so a route
-// declaration has to name it, which keeps "open on purpose" apart from
-// "nobody decided".
+// NoPermission marks a route that no permission guards; any account allowed
+// to see the app may call it.
 const NoPermission Permission = ""
 
 const (
@@ -30,9 +28,7 @@ const (
 	PermChannelDelete     Permission = "channel:delete"
 	PermChannelEditBranch Permission = "channel:edit-branch"
 	// PermChannelRolloutManage covers the whole lifecycle of a channel
-	// rollout (start, adjust the percentage, promote or revert): being able
-	// to move a rollout forward and being able to back it out are the same
-	// level of trust.
+	// rollout: start, adjust the percentage, promote, or revert.
 	PermChannelRolloutManage Permission = "channel-rollout:manage"
 	// PermUpdateRolloutManage is the per-update sibling: set the rollout
 	// percentage of a single update or revert it.
@@ -45,37 +41,17 @@ const (
 	// their types.
 	PermIdentityManage Permission = "identity:manage"
 	// PermIdentityRead browses the device registry: the device list, one
-	// device's detail, the distinct values of a metadata key, and the live
-	// count. That is per-device data (the client id, the metadata the app
-	// chose to attach, the city and coordinates), so seeing the app is no
-	// longer enough to read it.
-	//
-	// Deliberately NOT covering /identity/update-health: that one is an
-	// aggregate per update with no device named, and it feeds the updates
-	// table and the rollout card, which every member needs.
+	// device's detail, distinct metadata values, and the live count. It does
+	// not gate /identity/update-health, which every app viewer needs.
 	PermIdentityRead Permission = "identity:read"
-	// PermObserveRead opens the Observe explorer: the overview, the event and
-	// metric series, the breakdowns, the filter metadata and the live map.
-	// It also covers the raw log feed, which is the reason this permission
-	// exists at all: a log record carries the client id, the session id and a
-	// body the application wrote, so it can hold anything the app logged.
-	//
-	// It also covers the SEGMENTED mode of /observe/update-health/history,
-	// which is not obvious from the routing table: that route is open to any
-	// app viewer because its plain series is a per-update aggregate the
-	// updates table and the rollout card both need, but asking it to split by
-	// a device dimension reads device_model, os_version and country_code, so
-	// the handler asks for this permission before answering.
+	// PermObserveRead opens the Observe explorer: overview, event and metric
+	// series, breakdowns, filter metadata, the live map, and the raw log feed.
+	// It also gates the per-device split of /observe/update-health/history;
+	// the plain aggregate stays open to any app viewer.
 	PermObserveRead Permission = "observe:read"
-	// PermUpdatePublish republishes a past update and rolls a branch back to
-	// the embedded bundle from the dashboard. Both change what every device on
-	// the branch runs at the next update check, which is why one permission
-	// covers them: being able to put an update back in front of the fleet and
-	// being able to take one away are the same level of trust.
-	//
-	// Deliberately NOT covered by PermUpdateRolloutManage: reverting a rollout
-	// acts on a publish someone is already watching, while this acts on any
-	// update in the history.
+	// PermUpdatePublish republishes a past update or rolls a branch back to
+	// the embedded bundle. It is distinct from PermUpdateRolloutManage, which
+	// only reverts a rollout already in progress.
 	PermUpdatePublish Permission = "update:publish"
 )
 
@@ -107,9 +83,7 @@ var permissionSet = func() map[Permission]struct{} {
 	return set
 }()
 
-// IsValidPermission reports whether the string is part of the catalog. Every
-// write path validates through it so an unknown string can never reach the
-// database, where it would silently grant nothing.
+// IsValidPermission reports whether the string is part of the catalog.
 func IsValidPermission(p string) bool {
 	_, ok := permissionSet[Permission(p)]
 	return ok

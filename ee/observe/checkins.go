@@ -19,18 +19,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// CheckInRecorder registers device check-ins in the universal registry
-// (device_identity): every manifest poll and every telemetry batch lands
-// there, identity ops only layer metadata on top. Besides existence, a
-// check-in carries update-health state: the update the device currently runs
-// and the updates that crashed on it at launch (manifest error-recovery
-// headers), persisted in Postgres so instant-T adoption and health need no
-// ClickHouse and no SDK.
-//
-// The registry is uncapped; what the recorder provides is the WRITE-RATE
-// bound: the cached value holds the last recorded state, so a steady-state
-// device costs one registry write per TTL while a real state change (new
-// current update, new failure set, a fatal error) is recorded immediately.
+// CheckInRecorder records device check-ins (existence and update-health
+// state) into the device identity registry, debounced against the last
+// recorded state to bound the write rate.
 type CheckInRecorder struct {
 	identity *identity.Service
 	cache    cache.Cache
@@ -40,34 +31,25 @@ func NewCheckInRecorder(identityService *identity.Service, c cache.Cache) *Check
 	return &CheckInRecorder{identity: identityService, cache: c}
 }
 
-// checkInTTLSeconds bounds the steady-state last_seen bump rate per device;
-// ±60s of last_seen precision is far inside what any consumer needs.
+// checkInTTLSeconds bounds the steady-state last_seen bump rate per device.
 const checkInTTLSeconds = 60
 
-// checkInErrorCacheValue marks a failed registration: retry after the TTL
-// instead of one doomed transaction and one log line per poll (database
-// down, app row deleted under a live fleet).
+// checkInErrorCacheValue marks a failed registration so retries back off for the TTL.
 const checkInErrorCacheValue = "e"
 
 // fatalStashTTLSeconds keeps an unsaved fatal error around long enough to
-// survive a registry outage. The client sends the crash detail exactly once;
-// if the write that carried it failed, the stash re-attaches it to the next
-// successful failure write (the failed-ids header is sticky, the detail is
-// not).
+// survive a registry outage, so it can re-attach to the next successful failure write.
 const fatalStashTTLSeconds = 3600
 
 func checkInCacheKey(appID, easClientID string) string {
 	return "observe:checkin:" + appID + ":" + easClientID
 }
 
-// checkInClaimTTLSeconds bounds a claim. Longer than touchTimeout so a write
-// that is merely slow is never preempted, short enough that a process killed
-// mid-write frees the device on the next poll rather than on the next hour.
+// checkInClaimTTLSeconds bounds a claim, longer than touchTimeout so a slow
+// write is never preempted but a killed process frees the device quickly.
 const checkInClaimTTLSeconds = 10
 
-// checkInClaimKey is the "someone is writing this device right now" marker. A
-// key of its own rather than the debounce key, which holds the recorded state
-// and lives sixty seconds: this one has to disappear the moment the write ends.
+// checkInClaimKey marks that a device is currently being written.
 func checkInClaimKey(appID, easClientID string) string {
 	return "observe:checkin:claim:" + appID + ":" + easClientID
 }
@@ -76,17 +58,11 @@ func fatalStashKey(appID, easClientID string) string {
 	return "observe:fatal:" + appID + ":" + easClientID
 }
 
-// maxFatalErrorRunes bounds the crash detail before it is stored anywhere. It
-// arrives either as an OTLP attribute of a batch up to 16MB or as a manifest
-// header bounded only by the server's header limit, and from there it is copied
-// into PostgreSQL, into the outbox, into ClickHouse and into the cache stash,
-// so an unbounded value is amplified four times over. The client's own contract
-// truncates a log body at 4096 characters, and a crash message that needs more
-// than that is a stack trace nobody reads from a table cell.
+// maxFatalErrorRunes bounds the crash detail before it is stored anywhere.
 const maxFatalErrorRunes = 4096
 
-// boundFatalError caps the crash detail at maxFatalErrorRunes, counted in runes
-// so a multi-byte message is never cut mid-character.
+// boundFatalError caps the crash detail at maxFatalErrorRunes, counted in
+// runes so a multi-byte message is never cut mid-character.
 func boundFatalError(detail string) string {
 	if runes := []rune(detail); len(runes) > maxFatalErrorRunes {
 		return string(runes[:maxFatalErrorRunes])
@@ -94,44 +70,22 @@ func boundFatalError(detail string) string {
 	return detail
 }
 
-// checkInState is a check-in reduced to its EFFECTIVE update-health state,
-// normalized so that every source describes the same device state with the
-// same strings. The wire is inconsistent on purpose-defeating details: the
-// manifest header carries raw (possibly uppercase) UUIDs while telemetry
-// carries normalized ones, telemetry uses the zero-UUID sentinel where the
-// manifest omits the header, and telemetry never knows the failure list.
-// Fingerprinting raw check-ins would bust the debounce on every
-// manifest/telemetry alternation; normalizing first is what makes the
-// write-rate bound real for dual-source devices.
+// checkInState is a check-in reduced to its normalized, effective
+// update-health state, so manifest and telemetry sources compare equal.
 type checkInState struct {
-	// currentUpdateID is the canonical lowercase uuid of the running update,
-	// "" when this check-in does not know it (embedded-bundle telemetry, no
-	// header). "" never overwrites a known value downstream.
+	// currentUpdateID is "" when this check-in does not know it; "" never overwrites a known value downstream.
 	currentUpdateID string
-	// observedAt is when the device was running that update. A manifest poll
-	// observes it as it answers; a telemetry batch observed it whenever its
-	// newest record was written, which can be well before it arrives. The
-	// store refuses an observation older than the one it holds, so this is
-	// what stops a backlog flushed after an update from putting the registry
-	// back on the update the device already left.
+	// observedAt is when the device was running that update.
 	observedAt time.Time
-	// failedUpdateIDs is the parsed, normalized, sorted failure list; empty
-	// when the check-in carries none (which, for telemetry, means "does not
-	// know", not "no failures").
+	// failedUpdateIDs is empty both when there are no failures and when this check-in does not know.
 	failedUpdateIDs []string
 	fatalError      string
-	// device is the reported hardware and OS, zero when this check-in does
-	// not know it (every manifest poll). Like the other components, unknown
-	// never overwrites and never busts the debounce.
-	device identity.DeviceInfo
+	device          identity.DeviceInfo
 }
 
 func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInState {
 	state := checkInState{fatalError: boundFatalError(checkIn.FatalError), observedAt: checkIn.ObservedAt}
-	// Never in the future. Telemetry timestamps are client-supplied and only
-	// clamped to a day of skew, and one device with a fast clock would
-	// otherwise record an observation no later check-in could beat, freezing
-	// its own registry entry until real time caught up.
+	// Client-supplied timestamps are clamped to never be in the future.
 	if state.observedAt.IsZero() || state.observedAt.After(now) {
 		state.observedAt = now
 	}
@@ -151,9 +105,7 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInStat
 	return state
 }
 
-// deviceFingerprint condenses the reported hardware and store version, so a
-// device that upgrades its OS or takes a store release is written through
-// instead of waiting for an unrelated state change.
+// deviceFingerprint condenses the reported hardware and store version.
 // Zero info fingerprints to "", which reads as "unknown" everywhere below.
 func deviceFingerprint(device identity.DeviceInfo) string {
 	if device.IsZero() {
@@ -167,9 +119,8 @@ func deviceFingerprint(device identity.DeviceInfo) string {
 	return "d" + strconv.FormatUint(h.Sum64(), 36)
 }
 
-// failedFingerprint condenses the normalized failure list; FNV-1a like the
-// telemetry content hash. The "f" prefix keeps every real cache value out of
-// the error sentinel's ("e") value space.
+// failedFingerprint condenses the normalized failure list. The "f" prefix
+// keeps real cache values out of the error sentinel's ("e") value space.
 func failedFingerprint(ids []string) string {
 	h := fnv.New64a()
 	for _, id := range ids {
@@ -179,16 +130,13 @@ func failedFingerprint(ids []string) string {
 	return "f" + strconv.FormatUint(h.Sum64(), 36)
 }
 
-// cachedCheckInValue encodes the last recorded state: current uuid (may be
-// empty), failure fingerprint and hardware fingerprint, parseable so later
-// check-ins compare component-wise.
+// cachedCheckInValue encodes the last recorded state so later check-ins can compare component-wise.
 func cachedCheckInValue(currentUpdateID string, failedFP string, deviceFP string) string {
 	return "f:" + currentUpdateID + ":" + failedFP + ":" + deviceFP
 }
 
-// Values written before the hardware component existed have two fields; they
-// parse with an unknown device fingerprint, so the next telemetry batch writes
-// the hardware through instead of the entry looking already up to date.
+// Values written before the hardware component existed have two fields and
+// parse with an unknown device fingerprint.
 func parseCachedCheckIn(value string) (currentUpdateID string, failedFP string, deviceFP string, ok bool) {
 	rest, found := strings.CutPrefix(value, "f:")
 	if !found {
@@ -205,17 +153,9 @@ func parseCachedCheckIn(value string) (currentUpdateID string, failedFP string, 
 // touchTimeout bounds the background registration a check-in triggers.
 const touchTimeout = 5 * time.Second
 
-// Record records one device check-in, debounced against the last
-// RECORDED state. Both ids are raw header input on the manifest path (no
-// app-existence middleware there), so non-UUIDs are ignored outright. The
-// cache check stays inline (a map or Redis read); only a real change (or an
-// expired entry) spawns the background write, detached from the request on
-// purpose (WithoutCancel, like audit's recorder) so a canceled poll still
-// counts.
-//
-// A check-in that does not know a component ("" current from embedded-bundle
-// telemetry, no failure list on any telemetry) never busts the debounce on
-// that component: unknown is not a state, it is an absence of signal.
+// Record records one device check-in, debounced against the last recorded
+// state; only a real change spawns the background write. A component the
+// check-in does not know never busts the debounce on that component.
 func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceCheckIn) {
 	if _, err := uuid.Parse(checkIn.AppID); err != nil {
 		return
@@ -223,11 +163,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	if _, err := uuid.Parse(checkIn.EASClientID); err != nil {
 		return
 	}
-	// A refused poll leaves nothing durable. Its crash detail is stashed, which
-	// is where an unsaved one already waits (see record below), so the next
-	// poll that does resolve writes it onto the failure it belongs to. Nothing
-	// else of a refused poll is worth keeping: every other signal survives on
-	// its own.
+	// A refused poll leaves nothing durable except its crash detail, stashed for the next resolving poll.
 	if checkIn.Rejected {
 		if checkIn.FatalError != "" {
 			ttl := fatalStashTTLSeconds
@@ -239,9 +175,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	key := checkInCacheKey(checkIn.AppID, checkIn.EASClientID)
 	cached := r.cache.Get(key)
 
-	// Error cooldown: one doomed attempt per TTL. Exception: a poll carrying
-	// the one-shot fatal error always tries, losing the crash detail to a
-	// backoff would be permanent while one extra failed write is nothing.
+	// Error cooldown, except a poll carrying the one-shot fatal error always tries.
 	if cached == checkInErrorCacheValue && state.fatalError == "" {
 		return
 	}
@@ -279,17 +213,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), touchTimeout)
 	go func() {
 		defer cancel()
-		// Released after the debounce below is written, never before: a claim
-		// dropped first would let the next poll through to redo the work the
-		// debounce is about to make unnecessary. Empty when this poll carried
-		// a crash and took no claim, in which case there is nothing of ours to
-		// release and the holder's claim must be left alone.
-		//
-		// Taken and released around the write itself, which is what keeps the
-		// claim's lifetime shorter than its TTL: touchTimeout bounds the write
-		// at five seconds, the claim lives ten, so a claim can never expire
-		// under its own holder and be deleted out from under whoever took it
-		// next.
+		// Released only after the debounce write below, and only if this poll took a claim.
 		if claim != "" {
 			defer r.cache.Delete(claim)
 		}
@@ -299,9 +223,7 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 			_ = r.cache.Set(key, checkInErrorCacheValue, &ttl)
 			return
 		}
-		// The recorded state: a component this check-in did not know keeps
-		// its previously recorded value, so the next knowing check-in
-		// compares against reality.
+		// A component this check-in did not know keeps its previously recorded value.
 		newCurrent := state.currentUpdateID
 		if newCurrent == "" {
 			newCurrent = cachedCurrent
@@ -318,11 +240,8 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 	}()
 }
 
-// record persists one check-in. Failures go FIRST: the fatal error is the
-// only unrecoverable datum (the client sends it once), so it must not be
-// lost to a touch that fails midway; device_update_failures has no FK on
-// device_identity, so the order is safe. An unsaved fatal error is stashed
-// and re-attached to the next successful failure write.
+// record persists one check-in. Failures are written first since the fatal
+// error is unrecoverable if lost; an unsaved one is stashed for retry.
 func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceCheckIn, state checkInState) error {
 	if len(state.failedUpdateIDs) > 0 {
 		fatal := state.fatalError
@@ -349,13 +268,9 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 
 const maxFailedUpdateIDsPerCheckIn = 5
 
-// ParseFailedUpdateIDs reads the Expo-Recent-Failed-Update-IDs header: a
-// structured-field list of quoted lowercase UUIDs (`"id1", "id2"`, RFC 8941
-// serialization of expo-updates' StringList). Hand-parsed: values are plain
-// quoted strings with no parameters, and tolerance matters more than spec
-// completeness on an unauthenticated header. Anything that does not parse as
-// a UUID is dropped; output is canonical lowercase, deduplicated and capped so
-// one unauthenticated manifest poll cannot fan out into unbounded SQL writes.
+// ParseFailedUpdateIDs reads the Expo-Recent-Failed-Update-IDs header, a
+// quoted-UUID list (RFC 8941 style). Invalid entries are dropped and the
+// result is deduplicated and capped.
 func ParseFailedUpdateIDs(raw string) []string {
 	if raw == "" {
 		return nil

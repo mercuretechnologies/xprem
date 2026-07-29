@@ -17,14 +17,7 @@ import (
 
 // ApiKeyAccess is everything one API key is allowed to do: the branches it
 // reaches, what it may do there, and the source networks it may be used from.
-// An empty BranchRules means every branch of the app, which is what a key has
-// always been able to do and all a community deployment ever sees.
-//
-// There is no separate say over creating a branch. Publishing to a branch that
-// does not exist yet is how the CLI opens one, so a rule that admits the name
-// admits the creation: a key scoped to "pr-*" opens pr-482 by publishing to it.
-// The alternative was a second axis that did nothing at all for a key whose
-// rules are plain names, since an absent branch is out of scope anyway.
+// An empty BranchRules means every branch of the app.
 type ApiKeyAccess struct {
 	ApiKeyID    int64
 	AllowedIps  []netip.Prefix
@@ -32,8 +25,7 @@ type ApiKeyAccess struct {
 }
 
 // CliRequest is one authenticated CLI request, in the terms the access
-// decision is made in. It is built by the router, which is the only layer
-// holding the route, its branch and what it does at the same time.
+// decision is made in.
 type CliRequest struct {
 	AppID    string
 	APIKeyID int64
@@ -63,17 +55,15 @@ var (
 	ErrIpNotAllowed = fmt.Errorf("%w: this API key cannot be used from this IP address", services.ErrCliAccessDenied)
 )
 
-// deniedError names the branch and the action, because the alternative is a
-// CI job that fails with "access denied" and an operator who has to guess
-// which of the two ends of the rule is wrong. The holder of the key is the
-// team that owns the app, not a stranger.
+// deniedError names both the branch and the action so the caller does not
+// have to guess which one failed.
 func deniedError(action Action, branchName string) error {
 	return fmt.Errorf("%w: this API key is not allowed to %s on branch %q", services.ErrCliAccessDenied, action, branchName)
 }
 
-// unjudged turns a repository failure into "could not verify", so a database
-// outage reaches the CLI as a 500 rather than as "your key is invalid". A key
-// that is simply gone is not an outage: that one keeps its 401.
+// unjudged turns a repository failure into "could not verify" so an outage
+// reaches the CLI as a 500 rather than an invalid-key error. ErrApiKeyNotFound
+// passes through unchanged since a missing key is not an outage.
 func unjudged(err error) error {
 	if errors.Is(err, ErrApiKeyNotFound) {
 		return err
@@ -82,12 +72,10 @@ func unjudged(err error) error {
 }
 
 // ApiKeyAccessService owns the management and the enforcement of per-key
-// access. Mutations are license-gated (no valid license, no changes); reads
-// are not, so the dashboard can always show what a key is allowed to do.
+// access. Mutations are license-gated; reads are not.
 type ApiKeyAccessService struct {
 	repo ApiKeyAccessRepository
-	// licenseValid is the live licensing state; a field so same-package tests
-	// can pin it without minting signed keys.
+	// licenseValid reports whether the enterprise license is active.
 	licenseValid func() bool
 	// onAuditEvent is the audit emission seam; nil means access changes leave
 	// no events.
@@ -114,9 +102,8 @@ func (s *ApiKeyAccessService) GetAccessByApp(ctx context.Context, appID string) 
 }
 
 // SetAccess replaces what one API key is allowed to do. CIDR entries are
-// normalized (bare addresses become /32 or /128, host bits are masked off)
-// because the postgres cidr type rejects unmasked values; rules are validated
-// and reordered by NormalizeBranchRules.
+// normalized to satisfy the postgres cidr column, and rules are validated and
+// reordered by NormalizeBranchRules.
 func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKeyID int64, rules []BranchRule, cidrs []string) error {
 	if s.repo == nil {
 		return ErrRequiresControlPlane
@@ -140,15 +127,13 @@ func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKe
 	if err := s.repo.SetAccess(ctx, appID, access); err != nil {
 		return err
 	}
-	// Access policy is not secret: the point of the entry is "who widened this
-	// key's reach and when". CIDRs are recorded in their NORMALIZED form, the
-	// one actually enforced, and rules in the form the dashboard shows.
+	// CIDRs are recorded in normalized form; rules in the form the dashboard shows.
 	normalizedCidrs := make([]string, len(allowedIps))
 	for i, prefix := range allowedIps {
 		normalizedCidrs[i] = prefix.String()
 	}
-	// Same convention as api_key.created/revoked: the entry names the key,
-	// the numeric id stays the stable target id. Best-effort lookup.
+	// Best-effort lookup; the entry names the key while the numeric id stays
+	// the stable target id.
 	targetDisplay := strconv.FormatInt(apiKeyID, 10)
 	if s.onAuditEvent != nil {
 		if name, nameErr := s.repo.GetApiKeyName(ctx, appID, apiKeyID); nameErr == nil {
@@ -165,13 +150,7 @@ func (s *ApiKeyAccessService) SetAccess(ctx context.Context, appID string, apiKe
 }
 
 // Authorize is the enforcement point for an authenticated CLI request.
-// Enforcement is an enterprise feature, so without a control plane or an
-// active license nothing is enforced and every request passes.
-//
-// Two checks, in the order the answers are useful: the address first, then
-// whether the key may do this on this branch. The branch is matched by name,
-// existing or not, which is what makes a rule cover the branches it will open
-// as well as the ones already there.
+// Without a control plane or an active license, nothing is enforced.
 func (s *ApiKeyAccessService) Authorize(ctx context.Context, req CliRequest) error {
 	if s.repo == nil || !s.licenseValid() {
 		return nil
@@ -186,16 +165,12 @@ func (s *ApiKeyAccessService) Authorize(ctx context.Context, req CliRequest) err
 	if !AllowsBranch(access.BranchRules, req.Branch, req.Action) {
 		return deniedError(req.Action, req.Branch)
 	}
-	// Nothing else to ask. A publish to a branch that does not exist creates it
-	// (deployment_service.go upserts on the upload-url request and again when
-	// the update is sealed), and the rule that admitted the name is what
-	// admitted that too.
+	// A rule that admits a branch name also admits creating that branch via publish.
 	return nil
 }
 
-// recordAccessEvent reports one access mutation, actor = the dashboard
-// principal on the request context (both routes are permission-gated
-// dashboard mutations).
+// recordAccessEvent reports one access mutation; the actor is the dashboard
+// principal on the request context.
 func (s *ApiKeyAccessService) recordAccessEvent(ctx context.Context, action auditlog.Action, targetType string, targetID string, targetDisplay string, appID string, metadata map[string]any) {
 	if s.onAuditEvent == nil {
 		return
@@ -221,12 +196,8 @@ func (s *ApiKeyAccessService) recordAccessEvent(ctx context.Context, action audi
 	})
 }
 
-// ipNotAllowedError wraps ErrIpNotAllowed (and transitively
-// services.ErrCliAccessDenied, so handlers still map it to a 403) while naming
-// the address the server actually resolved for the caller. Surfacing it turns
-// a blind "denied" into something an operator can debug against the allowlist,
-// and an unresolved address points at the usual cause: a proxy in front of a
-// server that does not trust forwarded headers.
+// ipNotAllowedError wraps ErrIpNotAllowed with the resolved client IP so an
+// operator can debug against the allowlist.
 func ipNotAllowedError(clientIP netip.Addr) error {
 	if clientIP.IsValid() {
 		return fmt.Errorf("%w (resolved client IP: %s)", ErrIpNotAllowed, clientIP)

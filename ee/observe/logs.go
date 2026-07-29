@@ -3,9 +3,7 @@
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
 // The log stream: the records the SDK ships, unioned with the native crashes
-// only the manifest poll ever witnesses. Apart from explorer.go because it is
-// a domain of its own, with its own cursor, its own severity vocabulary and
-// its own second source, and it shares only the WHERE builder with the rest.
+// only the manifest poll ever witnesses.
 package observe
 
 import (
@@ -25,9 +23,7 @@ type LogsQuery struct {
 	ExplorerQuery
 	Severity string
 	Search   string
-	// Exact event names, unlike Search which reads the body and the attributes
-	// too. What a stream narrowed to "checkout_started" needs: a full-text
-	// match would also return the exception that mentions it.
+	// Exact event names, unlike Search which reads the body and attributes too.
 	EventNames []string
 	Cursor     *LogCursor
 	Limit      int
@@ -35,9 +31,8 @@ type LogsQuery struct {
 
 type LogCursor struct {
 	Timestamp time.Time
-	// EventKey is a String since content_key: the three identity eras it can
-	// come from do not share a numeric type, and the cursor only ever compares
-	// and orders it.
+	// EventKey is a string since content_key's three identity eras do not
+	// share a numeric type.
 	EventKey string
 }
 
@@ -60,15 +55,12 @@ type ObserveLog struct {
 	OSName         string    `json:"osName"`
 	OSVersion      string    `json:"osVersion"`
 	DeviceModel    string    `json:"deviceModel"`
-	// Where the device was when the record was produced. Empty on records
-	// ingested before the column existed, and wherever no GeoIP database is
-	// configured.
-	CountryCode    string `json:"countryCode"`
-	AppVersion     string `json:"appVersion"`
-	AppBuildNumber string `json:"appBuildNumber"`
-	EASBuildID     string `json:"easBuildId"`
-	Environment    string `json:"environment"`
-	SDKVersion     string `json:"sdkVersion"`
+	CountryCode    string    `json:"countryCode"`
+	AppVersion     string    `json:"appVersion"`
+	AppBuildNumber string    `json:"appBuildNumber"`
+	EASBuildID     string    `json:"easBuildId"`
+	Environment    string    `json:"environment"`
+	SDKVersion     string    `json:"sdkVersion"`
 }
 
 type LogsPage struct {
@@ -94,16 +86,11 @@ func severityPredicate(severity string) sqlFragment {
 	}
 }
 
-// nativeCrashArm builds the half of the log stream the SDK cannot report. A
-// crash at launch kills the app before any instrumentation runs, so the only
-// witness is the manifest poll that follows, and the record lives in
-// device_health_events. It is shown next to the app's own records because
-// "why did this update fail" is one question, not two.
-//
-// The arm drops out entirely rather than half-answering: a filter on a
-// dimension the manifest poll never learns (channel, app version, build,
-// environment) cannot be honoured here, and a severity filter that excludes
-// errors excludes every one of these by definition.
+// nativeCrashArm builds the half of the log stream the SDK cannot report:
+// launch crashes recorded only by the manifest poll, in device_health_events.
+// It drops out entirely rather than half-answer a filter the manifest poll
+// cannot honour (channel, app version, build, environment) or a severity
+// filter that would exclude it by definition.
 func nativeCrashArm(query LogsQuery, cohort bool) (sqlFragment, []any, bool) {
 	if len(query.Channels) > 0 || len(query.AppVersions) > 0 || len(query.AppBuildNumbers) > 0 ||
 		len(query.EASBuildIDs) > 0 || len(query.Environments) > 0 {
@@ -114,8 +101,6 @@ func nativeCrashArm(query LogsQuery, cohort bool) (sqlFragment, []any, bool) {
 	default:
 		return "", nil, false
 	}
-	// These records answer to one name only, so a stream narrowed to any other
-	// event is not asking for them.
 	if len(query.EventNames) > 0 && !slices.Contains(query.EventNames, nativeCrashEventName) {
 		return "", nil, false
 	}
@@ -132,12 +117,9 @@ func nativeCrashArm(query LogsQuery, cohort bool) (sqlFragment, []any, bool) {
 	}
 	inFilter("platform", query.Platform)
 	inFilter("update_id", query.UpdateIDs)
-	// The table has no group column: the group was already resolved to the
-	// updates it contains, which is the same question asked of this row. Kept
-	// as its own predicate rather than merged into the update ids, so that
-	// asking for an update AND a group stays an intersection here too, exactly
-	// like the telemetry arm. A group that resolved to nothing matches nothing,
-	// which an empty IN list would not say.
+	// The table has no group column, so a requested group is resolved to its
+	// member update ids and kept as its own predicate, matching the telemetry
+	// arm's intersection semantics.
 	if len(query.UpdateGroupIDs) > 0 {
 		if len(query.MemberUpdateIDs) == 0 {
 			return "", nil, false
@@ -161,9 +143,8 @@ func nativeCrashArm(query LogsQuery, cohort bool) (sqlFragment, []any, bool) {
 	return where, args, true
 }
 
-// The event name these records answer to, and the body they carry when the
-// device reported no error text: a crash with no message is still a crash,
-// and an empty row would read as a logging bug.
+// The event name these records answer to, and the fallback body when the
+// device reported no error text.
 const (
 	nativeCrashEventName = "native_crash"
 	nativeCrashFallback  = "Native crash at launch, no error reported"
@@ -196,9 +177,8 @@ func (e *Explorer) ReadLogs(ctx context.Context, appID string, query LogsQuery) 
 		args = append(args, query.Search)
 	}
 
-	// The cursor applies twice: once inside each arm to bound the scan, once
-	// outside to page across their merge. Its outer arguments are kept apart
-	// because they are bound after both arms, whatever the arms contain.
+	// The cursor applies twice: inside each arm to bound the scan, and outside
+	// to page across their merge.
 	var outerWhere sqlFragment
 	var outerArgs []any
 	if query.Cursor != nil {
@@ -207,9 +187,6 @@ func (e *Explorer) ReadLogs(ctx context.Context, appID string, query LogsQuery) 
 		outerWhere = "WHERE timestamp < ? OR (timestamp = ? AND event_key < ?)"
 		outerArgs = []any{query.Cursor.Timestamp.UTC(), query.Cursor.Timestamp.UTC(), query.Cursor.EventKey}
 	}
-	// Built before the logs args are consumed: the two arms share one flat
-	// placeholder list, so the native one has to be appended in the order it
-	// appears in the statement.
 	nativeWhere, nativeArgs, withNative := nativeCrashArm(query, cohort)
 	if withNative && query.Cursor != nil {
 		nativeWhere += " AND h.occurred_at <= ?"
@@ -353,12 +330,8 @@ func DecodeLogCursor(raw string) (*LogCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The key is text now, but not free text: it is the content key of a
-	// telemetry row, a UUID, or the outbox id of a native crash, a decimal
-	// number. Anything else is a corrupted cursor and is refused rather than
-	// paged from, which is the property the old strconv.ParseUint had: a
-	// tolerant parse would let "42junk" page from 42 and " 42" from somewhere
-	// else again, so a caller would silently get a window nobody asked for.
+	// eventKey must be a UUID or a decimal number; anything else is a
+	// corrupted cursor and is refused rather than paged from.
 	eventKey := parts[1]
 	if !isCursorKey(eventKey) {
 		return nil, fmt.Errorf("invalid cursor key")

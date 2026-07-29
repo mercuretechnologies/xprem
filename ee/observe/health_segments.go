@@ -15,7 +15,7 @@ import (
 )
 
 // HealthSegmentPoint is one bucket of one segment: how many devices ran the
-// update then, and how many of them had failed on it.
+// update then and how many had failed on it.
 type HealthSegmentPoint struct {
 	Timestamp         time.Time `json:"timestamp"`
 	DevicesOnUpdate   uint64    `json:"devicesOnUpdate"`
@@ -24,11 +24,7 @@ type HealthSegmentPoint struct {
 	HealthPercent     *float64  `json:"healthPercent"`
 }
 
-// Dimensions a segmented health history can group by. They are read from the
-// health events themselves, where they were frozen at delivery
-// (20260725180000_health_event_dimensions.sql and its app_version follow-up),
-// so a bucket is labelled with what the device was THEN. Rows delivered before
-// those migrations carry empty strings, which read as "unknown".
+// healthSegmentDimensions are the dimensions a segmented health history can group by.
 var healthSegmentDimensions = map[string]sqlFragment{
 	"deviceModel":    "device_model",
 	"osVersion":      "os_version",
@@ -45,40 +41,10 @@ func IsHealthSegmentDimension(name string) bool {
 	return found
 }
 
-// Grid size guard: devices times buckets is what this query materializes, and
-// a fleet of a million devices at one-minute buckets is not a chart, it is an
-// outage. Buckets are capped, and the caller's window does the rest.
-
-// The chart tells eight colours apart; past that a split stops informing.
-// Applied by TrimSegments on the rows already read, deliberately NOT as a
-// LIMIT in the query: selecting the top segments in SQL means a second
-// reference to the aggregate, and ClickHouse substitutes a CTE rather than
-// materializing it, so the whole grid and both ASOF joins were computed twice
-// (measured: six scans of device_health_events instead of three, and eighteen
-// times the memory) to trim a result the caller was trimming anyway.
+// maxHealthSegments is the most segments a chart shows; TrimSegments enforces it.
 const maxHealthSegments = 8
 
-// ReadBySegment answers "is this update failing on old Android phones", which
-// the plain history cannot: its snapshots are pre-aggregated per update and
-// carry nothing about the device. The raw events can, because
-// device_health_events carries the eas_client_id of every adoption and every
-// failure along with what the device was at that moment. This rebuilds the
-// same curves per segment, on the fly.
-//
-// The cost is a device-by-bucket grid, so the bucket follows the window rather
-// than the one-minute retention: an hour of a 24h window is 96 buckets, not
-// 1440, and the shape is identical at this scale. The grid is also the reason
-// the population is narrowed to devices that adopted one of the requested
-// updates: a device that never ran one cannot survive the final filter anyway,
-// and building its row per bucket first is how a fleet of a million turns into
-// 181 million intermediate rows for a chart about two updates.
-// bucketCount cuts the window exactly the way the rest of the explorer cuts
-// it, through observeBucket, so two series over one window are sampled the
-// same way. Deliberately independent of how large the fleet is: deriving the
-// step from the population would have given two apps different granularity for
-// the same window, which reads as a difference in the data rather than in the
-// sampling, and the size problem belongs to caching and pre-aggregation rather
-// than to silently coarsening one chart.
+// bucketCount cuts the window the same way the rest of the explorer does, via observeBucket.
 func (h *HealthHistory) bucketCount(from, to time.Time) int64 {
 	window := to.Sub(from)
 	step := int64(observeBucket(window).Seconds())

@@ -18,18 +18,12 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Same shape as the internal/dashboard cache keys (appId included so entries
-// from one app are never served to another); it lives here because the
-// feature is enterprise code.
+// computeGetApiKeyAccessCacheKey builds the cache key for one app's access list.
 func computeGetApiKeyAccessCacheKey(appId string) string {
 	return fmt.Sprintf("dashboard:%s:%s:request:getApiKeyAccess", version.Version, appId)
 }
 
-// maxAccessBodyBytes bounds the access payload. A key holds at most
-// maxBranchRules rules of at most 128 characters, so this is generous by two
-// orders of magnitude and only there to stop an unbounded read; the real limit
-// is enforced by NormalizeBranchRules, which needs the whole array in memory
-// to check it.
+// maxAccessBodyBytes bounds the access payload size.
 const maxAccessBodyBytes = 64 << 10
 
 type ApiKeyAccessHandler struct {
@@ -40,9 +34,8 @@ func NewApiKeyAccessHandler(service *ApiKeyAccessService) *ApiKeyAccessHandler {
 	return &ApiKeyAccessHandler{service: service}
 }
 
-// branchRulePayload is one rule on the wire. Actions are strings rather than
-// a typed enum so an older dashboard sending an unknown one gets a 400 naming
-// it, instead of a decoding error naming nothing.
+// branchRulePayload is one rule on the wire; actions are plain strings so an
+// unknown one gets a named 400 instead of a decoding error.
 type branchRulePayload struct {
 	Pattern string   `json:"pattern"`
 	Actions []string `json:"actions"`

@@ -46,8 +46,6 @@ func TestAuditLogsObjectStoreRefusesEscapingKeys(t *testing.T) {
 }
 
 func TestAuditLogsObjectStoreRefusesTheUpdatesDestination(t *testing.T) {
-	// The whole point of the dedicated destination is keeping security logs
-	// out of the update assets' access rules.
 	dir := t.TempDir()
 	t.Setenv("STORAGE_MODE", "local")
 	t.Setenv("LOCAL_BUCKET_BASE_PATH", dir)
@@ -70,9 +68,6 @@ func TestAuditLogsObjectStoreRequiresADestinationName(t *testing.T) {
 }
 
 func TestAuditLogsObjectStoreIgnoresTheUpdatesKeyPrefix(t *testing.T) {
-	// BUCKET_KEY_PREFIX namespaces the updates inside a shared bucket; the
-	// audit archive owns its whole dedicated bucket, so a store built with the
-	// prefix would silently relocate every archived file.
 	t.Setenv("BUCKET_KEY_PREFIX", "tenant-a/")
 
 	t.Setenv("STORAGE_MODE", "s3")

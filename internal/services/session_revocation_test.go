@@ -14,10 +14,7 @@ import (
 )
 
 // revocationFixture is one control-plane deployment with an admin and a
-// member, each holding a live session. Both are needed by nearly every case
-// below: the admin performs the revocations, the member is the account whose
-// sessions must die, and the admin's own session is what proves administrators
-// are revoked on the same terms as members.
+// member, each holding a live session.
 type revocationFixture struct {
 	auth          *DashboardAuthService
 	users         *UserService
@@ -101,12 +98,7 @@ func TestDisablingAMemberRevokesItsLiveSession(t *testing.T) {
 	assertSessionAlive(t, fixture.auth, fixture.adminSession)
 }
 
-// The disable tests above would pass on the pre-existing `enabled` check
-// alone, which is not the mechanism this ticket added. Re-enabling is what
-// tells the two apart: once the account is enabled again, only a bumped
-// session version still refuses the sessions it held while disabled. Those are
-// exactly the sessions an admin revoked access to, usually because one of them
-// was stolen.
+// Re-enabling the account must not resurrect the sessions it held while disabled.
 func TestReEnablingAnAccountDoesNotResurrectItsOldSessions(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	ctx := context.Background()
@@ -124,8 +116,7 @@ func TestDisablingAnAdminRevokesItsLiveSession(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	ctx := context.Background()
 
-	// The last enabled admin cannot be disabled, so promote the member first:
-	// this is the case where the account losing its sessions is an admin.
+	// The last enabled admin cannot be disabled, so promote the member first.
 	require.NoError(t, fixture.users.SetUserAdmin(ctx, fixture.admin.Id, fixture.member.Id, true))
 	require.NoError(t, fixture.users.SetUserEnabled(ctx, fixture.member.Id, fixture.admin.Id, false))
 
@@ -139,9 +130,7 @@ func TestDemotingAnAdminRevokesItsLiveSession(t *testing.T) {
 	require.NoError(t, fixture.users.SetUserAdmin(ctx, fixture.admin.Id, fixture.member.Id, true))
 	require.NoError(t, fixture.users.SetUserAdmin(ctx, fixture.member.Id, fixture.admin.Id, false))
 
-	// The demoted account keeps its password, so it may sign in again, as a
-	// member. What it must not keep is the session minted while it was admin,
-	// whose isAdmin claim would otherwise stand for another two hours.
+	// The demoted account may sign in again, but not on its old isAdmin session.
 	assertSessionDead(t, fixture.auth, fixture.adminSession)
 	fresh, err := fixture.auth.LoginWithEmailPassword(ctx, fixture.admin.Email, "Sup3rSecret!")
 	require.NoError(t, err)
@@ -150,9 +139,7 @@ func TestDemotingAnAdminRevokesItsLiveSession(t *testing.T) {
 	assert.False(t, principal.IsAdmin)
 }
 
-// Promoting is not a revocation: nothing about the account's existing session
-// became untrustworthy, and signing someone out to grant them a flag would be
-// gratuitous.
+// Promoting is not a revocation.
 func TestPromotingAMemberLeavesItsSessionAlive(t *testing.T) {
 	fixture := newRevocationFixture(t)
 
@@ -178,11 +165,8 @@ func TestChangingThePasswordRevokesEverySessionOfTheAccount(t *testing.T) {
 	assertSessionDead(t, fixture.auth, otherSession)
 }
 
-// Nothing else enforces the revocation a password change performs: no flag
-// changes and the row stays enabled, so the session version is the only thing
-// ending the old sessions. The store therefore moves both in one write, and a
-// failure must leave neither: a committed password with surviving sessions is
-// the exact hole this ticket closes.
+// The password write and the session bump happen in one write; a failure
+// must leave neither applied.
 func TestAFailedPasswordWriteRevokesNothing(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	failing := &passwordWriteFailingUserRepo{fakeUserRepo: fixture.repo}
@@ -217,8 +201,8 @@ func TestAuthenticateSessionSeparatesAnOutageFromARevocation(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrSessionRevoked)
 }
 
-// A token minted by a stateless deployment names no account. Pointed at a
-// control plane it must not authenticate the request as nobody.
+// A token minted by a stateless deployment names no account and must not
+// authenticate a request against a control plane as nobody.
 func TestAuthenticateSessionRejectsATokenWithNoAccount(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")
@@ -261,26 +245,21 @@ func TestReplayingARotatedRefreshTokenRevokesTheWholeChain(t *testing.T) {
 	rotated, err := fixture.auth.RefreshSession(ctx, stolen)
 	require.NoError(t, err)
 
-	// Past the grace window, a second presentation is a leak, not the same
-	// client asking twice.
+	// Past the grace window, a second presentation is a leak, not a race.
 	fixture.refreshTokens.markUsedAt(refreshTokenId(t, fixture.auth, stolen), time.Now().Add(-2*refreshReplayGrace))
 
 	_, err = fixture.auth.RefreshSession(ctx, stolen)
 	assert.ErrorIs(t, err, ErrRefreshTokenReuse)
 
-	// Whichever of the two holders was the thief, neither keeps a refresh: the
-	// successor handed to the legitimate client is gone too.
+	// Neither holder keeps a refresh, including the successor already issued.
 	_, err = fixture.auth.RefreshSession(ctx, rotated.RefreshToken)
 	assert.ErrorIs(t, err, ErrSessionRevoked)
 
-	// The account's OTHER sign-ins are a different family and survive.
+	// The account's other sign-ins are a different family and survive.
 	assertSessionAlive(t, fixture.auth, fixture.adminSession)
 }
 
-// A proven replay is proof that a credential of this account leaked, so the
-// response is account-wide, not chain-wide: the access token the replay just
-// produced belongs to no chain, and deleting the family alone would leave the
-// party that replayed with a working dashboard for the rest of its two hours.
+// A proven replay revokes the whole account, not just the compromised chain.
 func TestReplayRevokesEverySessionOfTheAccount(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	ctx := context.Background()
@@ -288,8 +267,7 @@ func TestReplayRevokesEverySessionOfTheAccount(t *testing.T) {
 	otherDevice, err := fixture.auth.LoginWithEmailPassword(ctx, fixture.member.Email, "Sup3rSecret!")
 	require.NoError(t, err)
 
-	// The access token a thief would have pocketed by rotating the stolen
-	// refresh token, taken here from the same account by the same means.
+	// The access token a thief would have pocketed by rotating the stolen token.
 	stolen := fixture.memberSession.RefreshToken
 	thiefSession, err := fixture.auth.RefreshSession(ctx, stolen)
 	require.NoError(t, err)
@@ -299,14 +277,12 @@ func TestReplayRevokesEverySessionOfTheAccount(t *testing.T) {
 	_, err = fixture.auth.RefreshSession(ctx, stolen)
 	require.ErrorIs(t, err, ErrRefreshTokenReuse)
 
-	// The access token minted from the compromised chain stops working at once.
 	assertSessionDead(t, fixture.auth, thiefSession)
-	// And so does the account's other device: on proof of a stolen credential,
-	// signing the account out everywhere is the right trade.
+	// The account's other device is signed out too.
 	_, err = fixture.auth.RefreshSession(ctx, otherDevice.RefreshToken)
 	assert.ErrorIs(t, err, ErrSessionRevoked)
 
-	// Other ACCOUNTS are untouched.
+	// Other accounts are untouched.
 	assertSessionAlive(t, fixture.auth, fixture.adminSession)
 }
 
@@ -321,15 +297,11 @@ func TestConcurrentRefreshWithinTheGraceWindowIsNotAReplay(t *testing.T) {
 	second, err := fixture.auth.RefreshSession(ctx, fixture.memberSession.RefreshToken)
 	require.NoError(t, err)
 
-	// Both callers get a usable session, and the chain is intact.
 	assertSessionAlive(t, fixture.auth, first)
 	assertSessionAlive(t, fixture.auth, second)
 
-	// Load-bearing: the second caller is handed the successor the first one
-	// already got, not a second live token. Two unconsumed tokens in a family
-	// would mean neither holder ever presents a consumed one again, and the
-	// chain would become permanently undetectable. Consuming it once must
-	// therefore retire it for BOTH.
+	// The second caller must be handed the same successor as the first, not a
+	// second live token, or the chain becomes permanently undetectable.
 	assert.Equal(t,
 		refreshTokenId(t, fixture.auth, first.RefreshToken),
 		refreshTokenId(t, fixture.auth, second.RefreshToken),
@@ -342,9 +314,8 @@ func TestConcurrentRefreshWithinTheGraceWindowIsNotAReplay(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRefreshTokenReuse, "detection must still work on the forked-into token")
 }
 
-// A refresh token that reaches a client without a ledger row behind it is a
-// credential nothing can rotate, detect a replay on, or revoke. Failing the
-// sign-in is the only safe answer, so the ledger write is not best-effort.
+// The ledger write is not best-effort: a token reaching the client without a
+// ledger row could never be rotated, replay-detected, or revoked.
 func TestSignInFailsWhenTheLedgerCannotRecordTheToken(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	fixture.refreshTokens.insertErr = errors.New("connection refused")
@@ -354,9 +325,7 @@ func TestSignInFailsWhenTheLedgerCannotRecordTheToken(t *testing.T) {
 }
 
 // A rotation that fails on infrastructure must leave the presented token
-// untouched. Burning it would cost the client its session over a blip, and the
-// retry it would make later would then look like a replay and revoke the
-// account.
+// untouched, or the client's retry would look like a replay.
 func TestRotationOutageDoesNotBurnTheRefreshToken(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	ctx := context.Background()
@@ -371,9 +340,8 @@ func TestRotationOutageDoesNotBurnTheRefreshToken(t *testing.T) {
 	assert.NoError(t, err, "the token must survive the outage")
 }
 
-// Sessions minted before rotation existed carry no jti. There is no row to
-// retire, so there is no way to make them single-use: they are refused rather
-// than grandfathered into a chain nothing can revoke.
+// Sessions minted before rotation existed carry no jti and no ledger row, so
+// they are refused rather than grandfathered in.
 func TestRefreshTokenWithoutALedgerRowIsRefused(t *testing.T) {
 	fixture := newRevocationFixture(t)
 	principal := DashboardPrincipal{UserId: fixture.member.Id, Email: fixture.member.Email}
@@ -385,9 +353,8 @@ func TestRefreshTokenWithoutALedgerRowIsRefused(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSessionRevoked)
 }
 
-// Stateless deployments have no ledger, so their refresh token is reusable
-// until it expires. That is the behaviour they have always had; the point here
-// is that adding rotation did not break them.
+// Stateless deployments have no ledger, so their refresh token stays reusable
+// until it expires.
 func TestStatelessRefreshStillWorksWithoutALedger(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")

@@ -27,8 +27,7 @@ func TestAccessChangesEmitAuditEvents(t *testing.T) {
 	ctx := services.WithPrincipal(context.Background(),
 		&services.DashboardPrincipal{UserId: "admin-1", Email: "admin@example.com"})
 
-	// Unmasked input on purpose: the entry must carry the normalized form the
-	// database persists and enforces, not what the admin typed.
+	// Unmasked input on purpose; the event must carry the normalized form.
 	require.NoError(t, service.SetAccess(ctx, "app-1", 42,
 		[]BranchRule{{Pattern: "pr-*", Actions: []Action{ActionPublish, ActionRead}}},
 		[]string{"10.0.0.5/8"}))

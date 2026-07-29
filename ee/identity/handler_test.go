@@ -19,9 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeStore is an in-memory identity.Store for handler tests. It defines the
-// query/CRUD methods the dashboard exercises; the embedded Store supplies the
-// unused ingest mutator methods so it satisfies the interface.
+// fakeStore is an in-memory identity.Store for handler tests.
 type fakeStore struct {
 	Store
 	schema  Schema
@@ -88,16 +86,14 @@ func (f *fakeStore) UpdateHealthByIDs(_ context.Context, _ string, updateIDs []s
 	return out, nil
 }
 
-// serve routes a request through a real mux router so path vars resolve.
-// licensedService builds a service with the enterprise gate open. Same-package
-// tests flip the field rather than mint a signed key; the gate itself is
-// covered by TestCustomAttributesRequireALicense.
+// licensedService builds a service with the enterprise gate open.
 func licensedService(store Store, geo GeoResolver) *Service {
 	service := NewService(store, geo)
 	service.licenseValid = func() bool { return true }
 	return service
 }
 
+// serve routes a request through a real mux router so path vars resolve.
 func serve(handler *IdentityHandler, method, path, body string) *httptest.ResponseRecorder {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/apps/{APP_ID}/identity/schema", handler.GetSchemaHandler).Methods(http.MethodGet)
@@ -134,7 +130,6 @@ func TestSchemaCRUDHandlers(t *testing.T) {
 	store := newFakeStore()
 	h := NewIdentityHandler(licensedService(store, nil))
 
-	// Empty schema.
 	rec := serve(h, http.MethodGet, appPath+"/schema", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -144,11 +139,11 @@ func TestSchemaCRUDHandlers(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &listed))
 	require.Empty(t, listed.Keys)
 
-	// Upsert a valid key; omitted maxLength defaults.
 	rec = serve(h, http.MethodPut, appPath+"/schema/userId", `{"type":"string"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var saved schemaKeyResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &saved))
+	// Omitted maxLength defaults.
 	require.Equal(t, schemaKeyResponse{Key: "userId", Type: "string", MaxLength: DefaultMaxLength}, saved)
 
 	// Invalid type is a 400 before the store.
@@ -156,11 +151,9 @@ func TestSchemaCRUDHandlers(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Equal(t, "application/problem+json; charset=utf-8", rec.Header().Get("Content-Type"))
 
-	// Malformed body is a 400.
 	rec = serve(h, http.MethodPut, appPath+"/schema/userId", `not json`)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 
-	// Delete existing then missing.
 	rec = serve(h, http.MethodDelete, appPath+"/schema/userId", "")
 	require.Equal(t, http.StatusNoContent, rec.Code)
 	rec = serve(h, http.MethodDelete, appPath+"/schema/userId", "")
@@ -175,8 +168,7 @@ func TestUpsertSchemaKeyLimitIs409(t *testing.T) {
 	require.Equal(t, http.StatusConflict, rec.Code)
 }
 
-// Declaring an attribute without a license is a 403 the dashboard can read,
-// not an opaque 500.
+// A 403 the dashboard can read, not an opaque 500.
 func TestUpsertSchemaKeyWithoutLicenseIs403(t *testing.T) {
 	service := NewService(newFakeStore(), nil)
 	service.licenseValid = func() bool { return false }
@@ -190,7 +182,6 @@ func TestSearchValuesHandler(t *testing.T) {
 	store.values = []ValueCount{{Value: "acme", DeviceCount: 3}, {Value: "globex", DeviceCount: 1}}
 	h := NewIdentityHandler(licensedService(store, nil))
 
-	// Missing key is a 400.
 	rec := serve(h, http.MethodGet, appPath+"/values", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -225,7 +216,6 @@ func TestGetDeviceHandler(t *testing.T) {
 	require.Equal(t, "FR", *d.CountryCode)
 	require.Equal(t, "2026-07-23T10:00:00Z", d.LastSeenAt)
 
-	// A missing but well-formed uuid → 404.
 	rec = serve(h, http.MethodGet, appPath+"/devices/"+uuid.NewString(), "")
 	require.Equal(t, http.StatusNotFound, rec.Code)
 
@@ -237,8 +227,7 @@ func TestGetDeviceHandler(t *testing.T) {
 func TestListDevicesTamperedCursorIs400(t *testing.T) {
 	store := newFakeStore()
 	h := NewIdentityHandler(licensedService(store, nil))
-	// Valid base64 + valid timestamp but a non-uuid second segment: must 400
-	// at the handler, never reach the store to 500 on the uuid parse.
+	// Valid base64 and timestamp, but a non-uuid second segment.
 	tampered := base64.RawURLEncoding.EncodeToString([]byte("2026-01-01T00:00:00Z|not-a-uuid"))
 	rec := serve(h, http.MethodGet, appPath+"/devices?cursor="+tampered, "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -255,8 +244,7 @@ func TestListDevicesHandlerPaginationAndFilter(t *testing.T) {
 		return []Device{{EASClientID: deviceID, FirstSeenAt: now, LastSeenAt: now}},
 			&DeviceCursor{LastSeenAt: now, EASClientID: deviceID}, nil
 	}
-	// A filter is only accepted against a declared attribute: the type is what
-	// says whether "u1" is a string, a number or a boolean once it reaches JSONB.
+	// A filter is only accepted against a declared attribute, since the type decides how it's read.
 	store.schema = Schema{"userId": {Key: "userId", Type: ValueTypeString, MaxLength: 256}}
 	h := NewIdentityHandler(licensedService(store, nil))
 
@@ -279,14 +267,11 @@ func TestListDevicesHandlerPaginationAndFilter(t *testing.T) {
 	require.Equal(t, deviceID, gotCursor.EASClientID)
 	require.True(t, gotCursor.LastSeenAt.Equal(now))
 
-	// A malformed cursor is a 400.
 	rec3 := serve(h, http.MethodGet, appPath+"/devices?cursor=!!!notbase64", "")
 	require.Equal(t, http.StatusBadRequest, rec3.Code)
 }
 
-// Metadata is matched by JSONB containment, which is type-aware: a boolean
-// stored as `true` is never found by the string `"true"`, so the filter has to
-// reach the store carrying the type its schema declares.
+// JSONB containment matching is type-aware: a boolean stored as `true` is never found by `"true"`.
 func TestListDevicesFilterCarriesTheDeclaredType(t *testing.T) {
 	store := newFakeStore()
 	store.schema = Schema{
@@ -308,8 +293,7 @@ func TestListDevicesFilterCarriesTheDeclaredType(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, MetadataFilters{{Key: "planLevel", Values: []any{float64(42)}}}, gotQuery.Metadata)
 
-	// A value that cannot be the declared type, and a key nothing declares, are
-	// both malformed questions rather than questions with an empty answer.
+	// A bad-type value and an undeclared key are both malformed, not empty answers.
 	rec = serve(h, http.MethodGet, appPath+"/devices?attr=canaryUser:perhaps", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -341,18 +325,15 @@ func TestUpdateHealthHandler(t *testing.T) {
 	crashy := "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
 	untried := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	both := "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
-	// FaultyDevices is the size of the failure SET, which is what the response
-	// divides by; the two breakdowns describe its causes and may overlap, so
-	// they are not summed to obtain it (see the `both` entry).
+	// FaultyDevices is the size of the failure set; UpdateIssues/RuntimeIssues may overlap
+	// and must not be summed to reproduce it.
 	store.health = map[string]UpdateHealth{
 		healthy: {DevicesOnUpdate: 99, FaultyDevices: 1, UpdateIssues: 1},
 		broken:  {DevicesOnUpdate: 0, FaultyDevices: 7, UpdateIssues: 7},
-		// 10 devices run it; 2 JS-crashed and still run it, 1 more JS-crashed
-		// then moved on: attempts 10+3-2=11, healthy 10-2=8.
+		// 10 devices run it; 2 JS-crashed and still run it, 1 more JS-crashed then moved on:
+		// attempts 10+3-2=11, healthy 10-2=8.
 		crashy: {DevicesOnUpdate: 10, FaultyDevices: 3, RuntimeIssues: 3, FailedStillOn: 2},
-		// One single device reported both a launch rollback and a JS crash.
-		// Both breakdowns show 1, the set holds 1, and the percentage must be
-		// computed from the set: summing the breakdowns would invent a device.
+		// One device reported both a rollback and a JS crash; FaultyDevices counts it once.
 		both: {DevicesOnUpdate: 4, FaultyDevices: 1, UpdateIssues: 1, RuntimeIssues: 1, FailedStillOn: 1},
 	}
 	h := NewIdentityHandler(licensedService(store, nil))
@@ -379,17 +360,13 @@ func TestUpdateHealthHandler(t *testing.T) {
 	require.EqualValues(t, 1, body.Updates[healthy].FaultyDevices)
 	require.EqualValues(t, 1, body.Updates[healthy].UpdateIssues)
 	require.EqualValues(t, 1, body.Updates[healthy].LaunchFailures)
-	// Runtime failures overlap the current cohort: still-running crashers
-	// count once as attempts and drop out of healthy.
 	require.EqualValues(t, 3, body.Updates[crashy].RuntimeIssues)
 	require.EqualValues(t, 3, body.Updates[crashy].LaunchFailures)
 	require.EqualValues(t, 8, body.Updates[crashy].SuccessfulDevices)
 	require.EqualValues(t, 3, body.Updates[crashy].FaultyDevices)
 	require.NotNil(t, body.Updates[crashy].HealthPercent)
 	require.InDelta(t, 100.0*8.0/11.0, *body.Updates[crashy].HealthPercent, 0.001)
-	// A device in both breakdowns is one faulty device, not two. attempts is
-	// 4+1-1=4 and healthy 4-1=3, so 75%. Summing the breakdowns would give
-	// attempts 5 and 60%, inventing a device that does not exist.
+	// One faulty device, not two: attempts 4+1-1=4, healthy 4-1=3, so 75%.
 	require.EqualValues(t, 1, body.Updates[both].UpdateIssues)
 	require.EqualValues(t, 1, body.Updates[both].RuntimeIssues)
 	require.EqualValues(t, 1, body.Updates[both].FaultyDevices)
@@ -412,9 +389,7 @@ func TestUpdateHealthHandler(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, serve(h, http.MethodGet, appPath+"/update-health?ids="+strings.Join(tooMany, ","), "").Code)
 }
 
-// "Online" is a window over last_seen_at, which every contact bumps. The
-// handler's job is to turn the requested window into the right lower bound and
-// to refuse a nonsensical one.
+// "Online" is a window over last_seen_at, which every contact bumps.
 func TestOnlineDevicesHandler(t *testing.T) {
 	store := newFakeStore()
 	store.devices["a"] = &Device{EASClientID: "a"}
@@ -436,15 +411,13 @@ func TestOnlineDevicesHandler(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.WithinDuration(t, time.Now().UTC().Add(-5*time.Minute), store.onlineSince, time.Minute)
 
-	// A window past the cap is clamped, not honoured, so one request cannot
-	// turn into a full-table scan of the registry.
+	// A window past the cap is clamped, so one request cannot scan the whole registry.
 	rec = serve(h, http.MethodGet, appPath+"/online?minutes=100000", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, int(MaxOnlineWindow.Minutes()), body.WindowMinutes)
 
-	// Large enough to overflow int64 when multiplied by time.Minute, which used
-	// to wrap the duration negative and report a window from the future.
+	// Large enough to overflow int64 when multiplied by time.Minute.
 	rec = serve(h, http.MethodGet, appPath+"/online?minutes=200000000", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -455,9 +428,7 @@ func TestOnlineDevicesHandler(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// The count is shown next to filtered figures, so it takes the same filters as
-// the inventory and refuses the same malformed ones. Anything the registry
-// cannot honour never reaches it: the caller only sends the dimensions below.
+// The online count takes the same filters as the inventory.
 func TestOnlineDevicesHandlerAppliesFilters(t *testing.T) {
 	store := newFakeStore()
 	store.devices["a"] = &Device{EASClientID: "a"}
@@ -474,8 +445,7 @@ func TestOnlineDevicesHandlerAppliesFilters(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, serve(h, http.MethodGet, appPath+"/online?updateId=not-a-uuid", "").Code)
 }
 
-// Each filter list becomes a text[] in an `= ANY(...)`, and a hand-written URL
-// can repeat one key thousands of times.
+// A hand-written URL can repeat one filter key far more times than any dashboard control would.
 func TestListDevicesRejectsOversizedFilterLists(t *testing.T) {
 	store := newFakeStore()
 	h := NewIdentityHandler(licensedService(store, nil))

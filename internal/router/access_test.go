@@ -13,8 +13,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// recordingPolicy captures what a route handed the access decision, which is
-// the whole subject of the guard.
+// recordingPolicy captures what a route handed the access decision.
 type recordingPolicy struct {
 	requests []apikeyrestrictions.CliRequest
 	deny     error
@@ -26,7 +25,7 @@ func (p *recordingPolicy) Authorize(_ context.Context, req apikeyrestrictions.Cl
 }
 
 // serveTokenRequest registers one route through appGroup and sends a CLI
-// credential at it, the way NewAuthMiddleware would have stamped one.
+// credential at it.
 func serveTokenRequest(t *testing.T, path, requestPath string, access Access, policy cliAccessPolicy) (*httptest.ResponseRecorder, *services.CliCredential) {
 	t.Helper()
 	router := mux.NewRouter()
@@ -45,16 +44,11 @@ func serveTokenRequest(t *testing.T, path, requestPath string, access Access, po
 	return w, seen
 }
 
-// The hole this closes: a route that lets a token in but names no branch
-// leaves the access rules nothing to match, and "no rule applies" is one word
-// away from "everything is allowed". It has to fail at boot, not in
-// production.
+// TestTokenRouteMustNameABranch checks that registering a token route with no
+// {BRANCH} in its path panics at boot.
 func TestTokenRouteMustNameABranch(t *testing.T) {
 	for name, path := range map[string]string{
-		"no branch at all": "/apiKeys",
-		// The spelling is load-bearing: this one exists in routes_app.go, and
-		// the guard reads {BRANCH}. A token route spelled this way would have
-		// been judged on an empty branch name.
+		"no branch at all":         "/apiKeys",
 		"branch spelled BRANCH_ID": "/branch/{BRANCH_ID}/updateChannelBranchMapping",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -70,7 +64,8 @@ func TestTokenRouteMustNameABranch(t *testing.T) {
 	}
 }
 
-// A route that names no token is closed to one, whatever its path.
+// TestRouteWithoutTokenRefusesCliCredential checks that a route with no token
+// declaration refuses a CLI credential, whatever its path.
 func TestRouteWithoutTokenRefusesCliCredential(t *testing.T) {
 	policy := &recordingPolicy{}
 	w, _ := serveTokenRequest(t, "/branch/{BRANCH}/runtimeVersions",
@@ -106,8 +101,6 @@ func TestTokenRouteAsksThePolicyWithItsBranchAndAction(t *testing.T) {
 	if request.APIKeyID != 42 || request.AppID != "app-1" {
 		t.Fatalf("expected the credential's key and app, got %+v", request)
 	}
-	// The credential reaches the handler, which is what the audit trail and the
-	// app-visibility gate read it for.
 	if credential == nil || credential.KeyID != 42 {
 		t.Fatalf("expected the credential on the handler's context, got %+v", credential)
 	}
@@ -124,8 +117,8 @@ func TestTokenRouteRefusesWhatThePolicyDenies(t *testing.T) {
 	}
 }
 
-// Stateless mode has no API key, so there is nothing to carry access rules
-// and nothing to ask.
+// TestStatelessCredentialSkipsThePolicy checks that a stateless credential
+// (no API key) never reaches the access policy.
 func TestStatelessCredentialSkipsThePolicy(t *testing.T) {
 	policy := &recordingPolicy{deny: errors.New("must not be called")}
 	router := mux.NewRouter()
@@ -147,7 +140,8 @@ func TestStatelessCredentialSkipsThePolicy(t *testing.T) {
 	}
 }
 
-// Every route declaration is checked at boot; this is the check itself.
+// TestUndeclaredAccessIsRefusedAtBoot checks that a route registered without
+// an Access declaration panics.
 func TestUndeclaredAccessIsRefusedAtBoot(t *testing.T) {
 	defer func() {
 		if recover() == nil {

@@ -2,9 +2,9 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-// Integration tests for the RBAC store: the transactional grant replacement,
-// the FK mappings (role in use, unknown app/role) and the cascades need a
-// real Postgres. They skip unless TEST_DATABASE_URL is set, e.g.:
+// Integration tests for the RBAC store; they need a real Postgres.
+//
+// They skip unless TEST_DATABASE_URL is set, e.g.:
 //
 //	docker run -d --name eoo-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16-alpine
 //	TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/postgres?sslmode=disable" go test ./ee/rbac/
@@ -31,8 +31,7 @@ func setupRBACStore(t *testing.T) (*PostgresRBACStore, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// See the same guard in the sso store tests: a skip in CI is a green
-		// job that ran none of these guarded queries.
+		// A skip in CI would be a green job that ran none of these guarded queries.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}

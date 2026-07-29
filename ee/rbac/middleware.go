@@ -16,19 +16,16 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// UserLookup is the one read the middlewares need from the users store.
-// services.UserRepository satisfies it; keeping it narrow lets tests fake a
-// single method instead of the whole repository. Nil in stateless mode, where
-// the session claim is authoritative (the single ADMIN_EMAIL account).
+// UserLookup is the one read the middlewares need from the users store. It is
+// nil in stateless mode, where the session claim (the single ADMIN_EMAIL
+// account) is authoritative.
 type UserLookup interface {
 	GetUserByID(ctx context.Context, id string) (store.User, error)
 }
 
 // resolveSubject authenticates the request as a dashboard account and
-// resolves its admin flag from a fresh users-table read, exactly like the
-// community admin gate: a session token lives 2 hours, and a revoked admin
-// (or deleted user) must lose access immediately, not at the next refresh.
-// On failure it writes the response and returns ok=false.
+// resolves its admin flag from a fresh users-table read. On failure it writes
+// the response and returns ok=false.
 func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Subject, bool) {
 	principal := services.PrincipalFromContext(r.Context())
 	if principal == nil {
@@ -55,8 +52,7 @@ func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Su
 
 // RequirePermission guards one app-scoped dashboard action: admins pass,
 // members need the permission on the route's APP_ID. When roles are not
-// enforced (no control plane, no valid license) there are no grants to read,
-// and the route's own fallback decides instead: see Fallback.
+// enforced, the route's own fallback decides instead; see Fallback.
 func RequirePermission(service *RBACService, perm Permission, fallback Fallback) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,11 +64,7 @@ func RequirePermission(service *RBACService, perm Permission, fallback Fallback)
 	}
 }
 
-// authorizeRequest is the decision RequirePermission wraps, split out so the
-// middleware stays three lines. Deliberately unexported: a handler that
-// authorizes itself is a permission nobody can find by reading the routing
-// table, and the one endpoint that seemed to need it turned out to be two
-// endpoints wearing one URL.
+// authorizeRequest is the decision RequirePermission wraps.
 func authorizeRequest(
 	service *RBACService,
 	w http.ResponseWriter,
@@ -97,10 +89,8 @@ func authorizeRequest(
 	return true
 }
 
-// recordDenied reports a refusal to the audit trail: permission.denied is the
-// single event for authorization refusals (see the audit catalog). Only real
-// denials are events — the community fallback's admin-only refusals happen
-// precisely when no license is active, so the recorder would drop them anyway.
+// recordDenied reports a refusal to the audit trail. Only real denials are
+// recorded; the community fallback's admin-only refusals are not.
 func (s *RBACService) recordDenied(r *http.Request, subject Subject, appID string, cause error, metadata map[string]any) {
 	if s.onAuditEvent == nil {
 		return
@@ -113,9 +103,8 @@ func (s *RBACService) recordDenied(r *http.Request, subject Subject, appID strin
 	default:
 		return
 	}
-	// The method and path disambiguate what was attempted when one permission
-	// covers several endpoints (apikeys:manage gates create, revoke and
-	// restrictions).
+	// The method and path disambiguate when one permission covers several
+	// endpoints.
 	metadata["method"] = r.Method
 	metadata["path"] = r.URL.Path
 	actorDisplay := subject.UserID
@@ -140,7 +129,7 @@ func renderAuthorizeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrRequiresControlPlane), errors.Is(err, ErrRequiresValidLicense):
 		// Community fallback: members are read-only, same refusal as the
-		// admin-only gate so an expired license reads identically to today.
+		// admin-only gate.
 		handlers.RenderError(w, http.StatusForbidden, "This action requires an admin account")
 	case errors.Is(err, ErrNoAppAccess):
 		// Same body as the app resolver's 404: an app the member has no
@@ -153,12 +142,10 @@ func renderAuthorizeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// RequireAppVisible guards the app-scoped dashboard reads: while roles are
-// enforced, members only see the apps they hold a grant on — anything else
-// 404s like an app that does not exist. Admins and the community fallback see
-// everything. CLI credentials pass through on the explicit marker the auth
-// middleware stamped after validating their app scope — asserted, not
-// inferred from a missing principal, so a wiring mistake fails closed.
+// RequireAppVisible guards the app-scoped dashboard reads: members only see
+// apps they hold a grant on; everything else 404s. Admins, the community
+// fallback, and CLI credentials (marked after their app-scope check) pass
+// through.
 func RequireAppVisible(service *RBACService) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

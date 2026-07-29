@@ -6,37 +6,20 @@ package identity
 
 import "sort"
 
-// Identity consumes log records already decoded by the transport (ee/observe
-// owns the OTLP wire format); this file owns the identity-side conventions:
-// which record attributes form the operation payload.
-
-// The two record attributes the client SDK reserves on every log record; they
-// are envelope, not payload, and are stripped before sanitization. Stripping
-// is identity policy and lives here on purpose: keyPattern allows dots, so an
-// operator could declare a metadata key literally named "event.name", and the
-// future ClickHouse flattener will keep these as real columns rather than
-// strip them. recordEventNameKey mirrors observe.EventNameKey by necessity
-// (the observe → identity dependency forbids importing it back).
+// recordEventNameKey and recordSessionIDKey are envelope attributes on every log record,
+// stripped from the payload before sanitization.
 const (
 	recordEventNameKey = "event.name"
 	recordSessionIDKey = "session.id"
 )
 
-// unsetKeysAttributeKey is the record attribute carrying the key names of a
-// $unset: `logEvent('$unset', { attributes: { keys: ['userId'] } })`. An
-// explicit array attribute because null values never leave the stock SDK
-// (dropped client-side), so "set to null" cannot express removal.
+// unsetKeysAttributeKey is the record attribute carrying the key names of a $unset.
 const unsetKeysAttributeKey = "keys"
 
-// RequestFromRecord builds an identity Request from one decoded log record.
-// The second return is false when the record carries nothing applicable
-// (a $unset without keys, a $set with an empty payload): skipping those saves
-// a store transaction that would be a no-op. The caller's map is never
-// mutated: the decoded attributes are the same map the telemetry pass reads
-// afterwards to recognize an identity record, and stripping the envelope in
-// place made that record unrecognizable, so its payload was persisted as a
-// nameless log line. The payload is copied into a map this request owns,
-// which CoalesceRequests is then free to merge into.
+// RequestFromRecord builds an identity Request from one decoded log record. The second
+// return is false when the record carries nothing applicable (an empty $unset or $set).
+// The caller's attributes map is never mutated; the payload is copied into a map this
+// request owns.
 func RequestFromRecord(appID string, easClientID string, op Op, attributes map[string]any, remoteIP string) (Request, bool) {
 	req := Request{AppID: appID, EASClientID: easClientID, Op: op, RemoteIP: remoteIP}
 	switch op {
@@ -68,17 +51,10 @@ func RequestFromRecord(appID string, easClientID string, op Op, attributes map[s
 	return req, true
 }
 
-// sameScalar reports whether two wire values are the same, for the only shapes
-// a stored value can have. It exists because `==` on two `any` PANICS when the
-// dynamic type is uncomparable, and the decoder produces exactly those: an OTLP
-// arrayValue becomes []any and a kvlistValue becomes map[string]any, both legal
-// attribute values the SDK accepts. The panic surfaced as a 503, which the
-// published clients read as "retry", so one attribute holding a list turned a
-// batch into a poison pill the device replayed for ever.
-//
-// Anything that is not one of these four is reported as different, which costs
-// an extra group and never a wrong outcome. The store would drop such a value
-// anyway: coerceValue only ever yields a string, a number or a bool.
+// sameScalar reports whether two wire values are equal, without panicking on the
+// uncomparable dynamic types (arrays, maps) the decoder can produce. Anything outside
+// string/bool/int64/float64 is reported as different, which costs an extra group and
+// never a wrong outcome.
 func sameScalar(a, b any) bool {
 	switch left := a.(type) {
 	case string:
@@ -97,45 +73,13 @@ func sameScalar(a, b any) bool {
 	return false
 }
 
-// CoalesceRequests reduces ONE installation's operations to the fewest store
-// transactions that reach the SAME row, so a backlog does not cost one
-// transaction per operation. The SDK ships its whole backlog in a single POST,
-// and a device that wrote the same attribute forty times is describing one
-// outcome.
+// CoalesceRequests reduces one installation's operations to the fewest store transactions
+// that reach the same row. Requests naming more than one installation are handed back
+// untouched.
 //
-// One installation, because that is all a batch can name: the app comes from
-// the URL and the client id is persisted per install, so the caller refuses a
-// body naming two before anything reaches here. A request naming another one is
-// therefore not something to merge, and the whole input is handed back
-// untouched rather than folded into a row it does not belong to.
-//
-// THE RULE: two operations on the same key merge only when they are the same
-// operation carrying the same value. Anything else opens a group boundary, and
-// operations on other keys keep merging into the current group.
-//
-// That rule is stricter than it looks like it needs to be, and the reason is an
-// asymmetry in the store rather than anything about ordering. A $set and a
-// $set_once are filtered per key: an undeclared key, a value of the wrong type
-// or one past its length is dropped by Schema.Sanitize, and without a licence
-// they carry nothing at all. A $unset is filtered by neither, deliberately, so
-// that removing data keeps working when collecting it no longer does. So a
-// later write CANNOT be assumed to land, and every shortcut that assumes it
-// does is wrong:
-//
-//	$unset{plan}, $set{plan:42}   the 42 is dropped for its type, and folding
-//	                             to the $set alone loses the deletion, leaving
-//	                             the old value in place forever
-//	$set{ref:42}, $set_once{ref}  the 42 is dropped, so the $set_once is the
-//	                             one that lands, and dropping it as "already
-//	                             present" loses the value
-//	$set{k:"ok"}, $set{k:42}      the 42 is dropped, so a replay leaves "ok",
-//	                             while folding to the last write leaves
-//	                             whatever the row held before the batch
-//
-// Merging equal writes is what stays safe, and it is also what a real backlog
-// is made of: a device that re-sends the same userId every session collapses to
-// one transaction. A key whose value genuinely changes costs one more group,
-// which is the honest price of not guessing what the schema will accept.
+// Two operations on the same key merge only when they are the same operation carrying the
+// same value; a $set can be dropped downstream by Schema.Sanitize while a $unset never is,
+// so a later write cannot be assumed to land, and any other merge risks losing data.
 func CoalesceRequests(requests []Request) []Request {
 	if len(requests) < 2 {
 		return requests
@@ -146,18 +90,15 @@ func CoalesceRequests(requests []Request) []Request {
 		}
 	}
 
-	// What one key is doing in one group.
 	type write struct {
 		op    Op
 		value any
 	}
-	// A group is a set of operations on distinct keys that can share their
-	// transactions. Groups are applied in order, so a key appearing in two of
-	// them is written twice, in the order the device sent it.
+	// A group is a set of operations on distinct keys that can share their transactions,
+	// applied in order.
 	type group struct {
 		writes map[string]write
-		// Key names in the order they were first seen: ranging over a Go map is
-		// randomized, and the output has to be stable.
+		// Key names in first-seen order, since ranging over the map is randomized.
 		order []string
 	}
 	groups := []*group{{writes: map[string]write{}}}
@@ -165,8 +106,7 @@ func CoalesceRequests(requests []Request) []Request {
 	place := func(name string, op Op, value any) {
 		current := groups[len(groups)-1]
 		if held, taken := current.writes[name]; taken {
-			// Same operation, same value: the second one changes nothing
-			// whatever the schema decides, so it costs no group.
+			// Same op, same value: costs no group regardless of what the schema decides.
 			if held.op == op && sameScalar(held.value, value) {
 				return
 			}
@@ -183,10 +123,7 @@ func CoalesceRequests(requests []Request) []Request {
 				place(name, OpUnset, nil)
 			}
 		case OpSet, OpSetOnce:
-			// Sorted, because which key is placed first decides which group the
-			// others land in when one of them opens a boundary. Ranging over
-			// the map would make the same batch produce different (equivalent)
-			// splits from one run to the next.
+			// Sorted for a stable split; ranging over the map would vary run to run.
 			names := make([]string, 0, len(req.Attributes))
 			for name := range req.Attributes {
 				names = append(names, name)
@@ -222,9 +159,7 @@ func CoalesceRequests(requests []Request) []Request {
 			}
 			buckets[decided.op] = bucket
 		}
-		// Within a group the three touch disjoint keys, so their order is
-		// presentation; across groups it is semantics, and the loop above
-		// already walks them in order.
+		// Within a group the three ops touch disjoint keys, so this order is presentation only.
 		for _, op := range []Op{OpSet, OpSetOnce, OpUnset} {
 			if bucket, open := buckets[op]; open {
 				coalesced = append(coalesced, bucket)

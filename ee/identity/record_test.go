@@ -65,9 +65,7 @@ func TestCoalesceRequests(t *testing.T) {
 			set("d1", map[string]any{"a": "1", "b": "1"}),
 			set("d1", map[string]any{"b": "2"}),
 		})
-		// b changes, so it cannot share a transaction with its own earlier
-		// value: if "2" is dropped by the schema, "1" has to have landed. a
-		// never repeats, so it stays in the first.
+		// If "2" is dropped by the schema, "1" must still have landed.
 		require.Len(t, out, 2)
 		require.Equal(t, map[string]any{"a": "1", "b": "1"}, out[0].Attributes)
 		require.Equal(t, map[string]any{"b": "2"}, out[1].Attributes)
@@ -88,9 +86,7 @@ func TestCoalesceRequests(t *testing.T) {
 			{AppID: "app", EASClientID: "d1", Op: OpSetOnce, Attributes: map[string]any{"ref": "organic"}},
 			{AppID: "app", EASClientID: "d1", Op: OpSetOnce, Attributes: map[string]any{"ref": "paid", "v": "1"}},
 		})
-		// "organic" cannot be assumed to land: an undeclared key, a bad type or
-		// a lapsed licence drops it, and then "paid" is the one that decides.
-		// The key that repeats opens a group; "v" rides along in it.
+		// "organic" cannot be assumed to land, so "paid" must not be folded into it.
 		require.Len(t, out, 2)
 		require.Equal(t, map[string]any{"ref": "organic"}, out[0].Attributes)
 		require.Equal(t, map[string]any{"ref": "paid", "v": "1"}, out[1].Attributes)
@@ -102,8 +98,6 @@ func TestCoalesceRequests(t *testing.T) {
 			set("d1", map[string]any{"userId": "u42"}),
 			set("d1", map[string]any{"userId": "u42"}),
 		})
-		// What a real backlog is made of: the same identity re-sent every
-		// session. Whatever the schema decides, it decides it once.
 		require.Len(t, out, 1)
 		require.Equal(t, map[string]any{"userId": "u42"}, out[0].Attributes)
 	})
@@ -113,9 +107,7 @@ func TestCoalesceRequests(t *testing.T) {
 			{AppID: "app", EASClientID: "d1", Op: OpUnset, UnsetKeys: []string{"plan"}},
 			set("d1", map[string]any{"plan": 42}),
 		})
-		// The 42 is dropped for its type while the delete is not filtered at
-		// all, so folding to the write alone would leave the old value in
-		// place forever. The deletion the device asked for must survive.
+		// The 42 can be dropped for its type; the deletion must still survive.
 		require.Len(t, out, 2)
 		require.Equal(t, OpUnset, out[0].Op)
 		require.Equal(t, []string{"plan"}, out[0].UnsetKeys)
@@ -131,10 +123,6 @@ func TestCoalesceRequests(t *testing.T) {
 		require.Equal(t, []string{"a", "b"}, out[0].UnsetKeys)
 	})
 
-	// A batch names one installation: the app comes from the URL and the client
-	// id is persisted per install, and the ingest handler caps it before this
-	// runs. Folding two of them into one row would be silent corruption, so the
-	// input comes back untouched instead.
 	t.Run("more than one device is handed back untouched", func(t *testing.T) {
 		in := []Request{
 			set("d1", map[string]any{"a": "1"}),
@@ -153,16 +141,9 @@ func TestCoalesceRequests(t *testing.T) {
 	})
 }
 
-// applySequentially is what the store does, spelled out: the reference the fold
-// has to match. Deliberately a naive replay, because a fold that is only
-// checked against itself proves nothing.
-//
-// `rejected` is the piece whose absence hid a real bug: the store filters a
-// $set and a $set_once per key (Schema.Sanitize drops an undeclared key or a
-// value of the wrong type, and a lapsed licence empties them entirely) while it
-// filters a $unset by neither, on purpose. A reference that applies everything
-// models a store that does not exist, and no number of iterations can then
-// catch a fold that assumes its writes land.
+// applySequentially is a naive replay of the requests, the reference CoalesceRequests's
+// output must match. rejected names keys the store would drop, since $set/$set_once are
+// filtered per key while $unset never is.
 func applySequentially(state map[string]any, requests []Request, rejected map[string]bool) map[string]any {
 	result := map[string]any{}
 	for key, value := range state {
@@ -187,8 +168,7 @@ func applySequentially(state map[string]any, requests []Request, rejected map[st
 				}
 			}
 		case OpUnset:
-			// Never filtered: it is the cleanup path, and it works for keys the
-			// allowlist has since dropped.
+			// Never filtered, so it still works for keys the allowlist has since dropped.
 			for _, key := range req.UnsetKeys {
 				delete(result, key)
 			}
@@ -197,17 +177,12 @@ func applySequentially(state map[string]any, requests []Request, rejected map[st
 	return result
 }
 
-// The fold rewrites a sequence of operations into a shorter one, so the only
-// property that matters is that both reach the same row. Three keys and three
-// operations over a random starting row cover the orderings that make this
-// non-obvious far better than cases picked by hand, and one key is always
-// refused by the schema so the asymmetry between "a write may be dropped" and
-// "a delete always lands" is exercised on every attempt.
+// TestCoalesceRequestsPreservesTheOutcome fuzzes random operation sequences and checks
+// that CoalesceRequests's output reaches the same row as a naive replay, with one key
+// always rejected to exercise "a write may be dropped, a delete always lands".
 func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 	random := rand.New(rand.NewSource(20260727))
 	keys := []string{"a", "b", "c"}
-	// "c" stands for every reason a write does not land: undeclared, wrong
-	// type, too long, or no licence.
 	rejected := map[string]bool{"c": true}
 
 	for attempt := 0; attempt < 5000; attempt++ {
@@ -233,8 +208,7 @@ func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 			requests = append(requests, req)
 		}
 
-		// CoalesceRequests reads the requests it is given, so the reference
-		// replay runs on a copy taken before the fold touches anything.
+		// The reference replay runs on a copy taken before the fold touches anything.
 		reference := make([]Request, len(requests))
 		for i, req := range requests {
 			reference[i] = Request{AppID: req.AppID, EASClientID: req.EASClientID, Op: req.Op, UnsetKeys: req.UnsetKeys}
@@ -247,9 +221,7 @@ func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 		}
 
 		folded := CoalesceRequests(requests)
-		// Same input, same split: which key opens a group boundary decides
-		// where the others land, so ranging over an attribute map would make
-		// one batch produce different shapes from one run to the next.
+		// Same input must produce the same split every time.
 		if attempt%50 == 0 {
 			again := make([]Request, len(reference))
 			copy(again, reference)
@@ -261,8 +233,6 @@ func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 			applySequentially(initial, reference, rejected),
 			applySequentially(initial, folded, rejected),
 			"attempt %d: %v", attempt, reference)
-		// And the same holds when nothing is refused, which is the ordinary
-		// case: a fold that only works under one schema is not a fold.
 		require.Equal(t,
 			applySequentially(initial, reference, nil),
 			applySequentially(initial, folded, nil),
@@ -270,11 +240,7 @@ func TestCoalesceRequestsPreservesTheOutcome(t *testing.T) {
 	}
 }
 
-// The decoder turns an OTLP arrayValue into []any and a kvlistValue into
-// map[string]any, both legal attribute values. Comparing two of them with `==`
-// panics, which the ingest handler answers with a 503, which the published
-// clients read as "retry": one attribute holding a list turned a batch into a
-// poison pill the device replayed for ever.
+// Array and map attribute values are legal but uncomparable with `==`, which used to panic.
 func TestCoalesceRequestsSurvivesUncomparableValues(t *testing.T) {
 	for _, value := range []any{
 		[]any{"a", "b"},
@@ -286,8 +252,7 @@ func TestCoalesceRequestsSurvivesUncomparableValues(t *testing.T) {
 				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
 				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
 			})
-			// Reported as different rather than merged, which costs a group and
-			// never a wrong outcome: the store drops such a value anyway.
+			// Reported as different rather than merged; the store would drop such a value anyway.
 			require.Len(t, out, 2)
 		}, "%T", value)
 	}

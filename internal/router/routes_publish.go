@@ -13,20 +13,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// The publish flow, called by the eoas CLI from a developer machine or a CI
-// job. These five routes are the whole write path of an update: ask for the
-// upload URLs, push the files, seal the update, then the two operations that
-// move a branch's pointer afterwards.
-//
-// AUTHENTICATION AND AUTHORISATION happen here, in front of the handlers, and
-// each route says which action it performs on its {BRANCH}. That declaration
-// is the point: an API key's access rules are written about branches and
-// actions, so the layer that judges them has to hold both, and only the
-// routing table does. It used to live in the handlers, one hand-written call
-// per handler, which is a rule you can forget on the sixth one.
-//
-// AppResolverMiddleware still runs first and turns an unknown APP_ID into a
-// 404 before any of that.
+// registerPublishRoutes registers the publish flow called by the eoas CLI:
+// request the upload URLs, push the files, seal the update, then rollback or
+// republish. Each route declares which action it performs on its {BRANCH},
+// which is what an API key's access rules are judged against.
 func registerPublishRoutes(r *mux.Router, container *AppContainer) {
 	appSubrouter := r.PathPrefix("/{APP_ID}").Subrouter()
 	appSubrouter.Use(middleware.AppResolverMiddleware(container.AppRepo))
@@ -41,21 +31,14 @@ func registerPublishRoutes(r *mux.Router, container *AppContainer) {
 		publish.route(declaration.method, declaration.path, declaration.handler(container), declaration.action)
 	}
 
-	// The odd one out: the local-bucket file upload names no branch in its
-	// path, it carries a short-lived signed token minted by the upload-url
-	// request above. The branch is a claim of that token, so the guard reads
-	// it from there and judges the request like any other publish. Answering
-	// "no branch, no rules to apply, let it through" instead would have left a
-	// scoped key able to write files onto any branch it can name.
+	// The local-bucket file upload names no branch in its path; the branch is
+	// a claim of the signed token minted by the upload-url request above.
 	publish.uploadTokenRoute(http.MethodPut, "/uploadLocalFile", container.UploadHandler.RequestUploadLocalFileHandler)
 }
 
-// publishRouteTable is the declaration of every branch-scoped publish route:
-// what it is, and what it does to the branch it names. It is a table rather
-// than four calls so a test can read the same declarations the router
-// registers — an action written wrong here is a silent privilege change (a key
-// granted only read on production could roll production back), and that is
-// worth pinning against the source of truth rather than against a copy.
+// publishRouteTable declares every branch-scoped publish route and what it
+// does to the branch it names, as a table so a test can pin it against the
+// same declarations the router registers.
 var publishRouteTable = []struct {
 	method  string
 	path    string
@@ -72,9 +55,7 @@ var publishRouteTable = []struct {
 		func(c *AppContainer) http.HandlerFunc { return c.RepublishHandler.HandleRepublish }},
 }
 
-// publishGroup registers the CLI write routes. Like appGroup, its route()
-// cannot default the declaration: adding a publish route means saying what it
-// does to the branch it names.
+// publishGroup registers the CLI write routes.
 type publishGroup struct {
 	router       *mux.Router
 	cliAuth      *services.CliAuthService
@@ -91,13 +72,9 @@ func (g publishGroup) route(method, path string, handler http.HandlerFunc, actio
 	g.router.Handle(path, g.guard(action, routeBranch)(handler)).Methods(method)
 }
 
-// uploadTokenRoute is route() for the one publish route whose branch comes from
-// its signed upload token rather than its path.
-//
-// It is the door that skips route()'s "a publish route names a branch" check,
-// so it refuses a path that does carry one: the two doors are mutually
-// exclusive by construction, and a route registered through the wrong one
-// would be judged on a token claim it does not have.
+// uploadTokenRoute is route() for the one publish route whose branch comes
+// from its signed upload token rather than its path. It refuses a path that
+// carries a branch variable, since that would be judged through route() instead.
 func (g publishGroup) uploadTokenRoute(method, path string, handler http.HandlerFunc) {
 	if strings.Contains(path, branchVar) {
 		panic("router: " + method + " " + path + " names a " + branchVar +
@@ -113,11 +90,9 @@ func routeBranch(r *http.Request) string {
 	return mux.Vars(r)[branchVarName]
 }
 
-// uploadTokenBranch reads the branch out of the upload token, through the same
-// validation the handler runs, so the two cannot disagree about what a valid
-// upload token is. Anything unreadable, expired, foreign-signed or claimless
-// yields "", which the access rules refuse for a scoped key; the handler then
-// refuses the same token on its own.
+// uploadTokenBranch reads the branch out of the upload token, through the
+// same validation the handler runs. Anything unreadable, expired,
+// foreign-signed or claimless yields "".
 func uploadTokenBranch(r *http.Request) string {
 	branchName, err := bucket.ResolveUploadTokenBranch(r.URL.Query().Get("token"))
 	if err != nil {
@@ -137,9 +112,6 @@ func (g publishGroup) guard(action apikeyrestrictions.Action, resolveBranch bran
 			if !authorizeCliRequest(g.apiKeyAccess, w, r, credential, action, resolveBranch(r)) {
 				return
 			}
-			// This group has no authentication middleware in front of it, so
-			// this is what puts the credential on the context: the audit trail
-			// reads it as the actor of every publish.
 			next.ServeHTTP(w, r.WithContext(services.WithCliAuth(r.Context(), credential)))
 		})
 	}

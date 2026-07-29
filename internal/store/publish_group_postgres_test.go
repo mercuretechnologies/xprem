@@ -150,12 +150,8 @@ func TestGetUpdateFeedPostgres(t *testing.T) {
 	assert.NotEqual(t, firstPage[1].UpdateId, secondPage[0].UpdateId)
 }
 
-// TestPublishGroupRolloutActivationPostgres pins the sequential worst case of
-// one grouped rollout publish against the real SQL guards: iOS's rollout is
-// already active (checked) when Android's stamp runs. Both the conditional
-// stamp and the partial unique index are scoped per (branch, rtv, platform),
-// so the second platform of the same run must activate, leaving two active
-// rollouts under one publish group.
+// TestPublishGroupRolloutActivationPostgres verifies the second platform of a
+// grouped rollout publish still activates even though the first platform's rollout is already active.
 func TestPublishGroupRolloutActivationPostgres(t *testing.T) {
 	fixture := newRolloutFixture(t)
 	ctx := context.Background()

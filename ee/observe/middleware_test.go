@@ -46,7 +46,6 @@ func (r *countingAppRepo) DeleteAppByID(context.Context, string) error          
 func (r *countingAppRepo) GetApps(context.Context) ([]config.AppDescriptor, error) { return nil, nil }
 func (r *countingAppRepo) UpdateAppNameByID(context.Context, string, string) error { return nil }
 
-// Just here to verify correct compilation of the mocked appRepo
 var _ services.AppRepository = (*countingAppRepo)(nil)
 
 func chain(handler *IngestHandler, repo services.AppRepository) http.Handler {
@@ -58,8 +57,6 @@ func chain(handler *IngestHandler, repo services.AppRepository) http.Handler {
 }
 
 func post(h http.Handler, path, remote string) *httptest.ResponseRecorder {
-	// A valid empty batch: these tests exercise the middleware chain, not the
-	// decoder, so the handler must reach its 204 rather than 400 on the body.
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`)))
 	req.RemoteAddr = remote
 	rec := httptest.NewRecorder()
@@ -76,7 +73,6 @@ func TestCachedAppResolverMemoizesLookup(t *testing.T) {
 		rec := post(h, "/observe/known-app/proj/v1/logs", "203.0.113.20:1")
 		require.Equal(t, http.StatusNoContent, rec.Code)
 	}
-	// The five requests share one database read.
 	require.Equal(t, int64(1), atomic.LoadInt64(&repo.calls))
 }
 
@@ -89,7 +85,6 @@ func TestCachedAppResolverCachesUnknown(t *testing.T) {
 		rec := post(h, "/observe/ghost-app/proj/v1/logs", "203.0.113.21:1")
 		require.Equal(t, http.StatusNotFound, rec.Code)
 	}
-	// A flood of the same unknown id does not re-hit the database each time.
 	require.Equal(t, int64(1), atomic.LoadInt64(&repo.calls))
 }
 
@@ -97,7 +92,6 @@ func TestCachedAppResolverRejectsMalformedID(t *testing.T) {
 	resetObserveCache(t)
 	repo := &countingAppRepo{}
 	h := chain(NewIngestHandler(nil, nil, nil, nil), repo)
-	// A control character in the id fails the syntactic guard before any read.
 	rec := post(h, "/observe/%00bad/proj/v1/logs", "203.0.113.22:1")
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Equal(t, int64(0), atomic.LoadInt64(&repo.calls))

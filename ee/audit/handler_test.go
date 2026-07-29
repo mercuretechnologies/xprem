@@ -2,9 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-// The admin gate is not exercised here on purpose: it wraps the route in
-// internal/router (adminOnly), like every sibling admin endpoint; these tests
-// cover the handler's own contract.
+// The admin gate itself isn't exercised here; these tests cover only the handler's own contract.
 
 package audit
 
@@ -70,7 +68,6 @@ func TestListHandlerPassesEveryFilter(t *testing.T) {
 	// The service asks one extra row to detect the next page.
 	assert.Equal(t, 11, params.Limit)
 
-	// No filters: everything nil, default page size.
 	performList(t, service, "")
 	params = repo.listParams
 	assert.Nil(t, params.ActorID)
@@ -111,7 +108,6 @@ func TestListHandlerResponseShape(t *testing.T) {
 	require.Len(t, wire.Events, 1)
 	assert.Equal(t, int64(1), wire.Count)
 	assert.Nil(t, wire.NextCursor)
-	// The wire contract: camelCase keys, RFC3339 date, metadata as an object.
 	event := wire.Events[0]
 	assert.Equal(t, float64(7), event["id"])
 	assert.Equal(t, "2026-07-21T10:00:00Z", event["occurredAt"])
@@ -130,7 +126,6 @@ func TestListHandlerResponseShape(t *testing.T) {
 }
 
 func TestListHandlerPaginationWalk(t *testing.T) {
-	// Newest first, like the store returns them.
 	repo := &fakeAuditRepo{listResult: []Event{
 		{ID: 3, Action: auditlog.ActionUserLogin},
 		{ID: 2, Action: auditlog.ActionUserLogin},
@@ -198,8 +193,7 @@ func TestListHandlerRepositoryFailureIsAnInternalError(t *testing.T) {
 }
 
 func TestListHandlerReadsStayOpenWithoutLicense(t *testing.T) {
-	// A lapsed license stops collection, never read access: the viewer must
-	// keep answering (the UI overlay is the gate, not the server).
+	// A lapsed license stops collection, not read access; the server keeps answering.
 	repo := &fakeAuditRepo{listResult: []Event{{ID: 1, Action: auditlog.ActionUserLogin}}}
 	service := NewAuditService(repo)
 	service.licenseValid = func() bool { return false }

@@ -31,23 +31,7 @@ func NewBucketUpdateStore(bucket bucket2.Bucket) *BucketUpdateStore {
 
 // GetLatestUpdate returns the newest complete update for the platform, or nil
 // when the branch has none yet.
-//
-// Callers that need the cached answer must go through UpdateService, which owns
-// the lastUpdate cache — this is the uncached read underneath it.
 func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error) {
-	// List the runtime's updates (the bucket derives CreatedAt from the updateId, so
-	// we can sort newest-first WITHOUT reading any per-update metadata) and scan once,
-	// reading update-metadata.json + .check only until the first update that matches
-	// the platform AND is valid. That update is the latest (newest-first order), so
-	// the result is identical to filtering+validating every update — but a cold cache
-	// miss now does O(1) bucket reads in the common case (newest update matches)
-	// instead of O(N). The previous shape read metadata for every update up front,
-	// so a foreground herd at the 1800s lastUpdate TTL expiry stampeded the origin.
-	//
-	// It resolves the bucket through the singleton rather than s.bucket on purpose:
-	// the metadata reads below go via internal/update, which is singleton-backed
-	// throughout. Mixing the two would list updates from one bucket and read their
-	// metadata from another whenever they diverge.
 	updates, err := bucket2.GetBucket().GetUpdates(appId, branchName, runtimeVersion)
 	if err != nil {
 		return nil, err
@@ -77,12 +61,9 @@ func (s *BucketUpdateStore) GetUpdateType(ctx context.Context, update types.Upda
 	return s.updateType(update), nil
 }
 
-// updateType keys off the "rollback" marker file CreateRollback writes: its
-// presence is this backend's equivalent of the updates.update_type column.
-//
-// The error-free shape is what the listing paths below want: a missing marker
-// and an unreachable bucket are indistinguishable here, and both mean "not a
-// rollback".
+// updateType reports whether update is a rollback, based on the presence of
+// the "rollback" marker file written by CreateRollback.
+// A missing marker and an unreachable bucket are indistinguishable here; both mean "not a rollback".
 func (s *BucketUpdateStore) updateType(update types.Update) types.UpdateType {
 	file, _ := s.bucket.GetFile(update, "rollback")
 	if file != nil {
@@ -96,9 +77,8 @@ func (s *BucketUpdateStore) IsUpdateValid(ctx context.Context, update types.Upda
 	return s.isUpdateValid(update), nil
 }
 
-// isUpdateValid reports whether the ".check" sentinel is present — the bucket
-// equivalent of the checked_at column, written last so an update stays invisible
-// until every file has landed. See PostgresUpdateStore.IsUpdateValid.
+// isUpdateValid reports whether the ".check" sentinel file is present, marking
+// the update as fully uploaded.
 func (s *BucketUpdateStore) isUpdateValid(update types.Update) bool {
 	file, _ := s.bucket.GetFile(update, ".check")
 	if file != nil {
@@ -112,9 +92,8 @@ func (s *BucketUpdateStore) MarkUpdateAsChecked(ctx context.Context, update type
 	return s.bucket.UploadFileIntoUpdate(update, ".check", strings.NewReader(".check"))
 }
 
-// updateMetadataReader marshals the update-metadata.json body, the file holding
-// what the updates table keeps in columns. message is omitted when empty, which
-// is the case for every publish that gave none and for the CLI rollback.
+// updateMetadataReader marshals the update-metadata.json body. message is
+// omitted when empty.
 func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, error) {
 	fileUpdateMetadata := map[string]string{
 		"platform":   platform,
@@ -130,8 +109,7 @@ func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, 
 	return bytes.NewReader(marshalledMetadata), nil
 }
 
-// publishGroup is ignored: stateless mode has no publish grouping, rows always
-// list ungrouped there.
+// publishGroup is ignored: stateless mode has no publish grouping.
 func (s *BucketUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error) {
 	metadataReader, err := updateMetadataReader(platform, commitHash, message)
 	if err != nil {
@@ -162,9 +140,7 @@ func (s *BucketUpdateStore) GetUpdateDetails(ctx context.Context, appId string, 
 	if err != nil {
 		return types.UpdateDetails{}, fmt.Errorf("failed to fetch update: %w", err)
 	}
-	// Rollback folders and phantom updates carry no metadata.json; the
-	// details page must still render them (with an empty manifest id) so
-	// they stay visible and deletable from the dashboard.
+	// Rollback folders and phantom updates carry no metadata.json but must still render.
 	metadata, err := update2.GetMetadata(*update)
 	if err != nil && !errors.Is(err, update2.ErrUpdateMetadataMissing) {
 		return types.UpdateDetails{}, fmt.Errorf("failed to get update metadata: %w", err)
@@ -248,10 +224,7 @@ func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.
 }
 
 // GetUpdate reconstructs an update handle from its id without touching the
-// bucket: on this backend an update is a path, and every field is derivable
-// from the id. Note it does not tell the caller whether that path exists —
-// unlike the Postgres store, it never returns a nil update for a well-formed
-// id. Callers needing existence must follow up with IsUpdateValid.
+// bucket; it does not check whether the update actually exists.
 func (s *BucketUpdateStore) GetUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
 	updateIdInt64, err := strconv.ParseInt(updateId, 10, 64)
 	if err != nil {
@@ -289,15 +262,8 @@ func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, updat
 	return s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(updatedMetadata))
 }
 
-// CreateRollback writes this backend's record of a rollback: the metadata file
-// plus the "rollback" marker updateType keys off. There is no bundle or asset to
-// store — a rollback only says "from this id on, fall back to the embedded
-// update" — so the two files are the whole record.
-//
-// updateId is supplied by the caller rather than minted here so that both
-// backends stamp the id the service generated — the Postgres store already
-// inserts the id it is handed, and minting a second one here made the two
-// backends disagree about who owns update identity.
+// CreateRollback writes the metadata file and the "rollback" marker file;
+// there is no bundle or asset to store for a rollback.
 func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
 	update := types.Update{
 		AppId:          appId,
@@ -325,9 +291,8 @@ func (s *BucketUpdateStore) GetUpdateByBranchNameAndRuntime(ctx context.Context,
 	return pgdb.GetUpdateByBranchNameAndRuntimeRow{}, ErrNotSupportedInStatelessMode
 }
 
-// GetLatestUpdateWithRollout wraps GetLatestUpdate with an empty rollout envelope:
-// stateless mode has no rollouts, so the resolution path degrades to plain
-// latest-update behavior, byte-identical to today.
+// GetLatestUpdateWithRollout wraps GetLatestUpdate with an empty rollout
+// envelope, since stateless mode has no rollouts.
 func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
 	latest, err := s.GetLatestUpdate(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil {
@@ -339,8 +304,8 @@ func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appI
 	return &types.UpdateWithRollout{Update: *latest}, nil
 }
 
-// HasActiveRolloutUpdate is always false in stateless mode: rollouts never exist here,
-// so the publish pre-check never blocks.
+// HasActiveRolloutUpdate is always false in stateless mode, since rollouts
+// never exist here.
 func (s *BucketUpdateStore) HasActiveRolloutUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string) (bool, error) {
 	return false, nil
 }
@@ -357,9 +322,8 @@ func (s *BucketUpdateStore) GetUpdateFeed(ctx context.Context, appId string, que
 	return nil, ErrNotSupportedInStatelessMode
 }
 
-// GetUpdateByUUID returns (nil, nil) in stateless mode rather than an error so the assets
-// fallback keeps its current path: no Expo-Requested-Update-ID resolution, straight to the
-// latest-update decision, byte-identical to today.
+// GetUpdateByUUID always returns (nil, nil) in stateless mode; there is no
+// Expo-Requested-Update-ID resolution here.
 func (s *BucketUpdateStore) GetUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error) {
 	return nil, nil
 }

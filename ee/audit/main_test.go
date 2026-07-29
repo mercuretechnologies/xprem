@@ -11,8 +11,7 @@ import (
 	"expo-open-ota/internal/database/postgres/pgtest"
 )
 
-// The Postgres-backed tests share TEST_DATABASE_URL with other packages;
-// pgtest serializes them so migrations and test transactions cannot conflict.
+// pgtest serializes these tests since they share TEST_DATABASE_URL with other packages.
 func TestMain(m *testing.M) {
 	os.Exit(pgtest.RunSerialized(m))
 }

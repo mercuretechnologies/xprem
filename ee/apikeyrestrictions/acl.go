@@ -10,8 +10,7 @@ import (
 	"strings"
 )
 
-// maxBranchRules bounds one key's rule list: every CLI request walks it, and a
-// key needing fifty rules wanted a wildcard.
+// maxBranchRules bounds the number of rules a single API key may hold.
 const maxBranchRules = 50
 
 // Action is what a CLI request does to the branch it names.
@@ -20,7 +19,7 @@ type Action string
 const (
 	ActionRead     Action = "read"
 	ActionPublish  Action = "publish"
-	ActionRollback Action = "rollback" // rollback and republish: no working copy needed
+	ActionRollback Action = "rollback"
 )
 
 // AllActions is the catalog, in increasing order of trust.
@@ -35,21 +34,9 @@ func IsValidAction(action string) bool {
 	return false
 }
 
-// Implies reports whether granting a covers a request for b. Both writes cover
-// a read of the same branch: eoas lists a branch's runtime versions before
-// publishing to it, so publish alone would fail mid-command on a route the
-// operator never thought to grant.
-//
-// publish does NOT cover rollback, deliberately, even though it is the more
-// powerful grant. Shipping new code and putting an already-retired update back
-// in front of the fleet are separate decisions, and a CI token that only ever
-// needs the first should not silently hold the second.
-//
-// Spelled out rather than written as "a == b || b == ActionRead", which never
-// looks at a and therefore lets ANY string in a rule grant read. Nothing
-// unknown reaches here today (NormalizeBranchRules refuses it on write,
-// toActions drops it on read), but that guarantee lives in another package
-// while this is where the decision is made.
+// Implies reports whether granting a covers a request for b. ActionPublish and
+// ActionRollback both imply ActionRead, but ActionPublish does not imply
+// ActionRollback.
 func (a Action) Implies(b Action) bool {
 	if a == b {
 		return true
@@ -58,12 +45,8 @@ func (a Action) Implies(b Action) bool {
 }
 
 // BranchRule grants a set of actions on every branch matching Pattern, where
-// "*" stands for any run of characters. An API key holds a list of them, and
-// holding none means it reaches every branch of its app: the default a key has
-// always had, and all a community deployment ever sees.
-//
-// Allow-list only, no deny form: rules that both grant and revoke need a
-// precedence order, which is what nobody reads correctly at the third rule.
+// "*" stands for any run of characters. An API key holding no rules reaches
+// every branch of its app.
 type BranchRule struct {
 	Pattern string
 	Actions []Action
@@ -82,10 +65,7 @@ func (rule BranchRule) Allows(branchName string, action Action) bool {
 }
 
 // AllowsBranch is the decision for a whole rule list. An empty branchName is
-// refused for a scoped key: nothing matches branch rules, and on an allow-list
-// that reads as no. The routing table makes it unreachable anyway
-// (internal/router/access.go refuses a token route without a branch), so this
-// is the backstop.
+// refused whenever the key has any rules.
 func AllowsBranch(rules []BranchRule, branchName string, action Action) bool {
 	if len(rules) == 0 {
 		return true
@@ -101,10 +81,8 @@ func AllowsBranch(rules []BranchRule, branchName string, action Action) bool {
 	return false
 }
 
-// NormalizeBranchRules validates what the dashboard sent and returns the form
-// to persist: actions deduplicated and reordered into the catalog order, so
-// two equivalent lists are stored identically and the audit trail does not
-// report a change that is none. Errors are validation errors, hence 400.
+// NormalizeBranchRules validates the given rules and returns the form to
+// persist, with actions deduplicated and reordered into catalog order.
 func NormalizeBranchRules(rules []BranchRule) ([]BranchRule, error) {
 	if len(rules) > maxBranchRules {
 		return nil, validation.Errorf("rules", "a key cannot hold more than %d access rules", maxBranchRules)
@@ -115,10 +93,8 @@ func NormalizeBranchRules(rules []BranchRule) ([]BranchRule, error) {
 		if err := validation.NamePattern("pattern", rule.Pattern); err != nil {
 			return nil, err
 		}
-		// "*" and "**" mean the same set of branches, so they are stored the
-		// same way. Without this the duplicate check below compares strings
-		// that differ while the rules do not, and the key ends up with two
-		// grants a reader has to union in their head.
+		// "*" and "**" mean the same set of branches, so patterns are collapsed
+		// before the duplicate check below.
 		pattern := collapseWildcards(rule.Pattern)
 		if _, duplicate := seen[pattern]; duplicate {
 			return nil, validation.Errorf("pattern", "%q appears in more than one rule; merge them into one", pattern)
@@ -150,8 +126,6 @@ func normalizeActions(pattern string, actions []Action) ([]Action, error) {
 		granted[action] = struct{}{}
 	}
 	if len(granted) == 0 {
-		// A rule granting nothing reads as a restriction while being none:
-		// deleting the rule says the same thing, clearly.
 		return nil, validation.Errorf("actions", "rule %q grants no action; delete the rule instead", pattern)
 	}
 	ordered := make([]Action, 0, len(granted))
@@ -164,12 +138,7 @@ func normalizeActions(pattern string, actions []Action) ([]Action, error) {
 }
 
 // matchBranchPattern matches name against pattern, "*" standing for any run of
-// characters, empty included. Branch names cannot contain "*"
-// (validation.Name), so a pattern is never ambiguous with a literal.
-//
-// Written out rather than delegated to path.Match, which would also read "?"
-// and character classes: a branch may be named "beta[eu]", and path.Match
-// answers ErrBadPattern on it.
+// characters, including empty.
 func matchBranchPattern(pattern, name string) bool {
 	if !strings.Contains(pattern, "*") {
 		return pattern == name
@@ -184,8 +153,7 @@ func matchBranchPattern(pattern, name string) bool {
 		return false
 	}
 	rest := name[len(prefix) : len(name)-len(suffix)]
-	// Inner segments in order. Leftmost occurrence is enough: they are
-	// literals separated by gaps that absorb anything.
+	// Inner segments must appear in order; leftmost occurrence is enough.
 	for _, segment := range segments[1 : len(segments)-1] {
 		index := strings.Index(rest, segment)
 		if index < 0 {

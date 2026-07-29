@@ -12,7 +12,7 @@ import (
 )
 
 // User is a dashboard user account. PasswordHash is only populated by the
-// lookups the auth flows need (by email, by id) — never by listings — and must
+// lookups the auth flows need (by email, by id), never by listings, and must
 // never leave the service layer.
 type User struct {
 	Id           string
@@ -26,11 +26,9 @@ type User struct {
 	CreatedAt time.Time
 	// Nil until the account's first successful sign-in.
 	LastConnectedAt *time.Time
-	// SessionVersion is the account's security generation. Every dashboard JWT
-	// carries the value it was minted with, and a mismatch means the session
-	// was revoked (the account was disabled, demoted or changed its password
-	// since). Only the lookups that authenticate populate it. GetUsers does
-	// not: a listing has no session to check.
+	// SessionVersion is the account's security generation; every dashboard JWT
+	// carries the value it was minted with, and a mismatch means the session was
+	// revoked. Only the lookups that authenticate populate it; GetUsers does not.
 	SessionVersion int32
 }
 
@@ -132,7 +130,7 @@ func (s *PostgresUserStore) DeleteUserByID(ctx context.Context, id string) error
 	}
 	if commandTag.RowsAffected() == 0 {
 		// The guarded query matches no row both for a missing user and for the
-		// last remaining admin — look the row up to tell the two apart.
+		// last remaining admin, so look the row up to tell the two apart.
 		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
 			return lookupErr
 		}
@@ -165,7 +163,7 @@ func (s *PostgresUserStore) UpdateUserIsAdmin(ctx context.Context, id string, is
 	}
 	if commandTag.RowsAffected() == 0 {
 		// The guarded query matches no row both for a missing user and for the
-		// last remaining admin — look the row up to tell the two apart.
+		// last remaining admin, so look the row up to tell the two apart.
 		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
 			return lookupErr
 		}
@@ -184,7 +182,7 @@ func (s *PostgresUserStore) UpdateUserEnabled(ctx context.Context, id string, en
 	}
 	if commandTag.RowsAffected() == 0 {
 		// The guarded query matches no row both for a missing user and for the
-		// last remaining enabled admin — look the row up to tell the two apart.
+		// last remaining enabled admin, so look the row up to tell the two apart.
 		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
 			return lookupErr
 		}

@@ -2,13 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-// Integration tests for per-token access against a real Postgres. What they
-// cover cannot be reached by the in-memory fake in service_test.go: the
-// migration itself, the LEFT JOIN that folds a key and its rules into one
-// read, the transactional replacement of a rule list, the ON DELETE CASCADE,
-// and the revoked_at predicate that makes a revoked key answer "not found".
-// The last test runs the whole access decision, service included, over that
-// real schema.
+// Integration tests for per-token access against a real Postgres.
 //
 // They skip unless TEST_DATABASE_URL is set, e.g.:
 //
@@ -40,8 +34,7 @@ func setupAccessStore(t *testing.T) (*PostgresApiKeyRestrictionStore, *pgxpool.P
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// Same guard as the rbac and sso store tests: a skip in CI is a green
-		// job that ran none of these queries.
+		// A skip in CI would be a green job that ran none of these queries.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
@@ -159,8 +152,8 @@ func TestGetAccessByAppIDFoldsRealRows(t *testing.T) {
 	assert.Empty(t, byID[defaultID].BranchRules)
 }
 
-// SetAccess is one transaction: a key that belongs to another app is rejected
-// before its rules are touched, so nothing is left half-written.
+// SetAccess is one transaction; a key from another app is rejected before its
+// rules are touched.
 func TestSetAccessRejectsAKeyOfAnotherApp(t *testing.T) {
 	store, pool := setupAccessStore(t)
 	ctx := context.Background()
@@ -186,8 +179,7 @@ func TestSetAccessRejectsAKeyOfAnotherApp(t *testing.T) {
 	assert.Equal(t, "staging", access.BranchRules[0].Pattern)
 }
 
-// The enforcement read refuses a revoked key rather than answering with its
-// rules. Authentication already refuses one, so this is the second barrier.
+// The enforcement read refuses a revoked key rather than answering with its rules.
 func TestGetAccessRefusesARevokedKey(t *testing.T) {
 	store, pool := setupAccessStore(t)
 	ctx := context.Background()
@@ -205,8 +197,7 @@ func TestGetAccessRefusesARevokedKey(t *testing.T) {
 	require.ErrorIs(t, err, ErrApiKeyNotFound)
 }
 
-// Deleting a key takes its rules with it; without the cascade they would
-// outlive the key and be handed to whatever reused its id.
+// Deleting a key must cascade to its rules.
 func TestDeletingAKeyCascadesToItsRules(t *testing.T) {
 	store, pool := setupAccessStore(t)
 	ctx := context.Background()
@@ -226,8 +217,7 @@ func TestDeletingAKeyCascadesToItsRules(t *testing.T) {
 	assert.Zero(t, remaining)
 }
 
-// The whole decision, service included, over the real schema. This is what the
-// CLI actually goes through on a licensed deployment.
+// The whole decision, service included, over the real schema.
 func TestAuthorizeAgainstPostgres(t *testing.T) {
 	store, pool := setupAccessStore(t)
 	ctx := context.Background()
@@ -268,16 +258,14 @@ func TestAuthorizeAgainstPostgres(t *testing.T) {
 	err = service.Authorize(ctx, request("develop", ActionPublish, "10.1.2.3"))
 	require.ErrorIs(t, err, services.ErrCliAccessDenied)
 
-	// Allowed although pr-482 does not exist: the rule admits the name, and
-	// publishing to a name that is not there yet is how the CLI opens it.
+	// Allowed although pr-482 does not exist yet: the rule admits the name.
 	require.NoError(t, service.Authorize(ctx, request("pr-482", ActionPublish, "10.1.2.3")))
 
 	// Refused: right branch, right action, wrong address.
 	err = service.Authorize(ctx, request("staging", ActionPublish, "203.0.113.9"))
 	require.ErrorIs(t, err, ErrIpNotAllowed)
 
-	// And nothing is enforced without a license, which is the community
-	// edition running the very same rows.
+	// Nothing is enforced without a license.
 	community := serviceWith(store, false)
 	require.NoError(t, community.Authorize(ctx, request("develop", ActionPublish, "203.0.113.9")))
 }

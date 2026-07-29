@@ -18,8 +18,7 @@ import (
 )
 
 // servePublishRequest builds the publish group the way registerPublishRoutes
-// does, with a spy policy, and sends one request at it. The credential is
-// resolved by the group itself, so cliAuth must accept whatever is presented.
+// does, with a spy policy, and sends one request at it.
 func servePublishRequest(t *testing.T, method, path, requestPath string, action apikeyrestrictions.Action, policy *recordingPolicy) *httptest.ResponseRecorder {
 	t.Helper()
 	router := mux.NewRouter()
@@ -39,10 +38,8 @@ func servePublishRequest(t *testing.T, method, path, requestPath string, action 
 	return w
 }
 
-// Every publish route declares what it does to the branch it names, and that
-// declaration is what the access rules are matched against. A route declared
-// with the wrong action is a silent privilege change: a key granted only read
-// on production could roll production back. This pins each one.
+// TestPublishRoutesDeclareTheirAction pins the action each publish route
+// declares against what the access rules are actually judged on.
 func TestPublishRoutesDeclareTheirAction(t *testing.T) {
 	for _, tc := range []struct {
 		path        string
@@ -73,9 +70,8 @@ func TestPublishRoutesDeclareTheirAction(t *testing.T) {
 	}
 }
 
-// The declarations the router actually registers, read from the same table it
-// registers from. Re-declaring /rollback/{BRANCH} as a read, which is a silent
-// privilege change, fails here.
+// TestRegisteredPublishRoutesDeclareTheRightAction reads the declarations
+// from publishRouteTable, the same table the router registers from.
 func TestRegisteredPublishRoutesDeclareTheRightAction(t *testing.T) {
 	expected := map[string]apikeyrestrictions.Action{
 		"/requestUploadUrl/{BRANCH}":     apikeyrestrictions.ActionPublish,
@@ -96,15 +92,10 @@ func TestRegisteredPublishRoutesDeclareTheRightAction(t *testing.T) {
 			t.Fatalf("%s: expected action %q, got %q", declaration.path, want, declaration.action)
 		}
 	}
-	// uploadLocalFile is registered on its own because its branch comes from a
-	// token rather than the path; uploadTokenRoute hardcodes ActionPublish and
-	// TestUploadTokenBranchResolution checks it.
 }
 
-// A resolver that names no branch has authorized nothing, and the guard says so
-// itself rather than leaving the access rules to work it out. This is what a
-// path variable renamed out from under the lookup would look like, and it must
-// refuse rather than judge the request on an empty branch.
+// TestGuardRefusesARequestWithNoResolvedBranch checks that a resolver naming
+// no branch is refused rather than judged on an empty branch.
 func TestGuardRefusesARequestWithNoResolvedBranch(t *testing.T) {
 	policy := &recordingPolicy{}
 	router := mux.NewRouter()
@@ -113,8 +104,6 @@ func TestGuardRefusesARequestWithNoResolvedBranch(t *testing.T) {
 		cliAuth:      services.NewCliAuthService(acceptingCliRepo{}),
 		apiKeyAccess: policy,
 	}
-	// Registered through the guard directly, since both route() and
-	// uploadTokenRoute() refuse to produce this shape.
 	emptyResolver := func(*http.Request) string { return "" }
 	group.router.Handle("/publishSomething",
 		group.guard(apikeyrestrictions.ActionPublish, emptyResolver)(
@@ -135,8 +124,8 @@ func TestGuardRefusesARequestWithNoResolvedBranch(t *testing.T) {
 	}
 }
 
-// A publish route must name a branch, and must name a known action. Both are
-// refused at boot rather than at the first request.
+// TestPublishRouteDeclarationIsCheckedAtBoot checks that an invalid route
+// declaration (no branch, unknown action) panics at registration.
 func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
 	for name, register := range map[string]func(g publishGroup){
 		"no branch in the path": func(g publishGroup) {
@@ -145,8 +134,6 @@ func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
 		"unknown action": func(g publishGroup) {
 			g.route(http.MethodPost, "/rollback/{BRANCH}", nil, apikeyrestrictions.Action("delete"))
 		},
-		// The other door skips the branch requirement, so it has to refuse a
-		// path that carries one rather than judge it on an absent token claim.
 		"branch in the path of an upload-token route": func(g publishGroup) {
 			g.uploadTokenRoute(http.MethodPut, "/uploadLocalFile/{BRANCH}", nil)
 		},
@@ -162,10 +149,9 @@ func TestPublishRouteDeclarationIsCheckedAtBoot(t *testing.T) {
 	}
 }
 
-// uploadLocalFile names no branch: the guard reads it from the signed token,
-// through the same validation the handler runs. A token that does not survive
-// that validation names nothing, and a request that names no branch is refused
-// before the access rules are consulted at all.
+// TestUploadTokenBranchResolution checks that the branch is read from the
+// signed upload token, and that an invalid token is refused before the
+// access rules are consulted.
 func TestUploadTokenBranchResolution(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("BASE_URL", "http://localhost:3000")
@@ -174,16 +160,13 @@ func TestUploadTokenBranchResolution(t *testing.T) {
 	valid := mintUploadToken(t, "app-1", "production")
 	for name, tc := range map[string]struct {
 		query string
-		// branch is what the policy must be handed; empty means the request
-		// must be refused without the policy being asked.
+		// branch empty means the request must be refused without asking the policy.
 		branch string
 		status int
 	}{
 		"valid token":   {"?token=" + valid, "production", http.StatusOK},
 		"no token":      {"", "", http.StatusForbidden},
 		"garbage token": {"?token=not-a-jwt", "", http.StatusForbidden},
-		// Signed with another secret: the claim is unreadable, so it names
-		// nothing, exactly like a token that carries no claim at all.
 		"foreign token": {"?token=" + mintForeignUploadToken(t, "app-1", "production"), "", http.StatusForbidden},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -227,7 +210,7 @@ func TestUploadTokenBranchResolution(t *testing.T) {
 }
 
 // mintForeignUploadToken produces a well-formed upload token signed with a
-// different secret, which is the shape an attacker can actually build.
+// different secret.
 func mintForeignUploadToken(t *testing.T, appId, branch string) string {
 	t.Helper()
 	original := os.Getenv("JWT_SECRET")
@@ -237,8 +220,7 @@ func mintForeignUploadToken(t *testing.T, appId, branch string) string {
 	return token
 }
 
-// acceptingCliRepo authenticates any credential and reports a key id, which is
-// what makes the access decision run at all.
+// acceptingCliRepo authenticates any credential and reports a key id.
 type acceptingCliRepo struct{}
 
 func (acceptingCliRepo) ValidateCliCredential(context.Context, string, types.Auth) (int64, error) {

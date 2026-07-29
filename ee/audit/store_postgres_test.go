@@ -2,15 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-// Integration tests for the audit store: the optional-filter SQL, the keyset
-// pagination and the metadata roundtrip need a real Postgres. They skip unless
-// TEST_DATABASE_URL is set, e.g.:
-//
-//	docker run -d --name eoo-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16-alpine
-//	TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/postgres?sslmode=disable" go test ./ee/audit/
-//
-// The audit table accumulates rows across test runs on the same database, so
-// every test filters on a unique actor id instead of assuming an empty table.
+// Integration tests for the audit store; they skip unless TEST_DATABASE_URL is set.
 
 package audit
 
@@ -34,15 +26,13 @@ func setupAuditStore(t *testing.T) (*PostgresAuditStore, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// See the same guard in the rbac store tests: a skip in CI is a green
-		// job that ran none of these guarded queries.
+		// In CI, a skip would silently mean these SQL-only tests never ran.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
 		t.Skip("TEST_DATABASE_URL not set — start a Postgres and set it to run the audit store tests")
 	}
-	// The seed migration fails fast on an empty database without the
-	// bootstrap pair.
+	// The seed migration fails fast on an empty database without the bootstrap pair.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
 	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(dbURL)
@@ -157,7 +147,6 @@ func TestAuditEventFilters(t *testing.T) {
 
 	ctx := context.Background()
 
-	// By action, within the actor's rows.
 	deleted := string(auditlog.ActionChannelDeleted)
 	events, err := auditStore.List(ctx, ListParams{
 		ListFilters: ListFilters{ActorID: &actorID, Action: &deleted},
@@ -167,18 +156,15 @@ func TestAuditEventFilters(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, auditlog.ActionChannelDeleted, events[0].Action)
 
-	// By app: both actors' rows on this app.
 	count, err := auditStore.Count(ctx, ListFilters{AppID: &appID})
 	require.NoError(t, err)
 	require.EqualValues(t, 3, count)
 
-	// A date range in the future matches nothing.
 	future := time.Now().Add(time.Hour)
 	count, err = auditStore.Count(ctx, ListFilters{ActorID: &actorID, From: &future})
 	require.NoError(t, err)
 	require.Zero(t, count)
 
-	// A range around now matches everything the actor did.
 	past := time.Now().Add(-time.Hour)
 	count, err = auditStore.Count(ctx, ListFilters{ActorID: &actorID, From: &past, To: &future})
 	require.NoError(t, err)
@@ -200,7 +186,6 @@ func TestAuditEventOutcomeFilter(t *testing.T) {
 		Outcome: auditlog.OutcomeFailure,
 	})
 
-	// The security lens: only what failed, whatever the action.
 	failure := string(auditlog.OutcomeFailure)
 	events, err := auditStore.List(context.Background(), ListParams{
 		ListFilters: ListFilters{ActorID: &actorID, Outcome: &failure},
@@ -256,15 +241,13 @@ func TestExportCursorAndListAfter(t *testing.T) {
 		ActorType: auditlog.ActorUser, ActorID: actorID, ActorDisplay: "a@example.com",
 		Action: auditlog.ActionUserLogin, TargetType: "user", TargetID: actorID,
 	})
-	// ListAfter hides rows younger than its visibility lag (see the query),
-	// so freshly inserted rows are aged past it by hand.
+	// ListAfter hides rows younger than its visibility lag, so these are aged past it by hand.
 	_, err := pool.Exec(ctx,
 		"UPDATE audit_log_events SET occurred_at = now() - interval '1 minute' WHERE id = ANY($1)",
 		[]int64{first.ID, second.ID})
 	require.NoError(t, err)
 
-	// ListAfter is strictly-after and oldest first; the shared table holds
-	// other tests' rows, so assert order and membership, not exact contents.
+	// The shared table holds other tests' rows too, so assert order and membership, not exact contents.
 	events, err := auditStore.ListAfter(ctx, first.ID-1, 100000)
 	require.NoError(t, err)
 	indexOf := func(id int64) int {
@@ -292,8 +275,7 @@ func TestExportCursorAndListAfter(t *testing.T) {
 		return -1
 	}())
 
-	// The visibility lag: a row younger than 30 seconds stays invisible to
-	// the exporter, so a not-yet-committed smaller id can never be skipped.
+	// A row younger than 30 seconds stays invisible to the exporter.
 	fresh := insertTestEvent(t, auditStore, Event{
 		ActorType: auditlog.ActorUser, ActorID: actorID, ActorDisplay: "a@example.com",
 		Action: auditlog.ActionUserLogin, TargetType: "user", TargetID: actorID,
@@ -304,9 +286,7 @@ func TestExportCursorAndListAfter(t *testing.T) {
 		require.NotEqual(t, fresh.ID, event.ID)
 	}
 
-	// The CAS singleton: advancing from the current value wins, a stale
-	// expectation loses. Re-advancing to the same value keeps shared state
-	// intact for the other test runs.
+	// Re-advancing to the same value keeps shared state intact for other test runs.
 	cursor, err := auditStore.ExportCursor(ctx)
 	require.NoError(t, err)
 	advanced, err := auditStore.AdvanceExportCursor(ctx, cursor, cursor)
@@ -325,8 +305,7 @@ func TestExportLockIsExclusive(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, locked)
 
-	// A second claim rides another pooled connection, like another replica
-	// would: it must lose while the first one holds the lock.
+	// A second claim, like another replica, must lose while the first holds the lock.
 	_, lockedAgain, err := auditStore.TryExportLock(ctx)
 	require.NoError(t, err)
 	require.False(t, lockedAgain)
@@ -365,14 +344,13 @@ func TestPurgeExportedOnlySparesUnarchivedRows(t *testing.T) {
 	_, err = auditStore.PurgeBefore(ctx, time.Now().Add(-550*24*time.Hour), true)
 	require.NoError(t, err)
 
-	// The archived row is gone, the expired-but-unarchived one survives
-	// until the exporter reaches it.
 	events, err := auditStore.List(ctx, ListParams{
 		ListFilters: ListFilters{ActorID: &actorID},
 		Limit:       10,
 	})
 	require.NoError(t, err)
 	require.Len(t, events, 1)
+	// The archived row is gone; the expired-but-unarchived one survives.
 	require.Equal(t, unarchived.ID, events[0].ID)
 }
 
@@ -392,7 +370,6 @@ func TestAuditEventKeysetPagination(t *testing.T) {
 	ctx := context.Background()
 	filters := ListFilters{ActorID: &actorID}
 
-	// First page: the two newest, descending.
 	page1, err := auditStore.List(ctx, ListParams{ListFilters: filters, Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, page1, 2)
@@ -407,7 +384,6 @@ func TestAuditEventKeysetPagination(t *testing.T) {
 	require.Equal(t, insertedIDs[2], page2[0].ID)
 	require.Equal(t, insertedIDs[1], page2[1].ID)
 
-	// Last page is short.
 	cursor = page2[1].ID
 	page3, err := auditStore.List(ctx, ListParams{ListFilters: filters, BeforeID: &cursor, Limit: 2})
 	require.NoError(t, err)

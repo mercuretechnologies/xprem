@@ -13,51 +13,36 @@ import (
 	"time"
 )
 
-// A breakdown answers "who is this slow for". One metric, one or more
-// dimensions, one row per segment with the percentiles that matter and the
-// number of devices behind them, so a segment can be ranked by how many people
-// it hurts rather than alphabetically.
+// BreakdownSegment is one row of a breakdown: a segment value with the percentiles and device count behind it.
 type BreakdownSegment struct {
-	// Value is the raw column value this segment groups on. It doubles as the
-	// filter to apply when drilling into the segment, which is why it stays raw
-	// instead of being a display label the dashboard would have to parse back.
+	// Value doubles as the filter to apply when drilling into the segment.
 	Value string `json:"value"`
-	// Context qualifies the value when it means nothing alone: an OS version of
-	// "18.6" is only readable next to its OS name. Empty for every dimension
-	// that needs no qualifier.
+	// Context qualifies the value when it means nothing alone, e.g. an OS version needs its OS name.
 	Context string  `json:"context,omitempty"`
 	Devices uint64  `json:"devices"`
 	Samples uint64  `json:"samples"`
 	P50     float64 `json:"p50"`
 	P90     float64 `json:"p90"`
-	// Points is the median over time for this segment, present only when the
-	// caller asked for series: it costs a second query, and the ranking alone
-	// is what most callers want.
+	// Points is the median-over-time series, present only when the caller asked for it.
 	Points []ObserveMetricPoint `json:"points,omitempty"`
 }
 
+// Breakdown groups one metric by one dimension into ranked segments.
 type Breakdown struct {
 	Available bool               `json:"available"`
 	Metric    string             `json:"metric"`
 	Dimension string             `json:"dimension"`
 	Segments  []BreakdownSegment `json:"segments"`
-	// Overall is the same metric over the same filters with no grouping, so
-	// each segment can be read as a deviation from the app's own baseline
-	// instead of an absolute number nobody has a feel for.
+	// Overall is the same metric over the same filters with no grouping, the baseline segments deviate from.
 	Overall BreakdownSegment `json:"overall"`
 }
 
+// BreakdownQuery parameterizes a breakdown request.
 type BreakdownQuery struct {
 	ExplorerQuery
-	// Metric is a definition ID from observedMetricDefinitions, resolved to a
-	// metric_name before it ever reaches SQL.
+	// Metric is a definition ID from observedMetricDefinitions, resolved to a metric_name before it reaches SQL.
 	Metric string
 	// Dimension is the single column the segments group on. Empty is rejected.
-	//
-	// One, deliberately not a list: two dimensions at once multiply into a
-	// chart that cannot be read, and they answer a question that is better
-	// asked as two. Narrow to one device model with a filter, then split by OS
-	// version.
 	Dimension string
 	Limit     int
 	// WithPoints fills Segment.Points with a median-per-bucket series.
@@ -65,14 +50,11 @@ type BreakdownQuery struct {
 }
 
 // paramString reads one key of the params the client attached to a data point.
-// They arrive as a single JSON string with flat, dotted key names, so a key is
-// an argument rather than a path.
 func paramString(key string) sqlFragment {
 	return sqlFragment(fmt.Sprintf("JSONExtractString(m.custom_params, '%s')", key))
 }
 
-// paramBool keeps a boolean readable: grouped raw it would rank a segment
-// labelled "true" against one labelled "false".
+// paramBool turns a boolean param into a readable label instead of "true"/"false".
 func paramBool(key, whenTrue, whenFalse string) sqlFragment {
 	return sqlFragment(fmt.Sprintf(
 		"if(JSONHas(m.custom_params, '%s'), if(JSONExtractBool(m.custom_params, '%s'), '%s', '%s'), '')",
@@ -80,15 +62,8 @@ func paramBool(key, whenTrue, whenFalse string) sqlFragment {
 	))
 }
 
-// paramBuckets turns a numeric param into named ranges. A continuous value has
-// about as many distinct values as there are samples, so grouping on it raw
-// produces one segment per device and ranks nothing. labels carries one more
-// entry than bounds: the open-ended range above the last one.
-//
-// The labels are also the values a filter on this dimension takes, which is why
-// they are declared once here and served to the dashboard rather than restated
-// there: a bucket renamed on this side would otherwise leave a picker offering
-// a range the query can no longer match.
+// paramBuckets turns a numeric param into named ranges. labels carries one more entry than bounds,
+// for the open-ended range above the last bound.
 func paramBuckets(key string, bounds []float64, labels []string) sqlFragment {
 	value := fmt.Sprintf("JSONExtractFloat(m.custom_params, '%s')", key)
 	expression := fmt.Sprintf("multiIf(NOT JSONHas(m.custom_params, '%s'), ''", key)
@@ -101,27 +76,20 @@ func paramBuckets(key string, bounds []float64, labels []string) sqlFragment {
 	return sqlFragment(expression + fmt.Sprintf(", '%s')", labels[len(bounds)]))
 }
 
-// Dimension name to the columns it groups on. An allowlist, not a mapping
-// helper: the value lands in the SQL string itself, so anything outside this
-// table must never reach the query builder.
+// breakdownDimensions is the allowlist of dimension name to the columns it groups on: the value lands in the
+// SQL string itself, so anything outside this table must never reach the query builder.
 var breakdownDimensions = map[string]struct {
 	column  sqlFragment
 	context sqlFragment
-	// expr replaces the column for a dimension that is not one: the conditions
-	// a timing was measured under travel inside a single JSON string, and only
-	// the data points whose client attached params carry them at all.
+	// expr replaces the column for a dimension read from the params JSON rather than a column.
 	expr sqlFragment
-	// values is what a filter on this dimension accepts, in the order a picker
-	// should offer them. Set on the conditions only: every other dimension
-	// takes whatever the fleet reported, which no list here could enumerate.
+	// values is what a filter on this dimension accepts, in picker order. Set on the conditions only.
 	values []string
-	// session says the value belongs to the session rather than to the row, so
-	// reading it costs a join and every timing can answer for it.
+	// session says the value belongs to the session rather than to the row, and reading it costs a join.
 	session bool
 }{
 	"deviceModel": {column: "device_model"},
-	// expo-router integration only: route_name is empty on app-wide timings,
-	// which is exactly what makes "which screen is slow" answerable.
+	// route_name is empty on app-wide timings (expo-router integration only).
 	"route":          {column: "route_name"},
 	"osVersion":      {column: "os_version", context: "os_name"},
 	"osName":         {column: "os_name"},
@@ -129,25 +97,16 @@ var breakdownDimensions = map[string]struct {
 	"appVersion":     {column: "app_version"},
 	"appBuildNumber": {column: "app_build_number"},
 	"update":         {column: "update_id"},
-	// The publish, not the per-platform row: "my last release" is a group of
-	// one or two updates, and grouping by update splits it in two.
+	// The publish, not the per-platform row: grouping by update would split one publish in two.
 	"updateGroup":    {column: "update_group_id"},
 	"branch":         {column: "branch"},
 	"runtimeVersion": {column: "runtime_version"},
 	"channel":        {column: "channel"},
 	"environment":    {column: "environment"},
 	"platform":       {column: "platform"},
-	// The conditions the device was in when it timed itself. They answer the
-	// question a percentile alone never does: a p90 of four seconds is a
-	// complaint, the same p90 next to "thermally throttled" is a diagnosis.
-	// Attached by the framework to the interactive timings only.
+	// Attached by the framework to interactive timings only.
 	"thermalState": {expr: paramString("expo.device.thermalState"), values: thermalStates},
-	// Read off the session rather than off the row. The client attaches the
-	// conditions to the interactive timing alone, so an update download would
-	// never know whether it ran on wifi, which is the first thing anyone asks
-	// about a download. What the phone was connected to does not change between
-	// two timings of the same session, so borrowing it is sound; the counters
-	// below are tallied for one measurement and borrowing those would not be.
+	// Read off the session: an update download has no network condition of its own, so it borrows the session's.
 	"networkType": {expr: sessionNetwork, values: networkTypes, session: true},
 	"lowPowerMode": {
 		expr:   paramBool("expo.device.lowPowerMode", lowPowerOn, lowPowerOff),
@@ -170,19 +129,14 @@ var breakdownDimensions = map[string]struct {
 const (
 	lowPowerOn  = "Low power mode"
 	lowPowerOff = "Normal power"
-	// The one metric the client attaches the conditions to, verified on both
-	// platforms: MetricParamsBuilder has a single call site, inside
-	// markInteractive. Everything session-scoped is read from it.
+	// interactiveMetric is the one metric the client attaches conditions to; everything session-scoped reads from it.
 	interactiveMetric = "expo.app_startup.tti"
-	// The alias the join below is given, and how a session-scoped dimension
-	// spells itself in the query.
+	// sessionNetwork is the alias the join below is given.
 	sessionNetwork sqlFragment = "session_state.network"
 )
 
-// A timing read that needs a session-scoped condition joins the session's own
-// interactive timing to get it. LEFT, so a session that never became
-// interactive still contributes its rows: they land with an empty network and
-// the split drops them, which beats dropping the whole session silently.
+// metricsSource joins the session's own interactive timing when a session-scoped condition is needed.
+// LEFT, so a session that never became interactive still contributes rows with an empty network.
 func metricsSource(appID string, query ExplorerQuery, dimension string) (sqlFragment, []any) {
 	scoped := breakdownDimensions[dimension].session
 	for name, values := range query.Conditions {
@@ -204,9 +158,7 @@ func metricsSource(appID string, query ExplorerQuery, dimension string) (sqlFrag
 		[]any{appID, query.From.UTC(), query.To.UTC()}
 }
 
-// What each condition can be, worst last so a picker reads as a scale rather
-// than as an alphabetical list. The two the device names itself are the client
-// enums; the rest are ranges this file chose, which is why it also serves them.
+// The values each condition can take, worst last so a picker reads as a scale.
 var (
 	thermalStates = []string{"nominal", "fair", "serious", "critical"}
 	networkTypes  = []string{"wifi", "cellular", "none"}
@@ -215,15 +167,11 @@ var (
 	networkBytes  = []string{"Under 100 kB", "100 to 500 kB", "500 kB to 2 MB", "Over 2 MB"}
 )
 
-// ConditionDefinition is one filterable condition and the values it takes. The
-// dashboard renders a picker per entry, so this is what keeps the ranges it
-// offers and the ranges the SQL produces the same list.
+// ConditionDefinition is one filterable condition and the values it takes.
 type ConditionDefinition struct {
 	Name   string   `json:"name"`
 	Values []string `json:"values"`
-	// SessionScoped says the condition is read off the session rather than off
-	// the measurement, so every timing can be split and filtered by it. The
-	// dashboard needs it to know which cards to keep on screen.
+	// SessionScoped says the condition is read off the session rather than off the measurement.
 	SessionScoped bool `json:"sessionScoped"`
 }
 
@@ -245,10 +193,7 @@ func IsBreakdownDimension(name string) bool {
 	return found
 }
 
-// ConditionDimensions names the dimensions that read a measurement's own params
-// rather than a column, in a stable order. The handler walks it to know which
-// query parameters to accept, so the allowlist below stays the single place a
-// condition is declared.
+// ConditionDimensions names the dimensions that read a measurement's own params rather than a column.
 func ConditionDimensions() []string {
 	names := make([]string, 0, len(breakdownDimensions))
 	for name, dimension := range breakdownDimensions {
@@ -260,10 +205,7 @@ func ConditionDimensions() []string {
 	return names
 }
 
-// conditionsWhere narrows to the measurements taken in a given state. Applied
-// on the timing reads only, and never on the summary, the logs or the device
-// registry: none of them holds the params this reads, so a filter they cannot
-// honor has to be refused rather than silently ignored.
+// conditionsWhere narrows to the measurements taken in a given state. Applied on the timing reads only.
 func conditionsWhere(conditions map[string][]string) (sqlFragment, []any) {
 	if len(conditions) == 0 {
 		return "", nil
@@ -271,8 +213,7 @@ func conditionsWhere(conditions map[string][]string) (sqlFragment, []any) {
 	var where sqlFragment
 	var args []any
 	rowScoped := false
-	// Sorted, not map order: the same filters must produce the same SQL every
-	// time or ClickHouse caches a plan per permutation.
+	// Sorted, not map order, so the same filters always produce the same SQL.
 	for _, name := range ConditionDimensions() {
 		values := conditions[name]
 		if len(values) == 0 {
@@ -286,11 +227,6 @@ func conditionsWhere(conditions map[string][]string) (sqlFragment, []any) {
 		return "", nil
 	}
 	if rowScoped {
-		// A string comparison before any JSON is parsed. Two rows in three carry
-		// no params at all, and none of them can match a condition read off the
-		// row, so this drops them for the price of a byte. Never for a
-		// session-scoped one: there the row is meant to have no params of its
-		// own, and this would discard exactly what the join went to fetch.
 		where = " AND m.custom_params != ''" + where
 	}
 	return where, args
@@ -307,20 +243,13 @@ func metricNameForID(id string) (string, bool) {
 
 const (
 	maxBreakdownSegments = 50
-	// Overlaying more than this many series turns a chart into a hairball, so
-	// the points query stops there even when more segments are ranked.
+	// maxBreakdownSeries caps how many series get a points query, so a chart doesn't turn into a hairball.
 	maxBreakdownSeries = 8
-	// Below this, a segment's median is noise rather than a measurement: one
-	// unlucky device would otherwise out-rank a regression hitting hundreds.
-	// The dashboard applies the same floor, so both agree on what is worth
-	// looking at.
+	// minDevicesToRank excludes segments too small for their median to mean anything.
 	minDevicesToRank = 5
 )
 
-// plottableSegments picks the series worth drawing: the ones the dashboard
-// ranks highest, not the ones with the most samples. Ranking by volume here
-// and by impact there would draw one set of curves and list another, leaving
-// rows whose colour matches no line on the chart.
+// plottableSegments picks the series worth drawing, ranked by impact rather than by sample count.
 func plottableSegments(segments []BreakdownSegment, baselineP50 float64) []BreakdownSegment {
 	ranked := make([]BreakdownSegment, 0, len(segments))
 	for _, segment := range segments {
@@ -342,19 +271,14 @@ func plottableSegments(segments []BreakdownSegment, baselineP50 float64) []Break
 	return ranked
 }
 
-// breakdownGrouping is the pair of columns a dimension groups by: the value
-// itself, and the qualifier that makes it readable on its own (” when the
-// value needs none). Kept together because every use reads them in lockstep.
+// breakdownGrouping is the pair of columns a dimension groups by: the value itself and its context qualifier.
 type breakdownGrouping struct {
 	column  sqlFragment
 	context sqlFragment
 }
 
-// groupingSQL builds the aliases shared by both queries below, so the scan
-// order never has to be inferred from the underlying columns. `selected` is
-// wrapped in any() because the inner query collapses duplicate data points
-// rather than grouping on the dimension itself: every row behind one
-// deduplication key carries the same value, so any() of them is that value.
+// groupingSQL builds the aliases shared by both queries below. `selected` is wrapped in any() because the
+// inner query already collapsed duplicate data points onto one value per dedup key.
 func groupingSQL(grouping breakdownGrouping) (selected, aliases []sqlFragment) {
 	return []sqlFragment{
 			sqlFragment(sqlf("any(%s) AS s0", grouping.column)),
@@ -363,20 +287,10 @@ func groupingSQL(grouping breakdownGrouping) (selected, aliases []sqlFragment) {
 		[]sqlFragment{"s0", "c0"}
 }
 
-// dedupKey is the deduplication the rest of the explorer uses, as one key: a
-// published client re-sends an entire batch after any failed dispatch, so the
-// same data point can land twice. Grouping on one hash rather than on the six
-// columns it stands for is what keeps that collapse from costing more than the
-// aggregate it feeds.
-// A published client re-sends an entire batch after any failed dispatch, so
-// the same data point can land twice. Grouping on one key rather than on the
-// six columns it stands for is what keeps that collapse from costing more than
-// the aggregate it feeds.
+// dedupKey collapses a data point re-sent by a retried batch onto the one already counted.
 const dedupKey sqlFragment = `m.content_key`
 
-// The inner GROUP BY is the deduplication the rest of the explorer uses: a
-// published client re-sends an entire batch after any failed dispatch, so the
-// same data point can land twice and content_key is what collapses it.
+// ReadBreakdown is the cached entry point for readBreakdown.
 func (e *Explorer) ReadBreakdown(
 	ctx context.Context,
 	appID string,
@@ -398,8 +312,7 @@ func (e *Explorer) readBreakdown(
 		return Breakdown{}, errInvalidObserveFilter
 	}
 	var grouping breakdownGrouping
-	// Set when the dimension only exists where the client attached params, so
-	// the read can be narrowed to those data points below.
+	// condition is set when the dimension only exists where the client attached params.
 	var condition sqlFragment
 	rowScopedSplit := false
 	if dimension.expr != "" {
@@ -444,14 +357,9 @@ func (e *Explorer) readBreakdown(
 	conditionWhere, conditionArgs := conditionsWhere(query.Conditions)
 	where += conditionWhere
 	args = append(args, conditionArgs...)
-	// Splitting on a condition drops the samples that never reported one. They
-	// would otherwise collapse into a single nameless segment out-ranking every
-	// real one, and drag down the baseline the others are compared against: the
-	// point of the split is to compare devices that were throttled with devices
-	// that were not, and a sample that says neither belongs to no side.
+	// Splitting on a condition drops samples that never reported one, so they don't collapse into a nameless
+	// segment that skews the baseline.
 	if rowScopedSplit {
-		// Cheap first, for the same reason as conditionsWhere, and for the same
-		// reason skipped when the split reads the session instead of the row.
 		where += " AND m.custom_params != ''"
 	}
 	if condition != "" {
@@ -460,9 +368,7 @@ func (e *Explorer) readBreakdown(
 	source, sourceArgs := metricsSource(appID, query.ExplorerQuery, query.Dimension)
 	selected, aliases := groupingSQL(grouping)
 
-	// uniq, not uniqExact: this is the "N devices" of a table cell, and an exact
-	// distinct count over millions of rows costs more than every percentile on
-	// the row put together, for a figure nobody reconciles to the unit.
+	// uniq, not uniqExact: an exact distinct count over millions of rows costs far more for a figure nobody reconciles to the unit.
 	sql := sqlf(`
 		SELECT %s, uniq(eas_client_id), count(),
 		       toFloat64(quantileTDigest(0.5)(value)),
@@ -505,8 +411,7 @@ func (e *Explorer) readBreakdown(
 		return Breakdown{}, err
 	}
 
-	// Percentiles cannot be averaged back together from the segments, so the
-	// baseline is its own query rather than arithmetic on the rows above.
+	// Percentiles can't be averaged back from the segments, so the baseline is its own query.
 	overallSQL := sqlf(`
 		SELECT uniq(eas_client_id), count(),
 		       toFloat64(quantileTDigest(0.5)(value)),
@@ -539,9 +444,7 @@ func (e *Explorer) readBreakdown(
 	return breakdown, nil
 }
 
-// readBreakdownPoints fills the median-per-bucket series of the top segments,
-// restricted to the ones already ranked: pulling every segment's series would
-// return a long tail nobody plots.
+// readBreakdownPoints fills the median-per-bucket series of the top-ranked segments only.
 func (e *Explorer) readBreakdownPoints(
 	ctx context.Context,
 	appID string,
@@ -552,9 +455,7 @@ func (e *Explorer) readBreakdownPoints(
 	where sqlFragment,
 	whereArgs []any,
 	metricName string,
-	// segments is the set being filled in place; the ranking that decides which
-	// of them get a series is done here rather than by the caller, so the two
-	// cannot be handed over in the wrong order.
+	// segments is the set filled in place.
 	segments []BreakdownSegment,
 	baselineP50 float64,
 ) error {
@@ -563,8 +464,7 @@ func (e *Explorer) readBreakdownPoints(
 		return nil
 	}
 
-	// The value and its context travel as a pair: an OS version alone matches
-	// the same string under another OS name.
+	// The value and its context travel as a pair: an OS version alone matches the same string under another OS name.
 	tupleColumns := []sqlFragment{grouping.column, grouping.context}
 	placeholders := make([]sqlFragment, 0, len(plotted))
 	tupleArgs := make([]any, 0, len(plotted)*2)
@@ -625,11 +525,7 @@ func (e *Explorer) readBreakdownPoints(
 	return rows.Err()
 }
 
-// finite replaces the percentile of an empty set with zero. ClickHouse answers
-// nan when there is nothing to take a quantile of, which JSON has no way to
-// spell: marshalling fails and the whole response becomes a 500. Splitting a
-// timing that reports no conditions asks exactly that question, and the honest
-// answer to it is an empty breakdown, not an error.
+// finite replaces the percentile of an empty set (ClickHouse's NaN, which JSON can't marshal) with zero.
 func finite(value float64) float64 {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0
@@ -637,8 +533,7 @@ func finite(value float64) float64 {
 	return value
 }
 
-// segmentKey joins a segment's value and context with a separator no column
-// value can contain, so two segments never collide in the lookup above.
+// segmentKey joins a segment's value and context with a separator no column value can contain.
 func segmentKey(value, context string) string {
 	return value + "\x00" + context
 }
