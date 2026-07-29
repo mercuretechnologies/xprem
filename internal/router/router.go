@@ -37,6 +37,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 	registerIngestRoutes(r, container)
 	registerClientRoutes(r, container)
 	registerPreAuthRoutes(r, container)
+	registerOAuthRoutes(r, container)
 	registerDashboardAssets(r)
 
 	// Authentication from here on: the Use-Cli-Auth header picks between a

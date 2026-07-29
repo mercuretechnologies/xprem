@@ -168,6 +168,13 @@ type IdentityValueStat struct {
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type OauthClient struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	RedirectUris []string           `json:"redirect_uris"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type RefreshToken struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`

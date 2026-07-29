@@ -2271,3 +2271,7 @@ LEFT JOIN LATERAL (
       AND f.update_id = r.update_uuid
       AND f.resolved_at IS NULL
 ) failures ON TRUE;
+
+-- name: InsertOAuthClient :exec
+INSERT INTO oauth_clients (id, name, redirect_uris)
+VALUES ($1, $2, $3);

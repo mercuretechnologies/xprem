@@ -20,6 +20,7 @@ import (
 	"expo-open-ota/internal/handlers"
 	dashhandlers "expo-open-ota/internal/handlers/dashboard"
 	"expo-open-ota/internal/mcp"
+	"expo-open-ota/internal/oauth"
 	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
@@ -46,6 +47,7 @@ type AppContainer struct {
 	RollbackHandler             *handlers.RollbackHandler
 	RolloutHandler              *dashhandlers.RolloutHandler
 	MCPHandler                  *mcp.MCPHandler
+	OAuthHandler                *oauth.OAuthHandler
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
@@ -81,6 +83,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// nil in stateless mode: accounts only exist on the control plane.
 	var userRepo services.UserRepository
 	var refreshTokenRepo services.RefreshTokenRepository
+	var oauthClientRepo oauth.ClientRepository
+	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
@@ -132,6 +136,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
+		oauthClientRepo = store.NewPostgresOAuthClientStore(dbEngine)
+		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService())
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
 		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyAccessStore(dbEngine)
@@ -237,11 +243,14 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
-	mcpService := mcp.NewMCPService()
-	mcpHandler := mcp.NewMCPHandler(mcpService)
 
 	// Shared across handlers; with Redis configured, also across replicas.
 	rateLimiter := ratelimit.New(cache.GetCache())
+
+	var oauthHandler *oauth.OAuthHandler
+	if oauthClientRepo != nil {
+		oauthHandler = oauth.NewOAuthHandler(oauth.NewOAuthService(oauthClientRepo), rateLimiter)
+	}
 
 	container := &AppContainer{
 		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService, rateLimiter),
@@ -274,6 +283,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
 		MCPHandler:                  mcpHandler,
+		OAuthHandler:                oauthHandler,
 	}
 
 	if checkInRecorder != nil {

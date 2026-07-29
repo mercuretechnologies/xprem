@@ -2663,6 +2663,22 @@ func (q *Queries) InsertChannelRollout(ctx context.Context, arg InsertChannelRol
 	return result.RowsAffected(), nil
 }
 
+const insertOAuthClient = `-- name: InsertOAuthClient :exec
+INSERT INTO oauth_clients (id, name, redirect_uris)
+VALUES ($1, $2, $3)
+`
+
+type InsertOAuthClientParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Name         string      `json:"name"`
+	RedirectUris []string    `json:"redirect_uris"`
+}
+
+func (q *Queries) InsertOAuthClient(ctx context.Context, arg InsertOAuthClientParams) error {
+	_, err := q.db.Exec(ctx, insertOAuthClient, arg.ID, arg.Name, arg.RedirectUris)
+	return err
+}
+
 const insertRefreshToken = `-- name: InsertRefreshToken :exec
 INSERT INTO refresh_tokens (id, user_id, family_id, expires_at)
 VALUES ($1, $2, $3, $4)
