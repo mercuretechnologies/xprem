@@ -106,10 +106,10 @@ func TestTokenRouteAsksThePolicyWithItsBranchAndAction(t *testing.T) {
 	if request.APIKeyID != 42 || request.AppID != "app-1" {
 		t.Fatalf("expected the credential's key and app, got %+v", request)
 	}
-	// What was authorized is stamped back on the credential, so a handler can
-	// assert it is acting on the branch that was actually judged.
-	if credential == nil || credential.AuthorizedBranch != "production" {
-		t.Fatalf("expected the authorized branch on the credential, got %+v", credential)
+	// The credential reaches the handler, which is what the audit trail and the
+	// app-visibility gate read it for.
+	if credential == nil || credential.KeyID != 42 {
+		t.Fatalf("expected the credential on the handler's context, got %+v", credential)
 	}
 }
 

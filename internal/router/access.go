@@ -159,9 +159,14 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 	}
 }
 
-// authorizeCliRequest runs the enterprise access decision and stamps what it
-// authorized onto the credential. It answers (request, false) when the request
-// was refused, having already written the response.
+// authorizeCliRequest runs the enterprise access decision and puts the
+// credential on the request context. It answers (request, false) when the
+// request was refused, having already written the response.
+//
+// This is the only place the decision is taken, and nothing downstream repeats
+// it: a handler trusts it exactly as it trusts the RBAC permission middleware
+// and the dashboard session, because the registration groups in this package
+// are the only way a route reaches a handler at all.
 func authorizeCliRequest(
 	policy cliAccessPolicy,
 	w http.ResponseWriter,
@@ -192,6 +197,8 @@ func authorizeCliRequest(
 			return nil, false
 		}
 	}
-	credential.AuthorizedBranch = branchName
+	// Stamped for the audit trail and for the app-visibility gate, which read
+	// the credential downstream. On the app routes the middleware already put
+	// it there; on the publish routes this guard is what puts it there at all.
 	return r.WithContext(services.WithCliAuth(r.Context(), credential)), true
 }

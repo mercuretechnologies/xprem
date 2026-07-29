@@ -87,15 +87,6 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		http.Error(w, "No branch provided", http.StatusBadRequest)
 		return
 	}
-	// Authenticated AND authorized by the router, which declared this route a
-	// publish on its {BRANCH}. This asserts the handler is acting on the
-	// branch that was actually judged: both read the same path variable
-	// today, and this is what keeps them equal tomorrow.
-	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
-		log.Printf("[RequestID: %s] Branch %s was not the one authorized for this credential", requestID, branchName)
-		RenderCliAuthError(w, services.ErrCliAccessDenied)
-		return
-	}
 	runtimeVersion := r.URL.Query().Get("runtimeVersion")
 	if runtimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
@@ -230,15 +221,6 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Authenticated AND authorized by the router, which declared this route a
-	// publish on its {BRANCH}. This asserts the handler is acting on the
-	// branch that was actually judged: both read the same path variable
-	// today, and this is what keeps them equal tomorrow.
-	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
-		log.Printf("[RequestID: %s] Branch %s was not the one authorized for this credential", requestID, branchName)
-		RenderCliAuthError(w, services.ErrCliAccessDenied)
-		return
-	}
 
 	platform := r.URL.Query().Get("platform")
 	if platform != "" && (platform != "ios" && platform != "android") {
