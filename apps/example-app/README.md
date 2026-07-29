@@ -2,6 +2,43 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
+## Telemetry and navigation
+
+The app reports to `expo-observe`, which sends OTLP metrics and logs to the
+`endpointUrl` declared under `extra.eas.observe` in `app.json`. Point that at
+your own server to watch the payloads arrive.
+
+`expo-observe` records per-screen metrics (`cold_ttr`, `warm_ttr` and `tti`)
+only when a navigation integration is enabled, and it ships one integration per
+framework. They cannot both run at once, because the React Navigation one needs
+to own the navigation container that expo-router renders itself. So the app
+carries two navigation trees over the same screens and you pick one when you
+build the bundle:
+
+```bash
+yarn start                     # expo-router tree, routes live in app/
+yarn start:react-navigation    # @react-navigation tree, defined in navigation/
+```
+
+The same prefix works on any other script, for instance
+`yarn release_staging:react-navigation` to publish an update running the React
+Navigation tree. `EXPO_PUBLIC_NAV` is inlined by Metro, so the choice is made
+when the bundle is built and cannot change at runtime. `metro.config.js`
+resolves the entry of the unused tree to nothing so that a bundle only ever
+contains one of them, which is also what keeps Metro from rejecting a graph that
+holds both expo-router and React Navigation. The React Navigation mode still
+needs `EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK=1`, which its scripts already
+set, because expo-router stays resolvable through `expo-observe` itself.
+
+Whichever tree is running, `Observe.configure()` happens in `observe.config.ts`
+at module scope, before anything mounts. It also turns on `dispatchInDebug`,
+without which a debug build would discard everything instead of sending it.
+
+The Lab tab is where the interesting payloads come from. It opens a screen that
+stays busy for two seconds so `tti` lands well above `ttr`, sends log events at
+several severities, throws during render so the error boundary reports it, and
+throws asynchronously so the global handler picks it up.
+
 ## Get started
 
 1. Install dependencies

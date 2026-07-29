@@ -6,4 +6,12 @@
 if (global.HermesInternal) {
   // throw new Error('BOOT CRASH TEST');
 }
-require('expo-router/entry');
+// Must run before any navigation provider mounts: the expo-observe
+// integrations latch their enabled state when their provider first renders.
+require('./observe.config');
+// Both trees ship in the bundle; EXPO_PUBLIC_NAV picks which one boots.
+if (require('./navigation/mode').NAV_MODE === 'react-navigation') {
+  require('./navigation/entry');
+} else {
+  require('expo-router/entry');
+}

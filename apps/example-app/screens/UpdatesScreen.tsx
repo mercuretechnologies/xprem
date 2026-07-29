@@ -13,22 +13,13 @@ import { ThemedText } from '@/components/ThemedText'
 import { ThemedView } from '@/components/ThemedView'
 import Constants from 'expo-constants'
 import { useState, useEffect } from 'react'
+import { useObserve } from 'expo-observe'
 import { UpdatesLogViewer } from '@/components/LogViewer'
 
-
-
-export default function HomeScreen() {
+export function UpdatesScreen() {
   const [loading, load] = useState<boolean>(false)
   const [logs, setLogs] = useState<Updates.UpdatesLogEntry[]>([])
-
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const randomCrash = () => {
-    // Random throw an error 50% of time
-    if (Math.random() < 0.5) {
-      throw new Error('Random crash!')
-    }
-  }
+  const { markInteractive } = useObserve()
 
   useEffect(() => {
     const fetchLogs = async () => {
@@ -38,12 +29,14 @@ export default function HomeScreen() {
       } catch (error) {
         console.error('Error fetching logs:', error)
       }
+      // The screen only shows anything useful once the update logs are in, so
+      // that is what "interactive" means here.
+      markInteractive()
     }
 
     fetchLogs()
-    // randomCrash()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
 
   const checkUpdates = async () => {
     if (__DEV__ || loading || Platform.OS === 'web') {
