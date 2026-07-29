@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"expo-open-ota/internal/services"
+	"expo-open-ota/internal/validation"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -15,59 +16,47 @@ import (
 	"testing"
 )
 
-type fakeRestrictionRepo struct {
-	restrictions      map[int64]ApiKeyRestrictions
-	protectedBranches map[string]bool
+type fakeAccessRepo struct {
+	access   map[int64]ApiKeyAccess
+	branches map[string]bool
 
-	setApiKeyID          int64
-	setCanAccess         bool
-	setAllowedIps        []netip.Prefix
-	setCalls             int
-	setBranchCalls       int
-	setBranchName        string
-	setBranchProtectedTo bool
+	setAccess         ApiKeyAccess
+	setCalls          int
+	branchExistsCalls int
 }
 
-func (f *fakeRestrictionRepo) GetRestrictionsByAppID(ctx context.Context, appID string) ([]ApiKeyRestrictions, error) {
-	var out []ApiKeyRestrictions
-	for _, restriction := range f.restrictions {
-		out = append(out, restriction)
+func (f *fakeAccessRepo) GetAccessByAppID(_ context.Context, _ string) ([]ApiKeyAccess, error) {
+	var out []ApiKeyAccess
+	for _, access := range f.access {
+		out = append(out, access)
 	}
 	return out, nil
 }
 
-func (f *fakeRestrictionRepo) SetRestrictions(ctx context.Context, appID string, apiKeyID int64, canAccessProtectedBranches bool, allowedIps []netip.Prefix) error {
+func (f *fakeAccessRepo) GetAccess(_ context.Context, apiKeyID int64) (ApiKeyAccess, error) {
+	return f.access[apiKeyID], nil
+}
+
+func (f *fakeAccessRepo) SetAccess(_ context.Context, _ string, access ApiKeyAccess) error {
 	f.setCalls++
-	f.setApiKeyID = apiKeyID
-	f.setCanAccess = canAccessProtectedBranches
-	f.setAllowedIps = allowedIps
+	f.setAccess = access
 	return nil
 }
 
-func (f *fakeRestrictionRepo) GetRestrictions(ctx context.Context, apiKeyID int64) (ApiKeyRestrictions, error) {
-	return f.restrictions[apiKeyID], nil
+func (f *fakeAccessRepo) BranchExists(_ context.Context, _ string, branchName string) (bool, error) {
+	f.branchExistsCalls++
+	return f.branches[branchName], nil
 }
 
-func (f *fakeRestrictionRepo) SetBranchProtection(ctx context.Context, appID string, branchName string, protected bool) error {
-	f.setBranchCalls++
-	f.setBranchName = branchName
-	f.setBranchProtectedTo = protected
-	return nil
-}
-
-func (f *fakeRestrictionRepo) IsBranchProtected(ctx context.Context, appID string, branchName string) (bool, error) {
-	return f.protectedBranches[branchName], nil
-}
-
-func (f *fakeRestrictionRepo) GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error) {
+func (f *fakeAccessRepo) GetApiKeyName(_ context.Context, _ string, apiKeyID int64) (string, error) {
 	if apiKeyID == 42 {
 		return "ci-production", nil
 	}
 	return "", fmt.Errorf("unknown key")
 }
 
-func serviceWith(repo ApiKeyRestrictionRepository, licensed bool) *ApiKeyRestrictionService {
-	service := NewApiKeyRestrictionService(repo)
+func serviceWith(repo ApiKeyAccessRepository, licensed bool) *ApiKeyAccessService {
+	service := NewApiKeyAccessService(repo)
 	service.licenseValid = func() bool { return licensed }
 	return service
 }
@@ -81,79 +70,94 @@ func mustAddr(t *testing.T, value string) netip.Addr {
 	return addr
 }
 
+// publish is the request most tests are about; the fields that vary are set
+// by the caller.
+func publishOn(branchName string) CliRequest {
+	return CliRequest{AppID: "app", APIKeyID: 1, Branch: branchName, Action: ActionPublish}
+}
+
 func TestStatelessModeAnswersControlPlaneError(t *testing.T) {
 	service := serviceWith(nil, true)
-	if _, err := service.GetRestrictionsByApp(context.Background(), "app"); !errors.Is(err, ErrRequiresControlPlane) {
+	if _, err := service.GetAccessByApp(context.Background(), "app"); !errors.Is(err, ErrRequiresControlPlane) {
 		t.Fatalf("expected ErrRequiresControlPlane, got %v", err)
 	}
-	if err := service.SetRestrictions(context.Background(), "app", 1, false, nil); !errors.Is(err, ErrRequiresControlPlane) {
-		t.Fatalf("expected ErrRequiresControlPlane, got %v", err)
-	}
-	if err := service.SetBranchProtection(context.Background(), "app", "main", true); !errors.Is(err, ErrRequiresControlPlane) {
+	if err := service.SetAccess(context.Background(), "app", 1, true, nil, nil); !errors.Is(err, ErrRequiresControlPlane) {
 		t.Fatalf("expected ErrRequiresControlPlane, got %v", err)
 	}
 	// Enforcement is a no-op in stateless mode, never an error.
-	if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "main", netip.Addr{}); err != nil {
+	if err := service.Authorize(context.Background(), publishOn("main")); err != nil {
 		t.Fatalf("expected enforcement no-op, got %v", err)
 	}
 }
 
 func TestMutationsRequireValidLicense(t *testing.T) {
-	repo := &fakeRestrictionRepo{}
+	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, false)
-	if err := service.SetRestrictions(context.Background(), "app", 1, true, nil); !errors.Is(err, ErrRequiresValidLicense) {
+	if err := service.SetAccess(context.Background(), "app", 1, true, nil, nil); !errors.Is(err, ErrRequiresValidLicense) {
 		t.Fatalf("expected ErrRequiresValidLicense, got %v", err)
 	}
-	if err := service.SetBranchProtection(context.Background(), "app", "main", true); !errors.Is(err, ErrRequiresValidLicense) {
-		t.Fatalf("expected ErrRequiresValidLicense, got %v", err)
-	}
-	if repo.setCalls != 0 || repo.setBranchCalls != 0 {
+	if repo.setCalls != 0 {
 		t.Fatal("repository must not be touched without a valid license")
 	}
 }
 
-// Reads stay open without a license so the dashboard can always show which
-// restrictions exist on a key.
-func TestGetRestrictionsDoesNotRequireLicense(t *testing.T) {
-	repo := &fakeRestrictionRepo{restrictions: map[int64]ApiKeyRestrictions{7: {ApiKeyID: 7}}}
+// Reads stay open without a license so the dashboard can always show what a
+// key is allowed to do.
+func TestGetAccessDoesNotRequireLicense(t *testing.T) {
+	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{7: {ApiKeyID: 7}}}
 	service := serviceWith(repo, false)
-	restrictions, err := service.GetRestrictionsByApp(context.Background(), "app")
+	accesses, err := service.GetAccessByApp(context.Background(), "app")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(restrictions) != 1 || restrictions[0].ApiKeyID != 7 {
-		t.Fatalf("unexpected restrictions: %+v", restrictions)
+	if len(accesses) != 1 || accesses[0].ApiKeyID != 7 {
+		t.Fatalf("unexpected access: %+v", accesses)
 	}
 }
 
-// SetRestrictions runs entries through parseCidrs (its edge cases are
-// covered in cidr_test.go) and persists the normalized result together with
-// the branch grant.
-func TestSetRestrictionsPersistsNormalizedAllowlist(t *testing.T) {
-	repo := &fakeRestrictionRepo{}
+// SetAccess runs entries through parseCidrs (its edge cases are covered in
+// cidr_test.go) and persists the normalized result together with the rules.
+func TestSetAccessPersistsNormalizedInput(t *testing.T) {
+	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
-	err := service.SetRestrictions(context.Background(), "app", 1, true, []string{"192.168.1.5/24", "::ffff:10.1.2.3"})
+	err := service.SetAccess(context.Background(), "app", 1, false,
+		[]BranchRule{{Pattern: "staging", Actions: []Action{ActionRollback, ActionRead}}},
+		[]string{"192.168.1.5/24", "::ffff:10.1.2.3"},
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !repo.setCanAccess {
-		t.Fatal("expected canAccessProtectedBranches to be persisted")
+	if repo.setAccess.AllowBranchCreation {
+		t.Fatal("expected allowBranchCreation to be persisted as false")
 	}
-	expected := []netip.Prefix{
+	expectedIps := []netip.Prefix{
 		netip.MustParsePrefix("192.168.1.0/24"),
 		netip.MustParsePrefix("10.1.2.3/32"),
 	}
-	if !reflect.DeepEqual(repo.setAllowedIps, expected) {
-		t.Fatalf("unexpected allowed ips: %v", repo.setAllowedIps)
+	if !reflect.DeepEqual(repo.setAccess.AllowedIps, expectedIps) {
+		t.Fatalf("unexpected allowed ips: %v", repo.setAccess.AllowedIps)
+	}
+	// Actions come back in catalog order, whatever order they were sent in.
+	expectedRules := []BranchRule{{Pattern: "staging", Actions: []Action{ActionRead, ActionRollback}}}
+	if !reflect.DeepEqual(repo.setAccess.BranchRules, expectedRules) {
+		t.Fatalf("unexpected rules: %+v", repo.setAccess.BranchRules)
 	}
 }
 
-func TestSetRestrictionsRejectsInvalidCidr(t *testing.T) {
-	repo := &fakeRestrictionRepo{}
+func TestSetAccessRejectsInvalidInput(t *testing.T) {
+	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
-	err := service.SetRestrictions(context.Background(), "app", 1, false, []string{"not-an-ip"})
+
+	err := service.SetAccess(context.Background(), "app", 1, true, nil, []string{"not-an-ip"})
 	if !errors.Is(err, ErrInvalidCidr) {
 		t.Fatalf("expected ErrInvalidCidr, got %v", err)
+	}
+	// A malformed rule is caller input too, and must reach the handler as a
+	// validation error so it answers 400 rather than 500.
+	err = service.SetAccess(context.Background(), "app", 1, true,
+		[]BranchRule{{Pattern: "feature/x", Actions: []Action{ActionRead}}}, nil)
+	if !validation.IsValidationError(err) {
+		t.Fatalf("expected a validation error, got %v", err)
 	}
 	if repo.setCalls != 0 {
 		t.Fatal("repository must not be touched on invalid input")
@@ -162,31 +166,36 @@ func TestSetRestrictionsRejectsInvalidCidr(t *testing.T) {
 
 // An empty allowlist must reach the repository as nil so the column stores
 // NULL (no restriction) instead of an empty array.
-func TestSetRestrictionsEmptyAllowlistIsNil(t *testing.T) {
-	repo := &fakeRestrictionRepo{}
+func TestSetAccessEmptyAllowlistIsNil(t *testing.T) {
+	repo := &fakeAccessRepo{}
 	service := serviceWith(repo, true)
-	if err := service.SetRestrictions(context.Background(), "app", 1, false, []string{"", "  "}); err != nil {
+	if err := service.SetAccess(context.Background(), "app", 1, true, nil, []string{"", "  "}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if repo.setAllowedIps != nil {
-		t.Fatalf("expected nil allowlist, got %v", repo.setAllowedIps)
+	if repo.setAccess.AllowedIps != nil {
+		t.Fatalf("expected nil allowlist, got %v", repo.setAccess.AllowedIps)
 	}
 }
 
 func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions: map[int64]ApiKeyRestrictions{1: {
-			ApiKeyID:   1,
-			AllowedIps: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	repo := &fakeAccessRepo{
+		access: map[int64]ApiKeyAccess{1: {
+			ApiKeyID:            1,
+			AllowBranchCreation: true,
+			AllowedIps:          []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
 		}},
 	}
 	service := serviceWith(repo, true)
-	if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "", mustAddr(t, "10.1.2.3")); err != nil {
+
+	request := publishOn("main")
+	request.ClientIP = mustAddr(t, "10.1.2.3")
+	if err := service.Authorize(context.Background(), request); err != nil {
 		t.Fatalf("allowlisted address rejected: %v", err)
 	}
 	// The rejection names the resolved caller IP so an operator can debug the
 	// allowlist, while staying an ErrIpNotAllowed (mapped to a 403).
-	err := service.AuthorizeCliRequest(context.Background(), "app", 1, "", mustAddr(t, "203.0.113.9"))
+	request.ClientIP = mustAddr(t, "203.0.113.9")
+	err := service.Authorize(context.Background(), request)
 	if !errors.Is(err, ErrIpNotAllowed) {
 		t.Fatalf("expected ErrIpNotAllowed, got %v", err)
 	}
@@ -198,7 +207,8 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 	}
 	// An allowlist with an unresolvable caller address never passes, and the
 	// message hints at the proxy configuration that usually causes it.
-	err = service.AuthorizeCliRequest(context.Background(), "app", 1, "", netip.Addr{})
+	request.ClientIP = netip.Addr{}
+	err = service.Authorize(context.Background(), request)
 	if !errors.Is(err, ErrIpNotAllowed) {
 		t.Fatalf("expected ErrIpNotAllowed for invalid address, got %v", err)
 	}
@@ -211,89 +221,166 @@ func TestAuthorizeEnforcesIpAllowlist(t *testing.T) {
 // form must actually admit the caller it designates, whether that caller
 // arrives as plain IPv4 or in mapped form, and still exclude everyone else.
 func TestAuthorizeMatchesAllowlistEnteredInMappedForm(t *testing.T) {
-	repo := &fakeRestrictionRepo{restrictions: map[int64]ApiKeyRestrictions{}}
+	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{}}
 	service := serviceWith(repo, true)
-	err := service.SetRestrictions(context.Background(), "app", 1, false,
+	err := service.SetAccess(context.Background(), "app", 1, true, nil,
 		[]string{"::ffff:203.0.113.7", "::ffff:10.0.0.0/104"},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The fake repository does not wire Set to Get; feed the stored prefixes
-	// back so AuthorizeCliRequest evaluates exactly what was persisted.
-	repo.restrictions[1] = ApiKeyRestrictions{ApiKeyID: 1, AllowedIps: repo.setAllowedIps}
+	// back so Authorize evaluates exactly what was persisted.
+	repo.access[1] = ApiKeyAccess{ApiKeyID: 1, AllowBranchCreation: true, AllowedIps: repo.setAccess.AllowedIps}
 
 	for _, caller := range []string{"203.0.113.7", "::ffff:203.0.113.7", "10.20.30.40"} {
-		if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "", mustAddr(t, caller)); err != nil {
+		request := publishOn("main")
+		request.ClientIP = mustAddr(t, caller)
+		if err := service.Authorize(context.Background(), request); err != nil {
 			t.Fatalf("caller %q: allowlisted address rejected: %v", caller, err)
 		}
 	}
 	for _, caller := range []string{"203.0.113.8", "2001:db8::1"} {
-		if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "", mustAddr(t, caller)); !errors.Is(err, ErrIpNotAllowed) {
+		request := publishOn("main")
+		request.ClientIP = mustAddr(t, caller)
+		if err := service.Authorize(context.Background(), request); !errors.Is(err, ErrIpNotAllowed) {
 			t.Fatalf("caller %q: expected ErrIpNotAllowed, got %v", caller, err)
 		}
 	}
 }
 
-func TestAuthorizeDeniesProtectedBranchWithoutGrant(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions:      map[int64]ApiKeyRestrictions{1: {ApiKeyID: 1}},
-		protectedBranches: map[string]bool{"production": true},
-	}
+// A key with no rule reaches every branch: the state every community
+// deployment is in, and the default of a fresh key.
+func TestAuthorizeAllowsEverythingWithoutRules(t *testing.T) {
+	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: true}}}
 	service := serviceWith(repo, true)
-	err := service.AuthorizeCliRequest(context.Background(), "app", 1, "production", netip.Addr{})
-	if !errors.Is(err, ErrBranchProtected) {
-		t.Fatalf("expected ErrBranchProtected, got %v", err)
-	}
-}
-
-func TestAuthorizeAllowsProtectedBranchWithGrant(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions:      map[int64]ApiKeyRestrictions{1: {ApiKeyID: 1, CanAccessProtectedBranches: true}},
-		protectedBranches: map[string]bool{"production": true},
-	}
-	service := serviceWith(repo, true)
-	if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "production", netip.Addr{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestAuthorizeAllowsUnprotectedBranchForAnyKey(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions:      map[int64]ApiKeyRestrictions{1: {ApiKeyID: 1}},
-		protectedBranches: map[string]bool{"production": true},
-	}
-	service := serviceWith(repo, true)
-	// staging is not protected, and a brand-new branch is not protected
-	// either: both stay open to a default key.
-	for _, branch := range []string{"staging", "brand-new-branch"} {
-		if err := service.AuthorizeCliRequest(context.Background(), "app", 1, branch, netip.Addr{}); err != nil {
-			t.Fatalf("branch %q: unexpected error: %v", branch, err)
+	for _, action := range AllActions {
+		request := publishOn("production")
+		request.Action = action
+		if err := service.Authorize(context.Background(), request); err != nil {
+			t.Fatalf("action %q: unexpected error: %v", action, err)
 		}
 	}
 }
 
-func TestAuthorizeSkipsBranchCheckForBranchlessRequests(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions:      map[int64]ApiKeyRestrictions{1: {ApiKeyID: 1}},
-		protectedBranches: map[string]bool{"production": true},
+func TestAuthorizeEnforcesBranchRules(t *testing.T) {
+	repo := &fakeAccessRepo{
+		access: map[int64]ApiKeyAccess{1: {
+			ApiKeyID:            1,
+			AllowBranchCreation: true,
+			BranchRules: []BranchRule{
+				{Pattern: "production", Actions: []Action{ActionRead}},
+				{Pattern: "pr-*", Actions: []Action{ActionPublish}},
+			},
+		}},
 	}
 	service := serviceWith(repo, true)
-	if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "", netip.Addr{}); err != nil {
+
+	// In scope, with the action granted.
+	if err := service.Authorize(context.Background(), publishOn("pr-482")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	// In scope, but the action is not granted. The message names both ends so
+	// the operator knows which one to fix.
+	err := service.Authorize(context.Background(), publishOn("production"))
+	if !errors.Is(err, services.ErrCliAccessDenied) {
+		t.Fatalf("expected a CLI access denial, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "production") || !strings.Contains(err.Error(), "publish") {
+		t.Fatalf("expected the branch and the action in the message, got %q", err.Error())
+	}
+	// Out of scope entirely.
+	if err := service.Authorize(context.Background(), publishOn("staging")); !errors.Is(err, services.ErrCliAccessDenied) {
+		t.Fatalf("expected a CLI access denial, got %v", err)
+	}
+	// Reading production is what the rule does grant, and eoas reads a branch
+	// before it publishes.
+	read := publishOn("production")
+	read.Action = ActionRead
+	if err := service.Authorize(context.Background(), read); err != nil {
+		t.Fatalf("unexpected error on a granted read: %v", err)
+	}
+}
+
+// A scoped key is refused on a request that names no branch: nothing matches
+// rules that are all about branches.
+func TestAuthorizeRefusesBranchlessRequestForScopedKey(t *testing.T) {
+	repo := &fakeAccessRepo{
+		access: map[int64]ApiKeyAccess{
+			1: {ApiKeyID: 1, AllowBranchCreation: true, BranchRules: []BranchRule{{Pattern: "*", Actions: []Action{ActionPublish}}}},
+			2: {ApiKeyID: 2, AllowBranchCreation: true},
+		},
+	}
+	service := serviceWith(repo, true)
+
+	if err := service.Authorize(context.Background(), publishOn("")); !errors.Is(err, services.ErrCliAccessDenied) {
+		t.Fatalf("expected a CLI access denial for a scoped key, got %v", err)
+	}
+	// An unscoped key claimed nothing, so it keeps passing: this is the
+	// local-file upload of a community deployment.
+	unscoped := publishOn("")
+	unscoped.APIKeyID = 2
+	if err := service.Authorize(context.Background(), unscoped); err != nil {
+		t.Fatalf("unexpected error for an unscoped key: %v", err)
+	}
+}
+
+func TestAuthorizeEnforcesBranchCreation(t *testing.T) {
+	repo := &fakeAccessRepo{
+		access:   map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: false}},
+		branches: map[string]bool{"staging": true},
+	}
+	service := serviceWith(repo, true)
+
+	if err := service.Authorize(context.Background(), publishOn("staging")); err != nil {
+		t.Fatalf("publishing to an existing branch must pass: %v", err)
+	}
+	err := service.Authorize(context.Background(), publishOn("brand-new"))
+	if !errors.Is(err, services.ErrCliAccessDenied) {
+		t.Fatalf("expected a CLI access denial, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "brand-new") {
+		t.Fatalf("expected the branch in the message, got %q", err.Error())
+	}
+	// Rolling back never creates a branch, so it never asks the question.
+	before := repo.branchExistsCalls
+	rollback := publishOn("brand-new")
+	rollback.Action = ActionRollback
+	if err := service.Authorize(context.Background(), rollback); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.branchExistsCalls != before {
+		t.Fatal("a rollback must not pay for the branch existence lookup")
+	}
+}
+
+// The default costs nothing: a key allowed to create branches never reads the
+// branches table on the publish path.
+func TestAuthorizeSkipsExistenceLookupWhenCreationIsAllowed(t *testing.T) {
+	repo := &fakeAccessRepo{access: map[int64]ApiKeyAccess{1: {ApiKeyID: 1, AllowBranchCreation: true}}}
+	service := serviceWith(repo, true)
+	if err := service.Authorize(context.Background(), publishOn("brand-new")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.branchExistsCalls != 0 {
+		t.Fatalf("expected no existence lookup, got %d", repo.branchExistsCalls)
 	}
 }
 
 func TestAuthorizeIsNoOpWithoutValidLicense(t *testing.T) {
-	repo := &fakeRestrictionRepo{
-		restrictions: map[int64]ApiKeyRestrictions{1: {
+	repo := &fakeAccessRepo{
+		access: map[int64]ApiKeyAccess{1: {
 			ApiKeyID:   1,
 			AllowedIps: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+			BranchRules: []BranchRule{
+				{Pattern: "staging", Actions: []Action{ActionRead}},
+			},
 		}},
-		protectedBranches: map[string]bool{"production": true},
 	}
 	service := serviceWith(repo, false)
-	if err := service.AuthorizeCliRequest(context.Background(), "app", 1, "production", mustAddr(t, "203.0.113.9")); err != nil {
+	request := publishOn("production")
+	request.ClientIP = mustAddr(t, "203.0.113.9")
+	if err := service.Authorize(context.Background(), request); err != nil {
 		t.Fatalf("expected community behavior without license, got %v", err)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"expo-open-ota/internal/auditlog"
 	"expo-open-ota/internal/database/postgres/pgdb"
 	"expo-open-ota/internal/types"
-	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,41 +47,41 @@ func (f *fakeCliAuthRepo) RevokeApiKeyByID(_ context.Context, apiKeyId int64, _ 
 	return "other-key", nil
 }
 
-func TestValidateCliCredentialResolvesKeyIdentity(t *testing.T) {
+func TestAuthenticateCliCredentialResolvesKeyIdentity(t *testing.T) {
 	repo := &fakeCliAuthRepo{keyID: 42}
-	cliAuth := NewCliAuthService(repo, nil)
+	cliAuth := NewCliAuthService(repo)
 	cliAuth.SetAuditActive(func() bool { return true })
 
-	credential, err := cliAuth.ValidateCliCredential(context.Background(), "app-1", types.Auth{}, "", netip.Addr{})
+	credential, err := cliAuth.AuthenticateCliCredential(context.Background(), "app-1", types.Auth{})
 	require.NoError(t, err)
-	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: "42", KeyName: "ci-production"}, credential)
+	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: 42, KeyName: "ci-production"}, credential)
 }
 
-func TestValidateCliCredentialSurvivesMetadataFailure(t *testing.T) {
+func TestAuthenticateCliCredentialSurvivesMetadataFailure(t *testing.T) {
 	// The name only enriches the audit display: an unreadable name must not
 	// fail a valid credential, it just degrades to the app-scope display.
 	repo := &fakeCliAuthRepo{keyID: 42, nameErr: errors.New("lookup unavailable")}
-	cliAuth := NewCliAuthService(repo, nil)
+	cliAuth := NewCliAuthService(repo)
 	cliAuth.SetAuditActive(func() bool { return true })
 
-	credential, err := cliAuth.ValidateCliCredential(context.Background(), "app-1", types.Auth{}, "", netip.Addr{})
+	credential, err := cliAuth.AuthenticateCliCredential(context.Background(), "app-1", types.Auth{})
 	require.NoError(t, err)
-	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: "42"}, credential)
+	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: 42}, credential)
 }
 
-func TestValidateCliCredentialSkipsLookupWhenAuditInactive(t *testing.T) {
+func TestAuthenticateCliCredentialSkipsLookupWhenAuditInactive(t *testing.T) {
 	// Community deployments must not pay the metadata query for a name the
 	// dropped event would never display.
 	repo := &fakeCliAuthRepo{keyID: 42}
-	cliAuth := NewCliAuthService(repo, nil)
+	cliAuth := NewCliAuthService(repo)
 
-	credential, err := cliAuth.ValidateCliCredential(context.Background(), "app-1", types.Auth{}, "", netip.Addr{})
+	credential, err := cliAuth.AuthenticateCliCredential(context.Background(), "app-1", types.Auth{})
 	require.NoError(t, err)
-	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: "42"}, credential)
+	assert.Equal(t, CliCredential{AppID: "app-1", KeyID: 42}, credential)
 	assert.Zero(t, repo.nameQueries)
 
 	cliAuth.SetAuditActive(func() bool { return false })
-	_, err = cliAuth.ValidateCliCredential(context.Background(), "app-1", types.Auth{}, "", netip.Addr{})
+	_, err = cliAuth.AuthenticateCliCredential(context.Background(), "app-1", types.Auth{})
 	require.NoError(t, err)
 	assert.Zero(t, repo.nameQueries)
 }
@@ -90,7 +89,7 @@ func TestValidateCliCredentialSkipsLookupWhenAuditInactive(t *testing.T) {
 func TestApiKeyLifecycleEmitsAuditEvents(t *testing.T) {
 	repo := &fakeCliAuthRepo{keyID: 42}
 	recorder := &fakeAuditRecorder{}
-	cliAuth := NewCliAuthService(repo, nil)
+	cliAuth := NewCliAuthService(repo)
 	cliAuth.SetOnAuditEvent(recorder.Record)
 	ctx := adminManagementCtx()
 
@@ -113,13 +112,13 @@ func TestApiKeyLifecycleEmitsAuditEvents(t *testing.T) {
 	assert.Equal(t, "ci-production", revoked.TargetDisplay)
 }
 
-func TestValidateCliCredentialStatelessHasNoKeyIdentity(t *testing.T) {
+func TestAuthenticateCliCredentialStatelessHasNoKeyIdentity(t *testing.T) {
 	// Stateless mode's credential is the app's Expo token: id 0, no name.
 	repo := &fakeCliAuthRepo{keyID: 0}
-	cliAuth := NewCliAuthService(repo, nil)
+	cliAuth := NewCliAuthService(repo)
 	cliAuth.SetAuditActive(func() bool { return true })
 
-	credential, err := cliAuth.ValidateCliCredential(context.Background(), "app-1", types.Auth{}, "", netip.Addr{})
+	credential, err := cliAuth.AuthenticateCliCredential(context.Background(), "app-1", types.Auth{})
 	require.NoError(t, err)
 	assert.Equal(t, CliCredential{AppID: "app-1"}, credential)
 	assert.Zero(t, repo.nameQueries)

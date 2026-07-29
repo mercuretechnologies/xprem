@@ -17,8 +17,12 @@ func TestName_AcceptsValid(t *testing.T) {
 
 func TestName_Rejects(t *testing.T) {
 	cases := map[string]string{
-		"empty":           "",
-		"too long":        strings.Repeat("a", maxNameLen+1),
+		"empty":    "",
+		"too long": strings.Repeat("a", maxNameLen+1),
+		// Reserved as the wildcard of API key access rules, so a branch can
+		// never be named something a rule pattern already means.
+		"wildcard":        "pr-*",
+		"bare wildcard":   "*",
 		"slash":           "feature/x",
 		"backslash":       "feature\\x",
 		"dot":             ".",
@@ -36,6 +40,29 @@ func TestName_Rejects(t *testing.T) {
 			// Must be a *validation.Error so handlers map it to 400.
 			assert.True(t, IsValidationError(err))
 			assert.Contains(t, err.Error(), "branchName")
+		})
+	}
+}
+
+func TestNamePattern_AcceptsWildcards(t *testing.T) {
+	// Everything Name accepts, plus the wildcard forms.
+	for _, v := range []string{"staging", "*", "pr-*", "*-eu", "pr-*-eu", "a*b*c"} {
+		assert.NoError(t, NamePattern("pattern", v), "expected %q to be valid", v)
+	}
+}
+
+func TestNamePattern_RejectsWhatNameRejects(t *testing.T) {
+	for name, value := range map[string]string{
+		"empty":        "",
+		"too long":     strings.Repeat("a", maxNameLen+1),
+		"slash":        "feature/*",
+		"dotdot":       "..",
+		"control char": "bad\nname",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := NamePattern("pattern", value)
+			require.Error(t, err)
+			assert.True(t, IsValidationError(err))
 		})
 	}
 }

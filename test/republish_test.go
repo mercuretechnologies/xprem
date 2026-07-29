@@ -19,13 +19,12 @@ import (
 func createRepublishRequest(branch, runtimeVersion, headerKey, headerValue, platform, commitHash, updateId string) (*httptest.ResponseRecorder, *mux.Router, *mux.Route, *http.Request) {
 	var q string
 	if commitHash != "" {
-		q = fmt.Sprintf("http://localhost:3000/republish/%s?runtimeVersion=%s&platform=%s&updateId=%s&commitHash=%s", branch, runtimeVersion, platform, updateId, commitHash)
+		q = fmt.Sprintf("http://localhost:3000/test-app-id/republish/%s?runtimeVersion=%s&platform=%s&updateId=%s&commitHash=%s", branch, runtimeVersion, platform, updateId, commitHash)
 	} else {
-		q = fmt.Sprintf("http://localhost:3000/republish/%s?runtimeVersion=%s&updateId=%s&platform=%s", branch, runtimeVersion, updateId, platform)
+		q = fmt.Sprintf("http://localhost:3000/test-app-id/republish/%s?runtimeVersion=%s&updateId=%s&platform=%s", branch, runtimeVersion, updateId, platform)
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
-	r = mux.SetURLVars(r, map[string]string{"APP_ID": "test-app-id", "BRANCH": branch})
 	r.Header.Set(headerKey, headerValue)
 	return w, mux.NewRouter(), nil, r
 }
@@ -35,7 +34,7 @@ func TestToRepublishRollbackWithBadBearer(t *testing.T) {
 	defer teardown()
 	mockExpoForRequestUploadUrlTest("staging")
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_bad_token", "ios", "hash", "1737455526")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 401, w.Code, "Expected status code 401")
 	assert.Equal(t, "Error validating auth\n", w.Body.String(), "Expected error message")
 }
@@ -96,7 +95,7 @@ func TestGoodRepublish(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "ios", "hash", "1737455526")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	type Response struct {
 		Branch         string `json:"branch"`
@@ -163,7 +162,7 @@ func TestGoodRepublishWithoutCommitHash(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "ios", "", "1737455526")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	type Response struct {
 		Branch         string `json:"branch"`
@@ -230,7 +229,7 @@ func TestRepublishOnBadPlatform(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "android", "", "1737455526")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code, "Expected status code 400")
 	assert.Equal(t, "Update platform mismatch\n", w.Body.String(), "Expected error message")
 }
@@ -257,7 +256,7 @@ func TestRepublishInvalidUpdate(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "ios", "", "1737455526")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code, "Expected status code 400")
 	assert.Equal(t, "Update is not valid\n", w.Body.String(), "Expected error message")
 }
@@ -279,7 +278,7 @@ func TestRepublishWithBadUpdate(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "ios", "", "BAD_ONE")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code, "Expected status code 400")
 	assert.Equal(t, "Error getting update\n", w.Body.String(), "Expected error message")
 }
@@ -301,7 +300,7 @@ func TestToRepublishARollback(t *testing.T) {
 		panic(err)
 	}
 	w, _, _, r := createRepublishRequest("branch-2", "1", "Authorization", "Bearer expo_test_token", "ios", "", "1666629141")
-	testContainer().RepublishHandler.HandleRepublish(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code, "Expected status code 400")
 	assert.Equal(t, "Update type is not normal update\n", w.Body.String(), "Expected error message")
 }

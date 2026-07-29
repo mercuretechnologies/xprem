@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/services"
 	"log"
 	"net/http"
@@ -40,14 +39,15 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "No branch provided", http.StatusBadRequest)
 		return
 	}
-	auth := helpers.GetAuth(r)
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, branchName, helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
+	// Authenticated AND authorized by the router, which declared this route a
+	// publish on its {BRANCH}. This asserts the handler is acting on the
+	// branch that was actually judged: both read the same path variable
+	// today, and this is what keeps them equal tomorrow.
+	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
+		log.Printf("[RequestID: %s] Branch %s was not the one authorized for this credential", requestID, branchName)
+		RenderCliAuthError(w, services.ErrCliAccessDenied)
 		return
 	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
 	runtimeVersion := r.URL.Query().Get("runtimeVersion")
 	if runtimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)

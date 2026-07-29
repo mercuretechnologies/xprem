@@ -27,13 +27,30 @@ func WithPrincipal(ctx context.Context, principal *DashboardPrincipal) context.C
 type cliAuthContextKey struct{}
 
 // CliCredential identifies the validated app-scoped CLI credential of a
-// request: which app it may act on and which API key it was. KeyID/KeyName
-// are empty in stateless mode, where the credential is the app's Expo token,
-// not a named key.
+// request: which app it may act on, which API key it was, and what the router
+// authorized it for. KeyID is 0 and KeyName empty in stateless mode, where the
+// credential is the app's Expo token, not a named key.
 type CliCredential struct {
 	AppID   string
-	KeyID   string
+	KeyID   int64
 	KeyName string
+	// AuthorizedBranch is the branch the router ran the access decision on,
+	// empty on a route that names none. A handler acting on a branch asserts
+	// against it (RequireAuthorizedBranch) rather than trusting the value it
+	// read itself: the two come from the same path variable today, and this
+	// is what keeps them the same tomorrow.
+	AuthorizedBranch string
+}
+
+// RequireAuthorizedBranch reports whether a CLI request may act on branchName.
+// A request with no CLI credential is not a CLI request and is left alone, and
+// a credential authorized for no branch cannot act on one.
+func RequireAuthorizedBranch(ctx context.Context, branchName string) bool {
+	credential := CliAuthFromContext(ctx)
+	if credential == nil {
+		return true
+	}
+	return credential.AuthorizedBranch == branchName
 }
 
 // WithCliAuth marks the request as authenticated by an app-scoped CLI

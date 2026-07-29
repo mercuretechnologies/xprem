@@ -90,12 +90,12 @@ func (h *BranchHandler) DeleteBranchHandler(w http.ResponseWriter, r *http.Reque
 			handlers.RenderError(w, http.StatusConflict, branchErr.Error())
 			return
 		}
-		if rolloutErr := (*store.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
-			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
-			return
-		}
 		if protectedErr := (*store.ErrBranchProtected)(nil); errors.As(err, &protectedErr) {
 			handlers.RenderError(w, http.StatusConflict, protectedErr.Error())
+			return
+		}
+		if rolloutErr := (*store.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
+			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
 			return
 		}
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while deleting the branch.")
@@ -141,6 +141,13 @@ func (h *BranchHandler) GetRuntimeVersionsHandler(w http.ResponseWriter, r *http
 	branchName := vars["BRANCH"]
 	if branchName == "" {
 		handlers.RenderError(w, http.StatusBadRequest, "Branch name is empty")
+		return
+	}
+	// The same assertion the publish handlers carry: a CLI credential may only
+	// act on the branch the router judged. Both values come from {BRANCH}
+	// today, which is exactly why the check is cheap and why it is here.
+	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
+		handlers.RenderError(w, http.StatusForbidden, "This credential is not allowed on this branch")
 		return
 	}
 	cacheKey := dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName)

@@ -28,8 +28,8 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 // them are reachable without a credential, which is a property of what calls
 // them rather than an omission: a liveness probe, an installed mobile app and
 // a login page have no credential to present. The publish group is the odd one
-// out and its file says why, the check being inside each handler because what
-// is authorised is a branch and not just an app.
+// out and its file says why: it carries its own authentication, per route,
+// because what it authorises is a (branch, action) pair and not just an app.
 //
 // The ORDER of these calls is load-bearing in one place, noted again in
 // routes_account.go: the flat /api/apps routes are registered before the

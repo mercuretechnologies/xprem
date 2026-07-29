@@ -1,12 +1,25 @@
 package infrastructure
 
 import (
+	"context"
+	"expo-open-ota/ee/apikeyrestrictions"
 	"expo-open-ota/ee/rbac"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/services"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
+)
+
+// branchVar is the ONLY path variable a publishing token may be scoped on. A
+// route that lets a token in has to carry it, and route() refuses to register
+// one that does not: an access rule is written about branches, so a route with
+// no branch is a route no rule can judge.
+const (
+	branchVarName = "BRANCH"
+	branchVar     = "{" + branchVarName + "}"
 )
 
 // Access is a route's answer to "who may call this", and every app-scoped
@@ -17,16 +30,17 @@ import (
 // service, the same for every route).
 //
 // The type is a value with no exported fields on purpose. It can only be built
-// through the four constructors below, and each of them is internally
-// consistent: there is no way to write "no permission required" and "admins
-// only when roles are off" at the same time, because that pair contradicts
-// itself and would read as a guard while behaving as none.
+// through the constructors below, and each of them is internally consistent:
+// there is no way to write "no permission required" and "admins only when
+// roles are off" at the same time, because that pair contradicts itself and
+// would read as a guard while behaving as none.
 type Access struct {
-	// token: may a validated CLI publishing credential reach the handler. A
-	// token carries no account, so RBAC cannot apply to it: on the routes that
-	// allow one, the app scope its credential was validated against IS the
-	// authorisation.
-	token bool
+	// token: may a validated CLI publishing credential reach the handler, and
+	// what does it do here. A token carries no account, so RBAC cannot judge
+	// it; its API key's access rules can, and tokenAction is what they are
+	// judged against.
+	token       bool
+	tokenAction apikeyrestrictions.Action
 	// perm: what a member needs once roles are enforced. NoPermission means
 	// the route asks nothing beyond being able to see the app.
 	perm rbac.Permission
@@ -46,12 +60,15 @@ func AnyViewer() Access {
 	return Access{declared: true, perm: rbac.NoPermission}
 }
 
-// AnyViewerOrToken is AnyViewer, plus a publishing credential. Reserved for
-// what the eoas CLI genuinely calls: everything else stays out of a token's
-// reach, because a token is usually a shared CI secret and the app-scoped
-// reads carry device-level data.
-func AnyViewerOrToken() Access {
-	return Access{declared: true, perm: rbac.NoPermission, token: true}
+// AnyViewerOrToken is AnyViewer, plus a publishing credential doing action on
+// the route's {BRANCH}. Reserved for what the eoas CLI genuinely calls:
+// everything else stays out of a token's reach, because a token is usually a
+// shared CI secret and the app-scoped reads carry device-level data.
+func AnyViewerOrToken(action apikeyrestrictions.Action) Access {
+	if !apikeyrestrictions.IsValidAction(string(action)) {
+		panic("router: AnyViewerOrToken called with an unknown action " + string(action))
+	}
+	return Access{declared: true, perm: rbac.NoPermission, token: true, tokenAction: action}
 }
 
 // NeedsPermission gates the route behind perm once roles are enforced, and
@@ -73,12 +90,21 @@ func NeedsPermission(perm rbac.Permission, fallback rbac.Fallback) Access {
 	return Access{declared: true, perm: perm, fallback: fallback}
 }
 
+// cliAccessPolicy is the access decision the guard asks. It is an interface
+// rather than the concrete enterprise service so this package's tests can
+// observe what a route hands it: the branch and the action a route declares
+// are the whole subject of the guard, and asserting them needs a seam.
+type cliAccessPolicy interface {
+	Authorize(ctx context.Context, req apikeyrestrictions.CliRequest) error
+}
+
 // appGroup registers the app-scoped routes and is the only way to add one:
 // route() takes the Access declaration as an argument it cannot default, so a
 // new route cannot be added without answering the question.
 type appGroup struct {
-	router      *mux.Router
-	rbacService *rbac.RBACService
+	router       *mux.Router
+	rbacService  *rbac.RBACService
+	apiKeyAccess cliAccessPolicy
 }
 
 func (g appGroup) route(method, path string, handler http.HandlerFunc, access Access) {
@@ -86,6 +112,15 @@ func (g appGroup) route(method, path string, handler http.HandlerFunc, access Ac
 		// At boot, so it lands in the first test that builds a router rather
 		// than in production on the first request to the route.
 		panic("router: " + method + " " + path + " was registered without an Access declaration")
+	}
+	// The hole this closes: a token-reachable route with no branch in its path
+	// leaves the access rules with nothing to match, and the honest reading of
+	// that is "no rule applies", which is one word away from "everything is
+	// allowed". Refusing at boot means the question cannot be forgotten, and
+	// it also pins the SPELLING: a route declared {BRANCH_ID} does not pass.
+	if access.token && !strings.Contains(path, branchVar) {
+		panic("router: " + method + " " + path + " lets a publishing token in but names no " + branchVar +
+			"; a token is scoped to branches, so a branchless route cannot be judged")
 	}
 	g.router.Handle(path, g.guard(access)(handler)).Methods(method)
 }
@@ -107,15 +142,56 @@ func (g appGroup) guard(access Access) mux.MiddlewareFunc {
 			// A publishing credential is handled first and on its own: it has
 			// no account, so the permission path below cannot judge it. Only
 			// the routes that named a token get one.
-			if services.CliAuthFromContext(r.Context()) != nil {
+			if credential := services.CliAuthFromContext(r.Context()); credential != nil {
 				if !access.token {
 					handlers.RenderError(w, http.StatusForbidden, "This route requires a dashboard session")
 					return
 				}
-				gated.ServeHTTP(w, r)
+				authorized, ok := authorizeCliRequest(g.apiKeyAccess, w, r, *credential, access.tokenAction, mux.Vars(r)[branchVarName])
+				if !ok {
+					return
+				}
+				gated.ServeHTTP(w, authorized)
 				return
 			}
 			gated.ServeHTTP(w, r)
 		})
 	}
+}
+
+// authorizeCliRequest runs the enterprise access decision and stamps what it
+// authorized onto the credential. It answers (request, false) when the request
+// was refused, having already written the response.
+func authorizeCliRequest(
+	policy cliAccessPolicy,
+	w http.ResponseWriter,
+	r *http.Request,
+	credential services.CliCredential,
+	action apikeyrestrictions.Action,
+	branchName string,
+) (*http.Request, bool) {
+	// An empty branchName is not special-cased here. route() already refuses
+	// to register a token route without one, and where it can still happen
+	// (an upload token that carries no branch claim) the rules answer it
+	// correctly on their own: a scoped key matches nothing and is refused, an
+	// unscoped key was never claiming anything and passes, which is what a
+	// community deployment must keep doing.
+	//
+	// A key id of 0 is stateless mode: no API key exists, so there is nothing
+	// to carry access rules and nothing to enforce.
+	if credential.KeyID != 0 {
+		err := policy.Authorize(r.Context(), apikeyrestrictions.CliRequest{
+			AppID:    credential.AppID,
+			APIKeyID: credential.KeyID,
+			Branch:   branchName,
+			Action:   action,
+			ClientIP: helpers.ClientIP(r),
+		})
+		if err != nil {
+			handlers.RenderCliAuthError(w, err)
+			return nil, false
+		}
+	}
+	credential.AuthorizedBranch = branchName
+	return r.WithContext(services.WithCliAuth(r.Context(), credential)), true
 }

@@ -58,7 +58,35 @@ func Errorf(field, format string, args ...any) *Error {
 // The rules are a mirror of internal/bucket.validateSegment — keep the two in
 // sync. Rejects empties, path separators, "." / "..", null bytes, control
 // characters, and anything over maxNameLen.
+//
+// It also rejects "*", the wildcard of the branch patterns API key access
+// rules are written in (NamePattern below), so no branch can be named
+// something a rule already means.
+//
+// The rejection is not limited to creation: several callers validate a name
+// they are only reading, so a deployment already holding a branch named with
+// "*" answers 400 on the dashboard and CLI routes that name it. Devices are
+// unaffected, the update protocol goes through bucket.validateSegment, which
+// still accepts it.
 func Name(field, value string) error {
+	if strings.Contains(value, "*") {
+		return fail(field, "must not contain %q, which is reserved as the wildcard of API key access rules", "*")
+	}
+	return namePattern(field, value)
+}
+
+// NamePattern validates a branch pattern used in an API key's access rules: a
+// branch name, or a name with "*" standing for any run of characters, empty
+// included ("pr-*", "*-staging", "*"). Every other rule of Name applies, so a
+// pattern without a wildcard is exactly a branch name and matches only that
+// branch.
+func NamePattern(field, value string) error {
+	return namePattern(field, value)
+}
+
+// namePattern is Name without the wildcard rule, which is the only thing the
+// two differ by.
+func namePattern(field, value string) error {
 	if value == "" {
 		return fail(field, "must not be empty")
 	}

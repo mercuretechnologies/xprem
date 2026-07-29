@@ -115,8 +115,8 @@ LIMIT 1;
 
 -- name: DeleteBranchByName :execresult
 -- NOT protected: a protected branch cannot be deleted by anyone, admins
--- included — protection must be lifted first. The guard runs inside the
--- DELETE itself so a concurrent protect cannot race it; the store
+-- included, and lifting the protection is the explicit step. The guard runs
+-- inside the DELETE itself so a concurrent protect cannot race it; the store
 -- disambiguates the 0-rows result into protected vs not-found.
 DELETE FROM branches
 WHERE name = $1 AND app_id = $2 AND NOT protected;
@@ -787,21 +787,44 @@ WHERE issuer = $1 AND subject = $2;
 -- schema, so the EE feature's SQL lives here like the enterprise license
 -- queries above.
 
--- name: GetApiKeyRestrictions :one
--- Enforcement read for one authenticated key on the CLI request hot path.
-SELECT allowed_ips, can_access_protected_branches
-FROM api_keys
-WHERE id = $1;
+-- name: GetApiKeyAccess :many
+-- Enforcement read for one authenticated key on the CLI request hot path: the
+-- IP allow-list, the branch-creation flag and the branch rules in one round
+-- trip. A key with no rule yields a single row with a NULL pattern, which is
+-- the unrestricted default.
+--
+-- revoked_at IS NULL is redundant with authentication, which already refuses a
+-- revoked key, and it is here anyway: this is the last read before a publish is
+-- authorised, so it costs nothing to make "zero rows" mean exactly what the
+-- caller treats it as, a key that may no longer act.
+SELECT k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+FROM api_keys k
+LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
+WHERE k.id = $1 AND k.revoked_at IS NULL;
 
--- name: GetApiKeyRestrictionsByAppID :many
-SELECT id, allowed_ips, can_access_protected_branches
-FROM api_keys
-WHERE app_id = $1 AND revoked_at IS NULL;
+-- name: GetApiKeyAccessByAppID :many
+-- Same shape for the dashboard, over every live key of one app. Ordered so
+-- the caller can fold consecutive rows into one key without a map.
+SELECT k.id, k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+FROM api_keys k
+LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
+WHERE k.app_id = $1 AND k.revoked_at IS NULL
+ORDER BY k.id, r.id;
 
--- name: UpdateApiKeyRestrictions :execrows
+-- name: UpdateApiKeyAccess :execrows
 UPDATE api_keys
-SET allowed_ips = $1, can_access_protected_branches = $2
+SET allowed_ips = $1, allow_branch_creation = $2
 WHERE id = $3 AND app_id = $4 AND revoked_at IS NULL;
+
+-- name: DeleteApiKeyBranchRules :exec
+-- The rules of one key are replaced wholesale, inside the same transaction as
+-- UpdateApiKeyAccess: a partial write would leave a key granting something
+-- nobody asked for.
+DELETE FROM api_key_branch_rules WHERE api_key_id = $1;
+
+-- name: InsertApiKeyBranchRule :exec
+INSERT INTO api_key_branch_rules (api_key_id, pattern, actions)
+VALUES ($1, $2, $3);
 
 -- name: SetBranchProtected :execrows
 UPDATE branches
@@ -811,6 +834,12 @@ WHERE app_id = $2 AND name = $3;
 -- name: IsBranchProtected :one
 SELECT protected FROM branches
 WHERE app_id = $1 AND name = $2;
+
+-- name: BranchExists :one
+-- Asked before a publish, and only for the keys an admin took branch creation
+-- away from: publishing to a branch that is not there yet is how the CLI
+-- creates one.
+SELECT EXISTS (SELECT 1 FROM branches WHERE app_id = $1 AND name = $2);
 
 -- The queries below back progressive rollouts (MIT core, control-plane mode only).
 

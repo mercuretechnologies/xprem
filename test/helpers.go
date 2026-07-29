@@ -15,6 +15,7 @@ import (
 	"expo-open-ota/internal/types"
 	"github.com/jarcoal/httpmock"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -490,4 +491,13 @@ func SetValidConfiguration() {
 	if err := config.LoadAppsFromFlatEnv(); err != nil {
 		panic(err)
 	}
+}
+
+// serveThroughRouter runs a CLI publish request through the real router. It is
+// what these tests must use rather than calling a handler directly:
+// authentication and the per-key access decision live in the routing table
+// now (internal/router/routes_publish.go), so a handler called on its own
+// would answer as if every credential were valid.
+func serveThroughRouter(w *httptest.ResponseRecorder, r *http.Request) {
+	infrastructure.NewRouter(testContainer()).ServeHTTP(w, r)
 }

@@ -43,28 +43,15 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				}
 
 				auth := helpers.GetAuth(r)
-				// The BRANCH of the matched route, empty when it has none, the
-				// same value the publish handlers pass. It used to be hardcoded
-				// empty here, described as "these routes are branch-less
-				// reads": that was wrong. The two routes a publishing token may
-				// reach both carry a {BRANCH}, and an empty name skips the
-				// protected-branch check entirely (the restriction service only
-				// looks it up when the name is non-empty). A CI key marked as
-				// having no access to protected branches could therefore still
-				// read production's runtime versions and update history: the
-				// restriction meant "cannot write" while reading as "has
-				// nothing to do with protected branches".
-				//
-				// The SPELLING of the variable is load-bearing. This reads
-				// {BRANCH}, and routes_app.go also registers a route spelled
-				// {BRANCH_ID}. No token reaches that one today, so nothing
-				// breaks, but a future token-reachable route spelled
-				// {BRANCH_ID} would silently pass "" here and skip the
-				// protected-branch check again, which is exactly the hole this
-				// line closed.
-				credential, err := cliAuthService.ValidateCliCredential(
-					r.Context(), appId, auth, mux.Vars(r)["BRANCH"], helpers.ClientIP(r),
-				)
+				// Authentication only. What this credential may DO is the
+				// route's question, and it is answered where the route is
+				// declared (internal/router/access.go), which is the one place
+				// holding the branch and the action together. This used to
+				// happen here, on a branch name read out of mux.Vars, which
+				// made the SPELLING of a path variable load-bearing: a
+				// token-reachable route spelled {BRANCH_ID} would have passed
+				// an empty name and skipped the check.
+				credential, err := cliAuthService.AuthenticateCliCredential(r.Context(), appId, auth)
 				if err != nil {
 					handlers.RenderCliAuthError(w, err)
 					return

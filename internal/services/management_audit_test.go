@@ -188,7 +188,7 @@ func TestManagementEventsResolveCliActor(t *testing.T) {
 
 	// A named DB-mode key resolves to its identity, like the principal email.
 	namedCtx := WithCliAuth(context.Background(),
-		CliCredential{AppID: "app-1", KeyID: "42", KeyName: "ci-production"})
+		CliCredential{AppID: "app-1", KeyID: 42, KeyName: "ci-production"})
 	_, err := branchService.CreateBranch(namedCtx, "app-1", "main")
 	require.NoError(t, err)
 	require.Len(t, recorder.events, 1)

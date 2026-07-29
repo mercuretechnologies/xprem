@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"expo-open-ota/ee/apikeyrestrictions"
 	"expo-open-ota/ee/rbac"
 	"expo-open-ota/internal/middleware"
 	"net/http"
@@ -40,7 +41,7 @@ import (
 //     declaration, at boot.
 //
 //     AnyViewer()                any account that can see the app
-//     AnyViewerOrToken()         the same, plus a CLI publishing token
+//     AnyViewerOrToken(action)   the same, plus a CLI token doing action on {BRANCH}
 //     NeedsPermission(perm, fb)  perm once roles are enforced, fb when not
 //
 // The fallback is per route because the right answer differs. Mutations use
@@ -67,7 +68,11 @@ func registerAppRoutes(
 	appAuthSubrouter.Use(middleware.AppResolverMiddleware(container.AppRepo))
 	appAuthSubrouter.Use(rbac.RequireAppVisible(container.RBACService))
 
-	app := appGroup{router: appAuthSubrouter, rbacService: container.RBACService}
+	app := appGroup{
+		router:       appAuthSubrouter,
+		rbacService:  container.RBACService,
+		apiKeyAccess: container.ApiKeyAccessService,
+	}
 
 	// The app itself, registered as "" so the path matches exactly what the
 	// dashboard sends: /api/apps/{id}, no trailing slash, on all three.
@@ -88,6 +93,10 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermBranchCreate, rbac.FallbackAdminOnly))
 	app.route(http.MethodDelete, "/branches/{BRANCH}", container.BranchHandler.DeleteBranchHandler,
 		NeedsPermission(rbac.PermBranchDelete, rbac.FallbackAdminOnly))
+	// Protection is a deletion lock: it says this branch cannot be removed, and
+	// nothing about what an API key may publish on it.
+	app.route(http.MethodPut, "/branches/{BRANCH}/protection", container.BranchProtectionHandler.SetBranchProtectionHandler,
+		NeedsPermission(rbac.PermBranchProtect, rbac.FallbackAdminOnly))
 	app.route(http.MethodGet, "/channels", container.ChannelHandler.GetChannelsHandler,
 		AnyViewer())
 	app.route(http.MethodPost, "/channels", container.ChannelHandler.CreateChannelHandler,
@@ -96,8 +105,6 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermChannelDelete, rbac.FallbackAdminOnly))
 	app.route(http.MethodPost, "/branch/{BRANCH_ID}/updateChannelBranchMapping", container.BranchHandler.UpdateChannelBranchMappingHandler,
 		NeedsPermission(rbac.PermChannelEditBranch, rbac.FallbackAdminOnly))
-	app.route(http.MethodPut, "/branches/{BRANCH}/protection", container.ApiKeyRestrictionHandler.SetBranchProtectionHandler,
-		NeedsPermission(rbac.PermBranchProtect, rbac.FallbackAdminOnly))
 
 	// Progressive rollouts, control-plane only. One permission covers a channel
 	// rollout's whole lifecycle, its per-update sibling has its own. There is
@@ -120,9 +127,9 @@ func registerAppRoutes(
 	// publishing token may reach: eoas asks which runtime versions a branch
 	// has, then which updates that pair already holds, before it publishes.
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersions", container.BranchHandler.GetRuntimeVersionsHandler,
-		AnyViewerOrToken())
+		AnyViewerOrToken(apikeyrestrictions.ActionRead))
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates", container.UpdateHandler.GetUpdatesHandler,
-		AnyViewerOrToken())
+		AnyViewerOrToken(apikeyrestrictions.ActionRead))
 	app.route(http.MethodGet, "/updates", container.UpdateHandler.GetUpdateFeedHandler,
 		AnyViewer())
 	app.route(http.MethodGet, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/updates/{UPDATE_ID}", container.UpdateHandler.GetUpdateDetailsHandler,
@@ -144,11 +151,11 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
 	app.route(http.MethodDelete, "/apiKeys/{API_KEY_ID}/revoke", container.ApiKeyHandler.RevokeApiKeyHandler,
 		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
-	// Enterprise: per-key access restrictions ride with the token permission,
-	// since they change what a token can do. License-gated in their service.
-	app.route(http.MethodGet, "/apiKeys/restrictions", container.ApiKeyRestrictionHandler.GetApiKeyRestrictionsHandler,
+	// Enterprise: a key's access rules ride with the token permission, since
+	// they are what a token can do. License-gated in their service.
+	app.route(http.MethodGet, "/apiKeys/access", container.ApiKeyAccessHandler.GetApiKeyAccessHandler,
 		AnyViewer())
-	app.route(http.MethodPut, "/apiKeys/{API_KEY_ID}/restrictions", container.ApiKeyRestrictionHandler.SetApiKeyRestrictionsHandler,
+	app.route(http.MethodPut, "/apiKeys/{API_KEY_ID}/access", container.ApiKeyAccessHandler.SetApiKeyAccessHandler,
 		NeedsPermission(rbac.PermApiKeysManage, rbac.FallbackAdminOnly))
 
 	// Device identity (ee/identity). Browsing the registry means reading

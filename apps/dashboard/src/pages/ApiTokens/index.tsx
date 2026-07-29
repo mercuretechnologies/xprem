@@ -13,7 +13,7 @@ import { TimestampCell } from '@/components/ui/timestamp-cell';
 import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { AdminOnlyNote } from '@/components/ui/admin-only-note';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
-import { ApiKeyRestrictionsSheet } from '@/ee/components/ApiKeyRestrictionsSheet';
+import { ApiKeyAccessSheet } from '@/ee/components/ApiKeyAccessSheet';
 
 export const ApiTokens = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
@@ -36,27 +36,32 @@ export const ApiTokens = () => {
     enabled: !!selectedAppId && CONTROL_PLANE_ENABLED,
   });
 
-  // Enterprise access restrictions per token, summarized in the Restrictions
-  // column. The editing itself lives in ApiKeyRestrictionsSheet.
-  const apiKeyRestrictionsQuery = useQuery({
-    queryKey: ['apiKeyRestrictions', selectedAppId],
-    queryFn: () => api.getApiKeyRestrictions(),
+  // What each token is allowed to do, summarized in the Access column. The
+  // editing itself lives in ApiKeyAccessSheet.
+  const apiKeyAccessQuery = useQuery({
+    queryKey: ['apiKeyAccess', selectedAppId],
+    queryFn: () => api.getApiKeyAccess(),
     enabled: !!selectedAppId && CONTROL_PLANE_ENABLED,
   });
-  const restrictionsByKeyId = new Map(
-    (apiKeyRestrictionsQuery.data ?? []).map(restriction => [restriction.apiKeyId, restriction])
+  const accessByKeyId = new Map(
+    (apiKeyAccessQuery.data ?? []).map(access => [access.apiKeyId, access])
   );
 
-  const describeRestrictions = (apiKeyId: string) => {
-    const restrictions = restrictionsByKeyId.get(apiKeyId);
+  // Empty means the token is at its default, which is full access to the app.
+  // Saying "Every branch" rather than nothing keeps the two states apart at a
+  // glance, since one of them is the permissive one.
+  const describeAccess = (apiKeyId: string) => {
+    const access = accessByKeyId.get(apiKeyId);
     const parts: string[] = [];
-    if (restrictions?.canAccessProtectedBranches) {
-      parts.push('Protected access');
+    const ruleCount = access?.branchRules.length ?? 0;
+    if (ruleCount > 0) {
+      parts.push(`${ruleCount} branch rule${ruleCount > 1 ? 's' : ''}`);
     }
-    if (restrictions?.allowedIps.length) {
-      parts.push(
-        `${restrictions.allowedIps.length} IP${restrictions.allowedIps.length > 1 ? 's' : ''}`
-      );
+    if (access && !access.allowBranchCreation) {
+      parts.push('no new branches');
+    }
+    if (access?.allowedIps.length) {
+      parts.push(`${access.allowedIps.length} IP${access.allowedIps.length > 1 ? 's' : ''}`);
     }
     return parts.join(' · ');
   };
@@ -219,17 +224,17 @@ export const ApiTokens = () => {
               },
             },
             {
-              header: 'Restrictions',
-              id: 'restrictions',
+              header: 'Access',
+              id: 'access',
               cell: ({ row }: { row: { original: ApiKeyRecord } }) => {
-                const summary = describeRestrictions(row.original.id);
+                const summary = describeAccess(row.original.id);
                 const state = summary ? (
                   <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 dark:text-emerald-300">
                     <ShieldCheck className="h-3.5 w-3.5" />
                     {summary}
                   </span>
                 ) : (
-                  <span className="text-sm text-muted-foreground/60">None</span>
+                  <span className="text-sm text-muted-foreground/60">Every branch</span>
                 );
                 if (!canManageApiKeys) {
                   return state;
@@ -239,7 +244,7 @@ export const ApiTokens = () => {
                     type="button"
                     onClick={() => setKeyToRestrict(row.original)}
                     className="group inline-flex items-center gap-2.5"
-                    title="Edit the channel and IP restrictions of this token">
+                    title="Edit what this token is allowed to do">
                     {state}
                     <span className="inline-flex items-center gap-1 text-sm font-medium text-link group-hover:underline">
                       <Pencil className="h-3 w-3" />
@@ -275,7 +280,7 @@ export const ApiTokens = () => {
         />
       </div>
 
-      <ApiKeyRestrictionsSheet apiKey={keyToRestrict} onClose={() => setKeyToRestrict(null)} />
+      <ApiKeyAccessSheet apiKey={keyToRestrict} onClose={() => setKeyToRestrict(null)} />
 
       <DeleteDialog
         isOpen={!!keyToRevoke}

@@ -49,12 +49,12 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       {
         value: 'branch:delete',
         label: 'Delete branches',
-        description: 'Protected branches always refuse deletion.',
+        description: 'Remove an update branch from the app.',
       },
       {
         value: 'branch:protect',
-        label: 'Protect branches',
-        description: 'Toggle branch protection on and off.',
+        label: 'Lock branches',
+        description: 'Turn the deletion lock of a branch on and off.',
       },
     ],
   },

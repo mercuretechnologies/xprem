@@ -61,6 +61,10 @@ func (b *LocalBucket) RequestUploadUrlForFileUpdate(appId string, branch string,
 		"filePath": filepath.Join(dirPath, fileName),
 		"action":   "uploadLocalFile",
 		"appId":    appId,
+		// The branch this upload belongs to. The route that spends this token
+		// names no branch of its own, so this claim is what lets the router
+		// judge it against the API key's access rules.
+		"branch": branch,
 	})
 	if err != nil {
 		return "", err
@@ -268,26 +272,67 @@ func GetSubjectForApp(appId string) string {
 // same app as the URL — without that check, an attacker who obtained a leaked
 // token for AppA could PUT into AppB's bucket by hitting
 // /{AppB}/uploadLocalFile?token=<appA_token>.
-func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId string, err error) {
+func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId string, branch string, err error) {
 	claims := jwt.MapClaims{}
 	decodedToken, err := crypto.DecodeAndExtractJWTToken(config.GetEnv("JWT_SECRET"), token, claims)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if !decodedToken.Valid {
-		return "", "", errors.New("invalid token")
+		return "", "", "", errors.New("invalid token")
 	}
 	action, _ := claims["action"].(string)
 	filePath, _ = claims["filePath"].(string)
 	sub, _ := claims["sub"].(string)
 	appId, _ = claims["appId"].(string)
+	branch, _ = claims["branch"].(string)
 	if appId == "" || sub != GetSubjectForApp(appId) {
-		return "", "", errors.New("invalid token sub")
+		return "", "", "", errors.New("invalid token sub")
 	}
 	if action != "uploadLocalFile" {
-		return "", "", errors.New("invalid token action")
+		return "", "", "", errors.New("invalid token action")
 	}
-	return filePath, appId, nil
+	// The token carries the branch and the file path as two separate claims,
+	// and the router authorizes the FIRST while the handler writes under the
+	// SECOND. They agree by construction today, both being derived from the
+	// same argument in RequestUploadUrlForFileUpdate, and this is what keeps
+	// them agreeing: an access rule granting a key one branch must not admit a
+	// file written into another.
+	//
+	// Skipped when the claim is absent, which only happens for a token minted
+	// by a server older than it; those expire ten minutes after they were
+	// handed out, and the access rules already refuse them for a scoped key.
+	if branch != "" && !uploadPathIsInBranch(filePath, appId, branch) {
+		return "", "", "", errors.New("upload token path does not match its branch")
+	}
+	return filePath, appId, branch, nil
+}
+
+// uploadPathIsInBranch reports whether filePath sits under appId/branch. The
+// layout is rootPath/appId/branch/runtimeVersion/updateId/file, written by
+// RequestUploadUrlForFileUpdate, so the two segments appear in that order and
+// looking for them as a pair is enough: a bucket root that happens to repeat
+// the app id cannot fake the pair, since it would have to repeat the branch
+// right after it.
+func uploadPathIsInBranch(filePath, appId, branch string) bool {
+	return strings.Contains(
+		filepath.ToSlash(filePath),
+		"/"+appId+"/"+branch+"/",
+	)
+}
+
+// ResolveUploadTokenBranch returns the branch an upload token was minted for.
+// It is the router's read, before the handler validates the same token for
+// itself, and it goes through the SAME validation so there is one definition
+// of a valid upload token: signature, expiry, action and app subject. A
+// separate, laxer read here would have let any JWT_SECRET-signed token drive
+// the access decision on this route.
+//
+// A token minted by a server older than the branch claim yields "", which the
+// access rules refuse for a scoped key and ignore for an unscoped one.
+func ResolveUploadTokenBranch(token string) (string, error) {
+	_, _, branch, err := ValidateUploadTokenAndResolveFilePath(token)
+	return branch, err
 }
 
 func HandleUploadFile(filePath string, body multipart.File) (bool, error) {

@@ -22,9 +22,9 @@ const (
 	PermCertificateRead Permission = "certificate:read"
 	PermBranchCreate    Permission = "branch:create"
 	PermBranchDelete    Permission = "branch:delete"
-	// PermBranchProtect toggles branch protection on and off. Deliberately
-	// separate from PermBranchDelete: protecting production is routine,
-	// deleting branches is not.
+	// PermBranchProtect toggles the deletion lock on a branch. Deliberately
+	// separate from PermBranchDelete: locking production against an accidental
+	// delete is routine, deleting branches is not.
 	PermBranchProtect     Permission = "branch:protect"
 	PermChannelCreate     Permission = "channel:create"
 	PermChannelDelete     Permission = "channel:delete"
@@ -38,8 +38,7 @@ const (
 	// percentage of a single update or revert it.
 	PermUpdateRolloutManage Permission = "update-rollout:manage"
 	// PermApiKeysManage mints and revokes the app's publishing tokens and
-	// edits their enterprise restrictions (IP allowlists, protected-branch
-	// access).
+	// edits what they are allowed to do (branch access rules, IP allowlists).
 	PermApiKeysManage Permission = "apikeys:manage"
 	// PermIdentityManage edits the device-identity metadata allowlist (the
 	// dashboard "Identity" section): which metadata keys are accepted and

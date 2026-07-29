@@ -5,6 +5,7 @@ import (
 	"expo-open-ota/config"
 	"expo-open-ota/ee/apikeyrestrictions"
 	"expo-open-ota/ee/audit"
+	"expo-open-ota/ee/branchprotection"
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/ee/licensing"
 	"expo-open-ota/ee/observe"
@@ -30,7 +31,9 @@ type AppContainer struct {
 	DashboardAuthService        *services.DashboardAuthService
 	CliAuthService              *services.CliAuthService
 	ApiKeyHandler               *dashhandlers.ApiKeyHandler
-	ApiKeyRestrictionHandler    *apikeyrestrictions.ApiKeyRestrictionHandler
+	ApiKeyAccessHandler         *apikeyrestrictions.ApiKeyAccessHandler
+	BranchProtectionHandler     *branchprotection.Handler
+	ApiKeyAccessService         *apikeyrestrictions.ApiKeyAccessService
 	AppHandler                  *dashhandlers.AppHandler
 	AppRepo                     services.AppRepository
 	BranchHandler               *dashhandlers.BranchHandler
@@ -93,7 +96,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var ssoRepo sso.SSORepository
 	// And again: per-key access restrictions and branch protection are an
 	// enterprise feature backed by the database.
-	var apiKeyRestrictionRepo apikeyrestrictions.ApiKeyRestrictionRepository
+	var apiKeyAccessRepo apikeyrestrictions.ApiKeyAccessRepository
+	// The branch deletion lock is enterprise and database-backed too.
+	var branchProtectionRepo branchprotection.Repository
 	// User roles and per-app grants (ee/rbac) live in the database too; nil
 	// keeps the whole feature on the community fallback.
 	var rbacRepo rbac.RBACRepository
@@ -166,7 +171,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
-		apiKeyRestrictionRepo = apikeyrestrictions.NewPostgresApiKeyRestrictionStore(dbEngine)
+		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyRestrictionStore(dbEngine)
+		branchProtectionRepo = branchprotection.NewPostgresStore(dbEngine)
 		rbacRepo = rbac.NewPostgresRBACStore(dbEngine)
 		auditRepo = audit.NewPostgresAuditStore(dbEngine)
 		branchRepo = store.NewPostgresBranchStore(dbEngine)
@@ -262,7 +268,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// than at their next boot.
 	licenseService.StartSync(ctx, 30*time.Second)
 
-	apiKeyRestrictionService := apikeyrestrictions.NewApiKeyRestrictionService(apiKeyRestrictionRepo)
+	apiKeyAccessService := apikeyrestrictions.NewApiKeyAccessService(apiKeyAccessRepo)
+	branchProtectionService := branchprotection.NewService(branchProtectionRepo)
 	// The audit recorder is handed to every emitting surface below; it
 	// no-ops without a control plane and a currently valid license, so the
 	// call sites stay unconditional.
@@ -276,7 +283,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		log.Fatalf("🚨 [AUDIT] %v", err)
 	}
 	auditService.StartRetentionPurgeFromEnv(ctx)
-	apiKeyRestrictionService.SetOnAuditEvent(auditService.Record)
+	apiKeyAccessService.SetOnAuditEvent(auditService.Record)
+	branchProtectionService.SetOnAuditEvent(auditService.Record)
 	rbacService := rbac.NewRBACService(rbacRepo, userRepo)
 	rbacService.SetOnAuditEvent(auditService.Record)
 	// The community list handlers (apps, settings) receive this method as
@@ -286,7 +294,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	dashboardAuthService := services.NewDashboardAuthService(userRepo, refreshTokenRepo)
 	// The restriction service doubles as the CLI access policy: every CLI
 	// request runs through its enforcement after authenticating.
-	cliAuthService := services.NewCliAuthService(authRepo, apiKeyRestrictionService)
+	cliAuthService := services.NewCliAuthService(authRepo)
 	// Only gates the audit actor's key-name lookup: no collection, no lookup.
 	cliAuthService.SetAuditActive(auditService.Enabled)
 	cliAuthService.SetOnAuditEvent(auditService.Record)
@@ -324,7 +332,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		DashboardAuthService:        dashboardAuthService,
 		CliAuthService:              cliAuthService,
 		ApiKeyHandler:               dashhandlers.NewApiKeyHandler(cliAuthService),
-		ApiKeyRestrictionHandler:    apikeyrestrictions.NewApiKeyRestrictionHandler(apiKeyRestrictionService),
+		ApiKeyAccessHandler:         apikeyrestrictions.NewApiKeyAccessHandler(apiKeyAccessService),
+		ApiKeyAccessService:         apiKeyAccessService,
+		BranchProtectionHandler:     branchprotection.NewHandler(branchProtectionService),
 		AppHandler:                  dashhandlers.NewAppHandler(appService, visibleApps),
 		AppRepo:                     appRepo,
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),

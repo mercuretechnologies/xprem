@@ -117,7 +117,8 @@ export type BranchRecord = {
   branchId: string;
   releaseChannel?: string | null;
   createdAt: string | null;
-  // Enterprise branch protection; always false in stateless mode.
+  // A deletion lock and nothing else: a protected branch refuses to be
+  // deleted. Always false in stateless mode.
   protected: boolean;
   currentUpdate?: BranchUpdateState | null;
 };
@@ -596,15 +597,27 @@ export type CreateApiKeyResponse = {
   apiKey: string;
 };
 
-// Enterprise per-token access restrictions (/apiKeys/restrictions,
-// control-plane only). A token absent from the list is in the default state:
-// no access to protected branches and no IP allowlist. Empty allowedIps means
-// the token can be used from any source address.
-export type ApiKeyRestrictionsRecord = {
+// What one API token is allowed to do (/apiKeys/access, control-plane only).
+//
+// An empty branchRules means the token reaches EVERY branch, which is the
+// default of a fresh token and the only state a community deployment sees.
+// Empty allowedIps means it can be used from any source address.
+export type ApiKeyAccessRecord = {
   apiKeyId: string;
-  canAccessProtectedBranches: boolean;
+  allowBranchCreation: boolean;
+  branchRules: BranchRuleRecord[];
   allowedIps: string[];
 };
+
+// One rule: a branch name or a "*" pattern, and what the token may do there.
+// Both writes imply read on the server, so a rule granting publish also grants
+// the reads eoas performs before publishing.
+export type BranchRuleRecord = {
+  pattern: string;
+  actions: BranchRuleAction[];
+};
+
+export type BranchRuleAction = 'read' | 'publish' | 'rollback';
 
 // A dashboard user account. `id` is empty in stateless mode, where the only
 // account comes from ADMIN_EMAIL and is not a database row. `lastConnectedAt`
@@ -1185,26 +1198,6 @@ export class ApiClient {
     });
   }
 
-  public async getApiKeyRestrictions() {
-    return this.request<ApiKeyRestrictionsRecord[]>(`${this.appScope()}/apiKeys/restrictions`, {
-      method: 'GET',
-    });
-  }
-
-  public async setApiKeyRestrictions(
-    apiKeyId: string,
-    restrictions: { canAccessProtectedBranches: boolean; allowedIps: string[] }
-  ) {
-    return this.request<void>(
-      `${this.appScope()}/apiKeys/${encodeURIComponent(apiKeyId)}/restrictions`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(restrictions),
-      }
-    );
-  }
-
   public async setBranchProtection(branchName: string, isProtected: boolean) {
     return this.request<void>(
       `${this.appScope()}/branches/${encodeURIComponent(branchName)}/protection`,
@@ -1214,6 +1207,30 @@ export class ApiClient {
         body: JSON.stringify({ protected: isProtected }),
       }
     );
+  }
+
+  public async getApiKeyAccess() {
+    return this.request<ApiKeyAccessRecord[]>(`${this.appScope()}/apiKeys/access`, {
+      method: 'GET',
+    });
+  }
+
+  // The whole access of a token is replaced at once, so every field has to be
+  // sent every time: an omitted branchRules would not mean "leave them alone",
+  // it would clear the list, which the server reads as "every branch".
+  public async setApiKeyAccess(
+    apiKeyId: string,
+    access: {
+      allowBranchCreation: boolean;
+      branchRules: BranchRuleRecord[];
+      allowedIps: string[];
+    }
+  ) {
+    return this.request<void>(`${this.appScope()}/apiKeys/${encodeURIComponent(apiKeyId)}/access`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(access),
+    });
   }
 
   // The one route that answers something other than JSON.

@@ -124,6 +124,25 @@ func (q *Queries) ApplyIdentityValueStats(ctx context.Context, arg ApplyIdentity
 	return err
 }
 
+const branchExists = `-- name: BranchExists :one
+SELECT EXISTS (SELECT 1 FROM branches WHERE app_id = $1 AND name = $2)
+`
+
+type BranchExistsParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+// Asked before a publish, and only for the keys an admin took branch creation
+// away from: publishing to a branch that is not there yet is how the CLI
+// creates one.
+func (q *Queries) BranchExists(ctx context.Context, arg BranchExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, branchExists, arg.AppID, arg.Name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const bumpUserSessionVersion = `-- name: BumpUserSessionVersion :execresult
 UPDATE users
 SET session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
@@ -439,6 +458,18 @@ func (q *Queries) CountUpdateFailures(ctx context.Context, arg CountUpdateFailur
 	return count, err
 }
 
+const deleteApiKeyBranchRules = `-- name: DeleteApiKeyBranchRules :exec
+DELETE FROM api_key_branch_rules WHERE api_key_id = $1
+`
+
+// The rules of one key are replaced wholesale, inside the same transaction as
+// UpdateApiKeyAccess: a partial write would leave a key granting something
+// nobody asked for.
+func (q *Queries) DeleteApiKeyBranchRules(ctx context.Context, apiKeyID int64) error {
+	_, err := q.db.Exec(ctx, deleteApiKeyBranchRules, apiKeyID)
+	return err
+}
+
 const deleteAppByID = `-- name: DeleteAppByID :execresult
 DELETE FROM apps
 WHERE id = $1
@@ -459,8 +490,8 @@ type DeleteBranchByNameParams struct {
 }
 
 // NOT protected: a protected branch cannot be deleted by anyone, admins
-// included — protection must be lifted first. The guard runs inside the
-// DELETE itself so a concurrent protect cannot race it; the store
+// included, and lifting the protection is the explicit step. The guard runs
+// inside the DELETE itself so a concurrent protect cannot race it; the store
 // disambiguates the 0-rows result into protected vs not-found.
 func (q *Queries) DeleteBranchByName(ctx context.Context, arg DeleteBranchByNameParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, deleteBranchByName, arg.Name, arg.AppID)
@@ -770,6 +801,103 @@ func (q *Queries) GetActiveRolloutUpdates(ctx context.Context, arg GetActiveRoll
 	return items, nil
 }
 
+const getApiKeyAccess = `-- name: GetApiKeyAccess :many
+
+SELECT k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+FROM api_keys k
+LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
+WHERE k.id = $1 AND k.revoked_at IS NULL
+`
+
+type GetApiKeyAccessRow struct {
+	AllowedIps          []netip.Prefix `json:"allowed_ips"`
+	AllowBranchCreation bool           `json:"allow_branch_creation"`
+	Pattern             *string        `json:"pattern"`
+	Actions             []string       `json:"actions"`
+}
+
+// The queries below back the Enterprise Edition per-key access restrictions
+// (ee/apikeyrestrictions). sqlc generates a single package for the whole
+// schema, so the EE feature's SQL lives here like the enterprise license
+// queries above.
+// Enforcement read for one authenticated key on the CLI request hot path: the
+// IP allow-list, the branch-creation flag and the branch rules in one round
+// trip. A key with no rule yields a single row with a NULL pattern, which is
+// the unrestricted default.
+//
+// revoked_at IS NULL is redundant with authentication, which already refuses a
+// revoked key, and it is here anyway: this is the last read before a publish is
+// authorised, so it costs nothing to make "zero rows" mean exactly what the
+// caller treats it as, a key that may no longer act.
+func (q *Queries) GetApiKeyAccess(ctx context.Context, id int64) ([]GetApiKeyAccessRow, error) {
+	rows, err := q.db.Query(ctx, getApiKeyAccess, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetApiKeyAccessRow
+	for rows.Next() {
+		var i GetApiKeyAccessRow
+		if err := rows.Scan(
+			&i.AllowedIps,
+			&i.AllowBranchCreation,
+			&i.Pattern,
+			&i.Actions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getApiKeyAccessByAppID = `-- name: GetApiKeyAccessByAppID :many
+SELECT k.id, k.allowed_ips, k.allow_branch_creation, r.pattern, r.actions
+FROM api_keys k
+LEFT JOIN api_key_branch_rules r ON r.api_key_id = k.id
+WHERE k.app_id = $1 AND k.revoked_at IS NULL
+ORDER BY k.id, r.id
+`
+
+type GetApiKeyAccessByAppIDRow struct {
+	ID                  int64          `json:"id"`
+	AllowedIps          []netip.Prefix `json:"allowed_ips"`
+	AllowBranchCreation bool           `json:"allow_branch_creation"`
+	Pattern             *string        `json:"pattern"`
+	Actions             []string       `json:"actions"`
+}
+
+// Same shape for the dashboard, over every live key of one app. Ordered so
+// the caller can fold consecutive rows into one key without a map.
+func (q *Queries) GetApiKeyAccessByAppID(ctx context.Context, appID pgtype.UUID) ([]GetApiKeyAccessByAppIDRow, error) {
+	rows, err := q.db.Query(ctx, getApiKeyAccessByAppID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetApiKeyAccessByAppIDRow
+	for rows.Next() {
+		var i GetApiKeyAccessByAppIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AllowedIps,
+			&i.AllowBranchCreation,
+			&i.Pattern,
+			&i.Actions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getApiKeyNameByID = `-- name: GetApiKeyNameByID :one
 SELECT name FROM api_keys
 WHERE id = $1 AND app_id = $2
@@ -786,62 +914,6 @@ func (q *Queries) GetApiKeyNameByID(ctx context.Context, arg GetApiKeyNameByIDPa
 	var name string
 	err := row.Scan(&name)
 	return name, err
-}
-
-const getApiKeyRestrictions = `-- name: GetApiKeyRestrictions :one
-
-SELECT allowed_ips, can_access_protected_branches
-FROM api_keys
-WHERE id = $1
-`
-
-type GetApiKeyRestrictionsRow struct {
-	AllowedIps                 []netip.Prefix `json:"allowed_ips"`
-	CanAccessProtectedBranches bool           `json:"can_access_protected_branches"`
-}
-
-// The queries below back the Enterprise Edition per-key access restrictions
-// (ee/apikeyrestrictions). sqlc generates a single package for the whole
-// schema, so the EE feature's SQL lives here like the enterprise license
-// queries above.
-// Enforcement read for one authenticated key on the CLI request hot path.
-func (q *Queries) GetApiKeyRestrictions(ctx context.Context, id int64) (GetApiKeyRestrictionsRow, error) {
-	row := q.db.QueryRow(ctx, getApiKeyRestrictions, id)
-	var i GetApiKeyRestrictionsRow
-	err := row.Scan(&i.AllowedIps, &i.CanAccessProtectedBranches)
-	return i, err
-}
-
-const getApiKeyRestrictionsByAppID = `-- name: GetApiKeyRestrictionsByAppID :many
-SELECT id, allowed_ips, can_access_protected_branches
-FROM api_keys
-WHERE app_id = $1 AND revoked_at IS NULL
-`
-
-type GetApiKeyRestrictionsByAppIDRow struct {
-	ID                         int64          `json:"id"`
-	AllowedIps                 []netip.Prefix `json:"allowed_ips"`
-	CanAccessProtectedBranches bool           `json:"can_access_protected_branches"`
-}
-
-func (q *Queries) GetApiKeyRestrictionsByAppID(ctx context.Context, appID pgtype.UUID) ([]GetApiKeyRestrictionsByAppIDRow, error) {
-	rows, err := q.db.Query(ctx, getApiKeyRestrictionsByAppID, appID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetApiKeyRestrictionsByAppIDRow
-	for rows.Next() {
-		var i GetApiKeyRestrictionsByAppIDRow
-		if err := rows.Scan(&i.ID, &i.AllowedIps, &i.CanAccessProtectedBranches); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const getApiKeysMetadataByAppID = `-- name: GetApiKeysMetadataByAppID :many
@@ -2429,6 +2501,22 @@ func (q *Queries) InsertApiKey(ctx context.Context, arg InsertApiKeyParams) (int
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertApiKeyBranchRule = `-- name: InsertApiKeyBranchRule :exec
+INSERT INTO api_key_branch_rules (api_key_id, pattern, actions)
+VALUES ($1, $2, $3)
+`
+
+type InsertApiKeyBranchRuleParams struct {
+	ApiKeyID int64    `json:"api_key_id"`
+	Pattern  string   `json:"pattern"`
+	Actions  []string `json:"actions"`
+}
+
+func (q *Queries) InsertApiKeyBranchRule(ctx context.Context, arg InsertApiKeyBranchRuleParams) error {
+	_, err := q.db.Exec(ctx, insertApiKeyBranchRule, arg.ApiKeyID, arg.Pattern, arg.Actions)
+	return err
 }
 
 const insertApp = `-- name: InsertApp :one
@@ -5067,23 +5155,23 @@ func (q *Queries) TouchUserLastConnectedAt(ctx context.Context, id pgtype.UUID) 
 	return err
 }
 
-const updateApiKeyRestrictions = `-- name: UpdateApiKeyRestrictions :execrows
+const updateApiKeyAccess = `-- name: UpdateApiKeyAccess :execrows
 UPDATE api_keys
-SET allowed_ips = $1, can_access_protected_branches = $2
+SET allowed_ips = $1, allow_branch_creation = $2
 WHERE id = $3 AND app_id = $4 AND revoked_at IS NULL
 `
 
-type UpdateApiKeyRestrictionsParams struct {
-	AllowedIps                 []netip.Prefix `json:"allowed_ips"`
-	CanAccessProtectedBranches bool           `json:"can_access_protected_branches"`
-	ID                         int64          `json:"id"`
-	AppID                      pgtype.UUID    `json:"app_id"`
+type UpdateApiKeyAccessParams struct {
+	AllowedIps          []netip.Prefix `json:"allowed_ips"`
+	AllowBranchCreation bool           `json:"allow_branch_creation"`
+	ID                  int64          `json:"id"`
+	AppID               pgtype.UUID    `json:"app_id"`
 }
 
-func (q *Queries) UpdateApiKeyRestrictions(ctx context.Context, arg UpdateApiKeyRestrictionsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateApiKeyRestrictions,
+func (q *Queries) UpdateApiKeyAccess(ctx context.Context, arg UpdateApiKeyAccessParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateApiKeyAccess,
 		arg.AllowedIps,
-		arg.CanAccessProtectedBranches,
+		arg.AllowBranchCreation,
 		arg.ID,
 		arg.AppID,
 	)

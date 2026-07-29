@@ -20,8 +20,8 @@ func (f *fakeAuditRecorder) Record(_ context.Context, event auditlog.Event) {
 	f.events = append(f.events, event)
 }
 
-func TestRestrictionChangesEmitAuditEvents(t *testing.T) {
-	service := serviceWith(&fakeRestrictionRepo{}, true)
+func TestAccessChangesEmitAuditEvents(t *testing.T) {
+	service := serviceWith(&fakeAccessRepo{}, true)
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
 	ctx := services.WithPrincipal(context.Background(),
@@ -29,7 +29,9 @@ func TestRestrictionChangesEmitAuditEvents(t *testing.T) {
 
 	// Unmasked input on purpose: the entry must carry the normalized form the
 	// database persists and enforces, not what the admin typed.
-	require.NoError(t, service.SetRestrictions(ctx, "app-1", 42, false, []string{"10.0.0.5/8"}))
+	require.NoError(t, service.SetAccess(ctx, "app-1", 42, false,
+		[]BranchRule{{Pattern: "pr-*", Actions: []Action{ActionPublish, ActionRead}}},
+		[]string{"10.0.0.5/8"}))
 	require.Len(t, recorder.events, 1)
 	restricted := recorder.events[0]
 	assert.Equal(t, auditlog.ActionAPIKeyRestrictionsUpdated, restricted.Action)
@@ -38,25 +40,21 @@ func TestRestrictionChangesEmitAuditEvents(t *testing.T) {
 	// The entry names the key, like api_key.created/revoked.
 	assert.Equal(t, "ci-production", restricted.TargetDisplay)
 	assert.Equal(t, "app-1", restricted.AppID)
+	// Rules land in the form the dashboard shows, and in catalog order.
 	assert.Equal(t, map[string]any{
-		"can_access_protected_branches": false,
-		"allowed_cidrs":                 []string{"10.0.0.0/8"},
+		"branch_rules":          []string{"pr-*:read+publish"},
+		"allow_branch_creation": false,
+		"allowed_cidrs":         []string{"10.0.0.0/8"},
 	}, restricted.Metadata)
 
-	require.NoError(t, service.SetBranchProtection(ctx, "app-1", "main", true))
-	require.Len(t, recorder.events, 2)
-	protected := recorder.events[1]
-	assert.Equal(t, auditlog.ActionBranchProtectionUpdated, protected.Action)
-	assert.Equal(t, "main", protected.TargetID)
-	assert.Equal(t, map[string]any{"protected": true}, protected.Metadata)
 }
 
-func TestUnlicensedRestrictionChangesEmitNothing(t *testing.T) {
-	service := serviceWith(&fakeRestrictionRepo{}, false)
+func TestUnlicensedAccessChangesEmitNothing(t *testing.T) {
+	service := serviceWith(&fakeAccessRepo{}, false)
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
 
-	err := service.SetBranchProtection(context.Background(), "app-1", "main", true)
+	err := service.SetAccess(context.Background(), "app-1", 42, true, nil, nil)
 	require.ErrorIs(t, err, ErrRequiresValidLicense)
 	require.Empty(t, recorder.events)
 }

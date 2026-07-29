@@ -41,6 +41,8 @@ func (e *ErrBranchInActiveRollout) Error() string {
 	return fmt.Sprintf("cannot delete branch %q because it is serving an active rollout on the following channels: [%s]. Promote or revert these rollouts first.", e.BranchName, channelsList)
 }
 
+// ErrBranchProtected is the refusal of a delete, and only that: protection no
+// longer takes part in what an API key may publish.
 type ErrBranchProtected struct {
 	BranchName string
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"expo-open-ota/internal/auditlog"
+	"strconv"
 )
 
 // auditActorFromContext resolves the audit actor of the request: the
@@ -23,7 +24,11 @@ func auditActorFromContext(ctx context.Context) (auditlog.ActorType, string, str
 			// scope is the honest identity left.
 			display = "api key (app " + credential.AppID + ")"
 		}
-		return auditlog.ActorAPIKey, credential.KeyID, display
+		actorID := ""
+		if credential.KeyID != 0 {
+			actorID = strconv.FormatInt(credential.KeyID, 10)
+		}
+		return auditlog.ActorAPIKey, actorID, display
 	}
 	return "", "", ""
 }

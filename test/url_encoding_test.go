@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +26,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
 	sampleUpdatePath := filepath.Join(projectRoot, "test/test-updates/test-app-id/branch-4/1/1674170952")
 
-	u, _ := url.Parse("http://localhost:3000/requestUploadUrl/DO_NOT_USE")
+	u, _ := url.Parse("http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE")
 	q := u.Query()
 	q.Set("runtimeVersion", runtimeVersionWithPlus)
 	q.Set("platform", "android")
@@ -36,7 +35,6 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", u.String(), nil)
-	r = mux.SetURLVars(r, map[string]string{"APP_ID": "test-app-id", "BRANCH": "DO_NOT_USE"})
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
@@ -44,7 +42,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	require.NoError(t, err)
 	r.Body = io.NopCloser(bytes.NewReader(uploadRequestsInputJSON))
 
-	testContainer().UploadHandler.RequestUploadUrlHandler(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	assert.NotEmpty(t, w.Header().Get("expo-update-id"), "Expected non-empty update ID")
 
@@ -64,7 +62,7 @@ func TestRollbackWithEncodedPlusInRuntimeVersion(t *testing.T) {
 
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
 
-	u, _ := url.Parse("http://localhost:3000/rollback/DO_NOT_USE")
+	u, _ := url.Parse("http://localhost:3000/test-app-id/rollback/DO_NOT_USE")
 	q := u.Query()
 	q.Set("runtimeVersion", runtimeVersionWithPlus)
 	q.Set("platform", "ios")
@@ -73,10 +71,9 @@ func TestRollbackWithEncodedPlusInRuntimeVersion(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", u.String(), nil)
-	r = mux.SetURLVars(r, map[string]string{"APP_ID": "test-app-id", "BRANCH": "DO_NOT_USE"})
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 
-	testContainer().RollbackHandler.HandleRollback(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 
 	type Response struct {

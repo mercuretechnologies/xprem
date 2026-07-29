@@ -5,7 +5,6 @@ import (
 	"errors"
 	"expo-open-ota/config"
 	"expo-open-ota/internal/bucket"
-	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/validation"
 	"fmt"
@@ -88,14 +87,15 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		http.Error(w, "No branch provided", http.StatusBadRequest)
 		return
 	}
-	auth := helpers.GetAuth(r)
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, branchName, helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
+	// Authenticated AND authorized by the router, which declared this route a
+	// publish on its {BRANCH}. This asserts the handler is acting on the
+	// branch that was actually judged: both read the same path variable
+	// today, and this is what keeps them equal tomorrow.
+	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
+		log.Printf("[RequestID: %s] Branch %s was not the one authorized for this credential", requestID, branchName)
+		RenderCliAuthError(w, services.ErrCliAccessDenied)
 		return
 	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
 	runtimeVersion := r.URL.Query().Get("runtimeVersion")
 	if runtimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
@@ -116,7 +116,7 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		RuntimeVersion: runtimeVersion,
 		UpdateID:       updateId,
 	}
-	err = h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
+	err := h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, services.ErrUnauthorized) {
 			RenderCliAuthError(w, err)
@@ -158,17 +158,6 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 	requestID := uuid.New().String()
 	appId := mux.Vars(r)["APP_ID"]
 
-	auth := helpers.GetAuth(r)
-	// No branch here: the signed upload token already binds the file path to
-	// the branch that went through RequestUploadUrlHandler's branch check.
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, "", helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
-		return
-	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
-
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		log.Printf("[RequestID: %s] No token provided", requestID)
@@ -176,12 +165,17 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		return
 	}
 
-	filePath, tokenAppId, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
+	filePath, tokenAppId, _, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error validating upload token: %v", requestID, err)
 		http.Error(w, "Error validating upload token", http.StatusBadRequest)
 		return
 	}
+	// No RequireAuthorizedBranch here, unlike the four handlers that take a
+	// {BRANCH} from their path: this route names no branch, the router judged
+	// the one this token claims, and ValidateUploadTokenAndResolveFilePath is
+	// what guarantees filePath lies inside that same branch. Asserting the
+	// branch claim against itself here would prove nothing.
 
 	fileName := filepath.Base(filePath)
 	file, _, err := r.FormFile(fileName)
@@ -236,14 +230,15 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	auth := helpers.GetAuth(r)
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, branchName, helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
+	// Authenticated AND authorized by the router, which declared this route a
+	// publish on its {BRANCH}. This asserts the handler is acting on the
+	// branch that was actually judged: both read the same path variable
+	// today, and this is what keeps them equal tomorrow.
+	if !services.RequireAuthorizedBranch(r.Context(), branchName) {
+		log.Printf("[RequestID: %s] Branch %s was not the one authorized for this credential", requestID, branchName)
+		RenderCliAuthError(w, services.ErrCliAccessDenied)
 		return
 	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
 
 	platform := r.URL.Query().Get("platform")
 	if platform != "" && (platform != "ios" && platform != "android") {

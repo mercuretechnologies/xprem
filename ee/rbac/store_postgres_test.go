@@ -91,11 +91,11 @@ func TestRoleCRUDRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, role.Name, fetched.Name)
 
-	require.NoError(t, rbacStore.UpdateRole(ctx, role.ID, role.Name+" v2", []Permission{PermBranchProtect}))
+	require.NoError(t, rbacStore.UpdateRole(ctx, role.ID, role.Name+" v2", []Permission{PermBranchDelete}))
 	fetched, err = rbacStore.GetRoleByID(ctx, role.ID)
 	require.NoError(t, err)
 	require.Equal(t, role.Name+" v2", fetched.Name)
-	require.Equal(t, []Permission{PermBranchProtect}, fetched.Permissions)
+	require.Equal(t, []Permission{PermBranchDelete}, fetched.Permissions)
 
 	require.NoError(t, rbacStore.DeleteRole(ctx, role.ID))
 	require.ErrorIs(t, rbacStore.DeleteRole(ctx, role.ID), ErrRoleNotFound)
@@ -114,7 +114,7 @@ func TestReplaceUserGrantsRoundtrip(t *testing.T) {
 	role, err := rbacStore.InsertRole(ctx, Role{
 		ID:          uuid.NewString(),
 		Name:        "Ops " + uuid.NewString()[:8],
-		Permissions: []Permission{PermBranchProtect},
+		Permissions: []Permission{PermBranchDelete},
 	})
 	require.NoError(t, err)
 
@@ -135,7 +135,7 @@ func TestReplaceUserGrantsRoundtrip(t *testing.T) {
 	require.Equal(t, role.ID, *granted.RoleID)
 	require.NotNil(t, granted.RoleName)
 	require.Equal(t, role.Name, *granted.RoleName)
-	require.Equal(t, []Permission{PermBranchProtect}, granted.RolePermissions)
+	require.Equal(t, []Permission{PermBranchDelete}, granted.RolePermissions)
 	require.Equal(t, []Permission{PermCertificateRead}, granted.ExtraPermissions)
 	require.Nil(t, byApp[appTwo].RoleID, "a role-less grant keeps a nil role")
 
@@ -143,7 +143,7 @@ func TestReplaceUserGrantsRoundtrip(t *testing.T) {
 	enforcement, err := rbacStore.GetUserAppGrant(ctx, userID, appOne)
 	require.NoError(t, err)
 	require.NotNil(t, enforcement)
-	require.True(t, enforcement.Has(PermBranchProtect))
+	require.True(t, enforcement.Has(PermBranchDelete))
 	require.True(t, enforcement.Has(PermCertificateRead))
 	require.False(t, enforcement.Has(PermAppDelete))
 

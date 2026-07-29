@@ -37,7 +37,7 @@ func runDashboardOnly(t *testing.T, stamp func(*http.Request) *http.Request) *ht
 func TestDashboardOnlyRefusesAValidatedCliCredential(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request {
 		return r.WithContext(services.WithCliAuth(r.Context(), services.CliCredential{
-			AppID: "test-app-id", KeyID: "key-1", KeyName: "ci",
+			AppID: "test-app-id", KeyID: 1, KeyName: "ci",
 		}))
 	})
 	if recorder.Code != http.StatusForbidden {
@@ -56,7 +56,7 @@ func TestDashboardOnlyRefusesACliCredentialEvenBesideAPrincipal(t *testing.T) {
 			Email: "admin@expo-open-ota.dev", IsAdmin: true,
 		})
 		return r.WithContext(services.WithCliAuth(ctx, services.CliCredential{
-			AppID: "test-app-id", KeyID: "key-1", KeyName: "ci",
+			AppID: "test-app-id", KeyID: 1, KeyName: "ci",
 		}))
 	})
 	if recorder.Code != http.StatusForbidden {

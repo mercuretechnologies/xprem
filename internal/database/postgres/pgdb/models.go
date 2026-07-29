@@ -11,16 +11,24 @@ import (
 )
 
 type ApiKey struct {
-	ID                         int64              `json:"id"`
-	AppID                      pgtype.UUID        `json:"app_id"`
-	Name                       string             `json:"name"`
-	Hint                       string             `json:"hint"`
-	HashedKey                  string             `json:"hashed_key"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt                 pgtype.Timestamptz `json:"last_used_at"`
-	RevokedAt                  pgtype.Timestamptz `json:"revoked_at"`
-	AllowedIps                 []netip.Prefix     `json:"allowed_ips"`
-	CanAccessProtectedBranches bool               `json:"can_access_protected_branches"`
+	ID                  int64              `json:"id"`
+	AppID               pgtype.UUID        `json:"app_id"`
+	Name                string             `json:"name"`
+	Hint                string             `json:"hint"`
+	HashedKey           string             `json:"hashed_key"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt          pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt           pgtype.Timestamptz `json:"revoked_at"`
+	AllowedIps          []netip.Prefix     `json:"allowed_ips"`
+	AllowBranchCreation bool               `json:"allow_branch_creation"`
+}
+
+type ApiKeyBranchRule struct {
+	ID        int64              `json:"id"`
+	ApiKeyID  int64              `json:"api_key_id"`
+	Pattern   string             `json:"pattern"`
+	Actions   []string           `json:"actions"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type App struct {

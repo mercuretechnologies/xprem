@@ -150,7 +150,7 @@ func TestWritesRequireLicenseButReadsStayOpen(t *testing.T) {
 	repo.roles["role-1"] = Role{ID: "role-1", Name: "Release manager"}
 	service := unlicensedService(repo)
 
-	_, err := service.CreateRole(ctx, "Ops", []Permission{PermBranchProtect})
+	_, err := service.CreateRole(ctx, "Ops", []Permission{PermBranchDelete})
 	require.ErrorIs(t, err, ErrRequiresValidLicense)
 	require.ErrorIs(t, service.UpdateRole(ctx, "role-1", "Ops", nil), ErrRequiresValidLicense)
 	require.ErrorIs(t, service.DeleteRole(ctx, "role-1"), ErrRequiresValidLicense)

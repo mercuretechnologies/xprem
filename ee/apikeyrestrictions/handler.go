@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"expo-open-ota/internal/cache"
-	"expo-open-ota/internal/dashboard"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/validation"
 	"expo-open-ota/internal/version"
 	"fmt"
 	"net/http"
@@ -21,62 +21,89 @@ import (
 // Same shape as the internal/dashboard cache keys (appId included so entries
 // from one app are never served to another); it lives here because the
 // feature is enterprise code.
-func computeGetApiKeyRestrictionsCacheKey(appId string) string {
-	return fmt.Sprintf("dashboard:%s:%s:request:getApiKeyRestrictions", version.Version, appId)
+func computeGetApiKeyAccessCacheKey(appId string) string {
+	return fmt.Sprintf("dashboard:%s:%s:request:getApiKeyAccess", version.Version, appId)
 }
 
-type ApiKeyRestrictionHandler struct {
-	service *ApiKeyRestrictionService
+// maxAccessBodyBytes bounds the access payload. A key holds at most
+// maxBranchRules rules of at most 128 characters, so this is generous by two
+// orders of magnitude and only there to stop an unbounded read; the real limit
+// is enforced by NormalizeBranchRules, which needs the whole array in memory
+// to check it.
+const maxAccessBodyBytes = 64 << 10
+
+type ApiKeyAccessHandler struct {
+	service *ApiKeyAccessService
 }
 
-func NewApiKeyRestrictionHandler(service *ApiKeyRestrictionService) *ApiKeyRestrictionHandler {
-	return &ApiKeyRestrictionHandler{service: service}
+func NewApiKeyAccessHandler(service *ApiKeyAccessService) *ApiKeyAccessHandler {
+	return &ApiKeyAccessHandler{service: service}
 }
 
-// ApiKeyRestrictionsResponse mirrors the dashboard's id conventions: ids are
-// strings, like ApiKeyMetadata.ID.
-type ApiKeyRestrictionsResponse struct {
-	ApiKeyID                   string   `json:"apiKeyId"`
-	CanAccessProtectedBranches bool     `json:"canAccessProtectedBranches"`
-	AllowedIps                 []string `json:"allowedIps"`
+// branchRulePayload is one rule on the wire. Actions are strings rather than
+// a typed enum so an older dashboard sending an unknown one gets a 400 naming
+// it, instead of a decoding error naming nothing.
+type branchRulePayload struct {
+	Pattern string   `json:"pattern"`
+	Actions []string `json:"actions"`
 }
 
-func renderApiKeyRestrictionServiceError(w http.ResponseWriter, err error) {
+// ApiKeyAccessResponse mirrors the dashboard's id conventions: ids are
+// strings, like ApiKeyMetadata.ID. An empty branchRules means the key reaches
+// every branch.
+type ApiKeyAccessResponse struct {
+	ApiKeyID            string              `json:"apiKeyId"`
+	AllowBranchCreation bool                `json:"allowBranchCreation"`
+	BranchRules         []branchRulePayload `json:"branchRules"`
+	AllowedIps          []string            `json:"allowedIps"`
+}
+
+func renderApiKeyAccessServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrRequiresControlPlane), errors.Is(err, ErrInvalidCidr):
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrRequiresValidLicense):
 		handlers.RenderError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, ErrApiKeyNotFound), errors.Is(err, ErrBranchNotFound):
+	case errors.Is(err, ErrApiKeyNotFound):
 		handlers.RenderError(w, http.StatusNotFound, err.Error())
+	// A malformed rule is caller input, like a malformed CIDR above.
+	case validation.IsValidationError(err):
+		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 	default:
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 	}
 }
 
-func (h *ApiKeyRestrictionHandler) GetApiKeyRestrictionsHandler(w http.ResponseWriter, r *http.Request) {
+func (h *ApiKeyAccessHandler) GetApiKeyAccessHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	requestCache := cache.GetCache()
-	cacheKey := computeGetApiKeyRestrictionsCacheKey(appId)
+	cacheKey := computeGetApiKeyAccessCacheKey(appId)
 	if cachedValue := requestCache.Get(cacheKey); cachedValue != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(cachedValue))
 		return
 	}
-	restrictions, err := h.service.GetRestrictionsByApp(r.Context(), appId)
+	accesses, err := h.service.GetAccessByApp(r.Context(), appId)
 	if err != nil {
-		renderApiKeyRestrictionServiceError(w, err)
+		renderApiKeyAccessServiceError(w, err)
 		return
 	}
-	response := make([]ApiKeyRestrictionsResponse, 0, len(restrictions))
-	for _, restriction := range restrictions {
-		entry := ApiKeyRestrictionsResponse{
-			ApiKeyID:                   strconv.FormatInt(restriction.ApiKeyID, 10),
-			CanAccessProtectedBranches: restriction.CanAccessProtectedBranches,
-			AllowedIps:                 make([]string, 0, len(restriction.AllowedIps)),
+	response := make([]ApiKeyAccessResponse, 0, len(accesses))
+	for _, access := range accesses {
+		entry := ApiKeyAccessResponse{
+			ApiKeyID:            strconv.FormatInt(access.ApiKeyID, 10),
+			AllowBranchCreation: access.AllowBranchCreation,
+			BranchRules:         make([]branchRulePayload, 0, len(access.BranchRules)),
+			AllowedIps:          make([]string, 0, len(access.AllowedIps)),
 		}
-		for _, prefix := range restriction.AllowedIps {
+		for _, rule := range access.BranchRules {
+			entry.BranchRules = append(entry.BranchRules, branchRulePayload{
+				Pattern: rule.Pattern,
+				Actions: fromActions(rule.Actions),
+			})
+		}
+		for _, prefix := range access.AllowedIps {
 			entry.AllowedIps = append(entry.AllowedIps, prefix.String())
 		}
 		response = append(response, entry)
@@ -90,7 +117,7 @@ func (h *ApiKeyRestrictionHandler) GetApiKeyRestrictionsHandler(w http.ResponseW
 	requestCache.Set(cacheKey, string(marshaledResponse), &ttl)
 }
 
-func (h *ApiKeyRestrictionHandler) SetApiKeyRestrictionsHandler(w http.ResponseWriter, r *http.Request) {
+func (h *ApiKeyAccessHandler) SetApiKeyAccessHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	apiKeyID, err := strconv.ParseInt(vars["API_KEY_ID"], 10, 64)
@@ -99,44 +126,27 @@ func (h *ApiKeyRestrictionHandler) SetApiKeyRestrictionsHandler(w http.ResponseW
 		return
 	}
 	var req struct {
-		CanAccessProtectedBranches bool     `json:"canAccessProtectedBranches"`
-		AllowedIps                 []string `json:"allowedIps"`
+		AllowBranchCreation bool                `json:"allowBranchCreation"`
+		BranchRules         []branchRulePayload `json:"branchRules"`
+		AllowedIps          []string            `json:"allowedIps"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAccessBodyBytes)).Decode(&req); err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if err := h.service.SetRestrictions(r.Context(), appId, apiKeyID, req.CanAccessProtectedBranches, req.AllowedIps); err != nil {
-		renderApiKeyRestrictionServiceError(w, err)
+	rules := make([]BranchRule, 0, len(req.BranchRules))
+	for _, payload := range req.BranchRules {
+		actions := make([]Action, 0, len(payload.Actions))
+		for _, action := range payload.Actions {
+			actions = append(actions, Action(action))
+		}
+		rules = append(rules, BranchRule{Pattern: payload.Pattern, Actions: actions})
+	}
+	if err := h.service.SetAccess(r.Context(), appId, apiKeyID, req.AllowBranchCreation, rules, req.AllowedIps); err != nil {
+		renderApiKeyAccessServiceError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 
-	cache.GetCache().Delete(computeGetApiKeyRestrictionsCacheKey(appId))
-}
-
-func (h *ApiKeyRestrictionHandler) SetBranchProtectionHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	appId := vars["APP_ID"]
-	branchName := vars["BRANCH"]
-	if branchName == "" {
-		handlers.RenderError(w, http.StatusBadRequest, "No branch provided")
-		return
-	}
-	var req struct {
-		Protected bool `json:"protected"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		handlers.RenderError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-	if err := h.service.SetBranchProtection(r.Context(), appId, branchName, req.Protected); err != nil {
-		renderApiKeyRestrictionServiceError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-
-	// The dashboard's branch listing carries the protected flag, so its
-	// cached copy is stale now.
-	cache.GetCache().Delete(dashboard.ComputeGetBranchesCacheKey(appId))
+	cache.GetCache().Delete(computeGetApiKeyAccessCacheKey(appId))
 }
