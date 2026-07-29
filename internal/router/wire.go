@@ -19,6 +19,7 @@ import (
 	"expo-open-ota/internal/database/postgres/migrations"
 	"expo-open-ota/internal/handlers"
 	dashhandlers "expo-open-ota/internal/handlers/dashboard"
+	"expo-open-ota/internal/mcp"
 	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
@@ -44,6 +45,7 @@ type AppContainer struct {
 	RBACService                 *rbac.RBACService
 	RollbackHandler             *handlers.RollbackHandler
 	RolloutHandler              *dashhandlers.RolloutHandler
+	MCPHandler                  *mcp.MCPHandler
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
@@ -235,6 +237,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
+	mcpService := mcp.NewMCPService()
+	mcpHandler := mcp.NewMCPHandler(mcpService)
 
 	// Shared across handlers; with Redis configured, also across replicas.
 	rateLimiter := ratelimit.New(cache.GetCache())
@@ -269,6 +273,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory, stateHistory),
 		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
+		MCPHandler:                  mcpHandler,
 	}
 
 	if checkInRecorder != nil {

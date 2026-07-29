@@ -32,6 +32,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 
 	// No authentication below this point.
 	registerInfraRoutes(r)
+	registerMCPRoutes(r, container)
 	registerPublishRoutes(r, container)
 	registerIngestRoutes(r, container)
 	registerClientRoutes(r, container)
