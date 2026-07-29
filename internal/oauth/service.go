@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"errors"
+	"expo-open-ota/config"
 	"expo-open-ota/internal/store"
 	"fmt"
 	"net/url"
@@ -26,6 +27,11 @@ type ClientRepository interface {
 	InsertOAuthClient(ctx context.Context, params store.InsertOAuthClientParameters) error
 }
 
+// UserRepository is the slice of the users table token verification needs.
+type UserRepository interface {
+	GetUserByID(ctx context.Context, id string) (store.User, error)
+}
+
 // Client is a registered OAuth client: a public client (no secret) pinned to
 // the redirect URIs it declared at registration.
 type Client struct {
@@ -36,10 +42,16 @@ type Client struct {
 
 type OAuthService struct {
 	clientRepo ClientRepository
+	userRepo   UserRepository
+	secret     string
 }
 
-func NewOAuthService(clientRepo ClientRepository) *OAuthService {
-	return &OAuthService{clientRepo: clientRepo}
+func NewOAuthService(clientRepo ClientRepository, userRepo UserRepository) *OAuthService {
+	return &OAuthService{
+		clientRepo: clientRepo,
+		userRepo:   userRepo,
+		secret:     config.GetEnv("JWT_SECRET"),
+	}
 }
 
 // RegisterClient validates the requested metadata and stores a new client.

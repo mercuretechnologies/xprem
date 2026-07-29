@@ -23,8 +23,9 @@ func newTestHandler(t *testing.T) (*OAuthHandler, *fakeClientRepo) {
 	t.Helper()
 	t.Setenv("BASE_URL", "https://ota.example.com")
 	repo := &fakeClientRepo{}
-	// A nil limiter allows everything; rate limiting has its own tests.
-	return NewOAuthHandler(NewOAuthService(repo), nil), repo
+	// A nil limiter allows everything; rate limiting has its own tests, and
+	// token verification (the userRepo) has its own in internal/middleware.
+	return NewOAuthHandler(NewOAuthService(repo, nil), nil), repo
 }
 
 func decodeJSON(t *testing.T, res *httptest.ResponseRecorder) map[string]interface{} {

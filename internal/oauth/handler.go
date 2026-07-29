@@ -50,10 +50,9 @@ func WithCORS(next http.HandlerFunc) http.HandlerFunc {
 // resource. Registered both path-inserted (/.well-known/...(/mcp) and at the
 // root, because non-conforming clients probe either.
 func (h *OAuthHandler) ProtectedResourceMetadataHandler(w http.ResponseWriter, r *http.Request) {
-	base := baseURL()
 	handlers.RenderJSON(w, http.StatusOK, map[string]interface{}{
-		"resource":                 base + "/mcp",
-		"authorization_servers":    []string{base},
+		"resource":                 ResourceURL(),
+		"authorization_servers":    []string{baseURL()},
 		"scopes_supported":         []string{ScopeMCP},
 		"bearer_methods_supported": []string{"header"},
 	})

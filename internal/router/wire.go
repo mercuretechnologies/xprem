@@ -48,6 +48,7 @@ type AppContainer struct {
 	RolloutHandler              *dashhandlers.RolloutHandler
 	MCPHandler                  *mcp.MCPHandler
 	OAuthHandler                *oauth.OAuthHandler
+	OAuthService                *oauth.OAuthService
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
@@ -247,9 +248,11 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// Shared across handlers; with Redis configured, also across replicas.
 	rateLimiter := ratelimit.New(cache.GetCache())
 
+	var oauthService *oauth.OAuthService
 	var oauthHandler *oauth.OAuthHandler
 	if oauthClientRepo != nil {
-		oauthHandler = oauth.NewOAuthHandler(oauth.NewOAuthService(oauthClientRepo), rateLimiter)
+		oauthService = oauth.NewOAuthService(oauthClientRepo, userRepo)
+		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 	}
 
 	container := &AppContainer{
@@ -284,6 +287,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
 		MCPHandler:                  mcpHandler,
 		OAuthHandler:                oauthHandler,
+		OAuthService:                oauthService,
 	}
 
 	if checkInRecorder != nil {
