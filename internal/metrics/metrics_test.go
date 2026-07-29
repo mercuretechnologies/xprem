@@ -21,7 +21,7 @@ func setupMetrics(t *testing.T) func() {
 	metrics.ResetMetricsForTest()
 	metrics.InitMetrics()
 	// Note: the in-memory cache (Sadd/Scard state) is NOT reset between
-	// tests — LocalCache.Clear() only resets the key/value map, not the
+	// tests, LocalCache.Clear() only resets the key/value map, not the
 	// set map. Tests that assert exact unique-user counts must therefore
 	// use identifier tuples (appId + branch + update + …) that are unique
 	// to that single test. See the isolation tests below for the pattern.
@@ -169,12 +169,12 @@ func TestGetTotalUpdateDownloadsByUpdate(t *testing.T) {
 }
 
 // Metrics for two different apps with identical branch/runtime/update must
-// not merge — before v2 the cache keys were only scoped by branch so two apps
+// not merge, before v2 the cache keys were only scoped by branch so two apps
 // with the same branch name would pollute each other's unique-user counts.
 //
 // The appIds here are intentionally unique to this test (not reused
 // elsewhere) because the in-memory cache's set state persists across tests
-// — using "app-1" would collide with whatever earlier tests left behind in
+// , using "app-1" would collide with whatever earlier tests left behind in
 // the seen-users set for that appId.
 func TestTrackActiveUser_IsolatedPerApp(t *testing.T) {
 	teardown := setupMetrics(t)
@@ -237,7 +237,7 @@ func TestPrometheusHandler(t *testing.T) {
 	if !strings.Contains(body, "update_downloads_total") {
 		t.Errorf("Expected update_downloads_total in metrics, got %s", body)
 	}
-	// Confirm the appId label is rendered in the exported format — protects
+	// Confirm the appId label is rendered in the exported format, protects
 	// against a future refactor that drops the label without updating tests.
 	if !strings.Contains(body, `appId="app-1"`) {
 		t.Errorf("Expected appId=\"app-1\" label in metrics output, got %s", body)

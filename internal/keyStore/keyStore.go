@@ -14,7 +14,7 @@ import (
 
 // GetPublicExpoKey returns the PEM-encoded Expo public signing key for the
 // given app, resolving it from the app's KeysConfig (local file, AWS Secrets
-// Manager, or inline b64). Returns "" on any read failure — callers that need
+// Manager, or inline b64). Returns "" on any read failure, callers that need
 // to differentiate "not configured" from "read error" should use
 // ReadExpoKey with the "public" selector.
 func GetPublicExpoKey(app config.AppConfig) string {
@@ -36,7 +36,7 @@ func GetPrivateExpoKey(app config.AppConfig) string {
 // surface as a signature rejection on every already-installed client. Binding
 // makes the unseal fail at the point of the mistake instead.
 //
-// The value is derived, never stored — it is rebuilt at unseal time from the
+// The value is derived, never stored, it is rebuilt at unseal time from the
 // app id of the row the blob was actually read from, which is what makes the
 // check meaningful. Changing this format invalidates every existing blob.
 func AppKeyAAD(appId string, public bool) []byte {
@@ -150,7 +150,7 @@ func GetPrivateCloudfrontKey() string {
 var cloudfrontSourceMismatchOnce sync.Once
 
 // warnCloudfrontSourceMismatch logs once when KEYS_STORAGE_TYPE selects an
-// empty CloudFront key source while another source is set — the exact
+// empty CloudFront key source while another source is set, the exact
 // misconfiguration that used to be silently masked by the old
 // first-source-wins behavior, and that now disables the CDN.
 func warnCloudfrontSourceMismatch(mode string, selectedEmpty, otherSet bool) {

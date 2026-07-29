@@ -39,7 +39,7 @@ func setup(t *testing.T) func() {
 // refactor; they are now methods on the container's handler structs, so tests
 // resolve them through here (e.g. testContainer().ExpoProtocolHandler.
 // HandleManifest). Built fresh per call so a test that mutates the bucket path
-// or app registry before invoking a handler sees its change — the bucket is a
+// or app registry before invoking a handler sees its change, the bucket is a
 // per-test singleton, so repeated calls reuse the same backend.
 func testContainer() *infrastructure.AppContainer {
 	container, _ := infrastructure.InitDependencies(context.Background())
@@ -97,7 +97,7 @@ func GlobalAfterEach(t *testing.T) {
 			t.Errorf("Error finding project root: %v", err)
 		}
 		// Clean both legacy path (./updates/DO_NOT_USE) and v2 multi-app path
-		// (./updates/test-app-id/DO_NOT_USE) — tests mix both depending on how
+		// (./updates/test-app-id/DO_NOT_USE), tests mix both depending on how
 		// they set LOCAL_BUCKET_BASE_PATH.
 		for _, updatesPath := range []string{
 			filepath.Join(projectRoot, "./updates/DO_NOT_USE"),

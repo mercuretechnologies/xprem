@@ -30,7 +30,7 @@ func setupAuditStore(t *testing.T) (*PostgresAuditStore, *pgxpool.Pool) {
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
-		t.Skip("TEST_DATABASE_URL not set — start a Postgres and set it to run the audit store tests")
+		t.Skip("TEST_DATABASE_URL not set, start a Postgres and set it to run the audit store tests")
 	}
 	// The seed migration fails fast on an empty database without the bootstrap pair.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")

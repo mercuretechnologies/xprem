@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Two distinct b64-encoded PEM stubs. Contents are not real keys — the point
+// Two distinct b64-encoded PEM stubs. Contents are not real keys, the point
 // of these tests is that each app's own KeysConfig drives key resolution, not
 // cryptographic behavior. decodeB64 decodes raw bytes, so any non-empty b64
 // round-trips cleanly here.
@@ -36,7 +36,7 @@ func envKeysApp(id, pubB64, privB64 string) config.AppConfig {
 }
 
 func TestGetPrivateExpoKey_IsolatedPerApp(t *testing.T) {
-	// Multi-app correctness property — two apps served by the same instance
+	// Multi-app correctness property, two apps served by the same instance
 	// must NOT sign with the same private key. A regression that resolved the
 	// wrong app's KeysConfig would silently cross-contaminate signatures
 	// between tenants.
@@ -61,7 +61,7 @@ func TestGetPublicExpoKey_IsolatedPerApp(t *testing.T) {
 
 func TestGetExpoKey_UnconfiguredKeysReturnEmpty(t *testing.T) {
 	// An app whose KeysConfig carries no material is treated as "no key
-	// available" rather than a crash — the handler layer already returns 404
+	// available" rather than a crash, the handler layer already returns 404
 	// for unknown apps before we get here, so returning "" keeps the key path
 	// defensive.
 	app := config.AppConfig{Id: "app-1", AccessToken: "t", Keys: config.KeysConfig{Mode: config.KeysModeEnvironment}}
@@ -115,7 +115,7 @@ func TestDatabaseKeys_RoundTripForOwnApp(t *testing.T) {
 
 // The reason the aad exists. All apps seal under one master key, so app 2's row
 // carrying app 1's blob would otherwise decrypt cleanly and sign app 2's
-// manifests with app 1's key — surfacing only as a signature rejection on every
+// manifests with app 1's key, surfacing only as a signature rejection on every
 // installed client. Binding turns it into a failed unseal at the point of use.
 func TestDatabaseKeys_BlobFromAnotherAppDoesNotOpen(t *testing.T) {
 	setTestMasterKey(t)
@@ -179,7 +179,7 @@ func writeTempPEM(t *testing.T, content string) string {
 
 func TestCloudfrontKey_LocalModeReadsFileAndIgnoresB64(t *testing.T) {
 	path := writeTempPEM(t, app1PEM)
-	// b64 of a DIFFERENT key is also set — the configured mode must win.
+	// b64 of a DIFFERENT key is also set, the configured mode must win.
 	setCloudfrontEnv(t, "local", "", app2PEMB64, path)
 
 	assert.Equal(t, app1PEM, GetPrivateCloudfrontKey(),
@@ -195,7 +195,7 @@ func TestCloudfrontKey_EnvironmentModeReadsB64AndIgnoresFile(t *testing.T) {
 }
 
 func TestCloudfrontKey_ModeSelectedSourceEmptyDoesNotFallBack(t *testing.T) {
-	// local mode with no PATH: the b64 leftover must NOT silently win —
+	// local mode with no PATH: the b64 leftover must NOT silently win -
 	// that was the old behavior this resolution replaces.
 	setCloudfrontEnv(t, "local", "", app2PEMB64, "")
 

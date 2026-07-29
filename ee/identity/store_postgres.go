@@ -26,9 +26,7 @@ func NewPostgresIdentityStore(engine *database.Engine) *PostgresIdentityStore {
 	return &PostgresIdentityStore{engine: engine}
 }
 
-// toPgUUID differs from store.ToPgUUID on purpose: identity ids come from the
-// unauthenticated wire, so a parse failure must surface as an error the caller
-// can act on, not as a zero UUID silently written to the database.
+// toPgUUID surfaces a parse failure as an error, never a zero UUID silently written to the database.
 func toPgUUID(id string) (pgtype.UUID, error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
@@ -78,9 +76,7 @@ func deviceFromRow(row pgdb.DeviceIdentity) (Device, error) {
 		OSName:          row.OsName,
 		OSVersion:       row.OsVersion,
 		CurrentUpdateID: optionalUUID(row.CurrentUpdateID),
-		// Recorded at check-in from the update the device reported, so every
-		// read of a device carries them, not just the inventory listing that
-		// used to join for them.
+		// Recorded at check-in from the update the device reported.
 		Branch:         row.BranchName,
 		RuntimeVersion: row.RuntimeVersion,
 		Platform:       row.Platform,
@@ -89,9 +85,7 @@ func deviceFromRow(row pgdb.DeviceIdentity) (Device, error) {
 	}, nil
 }
 
-// GetSchema returns the app's allowlist. An app with no declared keys gets an
-// empty schema, under which Sanitize drops everything: identity is opt-in per
-// app by declaring keys, there is no implicit passthrough.
+// GetSchema returns the app's allowlist; an app with no declared keys gets an empty schema.
 func (s *PostgresIdentityStore) GetSchema(ctx context.Context, appID string) (Schema, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -118,9 +112,8 @@ func (s *PostgresIdentityStore) UpsertSchemaKey(ctx context.Context, appID strin
 
 	var saved KeySpec
 	err = s.engine.WithTx(ctx, func(q *pgdb.Queries) error {
-		// The key-count cap runs in the same transaction as the insert so two
-		// concurrent declarations cannot both slip under the limit. Updating
-		// an already-declared key is always allowed, even at the cap.
+		// The cap check runs in the insert's transaction so two concurrent declarations
+		// cannot both slip under the limit.
 		existing, err := q.ListIdentitySchemaKeys(ctx, appUUID)
 		if err != nil {
 			return fmt.Errorf("listing identity schema: %w", err)
@@ -146,10 +139,8 @@ func (s *PostgresIdentityStore) UpsertSchemaKey(ctx context.Context, appID strin
 	return saved, nil
 }
 
-// DeleteSchemaKey removes a key from the allowlist and wipes its autocomplete
-// stats in the same transaction, so searchMetadata never suggests values of a
-// removed key. Values already merged into device metadata are left in place;
-// they stop being accepted and stop being suggested.
+// DeleteSchemaKey removes a key from the allowlist and wipes its autocomplete stats in the
+// same transaction. Values already merged into device metadata are left in place.
 func (s *PostgresIdentityStore) DeleteSchemaKey(ctx context.Context, appID string, key string) (bool, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -173,13 +164,9 @@ func (s *PostgresIdentityStore) DeleteSchemaKey(ctx context.Context, appID strin
 	return deleted, nil
 }
 
-// statOp is one pending change to identity_value_stats. Ops are executed in
-// deterministic (key, value) order across the whole transaction: increments
-// and decrements both take row locks held until commit, and Go map iteration
-// order is random, so unordered execution lets two identifies of DIFFERENT
-// devices that share stat rows (same tenant, same plan...) acquire those locks
-// in opposite orders and deadlock. Sorting by key alone is not enough: A
-// moving tenant acme->globex and B moving globex->acme would still cross.
+// statOp is one pending change to identity_value_stats, executed in deterministic
+// (key, value) order so two devices sharing a stat row cannot acquire its lock in
+// opposite orders and deadlock.
 type statOp struct {
 	key       string
 	value     string
@@ -194,12 +181,8 @@ const (
 	mutationUnset
 )
 
-// ApplySet runs one $set against the store: sanitize the raw wire metadata
-// against the allowlist, merge it into the device row (per-key merge, incoming
-// keys win), refresh geo when provided, and keep the per-value device counts
-// in sync. Everything happens in one transaction with the device row locked,
-// so concurrent identifies of the same install serialize and the counts never
-// drift from the merges that produced them.
+// ApplySet sanitizes raw wire metadata against the allowlist, merges it into the device row,
+// refreshes geo, and keeps the per-value device counts in sync, all in one transaction.
 func (s *PostgresIdentityStore) ApplySet(ctx context.Context, appID string, easClientID string, raw map[string]any, geo *Geo) (ApplyResult, error) {
 	return s.mutate(ctx, appID, easClientID, mutationSet, raw, nil, geo)
 }
@@ -211,28 +194,15 @@ func (s *PostgresIdentityStore) ApplySetOnce(ctx context.Context, appID string, 
 	return s.mutate(ctx, appID, easClientID, mutationSetOnce, raw, nil, geo)
 }
 
-// ApplyUnset removes keys from the device and moves the stat counts down.
-// Keys the device does not hold are ignored, which also bounds the work to
-// the (schema-capped) size of the device's metadata no matter how many keys
-// a hostile payload lists. Unset works even for keys since removed from the
-// allowlist: it is the cleanup path.
+// ApplyUnset removes keys from the device and moves the stat counts down. It works even
+// for keys since removed from the allowlist, since it is the cleanup path.
 func (s *PostgresIdentityStore) ApplyUnset(ctx context.Context, appID string, easClientID string, keys []string, geo *Geo) (ApplyResult, error) {
 	return s.mutate(ctx, appID, easClientID, mutationUnset, nil, keys, geo)
 }
 
-// applyStatOps settles a batch of per-value stat mutations inside the caller's
-// transaction, in TWO statements whatever the size of the batch. It used to be
-// three per key, executed one at a time: a hundred-key mutation cost three
-// hundred sequential round trips, with the transaction and its row locks held
-// for all of them, on the hottest path in the product.
-//
-// The sort survives the change and is still the point. It makes every writer
-// touch (key, value) rows in the same order, which is what keeps two devices
-// sharing a stat row (same tenant, same plan) from deadlocking, and it has to
-// hold across the WHOLE batch rather than within each direction: increments
-// and decrements therefore travel in one ordered statement rather than one
-// statement each. The decrement-first tie-break just keeps the order fully
-// deterministic.
+// applyStatOps settles a batch of per-value stat mutations in two statements regardless of
+// batch size. The sort makes every writer touch (key, value) rows in the same order across
+// the whole batch, which is what keeps two devices sharing a stat row from deadlocking.
 func applyStatOps(ctx context.Context, q *pgdb.Queries, appUUID pgtype.UUID, ops []statOp) error {
 	if len(ops) == 0 {
 		return nil
@@ -264,8 +234,7 @@ func applyStatOps(ctx context.Context, q *pgdb.Queries, appUUID pgtype.UUID, ops
 	}); err != nil {
 		return fmt.Errorf("applying value stats: %w", err)
 	}
-	// The rows the statement above floored at zero, swept in one pass over the
-	// pairs it touched: same rows, already locked by it, so no new ordering.
+	// Sweeps the rows the statement above floored at zero; same rows, already locked, no new ordering.
 	if err := q.DeleteZeroIdentityValueStats(ctx, pgdb.DeleteZeroIdentityValueStatsParams{
 		AppID: appUUID, Keys: keys, Values: values,
 	}); err != nil {
@@ -289,9 +258,7 @@ func (s *PostgresIdentityStore) mutate(ctx context.Context, appID string, easCli
 		var sanitized map[string]any
 		var dropped []string
 		if kind != mutationUnset {
-			// The schema read shares the transaction so a concurrent allowlist
-			// change cannot produce a merge mixing two versions of the schema.
-			// Unset skips it entirely: it bypasses the allowlist by design.
+			// Shares the transaction so a concurrent allowlist change cannot mix two schema versions.
 			schemaRows, err := q.ListIdentitySchemaKeys(ctx, appUUID)
 			if err != nil {
 				return fmt.Errorf("listing identity schema: %w", err)
@@ -342,8 +309,7 @@ func (s *PostgresIdentityStore) mutate(ctx context.Context, appID string, easCli
 				if !existed {
 					continue
 				}
-				// Also remove from previous so a duplicated key in the payload
-				// cannot decrement the same stat row twice.
+				// Also remove from previous so a duplicated key in the payload cannot double-decrement.
 				delete(previous, key)
 				delete(merged, key)
 				ops = append(ops, statOp{key: key, value: RenderValue(oldValue), decrement: true})
@@ -411,9 +377,7 @@ func (s *PostgresIdentityStore) GetDevice(ctx context.Context, appID string, eas
 	return &device, nil
 }
 
-// The fields of a DeviceQuery that need converting before they can be handed
-// to a query. The plain []string dimensions travel as they are, so they stay
-// at the call site rather than being copied through here.
+// convertedDeviceFilters holds the DeviceQuery fields that need converting before a query.
 type convertedDeviceFilters struct {
 	metadata      [][]byte
 	clientIDs     []pgtype.UUID
@@ -421,9 +385,8 @@ type convertedDeviceFilters struct {
 	publishGroups []pgtype.UUID
 }
 
-// Shared by the inventory page and the online count, which filter on exactly
-// the same dimensions: converting them in one place is what keeps the two
-// numbers answering the same question.
+// deviceFilterParams is shared by the inventory page and the online count so both filter
+// on exactly the same dimensions.
 func deviceFilterParams(query DeviceQuery) (convertedDeviceFilters, error) {
 	docs, err := query.Metadata.ContainmentDocs()
 	if err != nil {
@@ -449,10 +412,8 @@ func deviceFilterParams(query DeviceQuery) (convertedDeviceFilters, error) {
 	}, nil
 }
 
-// ListDevices returns one page of the device inventory, newest-seen first,
-// keyset-paginated. A nil cursor starts at the first page; the returned cursor
-// is nil on the last page. An optional filter narrows to installs whose
-// metadata contains the key/value (served by the GIN index).
+// ListDevices returns one page of the device inventory, newest-seen first, keyset-paginated.
+// A nil cursor starts at the first page; the returned cursor is nil on the last page.
 func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, query DeviceQuery, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -549,9 +510,8 @@ func (s *PostgresIdentityStore) CountOnlineDevices(ctx context.Context, appID st
 	return count, nil
 }
 
-// SearchMetadataValues is the autocomplete behind searchMetadata: top values
-// of one key ranked by device count, optionally narrowed by a substring. The
-// two arms are separate prepared statements on purpose (see queries.sql).
+// SearchMetadataValues returns top values of one key ranked by device count, optionally
+// narrowed by a substring.
 func (s *PostgresIdentityStore) SearchMetadataValues(ctx context.Context, appID string, key string, search string, limit int) ([]ValueCount, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -596,8 +556,7 @@ func (s *PostgresIdentityStore) SearchMetadataValues(ctx context.Context, appID 
 	return values, nil
 }
 
-// toPgUUIDs keeps the array predicates typed: an unparseable id is the
-// caller's mistake, not an empty result set.
+// toPgUUIDs surfaces an unparseable id as an error, not a silently empty result set.
 func toPgUUIDs(values []string) ([]pgtype.UUID, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -613,13 +572,8 @@ func toPgUUIDs(values []string) ([]pgtype.UUID, error) {
 	return parsed, nil
 }
 
-// maxHardwareTextRunes bounds the hardware strings before they reach the
-// registry. Model, OS name and OS version are unauthenticated client input on
-// both paths that write them (telemetry resource attributes and the manifest
-// check-in), the columns are unbounded TEXT, and the check-in debounce keys on
-// their fingerprint: an oversized value both fattens the row and makes every
-// batch look like a change worth writing. Metadata values are bounded for the
-// same reason, see Schema.Sanitize.
+// maxHardwareTextRunes bounds the hardware strings before they reach the registry, since
+// Model, OSName and OSVersion are unauthenticated client input into unbounded TEXT columns.
 const maxHardwareTextRunes = 128
 
 // boundHardwareText caps a hardware string at maxHardwareTextRunes.
@@ -630,9 +584,8 @@ func boundHardwareText(value string) string {
 	return value
 }
 
-// optionalText maps "not reported" onto SQL NULL. The registry columns are
-// COALESCE-written, so an empty string would blank a known value instead of
-// leaving it alone.
+// optionalText maps "not reported" onto SQL NULL, since the COALESCE-written registry
+// columns would otherwise blank a known value.
 func optionalText(value string) *string {
 	if value == "" {
 		return nil
@@ -641,15 +594,9 @@ func optionalText(value string) *string {
 	return &bounded
 }
 
-// TouchDevice is the universal device registration: EVERY check-in (manifest
-// poll, metrics batch, logs batch) lands here, identity ops only add the
-// metadata on top. The registry is UNCAPPED: the whole fleet is the
-// update-health source of truth, so a known device gets its last_seen bumped
-// (geo and current update opportunistically refreshed) and an unknown one is
-// simply registered. currentUpdateID nil means "this check-in does not know"
-// (a telemetry batch from the embedded bundle) and leaves the column alone.
-// Write rate is bounded upstream by the CheckInRecorder's debounce, which
-// lets state TRANSITIONS through immediately.
+// TouchDevice is the universal device registration: every check-in lands here, bumping
+// last_seen (and geo/current update) for a known device or registering a new one. A nil
+// current means this check-in does not know the update and leaves that column alone.
 func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, current *CurrentUpdate, device DeviceInfo) error {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -660,8 +607,7 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		return err
 	}
 	var currentUpdate pgtype.UUID // Valid:false = NULL = keep the known value
-	// Only read alongside a named update, and the queries ignore it otherwise;
-	// it still has to be a valid value because pgx binds every parameter.
+	// pgx binds every parameter, so observedAt still needs a valid value even when unused.
 	observedAt := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	if current != nil {
 		if currentUpdate, err = toPgUUID(current.ID); err != nil {
@@ -676,8 +622,6 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 		AppID: appUUID, EasClientID: clientUUID,
 		CurrentUpdateID: currentUpdate, ObservedAt: observedAt,
 	}
-	// nil, not "": the queries COALESCE on these, so an empty string would
-	// overwrite a known model with nothing on the next manifest poll.
 	touch.DeviceModel = optionalText(device.Model)
 	touch.OsName = optionalText(device.OSName)
 	touch.OsVersion = optionalText(device.OSVersion)
@@ -715,26 +659,16 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	if err != nil {
 		return fmt.Errorf("registering device: %w", err)
 	}
-	// Zero rows means the conflict arm refused this observation as older than
-	// the one on file. An observation the registry would not believe must not
-	// be allowed to close or re-open a failure either: a backlog flushed after
-	// the device already moved on would otherwise rewrite history that the
-	// state it was rejected against already contradicts.
+	// Zero rows means the conflict arm rejected this observation as older than the one on
+	// file; it must not be allowed to close or reopen a failure either.
 	if registered == 0 {
 		return nil
 	}
 	return s.resolveUpdateFailures(ctx, appUUID, clientUUID, currentUpdate, observedAt)
 }
 
-// resolveUpdateFailures closes the manifest failures this poll disproves: the
-// device is running an update it had reported as failed, or it has moved past
-// one onto a later release of the same lineage.
-//
-// Runs after the touch rather than before, and after the recorder has stored
-// this poll's failures, so a poll that carries both a current update and a
-// fresh failure leaves that failure open. Best effort by design: it is a
-// correction to a count on a dashboard, and a device whose manifest was served
-// must not be handed an error because a bookkeeping update failed.
+// resolveUpdateFailures closes the manifest failures this poll disproves: the device is
+// running an update it had reported as failed, or has moved past it. Best effort by design.
 func (s *PostgresIdentityStore) resolveUpdateFailures(
 	ctx context.Context,
 	appUUID, clientUUID, currentUpdate pgtype.UUID,
@@ -752,10 +686,7 @@ func (s *PostgresIdentityStore) resolveUpdateFailures(
 	}); err != nil {
 		log.Printf("identity: resolving update failures failed: %v", err)
 	}
-	// And the way back, for a device that met the same broken update again.
-	// Closing has to be reversible or it is a one-way door: an aborted rollout
-	// serves the failing release a second time, and the device that already
-	// went past it once would never be counted again.
+	// Reversible, for a device that meets the same broken update again after an aborted rollout.
 	if _, err := s.engine.ReopenDeviceUpdateFailures(ctx, pgdb.ReopenDeviceUpdateFailuresParams{
 		AppID:       appUUID,
 		EasClientID: clientUUID,
@@ -766,14 +697,9 @@ func (s *PostgresIdentityStore) resolveUpdateFailures(
 	return nil
 }
 
-// RecordUpdateFailures stores failures, one row per (device, update).
-// fatalError applies to every listed update whose error is still unrecorded:
-// the manifest client sends it once, on the poll where the freshly-crashed
-// update first appears, and the capture-once SQL keeps sticky re-sends from
-// blanking it. With several ids in one poll (rare) the error could stick to
-// an older failure whose capture was missed; acceptable, the crash FACT is
-// always exact. failureType is capture-once too: the first source to record
-// a (device, update) failure names it.
+// RecordUpdateFailures stores failures, one row per (device, update). fatalError and
+// failureType are capture-once: the first record of a (device, update) failure names them,
+// and sticky re-sends never overwrite it.
 func (s *PostgresIdentityStore) RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -856,27 +782,15 @@ func (s *PostgresIdentityStore) ResolveRuntimeFailure(ctx context.Context, appID
 	return nil
 }
 
-// UpdateHealth is one update's instant-T adoption and health, from the
-// registry alone: no ClickHouse required on the read path. DevicesOnUpdate
-// counts every device currently RUNNING the update. FaultyDevices is the size
-// of the set it failed on, and UpdateIssues / RuntimeIssues break that set down
-// by source (launch crash with rollback vs JS crash while running).
-//
-// The breakdown is NOT a partition: one device can report both a launch
-// rollback and a JS crash for the same update, so it appears in both counts and
-// UpdateIssues + RuntimeIssues can exceed FaultyDevices. Only FaultyDevices is
-// a device count that can be added to another device count.
-//
-// FailedStillOn is the overlap between the failure set and DevicesOnUpdate
-// (failed devices whose current update is still this one), which is what keeps
-// the two sets addable:
+// UpdateHealth is one update's instant-T adoption and health, from the registry alone.
+// DevicesOnUpdate counts devices currently running the update; FaultyDevices is the size
+// of the failure set, and UpdateIssues/RuntimeIssues break it down by cause but are NOT a
+// partition (a device can report both, so their sum can exceed FaultyDevices).
+// FailedStillOn is the overlap between the failure set and DevicesOnUpdate, keeping the two
+// addable:
 //
 //	attempts = DevicesOnUpdate + (FaultyDevices - FailedStillOn)
 //	healthy  = DevicesOnUpdate - FailedStillOn
-//
-// The ratio healthy/attempts is meaningful for the ACTIVE update: past
-// updates bleed successes to their successor while failures stay, so the
-// dashboard only scores the newest one.
 type UpdateHealth struct {
 	DevicesOnUpdate int64
 	FaultyDevices   int64
@@ -885,9 +799,7 @@ type UpdateHealth struct {
 	FailedStillOn   int64
 }
 
-// UpdateHealthByIDs returns health per update uuid; updates absent from the
-// map simply had no data (zero devices, zero failures). Non-UUID ids are
-// skipped: the caller feeds dashboard input.
+// UpdateHealthByIDs returns health per update uuid, skipping non-UUID ids.
 func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID string, updateIDs []string) (map[string]UpdateHealth, error) {
 	appUUID, err := toPgUUID(appID)
 	if err != nil {
@@ -903,12 +815,8 @@ func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID str
 	if len(ids) == 0 {
 		return health, nil
 	}
-	// Every id asked about gets an answer, including zero. The two queries
-	// below are GROUP BYs, so an update nobody runs and nobody failed on comes
-	// back from neither, and a caller reading a missing key cannot tell "no
-	// devices" from "not measured". On the updates feed those render as the
-	// same dash, which is the difference between "everyone left this version"
-	// and "we did not look".
+	// Every id asked about gets an entry, even zero, so a caller can't confuse "no data" with
+	// "not measured" (both queries below are GROUP BYs that answer nothing for an unused update).
 	for _, raw := range updateIDs {
 		if _, err := toPgUUID(raw); err == nil {
 			health[raw] = UpdateHealth{}

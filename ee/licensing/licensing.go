@@ -10,7 +10,7 @@
 //
 // The signature covers the literal string "key/" + the base64url dataset and
 // is verified against the Keygen account's Ed25519 verify key embedded below,
-// so validation works fully offline — no network calls, no phone home.
+// so validation works fully offline, no network calls, no phone home.
 package licensing
 
 import (

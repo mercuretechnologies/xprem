@@ -269,7 +269,7 @@ func GetSubjectForApp(appId string) string {
 // ValidateUploadTokenAndResolveFilePath decodes and verifies the JWT emitted
 // by RequestUploadUrlForFileUpdate. It returns the resolved filesystem path
 // plus the appId claim so the caller can confirm the token is scoped to the
-// same app as the URL — without that check, an attacker who obtained a leaked
+// same app as the URL, without that check, an attacker who obtained a leaked
 // token for AppA could PUT into AppB's bucket by hitting
 // /{AppB}/uploadLocalFile?token=<appA_token>.
 func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId string, branch string, err error) {

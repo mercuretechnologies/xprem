@@ -49,23 +49,23 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 	if err := validation.DisplayName("name", displayName); err != nil {
 		return "", err
 	}
-	// Apps are only ever created through the control plane — the bucket store
-	// rejects InsertApp — so creation always happens at runtime, from the
+	// Apps are only ever created through the control plane, the bucket store
+	// rejects InsertApp, so creation always happens at runtime, from the
 	// dashboard, which offers only database and aws-secrets-manager. Neither
 	// legacy mode can carry usable key material for a new app: local key paths
 	// would have to already exist on every replica and cannot be provisioned
 	// from the UI, and the apps table has no column for an inline b64 key, so an
 	// environment-mode app would persist nothing and fail at its first manifest
-	// signature — unrepairably, since UpdateApp only renames. Reject both up
+	// signature, unrepairably, since UpdateApp only renames. Reject both up
 	// front rather than let them fall through to a 201 and a broken app.
 	//
 	// This deliberately lives here and not in config.ValidateKeys: the infra->DB
 	// migration loads the legacy flat-env app (which may legitimately use local
-	// key files or env b64 keys) through that validator and must keep working —
+	// key files or env b64 keys) through that validator and must keep working -
 	// it seals such keys into mode=database instead.
 	if keysConfig.Mode == config.KeysModeLocal || keysConfig.Mode == config.KeysModeEnvironment {
 		return "", validation.Errorf("keysConfig.mode",
-			"%q is not supported when creating an app: it cannot be provisioned from the dashboard — use %q or %q",
+			"%q is not supported when creating an app: it cannot be provisioned from the dashboard, use %q or %q",
 			keysConfig.Mode, config.KeysModeDatabase, config.KeysModeAWSSM)
 	}
 	if err := config.ValidateKeys(&keysConfig, "keysConfig"); err != nil {
@@ -97,7 +97,7 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 			return "", fmt.Errorf("failed to generate application signing keys: %w", err)
 		}
 		// Sealed under the id minted above, which is also the id the row is
-		// inserted with — so the binding is checked at unseal against the row the
+		// inserted with, so the binding is checked at unseal against the row the
 		// blob was actually read from. See keyStore.AppKeyAAD.
 		sealedPublicKey, err := crypto.SealAESGCM([]byte(pubPEM), masterKeyBytes, keyStore.AppKeyAAD(appId.String(), true))
 		if err != nil {
@@ -173,7 +173,7 @@ func (s *AppService) GetAppByID(ctx context.Context, appId string) (config.AppCo
 		app.Keys.PublicPath = helpers.MaskKeyPath(app.Keys.PublicPath)
 	}
 	if app.Name == "" {
-		// The stateless flat env carries no display name — resolve it from
+		// The stateless flat env carries no display name, resolve it from
 		// Expo for the dashboard. Best-effort and cached; "" keeps the
 		// id-as-label fallback. Lives here rather than in the store so the
 		// device-facing OTA path never pays the Expo round-trip.

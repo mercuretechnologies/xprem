@@ -62,11 +62,11 @@ type AppContainer struct {
 // manifest and asset requests that carry no expo-app-id header.
 func logLegacyAppIdFallback() {
 	if appId := config.LegacyFallbackAppId(); appId != "" {
-		log.Printf("🔁 [LEGACY] app id fallback ACTIVE for %s — v1 clients sending no expo-app-id header resolve to this app. Set SKIP_LEGACY_APP_ID_FALLBACK=true once every client ships the header.", appId)
+		log.Printf("🔁 [LEGACY] app id fallback ACTIVE for %s, v1 clients sending no expo-app-id header resolve to this app. Set SKIP_LEGACY_APP_ID_FALLBACK=true once every client ships the header.", appId)
 		return
 	}
 	if config.GetEnv("EXPO_APP_ID") != "" {
-		log.Println("🔒 [LEGACY] app id fallback DISABLED by SKIP_LEGACY_APP_ID_FALLBACK — manifest/asset requests without an expo-app-id header are rejected. Any v1 client that has not been rebuilt stops receiving updates.")
+		log.Println("🔒 [LEGACY] app id fallback DISABLED by SKIP_LEGACY_APP_ID_FALLBACK, manifest/asset requests without an expo-app-id header are rejected. Any v1 client that has not been rebuilt stops receiving updates.")
 	}
 }
 

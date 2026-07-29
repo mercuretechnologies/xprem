@@ -11,7 +11,7 @@ import (
 
 // All metrics are scoped by appId. In multi-app deployments (v2), two
 // different apps can publish identically named branches / runtime versions,
-// so we include appId in the label set AND in the Redis cache keys — if we
+// so we include appId in the label set AND in the Redis cache keys, if we
 // didn't, the seen-users sets would merge across apps and skew the unique
 // counts.
 var (

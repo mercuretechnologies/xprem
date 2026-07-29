@@ -47,7 +47,7 @@ func getApps(t *testing.T, handler *AppHandler) (int, []config.AppDescriptor) {
 }
 
 // The cache stores the unfiltered list shared by every account, so the
-// visibility filter must apply on the cache-hit path too — a member's request
+// visibility filter must apply on the cache-hit path too, a member's request
 // right after an admin warmed the cache is the regression this guards.
 func TestGetAppsHandlerFiltersAfterCacheRead(t *testing.T) {
 	cache2.GetCache().Delete(dashboard.ComputeGetAppsCacheKey())

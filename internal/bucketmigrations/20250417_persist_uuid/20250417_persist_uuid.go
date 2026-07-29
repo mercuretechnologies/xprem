@@ -14,7 +14,7 @@ import (
 // any data created by a v2 server already satisfies the invariant this
 // migration enforced. The only remaining path that can carry un-UUID-ed data
 // is a v1→v2 in-place upgrade, and that path is handled by
-// 20260422_v2_scope_data_under_appid — which re-paths v1 data into the new
+// 20260422_v2_scope_data_under_appid, which re-paths v1 data into the new
 // {appId}-scoped layout and preserves whatever UUIDs the v1 server had
 // already written. Running the old iteration against the v2 layout would
 // fail anyway: the outer loop used a bucket-level branch listing that no

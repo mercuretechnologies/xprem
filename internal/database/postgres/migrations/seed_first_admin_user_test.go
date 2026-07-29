@@ -55,7 +55,7 @@ func TestResolveSeedAdminCredentialsRejectsMailboxFormEmail(t *testing.T) {
 }
 
 // The first admin is held to the same password policy as every dashboard
-// user, and the failure must spell the whole policy out — the operator
+// user, and the failure must spell the whole policy out, the operator
 // reading the migration log has no UI checklist.
 func TestResolveSeedAdminCredentialsEnforcesPasswordPolicy(t *testing.T) {
 	t.Setenv("ADMIN_EMAIL", "admin@example.com")

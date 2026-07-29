@@ -117,7 +117,7 @@ func TestValidateRelativePath_RejectsTraversal(t *testing.T) {
 		{"leading dot-dot", "../secret"},
 		{"absolute unix", "/etc/passwd"},
 		{"absolute windows", "\\etc\\passwd"},
-		// Backslash anywhere in the path — not just as a prefix. On Windows
+		// Backslash anywhere in the path, not just as a prefix. On Windows
 		// filepath.Join treats "\" as a separator, so "assets\..\..\etc" would
 		// traverse just like "assets/../..". The segment-level check only
 		// catches the leading-\ case, so enforce the full ban here.

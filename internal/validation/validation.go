@@ -1,7 +1,7 @@
 // Package validation holds the input-validation rules for user-supplied
 // dashboard values (resource names, display labels). Services call these before
 // persisting so bad input fails fast with a caller-facing 400 instead of a deep
-// store/bucket error — or, worse, a malformed row/key that only breaks later.
+// store/bucket error, or, worse, a malformed row/key that only breaks later.
 package validation
 
 import (
@@ -55,7 +55,7 @@ func Errorf(field, format string, args ...any) *Error {
 // Name validates a resource name used as a single storage-path segment and DB
 // value (branch, channel, release channel).
 //
-// The rules are a mirror of internal/bucket.validateSegment — keep the two in
+// The rules are a mirror of internal/bucket.validateSegment, keep the two in
 // sync. Rejects empties, path separators, "." / "..", null bytes, control
 // characters, and anything over maxNameLen.
 //
@@ -111,7 +111,7 @@ func namePattern(field, value string) error {
 }
 
 // DisplayName validates a human-facing label (app name, API key name). Looser
-// than Name — it is never a path segment, so spaces and unicode are allowed —
+// than Name, it is never a path segment, so spaces and unicode are allowed -
 // but still non-empty (ignoring surrounding whitespace), bounded, and free of
 // control characters (log / UI injection).
 func DisplayName(field, value string) error {

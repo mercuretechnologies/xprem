@@ -30,7 +30,7 @@ type Role struct {
 }
 
 // AppGrant is one member's access to one app: an optional role plus direct
-// extra permissions. A grant with neither still matters — it makes the app
+// extra permissions. A grant with neither still matters, it makes the app
 // visible to the member (read access).
 type AppGrant struct {
 	AppID string

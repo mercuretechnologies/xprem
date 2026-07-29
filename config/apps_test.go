@@ -12,11 +12,11 @@ import (
 
 // stubPEMB64 is the base64 encoding of a tiny PEM-shaped byte string used
 // throughout the tests to satisfy validatePEMKeyB64. Real key content is
-// not required — the validator only checks for the BEGIN marker.
+// not required, the validator only checks for the BEGIN marker.
 const stubPEMB64 = "LS0tLS1CRUdJTiBURVNUIEtFWS0tLS0tCnRlc3RkYXRhCi0tLS0tRU5EIFRFU1QgS0VZLS0tLS0K"
 
 // resetAppsEnv unsets every env var that LoadAppsFromFlatEnv can read so each test
-// starts from a known-empty environment. Central list — when a new env var
+// starts from a known-empty environment. Central list, when a new env var
 // is added to the loader, add it here too or the test suite will start
 // interfering across runs.
 func resetAppsEnv(t *testing.T) {
@@ -46,7 +46,7 @@ func resetAppsEnv(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// validateApp / ValidateKeys — unit tests on the validator only. No env.
+// validateApp / ValidateKeys, unit tests on the validator only. No env.
 // -----------------------------------------------------------------------------
 
 func TestValidateApp_AcceptsEachMode(t *testing.T) {
@@ -261,7 +261,7 @@ func TestValidateKeys_EnvironmentMode_RejectsInvalidBase64(t *testing.T) {
 }
 
 func TestValidateKeys_EnvironmentMode_RejectsNonPEM(t *testing.T) {
-	// Valid base64 that doesn't decode to a PEM-shaped payload — a common
+	// Valid base64 that doesn't decode to a PEM-shaped payload, a common
 	// mistake when the operator base64-encodes the key contents without
 	// the BEGIN/END markers.
 	rawB64 := "aGVsbG8td29ybGQ=" // -> "hello-world", no BEGIN marker
@@ -286,14 +286,14 @@ func TestValidateKeys_RejectsMissingOrUnknownMode(t *testing.T) {
 		err := ValidateKeys(&KeysConfig{Mode: "env-b64"}, "apps[0].keys")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid")
-		// The "env-b64" value is a common migration mistake — the message
+		// The "env-b64" value is a common migration mistake, the message
 		// must spell out the three valid modes so the user knows to swap.
 		assert.Contains(t, err.Error(), "environment")
 	})
 }
 
 // -----------------------------------------------------------------------------
-// LoadAppsFromFlatEnv — flat env. The only stateless config source: one app, v1-compat.
+// LoadAppsFromFlatEnv, flat env. The only stateless config source: one app, v1-compat.
 // Each key mode, and failure modes.
 // -----------------------------------------------------------------------------
 
@@ -383,14 +383,14 @@ func TestLoadAppsFromFlatEnv_RejectsMissingToken(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// LoadAppsFromFlatEnv — "nothing set" error path.
+// LoadAppsFromFlatEnv, "nothing set" error path.
 // -----------------------------------------------------------------------------
 
 func TestLoadAppsFromFlatEnv_NoSourceSetReturnsActionableError(t *testing.T) {
 	resetAppsEnv(t)
 	err := LoadAppsFromFlatEnv()
 	require.Error(t, err)
-	// The error message is part of the UX — it must name the flat-env entry
+	// The error message is part of the UX, it must name the flat-env entry
 	// point and point multi-app users at the control plane so a user who
 	// forgot to set anything isn't left guessing.
 	msg := err.Error()
@@ -399,7 +399,7 @@ func TestLoadAppsFromFlatEnv_NoSourceSetReturnsActionableError(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// GetAppConfig / ListAppIds — lookup API.
+// GetAppConfig / ListAppIds, lookup API.
 // -----------------------------------------------------------------------------
 
 func TestGetAppConfig_UnknownIdReturnsError(t *testing.T) {
@@ -420,7 +420,7 @@ func TestListAppIds_EmptyWhenNoConfigLoaded(t *testing.T) {
 
 func TestListAppIds_ReturnsAllLoaded(t *testing.T) {
 	// The registry is single-app in production stateless mode, but it backs
-	// the multi-app control-plane store too — seed several apps directly to
+	// the multi-app control-plane store too, seed several apps directly to
 	// prove the lookup surface holds more than one.
 	resetAppsEnv(t)
 	SetAppsForTest([]AppConfig{
@@ -432,7 +432,7 @@ func TestListAppIds_ReturnsAllLoaded(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Concurrency — GetAppConfig / ListAppIds must be safe for concurrent reads
+// Concurrency, GetAppConfig / ListAppIds must be safe for concurrent reads
 // (the server calls them from every handler goroutine).
 // -----------------------------------------------------------------------------
 
@@ -469,12 +469,12 @@ func TestLookupIsConcurrencySafe(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// ResetAppsForTest — must actually reset so test isolation holds. If this
+// ResetAppsForTest, must actually reset so test isolation holds. If this
 // regresses, every other test in the package becomes order-dependent.
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// Optional Name field — display label used by the dashboard. Absence must be
+// Optional Name field, display label used by the dashboard. Absence must be
 // accepted, presence must round-trip, and ListApps must surface it.
 // -----------------------------------------------------------------------------
 
@@ -531,7 +531,7 @@ func TestResetAppsForTest_ClearsRegistry(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// LegacyFallbackAppId — which app a manifest/asset request with no expo-app-id
+// LegacyFallbackAppId, which app a manifest/asset request with no expo-app-id
 // header belongs to. Drives whether v1 clients keep receiving updates after the
 // v2 upgrade, so each branch is pinned explicitly.
 // -----------------------------------------------------------------------------
@@ -553,7 +553,7 @@ func TestLegacyFallbackAppId_EmptyWithoutExpoAppId(t *testing.T) {
 }
 
 func TestLegacyFallbackAppId_SkipFlagDisablesFallback(t *testing.T) {
-	// strconv.ParseBool accepts 1/t/T/TRUE/true/True — every truthy spelling
+	// strconv.ParseBool accepts 1/t/T/TRUE/true/True, every truthy spelling
 	// must disable the fallback, so an operator who opted out gets the opt-out
 	// no matter how they spelled it.
 	for _, v := range []string{"true", "1", "True", "TRUE", "t"} {
@@ -568,7 +568,7 @@ func TestLegacyFallbackAppId_SkipFlagDisablesFallback(t *testing.T) {
 }
 
 func TestLegacyFallbackAppId_FalseyOrUnparseableSkipKeepsFallback(t *testing.T) {
-	// Anything that parses false — or does not parse at all — must leave the
+	// Anything that parses false, or does not parse at all, must leave the
 	// fallback on. Failing open matters here: guessing that "yes" means true
 	// would silently kill the update channel of every v1 client on the deploy.
 	for _, v := range []string{"false", "0", "", "yes", "nope"} {

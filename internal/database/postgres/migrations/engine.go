@@ -7,7 +7,7 @@ import "expo-open-ota/internal/database"
 // migration that needs to execute queries against the live engine (e.g. the
 // infra→DB data migration).
 //
-// It lives here — rather than inside a dated migration file — so the injection
+// It lives here, rather than inside a dated migration file, so the injection
 // point is discoverable and every migration file stays self-contained. New Go
 // migrations can reference dbEngine without hunting for where it's declared.
 var dbEngine *database.Engine

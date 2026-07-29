@@ -49,8 +49,8 @@ func parseRFC3339ToTz(str string, fieldName string) pgtype.Timestamptz {
 }
 
 // sealLegacyKeysIntoDB converts an app whose signing keys live outside the
-// database — a PEM file on disk (mode=local) or a base64 env var
-// (mode=environment) — into mode=database, sealing the key material under the
+// database, a PEM file on disk (mode=local) or a base64 env var
+// (mode=environment), into mode=database, sealing the key material under the
 // master key.
 //
 // Neither legacy mode survives the move to the control plane as-is. The
@@ -130,11 +130,11 @@ func sealLegacyKeysIntoDB(app config.AppConfig, params *pgdb.MigrateLegacyAppPar
 func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 	// A fresh control-plane install has nothing to import: apps are created from
 	// the dashboard and EXPO_APP_ID is deliberately unset. Bail out before
-	// ReadAppsFromFlatEnv, which reports an absent flat-env config as an error — goose
+	// ReadAppsFromFlatEnv, which reports an absent flat-env config as an error, goose
 	// turns that into a fatal and the server could never boot. Mirrors the guard
 	// in the sibling bucket migration (20260422_v2_scope_data_under_appid).
 	if strings.TrimSpace(os.Getenv("EXPO_APP_ID")) == "" {
-		log.Println("⏭️ [DATABASE] No legacy EXPO_APP_ID set — nothing to migrate from env/bucket.")
+		log.Println("⏭️ [DATABASE] No legacy EXPO_APP_ID set, nothing to migrate from env/bucket.")
 		return nil
 	}
 
@@ -156,7 +156,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 		for _, app := range apps {
 			// The apps table keys on a UUID, which only the control plane mints.
 			// A legacy id predating it cannot be represented, but failing here
-			// would brick an otherwise healthy stateless deploy on upgrade — skip
+			// would brick an otherwise healthy stateless deploy on upgrade, skip
 			// the app instead and let the operator recreate it from the dashboard.
 			parsedAppId, err := uuid.Parse(app.Id)
 			if err != nil {
@@ -165,7 +165,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 			}
 			// Canonicalize before the id is used as both the row key and the
 			// key-sealing AAD. uuid.Parse accepts uppercase, braced and urn:
-			// forms, but the row always reads back as the plain lowercase form —
+			// forms, but the row always reads back as the plain lowercase form -
 			// sealing under a non-canonical EXPO_APP_ID would bind the blob to an
 			// id no unseal ever reconstructs, breaking signing after migration.
 			// app is a per-iteration copy, so this does not touch the loaded config.

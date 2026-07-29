@@ -67,13 +67,8 @@ func (h *HealthHistory) ReadBySegment(
 		})
 }
 
-// readBySegment is the read itself, behind the cache above. It answers from the
-// precounted snapshots when the worker has been running long enough to cover
-// the window, and rebuilds the grid live when it has not.
-//
-// The fallback is what a deployment sees for the first hours after an upgrade,
-// and what it keeps seeing for any window reaching back past the day the
-// counters started. It is the same answer, paid for on the spot.
+// readBySegment answers from the precounted snapshots when the worker has
+// covered the window, and rebuilds the grid live otherwise.
 func (h *HealthHistory) readBySegment(
 	ctx context.Context,
 	appID string,
@@ -101,8 +96,7 @@ func (h *HealthHistory) readBySegment(
 	return h.readSegmentGrid(ctx, appID, updateIDs, dimension, from, to, step, buckets)
 }
 
-// gridSteps cuts the window the way every other series on the page is cut, and
-// never finer than a minute, which is the retention of the events themselves.
+// gridSteps cuts the window into buckets, never finer than a minute (the events' retention floor).
 func (h *HealthHistory) gridSteps(from, to time.Time) (buckets, step int64) {
 	buckets = h.bucketCount(from, to)
 	step = int64(to.Sub(from).Seconds()) / max(buckets-1, 1)
@@ -113,11 +107,8 @@ func (h *HealthHistory) gridSteps(from, to time.Time) (buckets, step int64) {
 	return buckets, step
 }
 
-// readSegmentGrid rebuilds the series from the raw events: one row per device
-// per bucket, walked by two ASOF joins. The cost is that product rather than
-// the rows it reads, which on a million devices stayed at 3.3 million while
-// the query took several seconds. This is what captureSegmentBucket collapses
-// to a single instant so a viewer never pays it.
+// readSegmentGrid rebuilds the series from raw events via two ASOF joins;
+// captureSegmentBucket precomputes this to a single instant.
 func (h *HealthHistory) readSegmentGrid(
 	ctx context.Context,
 	appID string,
@@ -128,20 +119,7 @@ func (h *HealthHistory) readSegmentGrid(
 ) (map[string][]HealthSegmentPoint, error) {
 	column := healthSegmentDimensions[dimension]
 
-	// The dimension is an allowlisted column name, never caller input.
-	//
-	// The segment rides on the adoption event, so the ASOF that already decides
-	// which update a device was running at a bucket decides its segment too:
-	// one source, no extra join, and the label is the device's state at that
-	// point rather than its state today. Reading it from telemetry instead
-	// meant one value per device for the whole window, which relabelled a
-	// device's entire history the moment it upgraded, and left every segment
-	// "unknown" on a deployment with no telemetry at all.
-	//
-	// Faults join on the update as well as the device. Without that, a device
-	// that crashed on an old update stays faulty for every update it runs
-	// afterwards, and for native crashes that never clears: only runtime issues
-	// ever emit a 'recovered' event.
+	// dimension is an allowlisted column name, never raw caller input.
 	sql := sqlf(`
 		WITH
 		  adoptions AS (

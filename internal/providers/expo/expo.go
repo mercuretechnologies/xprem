@@ -18,7 +18,7 @@ import (
 
 // The "operationName" header values below are a contract with the test mocks
 // (test/helpers.go and friends match on them), not a reflection of the Go
-// function names — they intentionally kept their original "FetchExpo…" spelling
+// function names, they intentionally kept their original "FetchExpo…" spelling
 // when this package was split out of providers and the prefix was dropped.
 // Renaming one to match its function silently breaks the mock that matches it.
 
@@ -312,7 +312,7 @@ const unknownAppName = "\x00unknown"
 // FetchAppName returns the app's display name as configured on Expo, or ""
 // when it cannot be resolved (missing/invalid token, network failure). Used
 // as a dashboard display fallback in stateless mode, where the flat env
-// carries no name — so best-effort by design: callers fall back to the id.
+// carries no name, so best-effort by design: callers fall back to the id.
 func FetchAppName(ctx context.Context, appId string) string {
 	cache := cache2.GetCache()
 	token := GetAccessToken(appId)

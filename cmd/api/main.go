@@ -51,8 +51,8 @@ func main() {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			(*handler.Load()).ServeHTTP(w, r)
 		}),
-		ReadHeaderTimeout:  10 * time.Second,
-		IdleTimeout:        120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	// Bind the port before running migrations so /hc answers from the very
 	// first probe; ListenAndServe only returns on failure.

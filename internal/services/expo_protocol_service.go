@@ -61,15 +61,14 @@ type AssetResolutionParams struct {
 	RuntimeVersion        string
 	Platform              string
 	PreventCDNRedirection bool
-	// ClientID is the device's EAS-Client-ID header; asset requests carry it too, so
-	// the rollout fallback decision matches the manifest decision for the device.
+	// ClientID is the device's EAS-Client-ID header.
 	ClientID string
 	// Branch and UpdateID are the query params baked into manifest asset URLs; when
-	// both are present (and valid) they pin the exact update the asset belongs to.
+	// both are present and valid they pin the exact update the asset belongs to.
 	Branch   string
 	UpdateID string
-	// RequestedUpdateID is the Expo-Requested-Update-ID header expo-updates sends on
-	// every asset request: the UUID of the update the client is downloading.
+	// RequestedUpdateID is the Expo-Requested-Update-ID header: the UUID of the
+	// update the client is downloading.
 	RequestedUpdateID string
 }
 
@@ -218,10 +217,7 @@ func (s *ExpoProtocolService) PutRollbackInResponse(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Update.CreatedAt is a duration since the epoch, i.e. nanoseconds — not the
-	// milliseconds NormalizeTimestamp expects. Feeding it there sent every value
-	// down the overflow branch and emitted a commitTime in the year 5655856,
-	// which expo-updates uses to decide whether to apply the rollback.
+	// CreatedAt is nanoseconds since the epoch, not the milliseconds NormalizeTimestamp expects.
 	commitTime := time.Unix(0, int64(lastUpdate.CreatedAt)).UTC().Format("2006-01-02T15:04:05.000Z")
 	directive, err := update2.CreateRollbackDirective(lastUpdate, commitTime)
 	if err != nil {
@@ -243,7 +239,7 @@ func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(w http.ResponseWrit
 }
 
 func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params ManifestRequestParams) (ManifestResult, error) {
-	// [Stateless mode] Reject unknown app ids at the edge with a clean 404 — otherwise
+	// [Stateless mode] Reject unknown app ids at the edge with a clean 404, otherwise
 	// downstream services.FetchExpoChannelMapping → GetExpoAccessToken
 	// returns an empty token for the unknown id and we end up POSTing to
 	// api.expo.dev with `Bearer ` (no token), surfacing the upstream 401
@@ -330,7 +326,7 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 }
 
 func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
-	// [Stateless mode] Same edge check as ManifestHandler — reject unknown ids with 404
+	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
 	// rather than letting them flow into FetchExpoChannelMapping and
 	// surfacing the upstream 401 as a 500.
 	if _, err := s.appRepo.GetAppByID(ctx, params.AppID); err != nil {

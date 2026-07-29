@@ -19,7 +19,7 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// v2_migration.go — one-shot data re-path from the v1 bucket layout
+// v2_migration.go, one-shot data re-path from the v1 bucket layout
 // ({prefix}/{branch}/{rv}/{updateId}/…) to the v2 layout
 // ({prefix}/{appId}/{branch}/{rv}/{updateId}/…). Driven by the migration
 // 20260422_v2_scope_data_under_appid registered in internal/bucketmigrations/.
@@ -29,7 +29,7 @@ import (
 // (the appId prefix is preserved on retry) and re-running the migration
 // only processes what's still at the root.
 //
-// .migrationhistory itself is deployment-global and explicitly excluded —
+// .migrationhistory itself is deployment-global and explicitly excluded -
 // it must stay at the bucket root so the migration ledger keeps working
 // across deploys.
 
@@ -39,7 +39,7 @@ import (
 // migration refuses and the operator renames the branch before retrying.
 //
 // EXPO_APP_ID is an Expo project id and therefore a UUID, so a branch
-// colliding with it is close to unreachable in practice — the guard is
+// colliding with it is close to unreachable in practice, the guard is
 // here because the corruption it prevents is silent and unrecoverable,
 // not because it is expected to fire.
 var ErrAppIdCollidesWithV1Branch = fmt.Errorf("app id collides with a v1 branch of the same name; rename that branch in the bucket, then reboot to retry the migration")
@@ -75,7 +75,7 @@ func (p *moveProgress) tick() {
 // MoveRootEntriesUnder walks the LocalBucket root and moves every
 // immediate child directory that LOOKS LIKE a v1 branch into
 // {rootPath}/{appId}/. An entry is considered a v1 branch when it
-// contains a .check or update-metadata.json file at depth 3 — the exact
+// contains a .check or update-metadata.json file at depth 3, the exact
 // shape produced by the v1 publish pipeline
 // ({branch}/{runtimeVersion}/{updateId}/.check). v2 directories hold the
 // same files at depth 4 ({appId}/{branch}/{rv}/{updateId}/.check) and so
@@ -102,7 +102,7 @@ func (b *LocalBucket) MoveRootEntriesUnder(appId string) error {
 	}
 
 	// Figure out what actually needs moving before creating the target
-	// dir — on a bucket that's already fully v2 we don't want to litter
+	// dir, on a bucket that's already fully v2 we don't want to litter
 	// an empty {appId}/ entry.
 	var toMove []string
 	for _, e := range entries {
@@ -177,7 +177,7 @@ func (b *LocalBucket) looksLikeV1Branch(name string) bool {
 // (.check or update-metadata.json) at exactly segment 4. Second pass
 // moves only objects whose first 3 segments land in a confirmed triple.
 // This is the equivalent of looksLikeV1Branch for LocalBucket and is
-// what keeps a bucket co-hosting v2 data for other apps safe — those
+// what keeps a bucket co-hosting v2 data for other apps safe, those
 // keys have their marker at segment 5, so their triple never gets
 // confirmed and they are left alone.
 func (b *S3Bucket) MoveRootEntriesUnder(appId string) error {
@@ -189,7 +189,7 @@ func (b *S3Bucket) MoveRootEntriesUnder(appId string) error {
 	appPrefix := b.prefixedKey(appId + "/")
 
 	// Pre-flight collision check: scan objects under appPrefix for a v1
-	// marker shape ({appId}/{rv}/{updateId}/.check — 4 segments after
+	// marker shape ({appId}/{rv}/{updateId}/.check, 4 segments after
 	// the key prefix). v2 objects under the same appPrefix sit at 5
 	// segments and are ignored here.
 	pc := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
@@ -339,7 +339,7 @@ func v1BranchTripleFromMarker(relKey string) (string, bool) {
 
 // inConfirmedTriple returns true when relKey's first three segments
 // match a triple that was positively confirmed as v1 in pass 1. Any
-// depth under the triple is allowed — v1 nested assets like
+// depth under the triple is allowed, v1 nested assets like
 // branch/rv/updateId/assets/foo.png must be moved along with their
 // branch.
 func inConfirmedTriple(relKey string, confirmed map[string]bool) bool {
@@ -355,7 +355,7 @@ func inConfirmedTriple(relKey string, confirmed map[string]bool) bool {
 
 // escapeKeyForCopySource URL-escapes an S3 object key for use in the
 // CopySource header. The key is escaped per path segment so literal
-// slashes separating segments survive — url.PathEscape on the whole key
+// slashes separating segments survive, url.PathEscape on the whole key
 // would turn them into %2F, which S3 accepts as part of the key but not
 // as a bucket/key separator.
 func escapeKeyForCopySource(key string) string {

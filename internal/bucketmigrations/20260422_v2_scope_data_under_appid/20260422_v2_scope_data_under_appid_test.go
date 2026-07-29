@@ -16,7 +16,7 @@ import (
 // Wrapping it in a validatingBucket (via bucket.GetBucket) would also
 // fail because UnwrapBucket expects a concrete *LocalBucket/*S3Bucket/
 // *GCSBucket, but the migration's up() bails out before unwrapping when
-// EXPO_APP_ID is unset — which is exactly what we want to prove.
+// EXPO_APP_ID is unset, which is exactly what we want to prove.
 type unreachableBucket struct{ t *testing.T }
 
 func (u unreachableBucket) GetBranches(string) ([]string, error) {
@@ -87,7 +87,7 @@ func resetEnv(t *testing.T) {
 }
 
 func TestUp_SkipsWhenEXPOAppIdUnset(t *testing.T) {
-	// Without EXPO_APP_ID there is no v1 install to migrate from —
+	// Without EXPO_APP_ID there is no v1 install to migrate from -
 	// typically a fresh v2 deploy. Must no-op cleanly.
 	resetEnv(t)
 	assert.NoError(t, up(unreachableBucket{t: t}))

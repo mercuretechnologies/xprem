@@ -283,7 +283,7 @@ func TestBranchesWithoutAuth(t *testing.T) {
 }
 
 // The dashboard /api/apps/{APP_ID}/... routes must run AppResolverMiddleware
-// so unknown app ids return 404 — without it handlers fall through to
+// so unknown app ids return 404, without it handlers fall through to
 // bucket lookups and can answer 200 with [] for a nonexistent app.
 func TestDashboardUnknownAppIdReturns404(t *testing.T) {
 	teardown := setup(t)
@@ -334,7 +334,7 @@ func TestDashboardUseExpoAuthRejectsInvalidExpoToken(t *testing.T) {
 	defer teardown()
 	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 		func(req *http.Request) (*http.Response, error) {
-			// Only FetchExpoUserAccountInformations runs before the reject —
+			// Only FetchExpoUserAccountInformations runs before the reject -
 			// branch mapping never fires because auth short-circuits first.
 			if req.Header.Get("operationName") == "FetchExpoUserAccountInformations" {
 				if req.Header.Get("Authorization") == "Bearer bogus_expo_token" {
@@ -358,13 +358,13 @@ func TestDashboardUseExpoAuthRejectsInvalidExpoToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, respRec.Code)
 }
 
-// TestDashboardUseExpoAuthCrossAppAttackRejected — the promise of
+// TestDashboardUseExpoAuthCrossAppAttackRejected, the promise of
 // Use-Cli-Auth is that a caller can only reach an app whose stored
 // EXPO_ACCESS_TOKEN resolves to the same Expo user as their session.
 // If two tenants coexist on the server, a caller with a valid Expo
 // token for tenant A must NOT be able to read tenant B via
 // /api/apps/{B}/... The middleware enforces this by calling Expo with
-// BOTH tokens and comparing the returned usernames — a mismatch is
+// BOTH tokens and comparing the returned usernames, a mismatch is
 // a 401, no 500, no fall-through to the handler.
 func TestDashboardUseExpoAuthCrossAppAttackRejected(t *testing.T) {
 	teardown := setup(t)
@@ -378,7 +378,7 @@ func TestDashboardUseExpoAuthCrossAppAttackRejected(t *testing.T) {
 				return httpmock.NewStringResponse(404, "Unknown operation"), nil
 			}
 			// Map each bearer to a distinct username so usernames differ
-			// across apps — that is what makes the match check fail.
+			// across apps, that is what makes the match check fail.
 			switch req.Header.Get("Authorization") {
 			case "Bearer token-app-1", "Bearer expo_session_of_user_1":
 				return MockExpoAccountResponse(map[string]interface{}{"id": "1", "username": "user-1"})
@@ -393,7 +393,7 @@ func TestDashboardUseExpoAuthCrossAppAttackRejected(t *testing.T) {
 	// config.LoadAppsFromFlatEnv (flat-env single app), which would otherwise clobber this
 	// injection. The bucket app store reads the registry live, so the resolver
 	// middleware sees app-1/app-2 at request time. app-1's token resolves to
-	// "user-1"; app-2's to "user-2" — distinct usernames are what make the
+	// "user-1"; app-2's to "user-2", distinct usernames are what make the
 	// cross-app match check fail.
 	config.SetAppsForTest([]config.AppConfig{
 		{Id: "app-1", AccessToken: "token-app-1", Keys: config.KeysConfig{Mode: config.KeysModeLocal, PublicPath: "/a", PrivatePath: "/b"}},
@@ -424,7 +424,7 @@ func TestDashboardUseExpoAuthHappyPath(t *testing.T) {
 			op := req.Header.Get("operationName")
 			if op == "FetchExpoUserAccountInformations" {
 				// Both the caller's token and the app's EXPO_ACCESS_TOKEN
-				// resolve to "test_username" — that's what makes the
+				// resolve to "test_username", that's what makes the
 				// match in ValidateExpoAuth succeed.
 				return MockExpoAccountResponse(map[string]interface{}{
 					"id":       "123",

@@ -12,11 +12,11 @@ import (
 // PasswordPolicyMinLength is the minimum length accepted for a dashboard user
 // password. The policy below is mirrored in the dashboard
 // (apps/dashboard/src/lib/password-policy.ts) so the UI can give per-rule
-// feedback before the server is ever hit — keep both in sync.
+// feedback before the server is ever hit, keep both in sync.
 const PasswordPolicyMinLength = 8
 
 // PasswordPolicyDescription spells out every rule at once, for messages that
-// must state the full policy up front — e.g. the seed migration's fail-fast,
+// must state the full policy up front, e.g. the seed migration's fail-fast,
 // where the operator has no UI checklist to look at.
 var PasswordPolicyDescription = fmt.Sprintf(
 	"at least %d characters, an uppercase letter, a lowercase letter, a digit and a special character",
@@ -61,7 +61,7 @@ func ValidatePasswordPolicy(password string) error {
 		missing = append(missing, "a special character")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("password does not meet the policy — it needs %s", strings.Join(missing, ", "))
+		return fmt.Errorf("password does not meet the policy, it needs %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

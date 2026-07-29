@@ -26,7 +26,7 @@ func TestDashboardSPAFallback(t *testing.T) {
 	respRec := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/dashboard/some/route", nil)
 	router.ServeHTTP(respRec, req)
-	// SPA fallback serves index.html — should not 403
+	// SPA fallback serves index.html, should not 403
 	assert.NotEqual(t, http.StatusForbidden, respRec.Code)
 }
 

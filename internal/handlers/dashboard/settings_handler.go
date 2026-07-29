@@ -73,9 +73,9 @@ type SettingsEnv struct {
 	// (configured, enabled and licensed), so the dashboard can adapt the
 	// account-management UI. Not an env var: the config lives in the database.
 	SSO_ENABLED bool `json:"SSO_ENABLED"`
-	// Apps lists the configured apps — the single flat-env app in stateless
+	// Apps lists the configured apps, the single flat-env app in stateless
 	// mode, or every app in the database in control-plane mode. Each entry
-	// carries just the id and optional display name — tokens and keys are
+	// carries just the id and optional display name, tokens and keys are
 	// never surfaced here because this endpoint is read by the dashboard UI.
 	Apps []config.AppDescriptor `json:"APPS"`
 }

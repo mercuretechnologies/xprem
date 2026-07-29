@@ -130,7 +130,7 @@ func TestGoodRollbackWithoutCommitHash(t *testing.T) {
 // concurrent /manifest request in that window would miss the cache, scan
 // the bucket, see the new update on disk WITHOUT a .check file, filter it
 // out via IsUpdateValid, fall back to the previous update, and re-cache
-// it under the lastUpdate key for the full 1800s TTL — serving a stale
+// it under the lastUpdate key for the full 1800s TTL, serving a stale
 // manifest for up to 30 minutes after the publish/rollback.
 //
 // The fix reorders MarkUpdateAsChecked to write .check before deleting
@@ -182,7 +182,7 @@ func TestRollbackDoesNotPoisonLatestUpdateCache(t *testing.T) {
 	// can actually point at a stale value.
 	warmed, err := updateService.GetLatestUpdate(ctx, appId, branchName, runtimeVersion, platform)
 	require.NoError(t, err)
-	require.NotNil(t, warmed, "fixture setup: planted update not picked up — check LOCAL_BUCKET_BASE_PATH wiring")
+	require.NotNil(t, warmed, "fixture setup: planted update not picked up, check LOCAL_BUCKET_BASE_PATH wiring")
 	require.Equal(t, staleUpdateId, warmed.UpdateId, "fixture setup: expected cache warmed with planted update")
 
 	// Hammer the read path from many goroutines. The old ordering would

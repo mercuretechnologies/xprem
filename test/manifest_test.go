@@ -142,7 +142,7 @@ func TestNotValidPlatformForManifest(t *testing.T) {
 }
 
 // legacyClientManifestRequest builds a manifest request shaped exactly like
-// the one a v1 binary sends: every header it knew about, and no expo-app-id —
+// the one a v1 binary sends: every header it knew about, and no expo-app-id -
 // that header is baked into Expo.plist / AndroidManifest.xml at build time, so
 // an already-installed v1 client cannot start sending it without a store
 // release. The runtime version resolves to no update, which is the shortest
@@ -177,7 +177,7 @@ func assertServedLegacyApp(t *testing.T, w *httptest.ResponseRecorder) {
 
 // TestManifestMissingAppIdHeaderFallsBackToLegacyApp covers the "no header at
 // all" branch. A v1 client cannot send expo-app-id, and rejecting it would kill
-// its update channel until a store release lands — for an OTA server, the one
+// its update channel until a store release lands, for an OTA server, the one
 // breaking change that defeats the point. EXPO_APP_ID names the only app such a
 // deploy has, so the request is not ambiguous and gets served.
 func TestManifestMissingAppIdHeaderFallsBackToLegacyApp(t *testing.T) {
@@ -191,7 +191,7 @@ func TestManifestMissingAppIdHeaderFallsBackToLegacyApp(t *testing.T) {
 	assertServedLegacyApp(t, w)
 }
 
-// TestManifestEmptyAppIdHeaderFallsBackToLegacyApp — the header is present but
+// TestManifestEmptyAppIdHeaderFallsBackToLegacyApp, the header is present but
 // empty. Must take the same path as missing rather than resolving to the
 // empty-string app.
 func TestManifestEmptyAppIdHeaderFallsBackToLegacyApp(t *testing.T) {
@@ -208,7 +208,7 @@ func TestManifestEmptyAppIdHeaderFallsBackToLegacyApp(t *testing.T) {
 	assertServedLegacyApp(t, w)
 }
 
-// TestManifestMissingAppIdHeaderRejectedWhenFallbackSkipped — the opt-out an
+// TestManifestMissingAppIdHeaderRejectedWhenFallbackSkipped, the opt-out an
 // operator sets once every client ships the header. Header-less requests fail
 // again, which is what surfaces the stragglers still running a v1 binary.
 func TestManifestMissingAppIdHeaderRejectedWhenFallbackSkipped(t *testing.T) {
@@ -222,7 +222,7 @@ func TestManifestMissingAppIdHeaderRejectedWhenFallbackSkipped(t *testing.T) {
 	assert.Equal(t, 400, w.Code, "Missing expo-app-id must 400 once the fallback is opted out of")
 }
 
-// The control-plane shape — no EXPO_APP_ID, so no legacy app to fall back to —
+// The control-plane shape, no EXPO_APP_ID, so no legacy app to fall back to -
 // is not reachable from here: a stateless container refuses to boot without
 // EXPO_APP_ID (wire.go log.Fatals on it), and a DB-mode container needs a
 // database. config.TestLegacyFallbackAppId covers that env resolution instead,
@@ -251,7 +251,7 @@ func TestManifestMalformedAppIdHeader(t *testing.T) {
 
 			testContainer().ExpoProtocolHandler.HandleManifest(w, r)
 			// 400 (malformed) or 404 (not in registry) are both acceptable
-			// — the invariant is "no 5xx and no data returned".
+			//, the invariant is "no 5xx and no data returned".
 			assert.Truef(t, w.Code == 400 || w.Code == 404, "want 400 or 404, got %d", w.Code)
 		})
 	}
@@ -259,7 +259,7 @@ func TestManifestMalformedAppIdHeader(t *testing.T) {
 
 // TestUnknownAppIdForManifest locks in the 404-on-unknown-app behaviour so
 // we never regress into firing an outbound Expo API call with an empty
-// Bearer token — which used to surface as an opaque 500 to the client.
+// Bearer token, which used to surface as an opaque 500 to the client.
 func TestUnknownAppIdForManifest(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
@@ -628,7 +628,7 @@ func TestRollbackResponseforManifest(t *testing.T) {
 	// every value down the overflow branch and emitted dates thousands of years
 	// out. expo-updates reads this field to decide whether to apply the
 	// rollback, so a wrong value silently disables it on shipped clients.
-	// Expected here is NormalizeTimestamp(1666304169) — the branch-3 fixture's
+	// Expected here is NormalizeTimestamp(1666304169), the branch-3 fixture's
 	// own update id, which is second-based, hence 1970.
 	assert.Equal(t, "1970-01-20T06:51:44.169Z", directive.Parameters.CommitTime, "unexpected rollback commitTime")
 }

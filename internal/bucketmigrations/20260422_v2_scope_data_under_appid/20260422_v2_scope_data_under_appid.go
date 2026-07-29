@@ -17,7 +17,7 @@ import (
 //
 // Only runs on the single-app flat-env path (EXPO_APP_ID set). A
 // control-plane deploy (DB mode) sets no EXPO_APP_ID, so this no-ops
-// there — fresh v2 installs have no v1 root-level data to re-path.
+// there, fresh v2 installs have no v1 root-level data to re-path.
 //
 // There is no opt-out: upgrading to v2 means accepting the re-path. The
 // move is idempotent, so a run interrupted anywhere converges on retry.
@@ -25,7 +25,7 @@ import (
 // The move is driven by the validated Bucket's underlying concrete
 // backend (via bucket.UnwrapBucket + type assertion on
 // *LocalBucket / *S3Bucket / *GCSBucket) because the validating
-// decorator rejects root-level listing — it expects scoped appId args.
+// decorator rejects root-level listing, it expects scoped appId args.
 func init() {
 	bucketmigration.Register(bucketmigration.BaseMigration{
 		Id:       "20260422_v2_scope_data_under_appid",
