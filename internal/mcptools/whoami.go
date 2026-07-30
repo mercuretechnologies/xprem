@@ -18,7 +18,7 @@ type WhoamiOutput struct {
 
 func whoamiHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, _ struct{}) (*mcpprot.CallToolResult, WhoamiOutput, error) {
 	return func(ctx context.Context, req *mcpprot.CallToolRequest, _ struct{}) (*mcpprot.CallToolResult, WhoamiOutput, error) {
-		principal := principalFromRequest(req)
+		principal := PrincipalFromRequest(req)
 		if principal == nil {
 			return nil, WhoamiOutput{}, errors.New("no authenticated account on this session")
 		}

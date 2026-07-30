@@ -260,6 +260,12 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService(
 			mcptools.Configurator(mcptools.Deps{
 				Apps:                appRepo,
+				Branches:            branchService,
+				Channels:            channelService,
+				UpdateFeed:          updateService,
+				UpdateRollouts:      rolloutService,
+				Certificates:        appService,
+				SSOEnabled:          ssoService.Enabled,
 				VisibleApps:         rbacService.VisibleAppsForPrincipal,
 				CanUseSomewhere:     rbacService.MCPCanUseSomewhere,
 				Authorize:           rbacService.MCPAuthorizeTool,
@@ -267,6 +273,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			}),
 			eemcptools.Configurator(eemcptools.Deps{
 				CanUseSomewhere: rbacService.MCPCanUseSomewhere,
+				Audit:           auditService,
 			}),
 		))
 	}

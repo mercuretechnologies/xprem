@@ -19,7 +19,7 @@ type GetAppsOutput struct {
 
 func getAppsHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, _ struct{}) (*mcpprot.CallToolResult, GetAppsOutput, error) {
 	return func(ctx context.Context, req *mcpprot.CallToolRequest, _ struct{}) (*mcpprot.CallToolResult, GetAppsOutput, error) {
-		principal := principalFromRequest(req)
+		principal := PrincipalFromRequest(req)
 		if principal == nil {
 			return nil, GetAppsOutput{}, errors.New("no authenticated account on this session")
 		}

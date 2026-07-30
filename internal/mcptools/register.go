@@ -4,6 +4,7 @@ import (
 	"context"
 	"expo-open-ota/config"
 	"expo-open-ota/internal/services"
+	"expo-open-ota/internal/types"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,7 +19,9 @@ const (
 )
 
 // Access declares who may see and call a gated tool: the rbac permission once
-// roles are enforced, the fallback until then.
+// roles are enforced, the fallback until then. An empty Perm means no grant
+// can ever carry it, so the fallback alone decides: {Fallback:
+// FallbackAdminOnly} reads as an admin-only tool.
 type Access struct {
 	Perm     string
 	Fallback Fallback
@@ -40,9 +43,32 @@ type AccountPermissions struct {
 	Apps          []AppPermissions `json:"apps"`
 }
 
-// AppLister is the slice of the app store the tools need.
+// The data interfaces below are consumer-side slices of the MIT services;
+// wire injects the services as-is.
+
 type AppLister interface {
 	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
+}
+
+type BranchLister interface {
+	GetBranches(ctx context.Context, appId string) ([]types.BranchMapping, error)
+	GetRuntimeVersionsWithUpdateStats(ctx context.Context, appId string, branchName string) ([]types.RuntimeVersionWithStats, error)
+}
+
+type ChannelLister interface {
+	GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error)
+}
+
+type UpdateFeedReader interface {
+	GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error)
+}
+
+type UpdateRolloutReader interface {
+	GetUpdateRollout(ctx context.Context, appId string, branchName string, runtimeVersion string) ([]types.RolloutUpdate, error)
+}
+
+type CertificateReader interface {
+	RetrieveAppCertificate(ctx context.Context, appId string) (string, error)
 }
 
 // Deps carries what tools need from the composition root: MIT data access
@@ -51,7 +77,15 @@ type AppLister interface {
 // line of logic, and tools compose data with decisions.
 type Deps struct {
 	// Apps is the app store; visibility is decided by VisibleApps, never here.
-	Apps AppLister
+	Apps           AppLister
+	Branches       BranchLister
+	Channels       ChannelLister
+	UpdateFeed     UpdateFeedReader
+	UpdateRollouts UpdateRolloutReader
+	Certificates   CertificateReader
+	// SSOEnabled reports whether enterprise SSO is active; get_server_config
+	// surfaces it.
+	SSOEnabled func(ctx context.Context) bool
 	// VisibleApps is the visibility decision: restricted=false means every
 	// app is visible to the principal.
 	VisibleApps func(ctx context.Context, principal *services.DashboardPrincipal) (restricted bool, visible map[string]bool, err error)
@@ -74,6 +108,14 @@ var registrations = []struct {
 }{
 	{register: registerWhoami},
 	{register: registerGetApps},
+	{register: registerGetBranches},
+	{register: registerGetRuntimeVersions},
+	{register: registerGetChannels},
+	{register: registerGetUpdates},
+	{register: registerGetChannelRollouts},
+	{register: registerGetUpdateRollout},
+	{register: registerGetCertificate, access: &certificateAccess},
+	{register: registerGetServerConfig},
 }
 
 // Configurator returns what NewMCPService needs: a function that populates

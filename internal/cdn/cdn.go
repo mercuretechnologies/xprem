@@ -49,3 +49,21 @@ func ResetCDNInstance() {
 	cdnInstance = nil
 	once = sync.Once{}
 }
+
+// ResolvedType names the CDN the server actually resolved at boot:
+// "cloudfront", "gcs-direct", "azure-direct", "generic", or "" when assets
+// are served directly.
+func ResolvedType() string {
+	switch GetCDN().(type) {
+	case *CloudfrontCDN:
+		return "cloudfront"
+	case *GCSDirectCDN:
+		return "gcs-direct"
+	case *AzureBlobDirectCDN:
+		return "azure-direct"
+	case *GenericCDN:
+		return "generic"
+	default:
+		return ""
+	}
+}

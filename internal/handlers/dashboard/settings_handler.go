@@ -80,21 +80,6 @@ type SettingsEnv struct {
 	Apps []config.AppDescriptor `json:"APPS"`
 }
 
-func resolvedCDNType() string {
-	switch cdn.GetCDN().(type) {
-	case *cdn.CloudfrontCDN:
-		return "cloudfront"
-	case *cdn.GCSDirectCDN:
-		return "gcs-direct"
-	case *cdn.AzureBlobDirectCDN:
-		return "azure-direct"
-	case *cdn.GenericCDN:
-		return "generic"
-	default:
-		return ""
-	}
-}
-
 func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	apps, err := h.appService.GetApps(r.Context())
 	if err != nil {
@@ -149,7 +134,7 @@ func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Requ
 		AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID: config.GetEnv("AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID"),
 		PRIVATE_CLOUDFRONT_KEY_PATH:            config.GetEnv("PRIVATE_CLOUDFRONT_KEY_PATH"),
 		PROMETHEUS_ENABLED:                     config.GetEnv("PROMETHEUS_ENABLED"),
-		CDN_TYPE:                               resolvedCDNType(),
+		CDN_TYPE:                               cdn.ResolvedType(),
 		EXPO_ACCOUNT_USERNAME:                  expoAccountUsername,
 		SSO_ENABLED:                            h.ssoEnabled != nil && h.ssoEnabled(r.Context()),
 		Apps:                                   apps,

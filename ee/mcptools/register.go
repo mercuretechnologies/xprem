@@ -6,6 +6,7 @@ package mcptools
 
 import (
 	"context"
+	"expo-open-ota/ee/audit"
 	mittools "expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/services"
 
@@ -14,11 +15,12 @@ import (
 
 // Deps carries what the enterprise tools need from the composition root;
 // it grows with the tool set. Like its MIT twin, every field is a plain
-// method value assigned in wire.
+// method value or service assigned in wire.
 type Deps struct {
 	// CanUseSomewhere gates enterprise tool visibility, shared with the MIT
 	// table's vocabulary.
 	CanUseSomewhere func(ctx context.Context, principal *services.DashboardPrincipal, access mittools.Access) bool
+	Audit           *audit.AuditService
 }
 
 // registrations is the enterprise tool table, the ee twin of the MIT one.
@@ -27,7 +29,9 @@ type Deps struct {
 var registrations = []struct {
 	register func(*mcpprot.Server, Deps)
 	access   *mittools.Access
-}{}
+}{
+	{register: registerQueryAuditLogs, access: &mittools.Access{Fallback: mittools.FallbackAdminOnly}},
+}
 
 // Configurator populates one session's server with the enterprise tools its
 // principal may use.
