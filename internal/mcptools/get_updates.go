@@ -20,9 +20,8 @@ const (
 type GetUpdatesInput struct {
 	AppId string `json:"appId"`
 	// Every filter narrows the feed; combine them to pinpoint an update.
-	// Branch is a name; BranchId is resolved to its name first.
+	// Branch is the branch name, as returned by get_branches.
 	Branch         string `json:"branch,omitempty"`
-	BranchId       string `json:"branchId,omitempty"`
 	RuntimeVersion string `json:"runtimeVersion,omitempty"`
 	Platform       string `json:"platform,omitempty"`
 	UpdateUUID     string `json:"updateUUID,omitempty"`
@@ -57,12 +56,8 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 		if limit > maxUpdatesLimit {
 			limit = maxUpdatesLimit
 		}
-		branchName, err := resolveBranchName(ctx, deps, input.AppId, input.Branch, input.BranchId)
-		if err != nil {
-			return nil, GetUpdatesOutput{}, err
-		}
 		query := types.UpdateFeedQuery{
-			Branch:         branchName,
+			Branch:         input.Branch,
 			RuntimeVersion: input.RuntimeVersion,
 			Platform:       input.Platform,
 			UpdateUUID:     input.UpdateUUID,

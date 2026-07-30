@@ -137,15 +137,9 @@ func TestBranchLookupById(t *testing.T) {
 		t.Fatalf("expected staging by id, got %+v", branches.Branches)
 	}
 
-	// Id resolution feeds the name-keyed services.
-	if _, _, err := getRuntimeVersionsHandler(deps)(ctx, req, GetRuntimeVersionsInput{AppId: "app-1", BranchId: "branch-id-1"}); err != nil {
-		t.Fatalf("branchId must resolve to the branch name, got %v", err)
-	}
-	if _, _, err := getRuntimeVersionsHandler(deps)(ctx, req, GetRuntimeVersionsInput{AppId: "app-1", BranchId: "branch-id-unknown"}); err == nil || err.Error() != "branch not found" {
-		t.Fatalf("unknown branchId must read as not found, got %v", err)
-	}
-	if _, _, err := getRuntimeVersionsHandler(deps)(ctx, req, GetRuntimeVersionsInput{AppId: "app-1", Branch: "staging", BranchId: "branch-id-1"}); err == nil {
-		t.Fatal("conflicting branch and branchId must be refused")
+	// The name-keyed services take the branch name straight through.
+	if _, _, err := getRuntimeVersionsHandler(deps)(ctx, req, GetRuntimeVersionsInput{AppId: "app-1", Branch: "main"}); err != nil {
+		t.Fatalf("branch name must pass through, got %v", err)
 	}
 }
 

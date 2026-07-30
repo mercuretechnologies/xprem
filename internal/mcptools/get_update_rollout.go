@@ -13,10 +13,8 @@ import (
 
 type GetUpdateRolloutInput struct {
 	AppId string `json:"appId"`
-	// Branch (name) or BranchId designates the branch; one of the two is
-	// required.
-	Branch         string `json:"branch,omitempty"`
-	BranchId       string `json:"branchId,omitempty"`
+	// Branch is the branch name, as returned by get_branches.
+	Branch         string `json:"branch"`
 	RuntimeVersion string `json:"runtimeVersion"`
 }
 
@@ -34,14 +32,10 @@ func getUpdateRolloutHandler(deps Deps) func(ctx context.Context, req *mcpprot.C
 		if err := requireAppVisible(ctx, deps, principal, input.AppId); err != nil {
 			return nil, GetUpdateRolloutOutput{}, err
 		}
-		if (input.Branch == "" && input.BranchId == "") || input.RuntimeVersion == "" {
-			return nil, GetUpdateRolloutOutput{}, errors.New("branch (or branchId) and runtimeVersion are required; find them with get_branches and get_runtime_versions")
+		if input.Branch == "" || input.RuntimeVersion == "" {
+			return nil, GetUpdateRolloutOutput{}, errors.New("branch and runtimeVersion are required; find them with get_branches and get_runtime_versions")
 		}
-		branchName, err := resolveBranchName(ctx, deps, input.AppId, input.Branch, input.BranchId)
-		if err != nil {
-			return nil, GetUpdateRolloutOutput{}, err
-		}
-		updates, err := deps.UpdateRollouts.GetUpdateRollout(ctx, input.AppId, branchName, input.RuntimeVersion)
+		updates, err := deps.UpdateRollouts.GetUpdateRollout(ctx, input.AppId, input.Branch, input.RuntimeVersion)
 		if err != nil {
 			if errors.Is(err, services.ErrRolloutsRequireControlPlane) {
 				return nil, GetUpdateRolloutOutput{}, errors.New("rollouts require the control plane; this deployment runs in stateless mode")

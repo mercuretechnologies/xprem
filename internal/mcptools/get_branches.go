@@ -29,27 +29,6 @@ func matchesBranch(branch types.BranchMapping, name string, id string) bool {
 	return true
 }
 
-// resolveBranchName turns an optional branch id into the branch name the
-// services key on; a plain name passes through untouched.
-func resolveBranchName(ctx context.Context, deps Deps, appId string, branchName string, branchId string) (string, error) {
-	if branchId == "" {
-		return branchName, nil
-	}
-	branches, err := deps.Branches.GetBranches(ctx, appId)
-	if err != nil {
-		return "", err
-	}
-	for _, branch := range branches {
-		if branch.BranchId != nil && *branch.BranchId == branchId {
-			if branchName != "" && !strings.EqualFold(branch.BranchName, branchName) {
-				return "", errors.New("branch and branchId name different branches")
-			}
-			return branch.BranchName, nil
-		}
-	}
-	return "", errors.New("branch not found")
-}
-
 type GetBranchesOutput struct {
 	Branches []types.BranchMapping `json:"branches"`
 }
@@ -88,10 +67,8 @@ func registerGetBranches(server *mcpprot.Server, deps Deps) {
 
 type GetRuntimeVersionsInput struct {
 	AppId string `json:"appId"`
-	// Branch (name) or BranchId designates the branch; one of the two is
-	// required.
-	Branch   string `json:"branch,omitempty"`
-	BranchId string `json:"branchId,omitempty"`
+	// Branch is the branch name, as returned by get_branches.
+	Branch string `json:"branch"`
 }
 
 type GetRuntimeVersionsOutput struct {
@@ -107,16 +84,12 @@ func getRuntimeVersionsHandler(deps Deps) func(ctx context.Context, req *mcpprot
 		if err := requireAppVisible(ctx, deps, principal, input.AppId); err != nil {
 			return nil, GetRuntimeVersionsOutput{}, err
 		}
-		if input.Branch == "" && input.BranchId == "" {
-			return nil, GetRuntimeVersionsOutput{}, errors.New("branch or branchId is required; list the branches with get_branches")
+		if input.Branch == "" {
+			return nil, GetRuntimeVersionsOutput{}, errors.New("branch is required; list the branches with get_branches")
 		}
-		branchName, err := resolveBranchName(ctx, deps, input.AppId, input.Branch, input.BranchId)
+		versions, err := deps.Branches.GetRuntimeVersionsWithUpdateStats(ctx, input.AppId, input.Branch)
 		if err != nil {
-			return nil, GetRuntimeVersionsOutput{}, err
-		}
-		versions, err := deps.Branches.GetRuntimeVersionsWithUpdateStats(ctx, input.AppId, branchName)
-		if err != nil {
-			log.Printf("mcp get_runtime_versions failed for app %s branch %s: %v", input.AppId, branchName, err)
+			log.Printf("mcp get_runtime_versions failed for app %s branch %s: %v", input.AppId, input.Branch, err)
 			return nil, GetRuntimeVersionsOutput{}, errors.New("could not list the runtime versions, try again later")
 		}
 		return nil, GetRuntimeVersionsOutput{RuntimeVersions: versions}, nil
@@ -126,6 +99,6 @@ func getRuntimeVersionsHandler(deps Deps) func(ctx context.Context, req *mcpprot
 func registerGetRuntimeVersions(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_runtime_versions",
-		Description: "The runtime versions published on a branch (appId plus branch name or branchId required), with update counts, last publication date and active rollout state.",
+		Description: "The runtime versions published on a branch (appId and branch name required, from get_branches), with update counts, last publication date and active rollout state.",
 	}, getRuntimeVersionsHandler(deps))
 }
