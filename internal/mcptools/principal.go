@@ -44,8 +44,13 @@ func requireAppPermission(ctx context.Context, deps Deps, req *mcpprot.CallToolR
 	if principal == nil {
 		return ctx, nil, errors.New("no authenticated account on this session")
 	}
-	if appID == "" {
-		return ctx, nil, errors.New("appId is required; list the apps with get_apps")
+	// Existence then authorization, the order the dashboard subrouter uses
+	// (AppResolverMiddleware, then rbac). Visibility is deliberately NOT
+	// checked here: Authorize already answers ErrNoAppAccess ("app not
+	// found") for a member with no grant on the app, so asking VisibleApps
+	// first would be the same decision at the cost of two more reads.
+	if err := requireAppExists(ctx, deps, appID); err != nil {
+		return ctx, nil, err
 	}
 	if err := deps.Authorize(ctx, principal, appID, access); err != nil {
 		return ctx, nil, err
@@ -132,8 +137,12 @@ func isActionableWriteError(err error) bool {
 	return false
 }
 
-// requireAppVisible gates the viewer-level app-scoped tools: any account that
-// may see the app passes, others get the 404 answer.
+// requireAppVisible gates the app-scoped tools: the app must exist and the
+// account must be allowed to see it. Both halves matter: VisibleApps answers
+// restricted=false for admins and for deployments without enforced roles, so
+// on its own it lets an unknown app id through to the services, where a
+// nonexistent app reads as an empty result or a constraint error instead of
+// "no such app".
 func requireAppVisible(ctx context.Context, deps Deps, principal *services.DashboardPrincipal, appID string) error {
 	if appID == "" {
 		return errors.New("appId is required; list the apps with get_apps")
@@ -143,8 +152,35 @@ func requireAppVisible(ctx context.Context, deps Deps, principal *services.Dashb
 		log.Printf("mcp tools could not resolve the visible apps of user %s: %v", principal.UserId, err)
 		return errors.New("could not check the app access, try again later")
 	}
-	if restricted && !visible[appID] {
-		return errAppNotFound
+	if restricted {
+		// A visible app is an app the account holds a grant on, so it exists:
+		// nothing more to read.
+		if !visible[appID] {
+			return errAppNotFound
+		}
+		return nil
 	}
-	return nil
+	// Unrestricted scope (an admin, or a deployment without enforced roles):
+	// the check above looked at nothing, so an unknown id would reach the
+	// services and read as an empty result or a constraint error.
+	return requireAppExists(ctx, deps, appID)
+}
+
+// requireAppExists answers like an app the account may not see, so the two
+// cases stay indistinguishable.
+func requireAppExists(ctx context.Context, deps Deps, appID string) error {
+	if appID == "" {
+		return errors.New("appId is required; list the apps with get_apps")
+	}
+	apps, err := deps.Apps.GetApps(ctx)
+	if err != nil {
+		log.Printf("mcp tools could not list the apps: %v", err)
+		return errors.New("could not check the app, try again later")
+	}
+	for _, app := range apps {
+		if app.Id == appID {
+			return nil
+		}
+	}
+	return errAppNotFound
 }

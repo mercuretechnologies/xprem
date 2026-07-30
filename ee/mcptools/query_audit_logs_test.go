@@ -51,10 +51,40 @@ func TestAuditToolVisibility(t *testing.T) {
 	}
 	deps := Deps{CanUseSomewhere: adminOnly, Audit: audit.NewAuditService(nil)}
 
+	member := registeredTools(t, deps, &services.DashboardPrincipal{UserId: "user-1"})
+	if member["query_audit_logs"] {
+		t.Errorf("a member session must not see the audit tool, got %v", member)
+	}
+	admin := registeredTools(t, deps, &services.DashboardPrincipal{UserId: "admin-1", IsAdmin: true})
+	if !admin["query_audit_logs"] {
+		t.Errorf("an admin session must see the audit tool, got %v", admin)
+	}
+}
+
+// registeredTools lists a session server's tools through a real client, the
+// same path tools/list takes.
+func registeredTools(t *testing.T, deps Deps, principal *services.DashboardPrincipal) map[string]bool {
+	t.Helper()
+	ctx := context.Background()
 	server := mcpprot.NewServer(&mcpprot.Implementation{Name: "test", Version: "0"}, nil)
-	Configurator(deps)(context.Background(), &services.DashboardPrincipal{UserId: "user-1"}, server)
-	// AddTool panics on schema problems; a member session registering nothing
-	// and an admin session registering the tool is the whole contract.
-	adminServer := mcpprot.NewServer(&mcpprot.Implementation{Name: "test", Version: "0"}, nil)
-	Configurator(deps)(context.Background(), &services.DashboardPrincipal{UserId: "admin-1", IsAdmin: true}, adminServer)
+	Configurator(deps)(ctx, principal, server)
+
+	clientTransport, serverTransport := mcpprot.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := mcpprot.NewClient(&mcpprot.Implementation{Name: "test-client", Version: "0"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	list, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, tool := range list.Tools {
+		names[tool.Name] = true
+	}
+	return names
 }

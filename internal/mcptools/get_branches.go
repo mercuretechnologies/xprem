@@ -16,7 +16,7 @@ type GetBranchesInput struct {
 	Name  string `json:"name,omitempty" jsonschema:"exact branch name, to fetch a single branch"`
 }
 
-// matchesBranch applies the optional name/id narrowing.
+// matchesBranch applies the optional name narrowing.
 func matchesBranch(branch types.BranchMapping, name string) bool {
 	if name != "" && !strings.EqualFold(branch.BranchName, name) {
 		return false
@@ -56,7 +56,7 @@ func getBranchesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTo
 func registerGetBranches(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_branches",
-		Description: "The branches of an app (appId required, from get_apps), with their release channel, protection flag and current update. Pass name or id to fetch a single branch.",
+		Description: "The branches of an app (appId required, from get_apps), with their release channel, protection flag and current update. Pass name to fetch a single branch.",
 		Annotations: &mcpprot.ToolAnnotations{Title: "List branches", ReadOnlyHint: true},
 	}, getBranchesHandler(deps))
 }

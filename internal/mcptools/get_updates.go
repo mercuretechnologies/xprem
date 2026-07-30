@@ -22,9 +22,9 @@ type GetUpdatesInput struct {
 	Branch         string `json:"branch,omitempty" jsonschema:"filter by branch name, as returned by get_branches"`
 	RuntimeVersion string `json:"runtimeVersion,omitempty" jsonschema:"filter by runtime version, as returned by get_runtime_versions"`
 	Platform       string `json:"platform,omitempty" jsonschema:"filter by platform: ios or android"`
-	UpdateUUID     string `json:"updateUUID,omitempty" jsonschema:"fetch one exact update by its updateUUID"`
-	PublishGroup   string `json:"publishGroup,omitempty" jsonschema:"filter by publish group id, the updates published together"`
-	CommitHash     string `json:"commitHash,omitempty" jsonschema:"filter by the git commit hash the update was built from"`
+	UpdateUUID     string `json:"updateUUID,omitempty" jsonschema:"filter by updateUUID; matches any update whose uuid contains this value, case-insensitive"`
+	PublishGroup   string `json:"publishGroup,omitempty" jsonschema:"filter by publish group id (the updates published together); matches by substring, case-insensitive"`
+	CommitHash     string `json:"commitHash,omitempty" jsonschema:"filter by the git commit hash the update was built from; matches by substring, case-insensitive"`
 	From           string `json:"from,omitempty" jsonschema:"only updates published at or after this RFC3339 timestamp"`
 	To             string `json:"to,omitempty" jsonschema:"only updates published at or before this RFC3339 timestamp"`
 	Limit          int    `json:"limit,omitempty" jsonschema:"maximum updates returned; default 20, max 50; prefer narrowing with filters over raising it"`

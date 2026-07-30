@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
@@ -87,30 +88,30 @@ func TestWriteToolsAuthorize(t *testing.T) {
 	req := callToolRequestFor(writePrincipal)
 
 	calls := map[string]struct {
-		perm string
-		call func(deps Deps) error
+		perm     string
+		callWith func(deps Deps, req *mcpprot.CallToolRequest) error
 	}{
-		"create_branch": {"branch:create", func(deps Deps) error {
+		"create_branch": {"branch:create", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := createBranchHandler(deps)(ctx, req, CreateBranchInput{AppId: "app-1", Branch: "new"})
 			return err
 		}},
-		"delete_branch": {"branch:delete", func(deps Deps) error {
+		"delete_branch": {"branch:delete", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := deleteBranchHandler(deps)(ctx, req, DeleteBranchInput{AppId: "app-1", Branch: "main"})
 			return err
 		}},
-		"create_channel": {"channel:create", func(deps Deps) error {
+		"create_channel": {"channel:create", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := createChannelHandler(deps)(ctx, req, CreateChannelInput{AppId: "app-1", Channel: "prod"})
 			return err
 		}},
-		"delete_channel": {"channel:delete", func(deps Deps) error {
+		"delete_channel": {"channel:delete", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := deleteChannelHandler(deps)(ctx, req, DeleteChannelInput{AppId: "app-1", Channel: "prod"})
 			return err
 		}},
-		"rollback_branch": {"update:publish", func(deps Deps) error {
+		"rollback_branch": {"update:publish", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := rollbackHandler(deps)(ctx, req, RollbackInput{AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", Message: "bad update"})
 			return err
 		}},
-		"republish_update": {"update:publish", func(deps Deps) error {
+		"republish_update": {"update:publish", func(deps Deps, req *mcpprot.CallToolRequest) error {
 			_, _, err := republishHandler(deps)(ctx, req, RepublishInput{AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", UpdateId: "12"})
 			return err
 		}},
@@ -126,7 +127,7 @@ func TestWriteToolsAuthorize(t *testing.T) {
 				}
 				return nil
 			}
-			if err := tc.call(deps); err != nil {
+			if err := tc.callWith(deps, req); err != nil {
 				t.Fatalf("allowed call must succeed, got %v", err)
 			}
 			if seen.Perm != tc.perm || seen.Fallback != FallbackAdminOnly {
@@ -137,17 +138,25 @@ func TestWriteToolsAuthorize(t *testing.T) {
 			denied.Authorize = func(_ context.Context, _ *services.DashboardPrincipal, _ string, _ Access) error {
 				return errors.New("permission denied")
 			}
-			if err := tc.call(denied); err == nil {
+			if err := tc.callWith(denied, req); err == nil {
 				t.Fatal("a denied authorization must refuse the write")
 			}
 
-			// No principal on the session: refused before anything else.
+			// No principal on the session: refused before authorization is
+			// ever consulted.
 			anonymous, _ := writeDeps()
+			authorizeCalled := false
 			anonymous.Authorize = func(_ context.Context, _ *services.DashboardPrincipal, _ string, _ Access) error {
-				t.Fatal("authorize must not be reached without a principal")
+				authorizeCalled = true
 				return nil
 			}
-			_ = anonymous
+			anonymousReq := callToolRequestFor(nil)
+			if err := tc.callWith(anonymous, anonymousReq); err == nil {
+				t.Fatal("a session without a principal must be refused")
+			}
+			if authorizeCalled {
+				t.Error("authorize must not be consulted without a principal")
+			}
 		})
 	}
 }
@@ -309,6 +318,100 @@ func TestPublishToolsRefuseUnknownTarget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no runtime version") {
 		t.Fatalf("republish must check its target too, got %v", err)
+	}
+}
+
+// A partial rollback must name what was rolled back and what to retry, and
+// must not leak the underlying failure: the SDK drops the structured output of
+// a failing call, so the message is all the caller gets.
+func TestRollbackPartialFailureMessage(t *testing.T) {
+	deps, _ := writeDeps()
+	calls := 0
+	deps.Deployments = failAfterFirstPlatform{onCall: func() int { calls++; return calls }}
+
+	_, _, err := rollbackHandler(deps)(context.Background(), callToolRequestFor(writePrincipal), RollbackInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", Message: "bad update",
+	})
+	if err == nil {
+		t.Fatal("expected the partial failure to be reported")
+	}
+	message := err.Error()
+	for _, want := range []string{"rolled back ios", "android failed", "platform=android"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("message must contain %q, got %q", want, message)
+		}
+	}
+	if strings.Contains(message, "10.0.0.5") {
+		t.Errorf("the underlying error must not leak, got %q", message)
+	}
+}
+
+// failAfterFirstPlatform rolls back the first platform and fails the second.
+type failAfterFirstPlatform struct {
+	onCall func() int
+}
+
+func (f failAfterFirstPlatform) CreateBranch(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+func (f failAfterFirstPlatform) DeleteBranch(context.Context, string, string) error { return nil }
+func (f failAfterFirstPlatform) CreateRollback(_ context.Context, _, platform, _, runtimeVersion, branchName, _ string) (*types.Update, error) {
+	if f.onCall() > 1 {
+		return nil, errors.New("failed to insert rollback update into database: dial tcp 10.0.0.5:5432: connect: connection refused")
+	}
+	return &types.Update{Branch: branchName, RuntimeVersion: runtimeVersion, UpdateId: "1"}, nil
+}
+func (f failAfterFirstPlatform) RepublishUpdateByID(context.Context, string, string, string, string) (*types.Update, error) {
+	return &types.Update{}, nil
+}
+func (f failAfterFirstPlatform) RepublishPublishGroup(context.Context, string, string, string, string) (*services.GroupOperationResult, error) {
+	return &services.GroupOperationResult{}, nil
+}
+
+// The publish tools validate their inputs like their route twins, so a mistake
+// reads as a mistake instead of an infrastructure retry.
+func TestPublishToolsValidateInputs(t *testing.T) {
+	deps, _ := writeDeps()
+	ctx := context.Background()
+	req := callToolRequestFor(writePrincipal)
+
+	// A UUID in updateId (get_updates also returns updateUUID) is named.
+	_, _, err := republishHandler(deps)(ctx, req, RepublishInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0",
+		UpdateId: "11111111-1111-1111-1111-111111111111",
+	})
+	if err == nil || !strings.Contains(err.Error(), "numeric") {
+		t.Fatalf("a non-numeric updateId must be named, got %v", err)
+	}
+
+	// Control characters and oversized messages are refused, like the route.
+	if _, _, err := rollbackHandler(deps)(ctx, req, RollbackInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", Message: "bad\x00update",
+	}); err == nil {
+		t.Fatal("a message with a null byte must be refused")
+	}
+	if _, _, err := rollbackHandler(deps)(ctx, req, RollbackInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", Message: strings.Repeat("x", 4096),
+	}); err == nil {
+		t.Fatal("an oversized message must be refused")
+	}
+}
+
+// Publish outputs carry an RFC3339 timestamp, not the Unix-nanosecond integer
+// types.Update holds internally.
+func TestPublishOutputTimestamp(t *testing.T) {
+	deps, _ := writeDeps()
+	_, output, err := rollbackHandler(deps)(context.Background(), callToolRequestFor(writePrincipal), RollbackInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "1.0.0", Message: "bad update", Platform: "ios",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Updates) != 1 || output.Updates[0].Platform != "ios" {
+		t.Fatalf("unexpected output: %+v", output.Updates)
+	}
+	if _, err := time.Parse(time.RFC3339, output.Updates[0].CreatedAt); err != nil {
+		t.Errorf("createdAt must be RFC3339, got %q", output.Updates[0].CreatedAt)
 	}
 }
 

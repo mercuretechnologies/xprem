@@ -116,6 +116,25 @@ func TestAppScopedToolsRequireVisibleApp(t *testing.T) {
 	}
 }
 
+// An app id that does not exist must read as not found for every account,
+// including an admin and any deployment where roles are not enforced: those
+// report restricted=false, so visibility alone cannot answer.
+func TestAppScopedToolsRefuseUnknownApp(t *testing.T) {
+	deps := readDeps()
+	deps.VisibleApps = func(_ context.Context, _ *services.DashboardPrincipal) (bool, map[string]bool, error) {
+		return false, nil, nil
+	}
+	admin := &services.DashboardPrincipal{UserId: "admin-1", IsAdmin: true}
+
+	_, _, err := getBranchesHandler(deps)(context.Background(), callToolRequestFor(admin), GetBranchesInput{AppId: "does-not-exist"})
+	if err == nil || err.Error() != "app not found" {
+		t.Fatalf("an unknown app must be refused, got %v", err)
+	}
+	if _, _, err := getBranchesHandler(deps)(context.Background(), callToolRequestFor(admin), GetBranchesInput{AppId: "app-1"}); err != nil {
+		t.Fatalf("a known app must pass, got %v", err)
+	}
+}
+
 func TestGetBranchesNameFilter(t *testing.T) {
 	deps := readDeps()
 	principal := &services.DashboardPrincipal{UserId: "user-1"}

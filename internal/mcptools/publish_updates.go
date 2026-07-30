@@ -3,8 +3,10 @@ package mcptools
 import (
 	"context"
 	"errors"
+	"expo-open-ota/internal/validation"
 	"log"
 	"strings"
+	"time"
 
 	"expo-open-ota/internal/types"
 
@@ -24,9 +26,31 @@ type RollbackInput struct {
 	Platform       string `json:"platform,omitempty" jsonschema:"limit the rollback to ios or android; both platforms when omitted"`
 }
 
+// PublishedUpdate is what a publish action created. types.Update carries its
+// creation time as Unix nanoseconds in a time.Duration, which serializes as an
+// integer beyond the JSON-safe range and disagrees with the RFC3339 timestamps
+// every read tool returns; this is the caller-facing shape.
+type PublishedUpdate struct {
+	UpdateId       string `json:"updateId"`
+	Branch         string `json:"branch"`
+	RuntimeVersion string `json:"runtimeVersion"`
+	Platform       string `json:"platform,omitempty"`
+	CreatedAt      string `json:"createdAt" jsonschema:"RFC3339 timestamp"`
+}
+
+func publishedUpdate(update types.Update, platform string) PublishedUpdate {
+	return PublishedUpdate{
+		UpdateId:       update.UpdateId,
+		Branch:         update.Branch,
+		RuntimeVersion: update.RuntimeVersion,
+		Platform:       platform,
+		CreatedAt:      time.Unix(0, int64(update.CreatedAt)).UTC().Format(time.RFC3339),
+	}
+}
+
 type PublishOutput struct {
-	Updates      []types.Update `json:"updates" jsonschema:"the updates this action created, one per platform it acted on"`
-	PublishGroup string         `json:"publishGroup,omitempty" jsonschema:"the new publish group, set only when republishing a group"`
+	Updates      []PublishedUpdate `json:"updates" jsonschema:"the updates this action created, one per platform it acted on"`
+	PublishGroup string            `json:"publishGroup,omitempty" jsonschema:"the new publish group, set only when republishing a group"`
 }
 
 func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, input RollbackInput) (*mcpprot.CallToolResult, PublishOutput, error) {
@@ -42,6 +66,9 @@ func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolR
 		if message == "" {
 			return nil, PublishOutput{}, errors.New("message is required: say why this rollback happens")
 		}
+		if err := validation.DisplayName("message", message); err != nil {
+			return nil, PublishOutput{}, err
+		}
 		if err := requireBranchRuntimeVersion(ctx, deps, input.AppId, input.Branch, input.RuntimeVersion); err != nil {
 			return nil, PublishOutput{}, err
 		}
@@ -53,18 +80,25 @@ func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolR
 			platforms = []string{input.Platform}
 		}
 
-		output := PublishOutput{Updates: []types.Update{}}
+		output := PublishOutput{Updates: []PublishedUpdate{}}
+		rolledBack := make([]string, 0, len(platforms))
 		for _, platform := range platforms {
 			update, err := deps.Deployments.CreateRollback(ctx, input.AppId, platform, "", input.RuntimeVersion, input.Branch, message)
 			if err != nil {
-				// A partial rollback must be reported, not hidden: the caller
-				// needs to know which platform is now on the embedded bundle.
-				if len(output.Updates) > 0 {
-					return nil, output, errors.New("rolled back " + output.Updates[0].RuntimeVersion + " for the first platform but failed for " + platform + ": " + err.Error())
+				// A partial rollback must name what happened: the SDK drops the
+				// structured output of a failing call, so the facts have to live
+				// in the message. The underlying error goes to the log only,
+				// like the dashboard does with the same case.
+				if len(rolledBack) > 0 {
+					log.Printf("mcp rollback_branch partially failed for user %s on app %s (%s/%s): rolled back %s, then %s failed: %v",
+						principal.UserId, input.AppId, input.Branch, input.RuntimeVersion, strings.Join(rolledBack, " and "), platform, err)
+					return nil, PublishOutput{}, errors.New("rolled back " + strings.Join(rolledBack, " and ") +
+						" but " + platform + " failed and is still serving the update; retry with platform=" + platform)
 				}
 				return nil, PublishOutput{}, writeError(err, "roll back the branch", "mcp rollback_branch", principal, input.AppId)
 			}
-			output.Updates = append(output.Updates, *update)
+			rolledBack = append(rolledBack, platform)
+			output.Updates = append(output.Updates, publishedUpdate(*update, platform))
 		}
 		log.Printf("mcp rollback_branch: user %s rolled back %s/%s of app %s", principal.UserId, input.Branch, input.RuntimeVersion, input.AppId)
 		return nil, output, nil
@@ -106,6 +140,11 @@ func republishHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTool
 		if err := requireBranchRuntimeVersion(ctx, deps, input.AppId, input.Branch, input.RuntimeVersion); err != nil {
 			return nil, PublishOutput{}, err
 		}
+		if input.UpdateId != "" {
+			if err := validation.NumericID("updateId", input.UpdateId); err != nil {
+				return nil, PublishOutput{}, errors.New(err.Error() + "; get_updates returns it as updateId (updateUUID is a different field)")
+			}
+		}
 
 		if input.PublishGroup != "" {
 			if _, err := uuid.Parse(input.PublishGroup); err != nil {
@@ -116,7 +155,11 @@ func republishHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTool
 				return nil, PublishOutput{}, writeError(err, "republish the publish group", "mcp republish_update", principal, input.AppId)
 			}
 			log.Printf("mcp republish_update: user %s republished group %s of app %s", principal.UserId, input.PublishGroup, input.AppId)
-			return nil, PublishOutput{Updates: result.Updates, PublishGroup: result.PublishGroup}, nil
+			updates := make([]PublishedUpdate, len(result.Updates))
+			for i, update := range result.Updates {
+				updates[i] = publishedUpdate(update, "")
+			}
+			return nil, PublishOutput{Updates: updates, PublishGroup: result.PublishGroup}, nil
 		}
 
 		update, err := deps.Deployments.RepublishUpdateByID(ctx, input.AppId, input.Branch, input.RuntimeVersion, input.UpdateId)
@@ -124,7 +167,7 @@ func republishHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTool
 			return nil, PublishOutput{}, writeError(err, "republish the update", "mcp republish_update", principal, input.AppId)
 		}
 		log.Printf("mcp republish_update: user %s republished update %s of app %s", principal.UserId, input.UpdateId, input.AppId)
-		return nil, PublishOutput{Updates: []types.Update{*update}}, nil
+		return nil, PublishOutput{Updates: []PublishedUpdate{publishedUpdate(*update, "")}}, nil
 	}
 }
 

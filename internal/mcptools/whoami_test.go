@@ -26,7 +26,9 @@ func callToolRequestFor(principal *services.DashboardPrincipal) *mcpprot.CallToo
 type fakeAppLister struct{}
 
 func (fakeAppLister) GetApps(context.Context) ([]config.AppDescriptor, error) {
-	return []config.AppDescriptor{{Id: "app-1"}}, nil
+	// app-hidden exists but is not always visible: that is what lets the
+	// visibility tests refuse it for the right reason.
+	return []config.AppDescriptor{{Id: "app-1"}, {Id: "app-visible"}, {Id: "app-hidden"}}, nil
 }
 
 func testDeps() Deps {
@@ -90,9 +92,14 @@ func TestWhoami(t *testing.T) {
 	if output.UserId != "user-1" || output.Email != "a@b.c" {
 		t.Errorf("unexpected identity: %+v", output)
 	}
+	// One permission entry per app the fake lister reports, each carrying the
+	// full granted/denied picture.
 	permissions := output.Permissions
-	if permissions.Role != "member" || len(permissions.Apps) != 1 || len(permissions.Apps[0].Granted) != 1 {
-		t.Errorf("unexpected description: %+v", permissions)
+	if permissions.Role != "member" || len(permissions.Apps) != 3 {
+		t.Fatalf("unexpected description: %+v", permissions)
+	}
+	if permissions.Apps[0].AppID != "app-1" || len(permissions.Apps[0].Granted) != 1 || len(permissions.Apps[0].Denied) != 1 {
+		t.Errorf("unexpected app entry: %+v", permissions.Apps[0])
 	}
 }
 
