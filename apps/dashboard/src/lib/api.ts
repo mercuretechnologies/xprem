@@ -865,35 +865,32 @@ export class ApiClient {
   }
 
   private async performRefresh(refreshToken: string) {
+    let response: Response;
     try {
       const form = new URLSearchParams();
       form.append('refreshToken', refreshToken);
-      const response = await fetch(`${this.baseUrl}/auth/refreshToken`, {
+      response = await fetch(`${this.baseUrl}/auth/refreshToken`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: form.toString(),
       });
+    } catch (error) {
+      // A network failure means unreachable, not revoked: keep the tokens and
+      // let the caller surface the failure. The next call retries.
+      console.error('Failed to refresh token:', error);
+      throw error;
+    }
 
-      if (!response.ok) {
-        // Only the server saying "this credential is no longer valid" ends the
-        // session. A 500 means it could not reach its database and a 429 means
-        // it is throttling — /auth/refreshToken distinguishes them precisely so
-        // that a blip or a shared office IP does not throw away a perfectly
-        // good refresh token. Keep it and let the caller surface the failure.
-        if (response.status !== 401 && response.status !== 403) {
-          throw new Error(`Refresh unavailable (${response.status})`);
-        }
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
         this.endSession(refreshToken);
         return;
       }
-
-      const data = await response.json();
-      setTokens(data.token, data.refreshToken);
-    } catch (error) {
-      // A network failure is the same story as a 5xx: unreachable, not revoked.
-      console.error('Failed to refresh token:', error);
-      this.endSession(refreshToken);
+      throw new Error(`Refresh unavailable (${response.status})`);
     }
+
+    const data = await response.json();
+    setTokens(data.token, data.refreshToken);
   }
 
   // endSession is what a revocation looks like from the client: the account was

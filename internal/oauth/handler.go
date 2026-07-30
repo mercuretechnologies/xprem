@@ -222,7 +222,7 @@ func (h *OAuthHandler) TokenHandler(w http.ResponseWriter, r *http.Request) {
 	// Tokens in the body: no cache anywhere.
 	w.Header().Set("Cache-Control", "no-store")
 	clientIP := helpers.ClientIP(r)
-	if decision := h.limiter.CheckRefresh(clientIP); !decision.Allowed {
+	if decision := h.limiter.CheckOAuthToken(clientIP); !decision.Allowed {
 		handlers.RenderThrottled(w, decision.RetryAfter)
 		return
 	}
@@ -250,7 +250,7 @@ func (h *OAuthHandler) TokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if errors.Is(err, ErrInvalidGrant) {
-			h.limiter.RecordRefreshFailure(clientIP)
+			h.limiter.RecordOAuthTokenFailure(clientIP)
 			renderTokenError(w, "invalid_grant", "the grant is invalid, expired, or was already used")
 			return
 		}
