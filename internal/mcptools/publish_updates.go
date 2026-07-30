@@ -42,6 +42,9 @@ func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolR
 		if message == "" {
 			return nil, PublishOutput{}, errors.New("message is required: say why this rollback happens")
 		}
+		if err := requireBranchRuntimeVersion(ctx, deps, input.AppId, input.Branch, input.RuntimeVersion); err != nil {
+			return nil, PublishOutput{}, err
+		}
 		platforms := []string{"ios", "android"}
 		if input.Platform != "" {
 			if input.Platform != "ios" && input.Platform != "android" {
@@ -99,6 +102,9 @@ func republishHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTool
 		}
 		if (input.UpdateId == "") == (input.PublishGroup == "") {
 			return nil, PublishOutput{}, errors.New("provide either updateId or publishGroup, not both")
+		}
+		if err := requireBranchRuntimeVersion(ctx, deps, input.AppId, input.Branch, input.RuntimeVersion); err != nil {
+			return nil, PublishOutput{}, err
 		}
 
 		if input.PublishGroup != "" {

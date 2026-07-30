@@ -7,6 +7,7 @@ import (
 	"expo-open-ota/internal/store"
 	"expo-open-ota/internal/validation"
 	"log"
+	"strconv"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -61,6 +62,40 @@ func writeError(err error, action string, logPrefix string, principal *services.
 	}
 	log.Printf("%s failed for user %s on app %s: %v", logPrefix, principal.UserId, appID, err)
 	return errors.New("could not " + action + ", try again later")
+}
+
+// requireBranchRuntimeVersion refuses a publish target that does not exist,
+// with a message naming what to fix. Without it the insert resolves the pair
+// to nothing and fails on a not-null constraint, which reads as an internal
+// error and tells the caller nothing (a branch id passed as a name lands
+// exactly there).
+func requireBranchRuntimeVersion(ctx context.Context, deps Deps, appId string, branchName string, runtimeVersion string) error {
+	branches, err := deps.Branches.GetBranches(ctx, appId)
+	if err != nil {
+		log.Printf("mcp tools could not list the branches of app %s: %v", appId, err)
+		return errors.New("could not check the branch, try again later")
+	}
+	found := false
+	for _, branch := range branches {
+		if branch.BranchName == branchName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("no branch named " + strconv.Quote(branchName) + " on this app; list the branches with get_branches and pass the branch NAME")
+	}
+	versions, err := deps.Branches.GetRuntimeVersionsWithUpdateStats(ctx, appId, branchName)
+	if err != nil {
+		log.Printf("mcp tools could not list the runtime versions of app %s branch %s: %v", appId, branchName, err)
+		return errors.New("could not check the runtime version, try again later")
+	}
+	for _, version := range versions {
+		if version.RuntimeVersion == runtimeVersion {
+			return nil
+		}
+	}
+	return errors.New("branch " + strconv.Quote(branchName) + " has no runtime version " + strconv.Quote(runtimeVersion) + "; list them with get_runtime_versions")
 }
 
 // isActionableWriteError reports whether a write failure tells the caller

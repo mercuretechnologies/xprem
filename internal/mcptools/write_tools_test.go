@@ -280,6 +280,38 @@ func TestRollbackBothPlatforms(t *testing.T) {
 	}
 }
 
+// An unknown branch or runtime version must be named, not turned into an
+// opaque internal error by the not-null constraint on the insert.
+func TestPublishToolsRefuseUnknownTarget(t *testing.T) {
+	deps, fake := writeDeps()
+	ctx := context.Background()
+	req := callToolRequestFor(writePrincipal)
+
+	_, _, err := rollbackHandler(deps)(ctx, req, RollbackInput{
+		AppId: "app-1", Branch: "branch-id-1", RuntimeVersion: "1.0.0", Message: "oops",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no branch named") {
+		t.Fatalf("a branch id passed as a name must be named as unknown, got %v", err)
+	}
+	if len(fake.rollbacks) != 0 {
+		t.Fatal("nothing must reach the service on an unknown target")
+	}
+
+	_, _, err = rollbackHandler(deps)(ctx, req, RollbackInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "9.9.9", Message: "oops",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no runtime version") {
+		t.Fatalf("an unknown runtime version must be named, got %v", err)
+	}
+
+	_, _, err = republishHandler(deps)(ctx, req, RepublishInput{
+		AppId: "app-1", Branch: "main", RuntimeVersion: "9.9.9", UpdateId: "12",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no runtime version") {
+		t.Fatalf("republish must check its target too, got %v", err)
+	}
+}
+
 func TestRollbackRefusesDuringActiveRollout(t *testing.T) {
 	deps, fake := writeDeps()
 	fake.rollbackErr = services.ErrActiveRolloutBlocksPublish
