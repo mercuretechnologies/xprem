@@ -307,13 +307,13 @@ func TestDeviceCursorRoundTrip(t *testing.T) {
 	c := &DeviceCursor{LastSeenAt: now, EASClientID: deviceID}
 	encoded := encodeDeviceCursor(c)
 	require.NotNil(t, encoded)
-	decoded, err := decodeDeviceCursor(*encoded)
+	decoded, err := DecodeDeviceCursor(*encoded)
 	require.NoError(t, err)
 	require.Equal(t, deviceID, decoded.EASClientID)
 	require.True(t, decoded.LastSeenAt.Equal(now))
 
 	require.Nil(t, encodeDeviceCursor(nil))
-	got, err := decodeDeviceCursor("")
+	got, err := DecodeDeviceCursor("")
 	require.NoError(t, err)
 	require.Nil(t, got)
 }

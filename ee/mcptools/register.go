@@ -7,11 +7,17 @@ package mcptools
 import (
 	"context"
 	"expo-open-ota/ee/audit"
+	"expo-open-ota/ee/identity"
+	"expo-open-ota/ee/observe"
 	mittools "expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/services"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// identityUpdateHealth is what the device registry answers per update; aliased
+// so the health tool does not repeat the store's package path.
+type identityUpdateHealth = identity.UpdateHealth
 
 // Deps carries what the enterprise tools need from the composition root;
 // it grows with the tool set. Like its MIT twin, every field is a plain
@@ -20,7 +26,28 @@ type Deps struct {
 	// CanUseSomewhere gates enterprise tool visibility, shared with the MIT
 	// table's vocabulary.
 	CanUseSomewhere func(ctx context.Context, principal *services.DashboardPrincipal, access mittools.Access) bool
-	Audit           *audit.AuditService
+	// Authorize gates one tool execution on one app. CanUseSomewhere above
+	// only decides what a session sees: holding a permission on some app must
+	// never unlock another one.
+	Authorize func(ctx context.Context, principal *services.DashboardPrincipal, appID string, access mittools.Access) error
+	Audit     *audit.AuditService
+	// Apps and VisibleApps gate the app-scoped enterprise tools through the
+	// shared MIT decision.
+	Apps        mittools.AppLister
+	VisibleApps mittools.AppVisibilityFunc
+	// Identity reads the instant-T device registry; nil in stateless mode and
+	// under DISABLE_DEVICE_TELEMETRY.
+	Identity *identity.Service
+	// HealthHistory serves the snapshot history; also nil without ClickHouse,
+	// in which case StateHistory serves the degraded arrival history.
+	HealthHistory *observe.HealthHistory
+	StateHistory  *observe.StateHistory
+	// UpdateFeed resolves a publish group into its updates.
+	UpdateFeed mittools.UpdateFeedReader
+	// Explorer reads the telemetry: logs, events and timings. Nil in
+	// stateless mode and under DISABLE_DEVICE_TELEMETRY; present but serving
+	// degraded answers without ClickHouse.
+	Explorer *observe.Explorer
 }
 
 // registrations is the enterprise tool table, the ee twin of the MIT one.
@@ -31,6 +58,16 @@ var registrations = []struct {
 	access   *mittools.Access
 }{
 	{register: registerQueryAuditLogs, access: &mittools.Access{Fallback: mittools.FallbackAdminOnly}},
+	// Its dashboard twin is AnyViewer: seeing the app is enough.
+	{register: registerGetUpdateHealth},
+	{register: registerSearchDevices, access: &identityAccess},
+	{register: registerGetDevice, access: &identityAccess},
+	{register: registerCountOnlineDevices, access: &identityAccess},
+	{register: registerGetDeviceAttributes, access: &identityAccess},
+	{register: registerQueryLogs, access: &observeAccess},
+	{register: registerGetObserveOverview, access: &observeAccess},
+	{register: registerGetMetricBreakdown, access: &observeAccess},
+	{register: registerGetObserveEvents, access: &observeAccess},
 }
 
 // DeclaredPermissions lists the permission strings this table gates on, for
@@ -49,8 +86,9 @@ func DeclaredPermissions() []string {
 // principal may use.
 func Configurator(deps Deps) func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server) {
 	return func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server) {
+		canUse := mittools.MemoizeVisibility(deps.CanUseSomewhere)
 		for _, registration := range registrations {
-			if registration.access != nil && !deps.CanUseSomewhere(ctx, principal, *registration.access) {
+			if registration.access != nil && !canUse(ctx, principal, *registration.access) {
 				continue
 			}
 			registration.register(server, deps)

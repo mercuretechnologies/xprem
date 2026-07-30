@@ -277,7 +277,15 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			}),
 			eemcptools.Configurator(eemcptools.Deps{
 				CanUseSomewhere: rbacService.MCPCanUseSomewhere,
+				Authorize:       rbacService.MCPAuthorizeTool,
 				Audit:           auditService,
+				Apps:            appRepo,
+				VisibleApps:     rbacService.VisibleAppsForPrincipal,
+				Identity:        identityService,
+				HealthHistory:   healthHistory,
+				StateHistory:    stateHistory,
+				UpdateFeed:      updateService,
+				Explorer:        explorer,
 			}),
 		))
 	}

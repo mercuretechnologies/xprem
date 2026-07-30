@@ -60,6 +60,17 @@ func (s *RBACService) MCPDescribePermissions(ctx context.Context, principal *ser
 	return result, nil
 }
 
+// MCPAccess declares a tool gate from a catalog permission: the fallback is
+// the canonical one of that permission, so a tool can never gate differently
+// from the route that shares it.
+func MCPAccess(perm Permission) mcptools.Access {
+	access := mcptools.Access{Perm: string(perm), Fallback: mcptools.FallbackAdminOnly}
+	if DefaultFallback(perm) == FallbackAnyMember {
+		access.Fallback = mcptools.FallbackAnyMember
+	}
+	return access
+}
+
 func subjectFor(principal *services.DashboardPrincipal) Subject {
 	return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}
 }

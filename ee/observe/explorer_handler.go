@@ -91,7 +91,10 @@ func firstValue(values map[string][]string, key string) string {
 	return ""
 }
 
-func observeBucket(window time.Duration) time.Duration {
+// Bucket is the granularity a window is read at. Exported because every
+// surface asking for a series has to derive it the same way; the caller never
+// picks it, so a wide window cannot ask for a million points.
+func Bucket(window time.Duration) time.Duration {
 	switch {
 	case window <= 6*time.Hour:
 		return 5 * time.Minute
@@ -104,6 +107,10 @@ func observeBucket(window time.Duration) time.Duration {
 	default:
 		return 24 * time.Hour
 	}
+}
+
+func observeBucket(window time.Duration) time.Duration {
+	return Bucket(window)
 }
 
 // splitFilterValues trims repeated query parameters rather than splitting on

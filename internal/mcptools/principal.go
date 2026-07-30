@@ -23,9 +23,9 @@ func PrincipalFromRequest(req *mcpprot.CallToolRequest) *services.DashboardPrinc
 	return services.PrincipalFromExtra(req.Extra.TokenInfo.Extra)
 }
 
-// errAppNotFound reads like a 404 on purpose, mirroring the rbac semantics: a
+// ErrAppNotFound reads like a 404 on purpose, mirroring the rbac semantics: a
 // member without access must not learn the app exists.
-var errAppNotFound = errors.New("app not found")
+var ErrAppNotFound = errors.New("app not found")
 
 // boolPtr is for the SDK's optional tool hints.
 func boolPtr(value bool) *bool {
@@ -49,7 +49,7 @@ func requireAppPermission(ctx context.Context, deps Deps, req *mcpprot.CallToolR
 	// checked here: Authorize already answers ErrNoAppAccess ("app not
 	// found") for a member with no grant on the app, so asking VisibleApps
 	// first would be the same decision at the cost of two more reads.
-	if err := requireAppExists(ctx, deps, appID); err != nil {
+	if err := appExists(ctx, deps.Apps, appID); err != nil {
 		return ctx, nil, err
 	}
 	if err := deps.Authorize(ctx, principal, appID, access); err != nil {
@@ -137,17 +137,22 @@ func isActionableWriteError(err error) bool {
 	return false
 }
 
-// requireAppVisible gates the app-scoped tools: the app must exist and the
+func requireAppVisible(ctx context.Context, deps Deps, principal *services.DashboardPrincipal, appID string) error {
+	return RequireAppAccess(ctx, principal, appID, deps.Apps, deps.VisibleApps)
+}
+
+// RequireAppAccess gates the app-scoped tools: the app must exist and the
 // account must be allowed to see it. Both halves matter: VisibleApps answers
 // restricted=false for admins and for deployments without enforced roles, so
 // on its own it lets an unknown app id through to the services, where a
 // nonexistent app reads as an empty result or a constraint error instead of
-// "no such app".
-func requireAppVisible(ctx context.Context, deps Deps, principal *services.DashboardPrincipal, appID string) error {
+// "no such app". It takes its two dependencies rather than a Deps so the ee
+// tool package shares this one implementation of the answer.
+func RequireAppAccess(ctx context.Context, principal *services.DashboardPrincipal, appID string, apps AppLister, visibleApps AppVisibilityFunc) error {
 	if appID == "" {
 		return errors.New("appId is required; list the apps with get_apps")
 	}
-	restricted, visible, err := deps.VisibleApps(ctx, principal)
+	restricted, visible, err := visibleApps(ctx, principal)
 	if err != nil {
 		log.Printf("mcp tools could not resolve the visible apps of user %s: %v", principal.UserId, err)
 		return errors.New("could not check the app access, try again later")
@@ -156,31 +161,32 @@ func requireAppVisible(ctx context.Context, deps Deps, principal *services.Dashb
 		// A visible app is an app the account holds a grant on, so it exists:
 		// nothing more to read.
 		if !visible[appID] {
-			return errAppNotFound
+			return ErrAppNotFound
 		}
 		return nil
 	}
 	// Unrestricted scope (an admin, or a deployment without enforced roles):
 	// the check above looked at nothing, so an unknown id would reach the
 	// services and read as an empty result or a constraint error.
-	return requireAppExists(ctx, deps, appID)
+	return appExists(ctx, apps, appID)
 }
 
-// requireAppExists answers like an app the account may not see, so the two
-// cases stay indistinguishable.
-func requireAppExists(ctx context.Context, deps Deps, appID string) error {
+// appExists is the tool-layer twin of the dashboard's AppResolverMiddleware.
+// It answers like an app the account may not see, so the two cases stay
+// indistinguishable.
+func appExists(ctx context.Context, apps AppLister, appID string) error {
 	if appID == "" {
 		return errors.New("appId is required; list the apps with get_apps")
 	}
-	apps, err := deps.Apps.GetApps(ctx)
+	descriptors, err := apps.GetApps(ctx)
 	if err != nil {
 		log.Printf("mcp tools could not list the apps: %v", err)
 		return errors.New("could not check the app, try again later")
 	}
-	for _, app := range apps {
-		if app.Id == appID {
+	for _, descriptor := range descriptors {
+		if descriptor.Id == appID {
 			return nil
 		}
 	}
-	return errAppNotFound
+	return ErrAppNotFound
 }

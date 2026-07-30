@@ -712,3 +712,9 @@ func (e *Explorer) readEvents(ctx context.Context, appID string, query ExplorerQ
 	}
 	return events, pointRows.Err()
 }
+
+// MetricDefinitions lists the timings this server knows how to report on.
+// Custom metric names are discovered from the data, not from this list.
+func MetricDefinitions() []MetricDefinition {
+	return append([]MetricDefinition(nil), observedMetricDefinitions...)
+}

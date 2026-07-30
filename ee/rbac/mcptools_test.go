@@ -6,7 +6,6 @@ package rbac
 
 import (
 	"context"
-	eemcptools "expo-open-ota/ee/mcptools"
 	"expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/services"
 	"testing"
@@ -49,9 +48,11 @@ func TestMCPDecisionFunctions(t *testing.T) {
 }
 
 func TestMustValidateMCPTools(t *testing.T) {
-	// The permissions the shipped tool tables declare must all exist.
+	// The MIT table's permissions must all exist in this catalog. The ee
+	// table asserts the same about itself, where importing this package is
+	// not a cycle.
 	require.NotPanics(t, func() {
-		MustValidateMCPTools(mcptools.DeclaredPermissions(), eemcptools.DeclaredPermissions())
+		MustValidateMCPTools(mcptools.DeclaredPermissions())
 	})
 	require.Panics(t, func() {
 		MustValidateMCPTools([]string{"certificat:read"})

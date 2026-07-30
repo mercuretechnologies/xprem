@@ -46,6 +46,10 @@ type AccountPermissions struct {
 // The data interfaces below are consumer-side slices of the MIT services;
 // wire injects the services as-is.
 
+// AppVisibilityFunc is the visibility decision the ee rbac service provides:
+// restricted=false means every app is visible.
+type AppVisibilityFunc func(ctx context.Context, principal *services.DashboardPrincipal) (restricted bool, visible map[string]bool, err error)
+
 type AppLister interface {
 	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
 }
@@ -107,7 +111,7 @@ type Deps struct {
 	SSOEnabled func(ctx context.Context) bool
 	// VisibleApps is the visibility decision: restricted=false means every
 	// app is visible to the principal.
-	VisibleApps func(ctx context.Context, principal *services.DashboardPrincipal) (restricted bool, visible map[string]bool, err error)
+	VisibleApps AppVisibilityFunc
 	// CanUseSomewhere decides tool visibility at session creation: whether
 	// the principal may use an access-gated tool on at least one app.
 	CanUseSomewhere func(ctx context.Context, principal *services.DashboardPrincipal, access Access) bool
@@ -163,11 +167,27 @@ func DeclaredPermissions() []string {
 // still re-checks the specific app through Deps.Authorize.
 func Configurator(deps Deps) func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server) {
 	return func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server) {
+		canUse := MemoizeVisibility(deps.CanUseSomewhere)
 		for _, registration := range registrations {
-			if registration.access != nil && !deps.CanUseSomewhere(ctx, principal, *registration.access) {
+			if registration.access != nil && !canUse(ctx, principal, *registration.access) {
 				continue
 			}
 			registration.register(server, deps)
 		}
+	}
+}
+
+// MemoizeVisibility answers each distinct access once per session build.
+// Several tools share a permission, and the decision behind it reads the
+// account's grants every time; the principal cannot change mid-build.
+func MemoizeVisibility(canUse func(context.Context, *services.DashboardPrincipal, Access) bool) func(context.Context, *services.DashboardPrincipal, Access) bool {
+	answered := map[Access]bool{}
+	return func(ctx context.Context, principal *services.DashboardPrincipal, access Access) bool {
+		if allowed, known := answered[access]; known {
+			return allowed
+		}
+		allowed := canUse(ctx, principal, access)
+		answered[access] = allowed
+		return allowed
 	}
 }

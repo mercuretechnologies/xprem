@@ -5,7 +5,6 @@
 package identity
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"expo-open-ota/internal/handlers"
@@ -288,7 +287,7 @@ func (h *IdentityHandler) ListDevicesHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	cursor, err := decodeDeviceCursor(query.Get("cursor"))
+	cursor, err := DecodeDeviceCursor(query.Get("cursor"))
 	if err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "Invalid cursor.")
 		return
@@ -387,37 +386,13 @@ func sortSchemaKeys(keys []schemaKeyResponse) {
 	})
 }
 
-// encodeDeviceCursor makes the cursor opaque on the wire: base64 of "RFC3339Nano|uuid".
-func encodeDeviceCursor(c *DeviceCursor) *string {
-	if c == nil {
+// encodeDeviceCursor adapts the shared codec to the nullable wire field.
+func encodeDeviceCursor(cursor *DeviceCursor) *string {
+	encoded := EncodeDeviceCursor(cursor)
+	if encoded == "" {
 		return nil
 	}
-	raw := c.LastSeenAt.UTC().Format(time.RFC3339Nano) + "|" + c.EASClientID
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(raw))
 	return &encoded
-}
-
-func decodeDeviceCursor(encoded string) (*DeviceCursor, error) {
-	if encoded == "" {
-		return nil, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.SplitN(string(decoded), "|", 2)
-	if len(parts) != 2 {
-		return nil, errors.New("malformed cursor")
-	}
-	ts, err := time.Parse(time.RFC3339Nano, parts[0])
-	if err != nil {
-		return nil, err
-	}
-	// Validated here so a tampered cursor is a 400, not a 500 from the store's parse.
-	if _, err := uuid.Parse(parts[1]); err != nil {
-		return nil, err
-	}
-	return &DeviceCursor{LastSeenAt: ts, EASClientID: parts[1]}, nil
 }
 
 // maxDeviceFilterValues bounds one device-inventory filter list.

@@ -19,6 +19,9 @@ type MCPService struct {
 }
 
 func NewMCPService(configurators ...ConfigureServer) *MCPService {
+	// The tool schemas are inferred by reflection and never change, so every
+	// session server shares one cache.
+	schemas := &mcpprot.SchemaCache{}
 	// One server per session, built at initialize: the tool list is per
 	// account, so what a session's tools/list shows is already filtered to
 	// what its principal may use.
@@ -27,7 +30,7 @@ func NewMCPService(configurators ...ConfigureServer) *MCPService {
 			Name:    "Expo-Open-Ota",
 			Version: version.Version,
 			Title:   "Expo Open OTA",
-		}, nil)
+		}, &mcpprot.ServerOptions{SchemaCache: schemas})
 		principal := services.PrincipalFromContext(req.Context())
 		for _, configure := range configurators {
 			configure(req.Context(), principal, server)

@@ -537,3 +537,14 @@ func finite(value float64) float64 {
 func segmentKey(value, context string) string {
 	return value + "\x00" + context
 }
+
+// BreakdownDimensions names every dimension a breakdown may split on, sorted.
+// Exported for the surfaces that have to tell a caller what is available.
+func BreakdownDimensions() []string {
+	names := make([]string, 0, len(breakdownDimensions))
+	for name := range breakdownDimensions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}

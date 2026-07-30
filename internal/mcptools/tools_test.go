@@ -106,7 +106,7 @@ func TestAppScopedToolsRequireVisibleApp(t *testing.T) {
 				t.Fatalf("visible app must pass, got %v", err)
 			}
 			err := call("app-hidden")
-			if err == nil || err.Error() != "app not found" {
+			if err == nil || err.Error() != ErrAppNotFound.Error() {
 				t.Fatalf("invisible app must read as 404, got %v", err)
 			}
 			if err := call(""); err == nil || !strings.Contains(err.Error(), "appId is required") {
@@ -127,7 +127,7 @@ func TestAppScopedToolsRefuseUnknownApp(t *testing.T) {
 	admin := &services.DashboardPrincipal{UserId: "admin-1", IsAdmin: true}
 
 	_, _, err := getBranchesHandler(deps)(context.Background(), callToolRequestFor(admin), GetBranchesInput{AppId: "does-not-exist"})
-	if err == nil || err.Error() != "app not found" {
+	if err == nil || err.Error() != ErrAppNotFound.Error() {
 		t.Fatalf("an unknown app must be refused, got %v", err)
 	}
 	if _, _, err := getBranchesHandler(deps)(context.Background(), callToolRequestFor(admin), GetBranchesInput{AppId: "app-1"}); err != nil {

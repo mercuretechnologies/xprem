@@ -8,6 +8,7 @@
 package identity
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // ErrTooManySchemaKeys is returned when declaring a new allowlist key would exceed MaxSchemaKeys.
@@ -240,6 +243,41 @@ type Device struct {
 type DeviceCursor struct {
 	LastSeenAt  time.Time
 	EASClientID string
+}
+
+// EncodeDeviceCursor makes the cursor opaque on the wire: base64 of
+// "RFC3339Nano|uuid". Every surface paginating the inventory shares this
+// codec so a cursor handed out by one is readable by the other.
+func EncodeDeviceCursor(cursor *DeviceCursor) string {
+	if cursor == nil {
+		return ""
+	}
+	raw := cursor.LastSeenAt.UTC().Format(time.RFC3339Nano) + "|" + cursor.EASClientID
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// DecodeDeviceCursor rejects a tampered cursor here rather than letting the
+// store fail on the parse.
+func DecodeDeviceCursor(encoded string) (*DeviceCursor, error) {
+	if encoded == "" {
+		return nil, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return nil, errors.New("malformed cursor")
+	}
+	lastSeenAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return nil, err
+	}
+	if _, err := uuid.Parse(parts[1]); err != nil {
+		return nil, err
+	}
+	return &DeviceCursor{LastSeenAt: lastSeenAt, EASClientID: parts[1]}, nil
 }
 
 // MetadataFilter narrows the device inventory to installs whose metadata contains the key
