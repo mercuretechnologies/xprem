@@ -12,10 +12,9 @@ import (
 )
 
 type GetChannelsInput struct {
-	AppId string `json:"appId"`
-	// Name and Id each narrow the answer to one channel; exact match.
-	Name string `json:"name,omitempty"`
-	Id   string `json:"id,omitempty"`
+	AppId string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
+	Name  string `json:"name,omitempty" jsonschema:"exact channel name, to fetch a single channel"`
+	Id    string `json:"id,omitempty" jsonschema:"exact channel id, to fetch a single channel"`
 }
 
 // matchesChannel applies the optional name/id narrowing.

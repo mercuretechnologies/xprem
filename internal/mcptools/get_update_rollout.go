@@ -12,15 +12,14 @@ import (
 )
 
 type GetUpdateRolloutInput struct {
-	AppId string `json:"appId"`
-	// Branch is the branch name, as returned by get_branches.
-	Branch         string `json:"branch"`
-	RuntimeVersion string `json:"runtimeVersion"`
+	AppId          string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
+	Branch         string `json:"branch" jsonschema:"the branch name, as returned by get_branches"`
+	RuntimeVersion string `json:"runtimeVersion" jsonschema:"the runtime version, as returned by get_runtime_versions"`
 }
 
 type GetUpdateRolloutOutput struct {
-	Active  bool                  `json:"active"`
-	Updates []types.RolloutUpdate `json:"updates"`
+	Active  bool                  `json:"active" jsonschema:"false when no progressive rollout is in progress on this branch and runtime version"`
+	Updates []types.RolloutUpdate `json:"updates" jsonschema:"the rolled-out percentage per platform for the latest update"`
 }
 
 func getUpdateRolloutHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, input GetUpdateRolloutInput) (*mcpprot.CallToolResult, GetUpdateRolloutOutput, error) {

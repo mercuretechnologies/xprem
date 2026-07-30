@@ -22,18 +22,14 @@ const (
 )
 
 type QueryAuditLogsInput struct {
-	// Every filter narrows the answer; combine them to pinpoint events.
-	ActorId string `json:"actorId,omitempty"`
-	Action  string `json:"action,omitempty"`
-	AppId   string `json:"appId,omitempty"`
-	Outcome string `json:"outcome,omitempty"`
-	// From and To bound the event time, RFC3339.
-	From string `json:"from,omitempty"`
-	To   string `json:"to,omitempty"`
-	// BeforeId pages backwards from a previous nextCursor.
-	BeforeId int64 `json:"beforeId,omitempty"`
-	// Limit caps the answer; default 20, max 100.
-	Limit int `json:"limit,omitempty"`
+	ActorId  string `json:"actorId,omitempty" jsonschema:"filter by the acting user id or api key id"`
+	Action   string `json:"action,omitempty" jsonschema:"filter by action name, e.g. update.published or user.created"`
+	AppId    string `json:"appId,omitempty" jsonschema:"filter by app id, as returned by get_apps"`
+	Outcome  string `json:"outcome,omitempty" jsonschema:"filter by outcome: success, denied or failure"`
+	From     string `json:"from,omitempty" jsonschema:"only events at or after this RFC3339 timestamp"`
+	To       string `json:"to,omitempty" jsonschema:"only events at or before this RFC3339 timestamp"`
+	BeforeId int64  `json:"beforeId,omitempty" jsonschema:"page backwards: pass the nextCursor of a previous answer to fetch older events"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"maximum events returned; default 20, max 100"`
 }
 
 type AuditEventOutput struct {

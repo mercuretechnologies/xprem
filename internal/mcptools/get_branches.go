@@ -12,18 +12,13 @@ import (
 )
 
 type GetBranchesInput struct {
-	AppId string `json:"appId"`
-	// Name and Id each narrow the answer to one branch; exact match.
-	Name string `json:"name,omitempty"`
-	Id   string `json:"id,omitempty"`
+	AppId string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
+	Name  string `json:"name,omitempty" jsonschema:"exact branch name, to fetch a single branch"`
 }
 
 // matchesBranch applies the optional name/id narrowing.
-func matchesBranch(branch types.BranchMapping, name string, id string) bool {
+func matchesBranch(branch types.BranchMapping, name string) bool {
 	if name != "" && !strings.EqualFold(branch.BranchName, name) {
-		return false
-	}
-	if id != "" && (branch.BranchId == nil || *branch.BranchId != id) {
 		return false
 	}
 	return true
@@ -49,7 +44,7 @@ func getBranchesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTo
 		}
 		output := GetBranchesOutput{Branches: []types.BranchMapping{}}
 		for _, branch := range branches {
-			if !matchesBranch(branch, input.Name, input.Id) {
+			if !matchesBranch(branch, input.Name) {
 				continue
 			}
 			output.Branches = append(output.Branches, branch)
@@ -66,9 +61,8 @@ func registerGetBranches(server *mcpprot.Server, deps Deps) {
 }
 
 type GetRuntimeVersionsInput struct {
-	AppId string `json:"appId"`
-	// Branch is the branch name, as returned by get_branches.
-	Branch string `json:"branch"`
+	AppId  string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
+	Branch string `json:"branch" jsonschema:"the branch name, as returned by get_branches"`
 }
 
 type GetRuntimeVersionsOutput struct {

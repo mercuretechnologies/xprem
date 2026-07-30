@@ -13,7 +13,7 @@ import (
 var certificateAccess = Access{Perm: "certificate:read", Fallback: FallbackAdminOnly}
 
 type GetCertificateInput struct {
-	AppId string `json:"appId"`
+	AppId string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
 }
 
 type GetCertificateOutput struct {

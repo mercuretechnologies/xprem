@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/types"
@@ -32,7 +33,13 @@ func (fakeReadServices) GetChannels(_ context.Context, _ string) ([]types.Channe
 }
 
 func (fakeReadServices) GetUpdateFeed(_ context.Context, _ string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error) {
-	items := make([]types.UpdateFeedItem, 0, query.Limit)
+	// Always a full page plus one, so pagination has a next page to signal.
+	items := make([]types.UpdateFeedItem, query.Limit)
+	for i := range items {
+		items[i].UpdateId = "1"
+		items[i].BranchID = 7
+		items[i].FeedCreatedAt = time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC).Add(-time.Duration(i) * time.Minute)
+	}
 	return items, nil
 }
 
@@ -122,27 +129,6 @@ func TestGetBranchesNameFilter(t *testing.T) {
 	}
 }
 
-func TestBranchLookupById(t *testing.T) {
-	deps := readDeps()
-	principal := &services.DashboardPrincipal{UserId: "user-1"}
-	ctx := context.Background()
-	req := callToolRequestFor(principal)
-
-	// get_branches by id.
-	_, branches, err := getBranchesHandler(deps)(ctx, req, GetBranchesInput{AppId: "app-1", Id: "branch-id-2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(branches.Branches) != 1 || branches.Branches[0].BranchName != "staging" {
-		t.Fatalf("expected staging by id, got %+v", branches.Branches)
-	}
-
-	// The name-keyed services take the branch name straight through.
-	if _, _, err := getRuntimeVersionsHandler(deps)(ctx, req, GetRuntimeVersionsInput{AppId: "app-1", Branch: "main"}); err != nil {
-		t.Fatalf("branch name must pass through, got %v", err)
-	}
-}
-
 func TestChannelLookupById(t *testing.T) {
 	deps := readDeps()
 	principal := &services.DashboardPrincipal{UserId: "user-1"}
@@ -166,6 +152,31 @@ func TestGetChannelRolloutsOnlyActive(t *testing.T) {
 	}
 	if len(output.Rollouts) != 1 || output.Rollouts[0].ChannelName != "production" || output.Rollouts[0].Rollout.Percentage != 25 {
 		t.Fatalf("expected the production rollout only, got %+v", output.Rollouts)
+	}
+}
+
+func TestGetUpdatesPagination(t *testing.T) {
+	deps := readDeps()
+	principal := &services.DashboardPrincipal{UserId: "user-1"}
+	req := callToolRequestFor(principal)
+	ctx := context.Background()
+
+	_, output, err := getUpdatesHandler(deps)(ctx, req, GetUpdatesInput{AppId: "app-1", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Updates) != 5 {
+		t.Fatalf("expected the page capped at 5, got %d", len(output.Updates))
+	}
+	if output.NextCursor == "" {
+		t.Fatal("a full page plus one must signal a next page")
+	}
+	// The cursor round-trips into the next query.
+	if _, _, err := getUpdatesHandler(deps)(ctx, req, GetUpdatesInput{AppId: "app-1", Limit: 5, Cursor: output.NextCursor}); err != nil {
+		t.Fatalf("nextCursor must be accepted back, got %v", err)
+	}
+	if _, _, err := getUpdatesHandler(deps)(ctx, req, GetUpdatesInput{AppId: "app-1", Cursor: "not-a-cursor!!"}); err == nil {
+		t.Fatal("a malformed cursor must be refused")
 	}
 }
 

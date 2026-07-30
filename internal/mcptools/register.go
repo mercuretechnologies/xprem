@@ -38,9 +38,9 @@ type AppPermissions struct {
 // AccountPermissions is the account's full permission picture, one entry per
 // app it can see; the MIT twin of the rbac description wire maps onto it.
 type AccountPermissions struct {
-	Role          string           `json:"role"`
-	RolesEnforced bool             `json:"rolesEnforced"`
-	Apps          []AppPermissions `json:"apps"`
+	Role          string           `json:"role" jsonschema:"admin or member; admins hold every permission on every app"`
+	RolesEnforced bool             `json:"rolesEnforced" jsonschema:"whether per-app roles are enforced; when false, the community defaults decide"`
+	Apps          []AppPermissions `json:"apps" jsonschema:"one entry per app this account can see; apps not listed are invisible to it"`
 }
 
 // The data interfaces below are consumer-side slices of the MIT services;

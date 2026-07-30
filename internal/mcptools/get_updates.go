@@ -18,25 +18,23 @@ const (
 )
 
 type GetUpdatesInput struct {
-	AppId string `json:"appId"`
-	// Every filter narrows the feed; combine them to pinpoint an update.
-	// Branch is the branch name, as returned by get_branches.
-	Branch         string `json:"branch,omitempty"`
-	RuntimeVersion string `json:"runtimeVersion,omitempty"`
-	Platform       string `json:"platform,omitempty"`
-	UpdateUUID     string `json:"updateUUID,omitempty"`
-	PublishGroup   string `json:"publishGroup,omitempty"`
-	CommitHash     string `json:"commitHash,omitempty"`
-	// From and To bound the publication date, RFC3339.
-	From string `json:"from,omitempty"`
-	To   string `json:"to,omitempty"`
-	// Limit caps the answer; default 20, max 50. Use the filters rather than
-	// a big limit.
-	Limit int `json:"limit,omitempty"`
+	AppId          string `json:"appId" jsonschema:"the app id, as returned by get_apps"`
+	Branch         string `json:"branch,omitempty" jsonschema:"filter by branch name, as returned by get_branches"`
+	RuntimeVersion string `json:"runtimeVersion,omitempty" jsonschema:"filter by runtime version, as returned by get_runtime_versions"`
+	Platform       string `json:"platform,omitempty" jsonschema:"filter by platform: ios or android"`
+	UpdateUUID     string `json:"updateUUID,omitempty" jsonschema:"fetch one exact update by its updateUUID"`
+	PublishGroup   string `json:"publishGroup,omitempty" jsonschema:"filter by publish group id, the updates published together"`
+	CommitHash     string `json:"commitHash,omitempty" jsonschema:"filter by the git commit hash the update was built from"`
+	From           string `json:"from,omitempty" jsonschema:"only updates published at or after this RFC3339 timestamp"`
+	To             string `json:"to,omitempty" jsonschema:"only updates published at or before this RFC3339 timestamp"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"maximum updates returned; default 20, max 50; prefer narrowing with filters over raising it"`
+	Cursor         string `json:"cursor,omitempty" jsonschema:"page forward: pass the nextCursor of a previous answer to fetch older updates"`
 }
 
 type GetUpdatesOutput struct {
 	Updates []types.UpdateFeedItem `json:"updates"`
+	// NextCursor is set when more updates exist past this page.
+	NextCursor string `json:"nextCursor,omitempty" jsonschema:"present when more updates exist; pass it back as cursor to fetch the next page"`
 }
 
 func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, input GetUpdatesInput) (*mcpprot.CallToolResult, GetUpdatesOutput, error) {
@@ -56,6 +54,7 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 		if limit > maxUpdatesLimit {
 			limit = maxUpdatesLimit
 		}
+		// One extra row answers "is there a next page"; it is never returned.
 		query := types.UpdateFeedQuery{
 			Branch:         input.Branch,
 			RuntimeVersion: input.RuntimeVersion,
@@ -63,7 +62,16 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 			UpdateUUID:     input.UpdateUUID,
 			PublishGroup:   input.PublishGroup,
 			CommitHash:     input.CommitHash,
-			Limit:          limit,
+			Limit:          limit + 1,
+		}
+		cursor, err := types.DecodeUpdateFeedCursor(input.Cursor)
+		if err != nil {
+			return nil, GetUpdatesOutput{}, errors.New("cursor is invalid; pass a nextCursor from a previous answer")
+		}
+		if cursor != nil {
+			query.CursorCreatedAt = &cursor.CreatedAt
+			query.CursorBranchID = cursor.BranchID
+			query.CursorUpdateID = cursor.UpdateID
 		}
 		for _, bound := range []struct {
 			raw    string
@@ -90,13 +98,18 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 		if updates == nil {
 			updates = []types.UpdateFeedItem{}
 		}
-		return nil, GetUpdatesOutput{Updates: updates}, nil
+		output := GetUpdatesOutput{Updates: updates}
+		if len(updates) > limit {
+			output.Updates = updates[:limit]
+			output.NextCursor = types.EncodeUpdateFeedCursor(output.Updates[len(output.Updates)-1])
+		}
+		return nil, output, nil
 	}
 }
 
 func registerGetUpdates(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_updates",
-		Description: "The published updates of an app (appId required), newest first, max 50 per call. Narrow with branch, runtimeVersion, platform, updateUUID, publishGroup, commitHash, or a from/to date range instead of paging.",
+		Description: "The published updates of an app (appId required), newest first, max 50 per call. Narrow with branch, runtimeVersion, platform, updateUUID, publishGroup, commitHash, or a from/to date range; when nextCursor is present, pass it back as cursor for the next page.",
 	}, getUpdatesHandler(deps))
 }
