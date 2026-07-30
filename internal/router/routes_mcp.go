@@ -27,7 +27,7 @@ func mcpCORS(next http.Handler) http.Handler {
 }
 
 func registerMCPRoutes(r *mux.Router, container *AppContainer) {
-	if container.MCPHandler == nil {
+	if container.MCPHandler == nil || container.OAuthService == nil {
 		return
 	}
 	mcpRouter := r.PathPrefix("/mcp").Subrouter()
