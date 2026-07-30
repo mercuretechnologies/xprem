@@ -1,4 +1,4 @@
-import { getRefreshToken, getToken, logout, setTokens } from '@/lib/auth.ts';
+import { getRefreshToken, getToken, logout, saveReturnTo, setTokens } from '@/lib/auth.ts';
 
 export type APIProblemPayload = {
   title: string;
@@ -117,7 +117,9 @@ export type BranchRecord = {
   branchId: string;
   releaseChannel?: string | null;
   createdAt: string | null;
-  // Enterprise branch protection; always false in stateless mode.
+  // Branch protection: a protected branch refuses to be deleted. It says
+  // nothing about what may be published on it, which is decided per API token.
+  // Always false in stateless mode.
   protected: boolean;
   currentUpdate?: BranchUpdateState | null;
 };
@@ -596,15 +598,30 @@ export type CreateApiKeyResponse = {
   apiKey: string;
 };
 
-// Enterprise per-token access restrictions (/apiKeys/restrictions,
-// control-plane only). A token absent from the list is in the default state:
-// no access to protected branches and no IP allowlist. Empty allowedIps means
-// the token can be used from any source address.
-export type ApiKeyRestrictionsRecord = {
+// What one API token is allowed to do (/apiKeys/access, control-plane only).
+//
+// An empty branchRules means the token reaches EVERY branch, which is the
+// default of a fresh token and the only state a community deployment sees.
+// Empty allowedIps means it can be used from any source address.
+//
+// There is no separate say over creating a branch: publishing to a branch that
+// does not exist is how the CLI opens one, so a rule that admits the name
+// admits the creation.
+export type ApiKeyAccessRecord = {
   apiKeyId: string;
-  canAccessProtectedBranches: boolean;
+  branchRules: BranchRuleRecord[];
   allowedIps: string[];
 };
+
+// One rule: a branch name or a "*" pattern, and what the token may do there.
+// Both writes imply read on the server, so a rule granting publish also grants
+// the reads eoas performs before publishing.
+export type BranchRuleRecord = {
+  pattern: string;
+  actions: BranchRuleAction[];
+};
+
+export type BranchRuleAction = 'read' | 'publish' | 'rollback';
 
 // A dashboard user account. `id` is empty in stateless mode, where the only
 // account comes from ADMIN_EMAIL and is not a database row. `lastConnectedAt`
@@ -729,7 +746,7 @@ export type ServerSettings = {
   AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID: string;
   PRIVATE_CLOUDFRONT_KEY_PATH: string;
   PROMETHEUS_ENABLED: string;
-  CDN_TYPE: '' | 'cloudfront' | 'gcs-direct' | 'azure-direct' | 'generic';
+  CDN_TYPE: '' | 'cloudfront' | 'gcs-direct' | 's3-direct' | 'azure-direct' | 'generic';
   EXPO_ACCOUNT_USERNAME: string;
   SSO_ENABLED: boolean;
   APPS: { id: string; name?: string }[];
@@ -848,34 +865,32 @@ export class ApiClient {
   }
 
   private async performRefresh(refreshToken: string) {
+    let response: Response;
     try {
       const form = new URLSearchParams();
       form.append('refreshToken', refreshToken);
-      const response = await fetch(`${this.baseUrl}/auth/refreshToken`, {
+      response = await fetch(`${this.baseUrl}/auth/refreshToken`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: form.toString(),
       });
+    } catch (error) {
+      // A network failure means unreachable, not revoked: keep the tokens and
+      // let the caller surface the failure. The next call retries.
+      console.error('Failed to refresh token:', error);
+      throw error;
+    }
 
-      if (!response.ok) {
-        // Only the server saying "this credential is no longer valid" ends the
-        // session. A 500 means it could not reach its database and a 429 means
-        // it is throttling — /auth/refreshToken distinguishes them precisely so
-        // that a blip or a shared office IP does not throw away a perfectly
-        // good refresh token. Keep it and let the caller surface the failure.
-        if (response.status !== 401 && response.status !== 403) {
-          throw new Error(`Refresh unavailable (${response.status})`);
-        }
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
         this.endSession(refreshToken);
         return;
       }
-
-      const data = await response.json();
-      setTokens(data.token, data.refreshToken);
-    } catch (error) {
-      // A network failure is the same story as a 5xx: unreachable, not revoked.
-      console.error('Failed to refresh token:', error);
+      throw new Error(`Refresh unavailable (${response.status})`);
     }
+
+    const data = await response.json();
+    setTokens(data.token, data.refreshToken);
   }
 
   // endSession is what a revocation looks like from the client: the account was
@@ -893,7 +908,13 @@ export class ApiClient {
       return;
     }
     logout();
-    window.location.assign('/login');
+    // Remember where the session died so the next sign-in resumes there; the
+    // stored path is router-relative, so the /dashboard basename is stripped.
+    const currentPath = window.location.pathname.replace(/^\/dashboard/, '');
+    if (currentPath && currentPath !== '/login') {
+      saveReturnTo(currentPath + window.location.search);
+    }
+    window.location.assign('/dashboard/login');
   }
 
   public async login(email: string, password: string) {
@@ -901,6 +922,37 @@ export class ApiClient {
     form.append('email', email);
     form.append('password', password);
     return this.request<{ token: string; refreshToken: string }>(`/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+  }
+
+  // The OAuth consent screen echoes back the authorization request it was
+  // opened with, plus the user's decision; the server re-validates everything
+  // and answers with the redirect delivering the code (or the denial).
+  public async submitOAuthConsent(
+    authorizationParams: URLSearchParams,
+    decision: 'approve' | 'deny'
+  ) {
+    const form = new URLSearchParams();
+    for (const name of [
+      'client_id',
+      'redirect_uri',
+      'response_type',
+      'code_challenge',
+      'code_challenge_method',
+      'scope',
+      'state',
+      'resource',
+    ]) {
+      const value = authorizationParams.get(name);
+      if (value) {
+        form.append(name, value);
+      }
+    }
+    form.append('decision', decision);
+    return this.request<{ redirectUrl: string }>(`/api/oauth/consent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
@@ -1185,26 +1237,6 @@ export class ApiClient {
     });
   }
 
-  public async getApiKeyRestrictions() {
-    return this.request<ApiKeyRestrictionsRecord[]>(`${this.appScope()}/apiKeys/restrictions`, {
-      method: 'GET',
-    });
-  }
-
-  public async setApiKeyRestrictions(
-    apiKeyId: string,
-    restrictions: { canAccessProtectedBranches: boolean; allowedIps: string[] }
-  ) {
-    return this.request<void>(
-      `${this.appScope()}/apiKeys/${encodeURIComponent(apiKeyId)}/restrictions`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(restrictions),
-      }
-    );
-  }
-
   public async setBranchProtection(branchName: string, isProtected: boolean) {
     return this.request<void>(
       `${this.appScope()}/branches/${encodeURIComponent(branchName)}/protection`,
@@ -1214,6 +1246,29 @@ export class ApiClient {
         body: JSON.stringify({ protected: isProtected }),
       }
     );
+  }
+
+  public async getApiKeyAccess() {
+    return this.request<ApiKeyAccessRecord[]>(`${this.appScope()}/apiKeys/access`, {
+      method: 'GET',
+    });
+  }
+
+  // The whole access of a token is replaced at once, so every field has to be
+  // sent every time: an omitted branchRules would not mean "leave them alone",
+  // it would clear the list, which the server reads as "every branch".
+  public async setApiKeyAccess(
+    apiKeyId: string,
+    access: {
+      branchRules: BranchRuleRecord[];
+      allowedIps: string[];
+    }
+  ) {
+    return this.request<void>(`${this.appScope()}/apiKeys/${encodeURIComponent(apiKeyId)}/access`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(access),
+    });
   }
 
   // The one route that answers something other than JSON.

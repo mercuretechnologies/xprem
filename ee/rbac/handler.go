@@ -222,16 +222,9 @@ func (h *RBACHandler) GetGrantSummaryHandler(w http.ResponseWriter, r *http.Requ
 }
 
 // MyPermissionsResponse tells the dashboard what to show the current account.
-//
-// RBACEnabled answers "are fine-grained roles enforced right now", which needs
-// a control plane AND a valid enterprise license. False means the community
-// rules apply and isAdmin decides everything. It is named for the mechanism
-// and not just "enabled" because the accounts themselves carry an enabled
-// flag, and the two are unrelated: a disabled account cannot obtain a session
-// at all, which is settled long before this response is built.
-//
-// For an admin, or when roles are not enforced, Apps is null: there is nothing
-// per-app to say, the answer is the same everywhere.
+// RBACEnabled reports whether fine-grained roles are enforced (false means
+// isAdmin decides everything); Apps is null for admins or when roles are not
+// enforced.
 type MyPermissionsResponse struct {
 	RBACEnabled bool                `json:"rbacEnabled"`
 	IsAdmin     bool                `json:"isAdmin"`

@@ -103,8 +103,6 @@ func TestExplorerHandlerParsesTypedIdentityFilter(t *testing.T) {
 	require.JSONEq(t, `{"planLevel":42}`, string(reader.overviewQuery.MetadataFilter[0]))
 }
 
-// One attribute, several values: the cohort is the union, so the filter
-// reaches the reader as one containment document per value.
 func TestExplorerHandlerParsesSeveralIdentityValues(t *testing.T) {
 	reader := &recordingExplorer{}
 	handler := NewExplorerHandler(reader, staticSchema{schema: identity.Schema{
@@ -120,8 +118,6 @@ func TestExplorerHandlerParsesSeveralIdentityValues(t *testing.T) {
 	require.JSONEq(t, `{"plan":"pro"}`, string(reader.overviewQuery.MetadataFilter[0]))
 	require.JSONEq(t, `{"plan":"enterprise"}`, string(reader.overviewQuery.MetadataFilter[1]))
 
-	// One value that cannot be the declared type makes the whole question a
-	// 400, rather than quietly answering the narrower one.
 	typed := NewExplorerHandler(reader, staticSchema{schema: identity.Schema{
 		"planLevel": {Key: "planLevel", Type: identity.ValueTypeNumber, MaxLength: 256},
 	}})
@@ -129,9 +125,6 @@ func TestExplorerHandlerParsesSeveralIdentityValues(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, bad.Code)
 }
 
-// Several attributes narrow together: containment of one document already
-// means "plan is pro AND tenant is globex", so the cross-product of the values
-// is what reaches the cohort lookup.
 func TestExplorerHandlerParsesSeveralIdentityAttributes(t *testing.T) {
 	reader := &recordingExplorer{}
 	handler := NewExplorerHandler(reader, staticSchema{schema: identity.Schema{
@@ -152,9 +145,7 @@ func TestExplorerHandlerParsesSeveralIdentityAttributes(t *testing.T) {
 		string(reader.overviewQuery.MetadataFilter[1]),
 	)
 
-	// A pair without its colon names nothing.
 	require.Equal(t, http.StatusBadRequest, serveExplorer(handler, "/observe/overview?attr=plan").Code)
-	// A key the schema never declared is a malformed question, not an empty one.
 	require.Equal(
 		t,
 		http.StatusBadRequest,
@@ -196,10 +187,6 @@ func TestLogCursorRoundTrip(t *testing.T) {
 	require.Equal(t, cursor, *decoded)
 }
 
-// A cursor is server-issued, so anything that does not decode exactly is
-// corruption or a hand-crafted value. Reading what parses and ignoring the rest
-// would page from a position nobody asked for, silently: the previous decoder
-// took "42junk" for 42 and "0x10" for 16.
 func TestLogCursorRefusesAnythingButAnExactKey(t *testing.T) {
 	timestamp := time.Date(2026, 7, 24, 10, 0, 0, 123, time.UTC).Format(time.RFC3339Nano)
 	for _, key := range []string{"42junk", "0x10", " 42", "42 99", "", "-1", "4.2"} {
@@ -209,8 +196,6 @@ func TestLogCursorRefusesAnythingButAnExactKey(t *testing.T) {
 		require.Nil(t, decoded, "key %q", key)
 	}
 
-	// Both shapes the server itself mints still decode: a content key, and the
-	// outbox id of a native crash.
 	for _, key := range []string{"5a2b1c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "42"} {
 		valid := base64.RawURLEncoding.EncodeToString([]byte(timestamp + "|" + key))
 		decoded, err := DecodeLogCursor(valid)
@@ -232,9 +217,6 @@ func TestExplorerHandlerParsesHardwareDimensions(t *testing.T) {
 	require.Equal(t, []string{"iPhone18,2"}, reader.overviewQuery.DeviceModels)
 }
 
-// A tab left in the background comes back with a cursor from an hour ago. The
-// window it asks for is what the query costs, so on a large fleet an unclamped
-// cursor is an hour of the registry aggregated in one request.
 func TestExplorerCheckInsClampsStaleCursor(t *testing.T) {
 	reader := &recordingExplorer{}
 	stale := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
@@ -249,8 +231,6 @@ func TestExplorerCheckInsClampsStaleCursor(t *testing.T) {
 	)
 }
 
-// A cursor from the future would otherwise pin the window shut and the map
-// would never ping again.
 func TestExplorerCheckInsClampsFutureCursor(t *testing.T) {
 	reader := &recordingExplorer{}
 	ahead := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
@@ -265,9 +245,6 @@ func TestExplorerCheckInsRejectsUnparsableCursor(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
-// The feed answers from the registry, so a deployment with no ClickHouse still
-// gets its pings. Without a reader at all it degrades to an empty feed rather
-// than an error, so the map simply stops animating.
 func TestExplorerCheckInsWithoutReaderIsEmpty(t *testing.T) {
 	recorder := serveExplorer(NewExplorerHandler(nil, nil), "/observe/check-ins")
 	require.Equal(t, http.StatusOK, recorder.Code)
@@ -294,9 +271,6 @@ func TestExplorerBreakdownRequiresMetric(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
-// A breakdown groups on exactly one dimension. Links minted when it took a
-// list still resolve, on their leading dimension, rather than 400-ing a
-// bookmark; an unknown name is still refused outright.
 func TestExplorerBreakdownTakesOneDimension(t *testing.T) {
 	reader := &recordingExplorer{}
 	recorder := serveExplorer(
@@ -347,11 +321,8 @@ func TestExplorerBreakdownReportsUnavailableWithoutReader(t *testing.T) {
 	require.Empty(t, response.Segments)
 }
 
-// Every dimension the handler accepts must resolve to a column or to an
-// expression, and to exactly one of the two: the value lands in the SQL string
-// itself, so a dimension the query builder cannot spell breaks at runtime
-// instead of at review time, and one that carries both would silently group by
-// whichever branch happens to be read first.
+// TestBreakdownDimensionsAreAllMapped verifies every dimension resolves to
+// exactly one of a column or an expression.
 func TestBreakdownDimensionsAreAllMapped(t *testing.T) {
 	for name, dimension := range breakdownDimensions {
 		require.True(t, IsBreakdownDimension(name), name)
@@ -361,9 +332,6 @@ func TestBreakdownDimensionsAreAllMapped(t *testing.T) {
 	require.False(t, IsBreakdownDimension(""))
 }
 
-// The conditions are the dimensions read from a measurement's own params, and
-// the handler accepts a query parameter per name. Anything else in that list
-// would open a query parameter the query builder has no expression for.
 func TestConditionDimensionsAreTheExpressionOnes(t *testing.T) {
 	require.Equal(
 		t,
@@ -375,10 +343,8 @@ func TestConditionDimensionsAreTheExpressionOnes(t *testing.T) {
 	}
 }
 
-// Splitting a timing that reports no conditions leaves the baseline with
-// nothing to take a percentile of, and ClickHouse answers nan. JSON cannot
-// spell it, so letting one through fails the marshal and turns an empty answer
-// into a 500 on the whole endpoint.
+// TestBreakdownSurvivesEmptyPercentiles verifies finite() replaces NaN/Inf
+// percentiles, which JSON cannot marshal.
 func TestBreakdownSurvivesEmptyPercentiles(t *testing.T) {
 	require.Equal(t, 0.0, finite(math.NaN()))
 	require.Equal(t, 0.0, finite(math.Inf(1)))
@@ -392,17 +358,12 @@ func TestBreakdownSurvivesEmptyPercentiles(t *testing.T) {
 	require.Contains(t, string(body), `"p50":0`)
 }
 
-// A condition narrows the timings only, and it has to reach the SQL as a bound
-// parameter: the values are segment labels that came back from a previous
-// query, so they are the one part of the predicate that is not from the
-// allowlist.
 func TestConditionsWhereBindsItsValues(t *testing.T) {
 	where, args := conditionsWhere(map[string][]string{
 		"thermalState": {"serious", "critical"},
 		"networkType":  {"cellular"},
 	})
 	require.Equal(t, []any{[]string{"cellular"}, []string{"serious", "critical"}}, args)
-	// Sorted by dimension name, so the same filters always build the same SQL.
 	predicate := string(where)
 	require.Less(
 		t,
@@ -416,8 +377,6 @@ func TestConditionsWhereBindsItsValues(t *testing.T) {
 	require.Empty(t, noArgs)
 }
 
-// Several values per filter is what turns a filter into a comparison: two
-// branches side by side, three device models against each other.
 func TestExplorerHandlerParsesMultipleFilterValues(t *testing.T) {
 	reader := &recordingExplorer{}
 	recorder := serveExplorer(
@@ -430,8 +389,6 @@ func TestExplorerHandlerParsesMultipleFilterValues(t *testing.T) {
 	require.Equal(t, []string{"production", "staging"}, reader.overviewQuery.Branches)
 	require.Equal(t, []string{"ios", "android"}, reader.overviewQuery.Platform)
 	require.Equal(t, []string{"26.1", "18.6"}, reader.overviewQuery.OSVersions)
-	// Apple hardware identifiers carry a comma, which is exactly why the wire
-	// format repeats the parameter instead of separating values with one.
 	require.Equal(t, []string{"iPhone18,2", "SM-A546B"}, reader.overviewQuery.DeviceModels)
 }
 
@@ -447,9 +404,8 @@ func TestExplorerHandlerRejectsTooManyFilterValues(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
-// A crash at launch is only ever witnessed by the manifest poll that follows,
-// so the record carries what the registry knows and nothing else. The arm has
-// to drop out rather than answer a question it cannot answer.
+// TestNativeCrashArmHonoursOnlyWhatItKnows verifies the native-crash arm drops
+// out rather than answer filters it has no data to satisfy.
 func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 	base := LogsQuery{ExplorerQuery: ExplorerQuery{
 		From: time.Now().Add(-time.Hour),
@@ -461,7 +417,6 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 	require.Contains(t, where, "h.failure_type = ?")
 	require.Contains(t, args, string(identity.FailureTypeUpdate))
 
-	// Dimensions the registry holds narrow it like any other row.
 	narrowed := base
 	narrowed.Branches = []string{"production"}
 	narrowed.DeviceModels = []string{"SM-A546B"}
@@ -470,8 +425,6 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 	require.Contains(t, where, "h.branch IN ?")
 	require.Contains(t, where, "h.device_model IN ?")
 
-	// An update group was already resolved to the updates it contains, which
-	// is the same question asked of a row that has no group column.
 	grouped := base
 	grouped.UpdateGroupIDs = []string{"99999999-9999-9999-9999-999999999999"}
 	grouped.MemberUpdateIDs = []string{"11111111-1111-1111-1111-111111111111"}
@@ -480,8 +433,7 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 	require.Contains(t, where, "h.update_id IN ?")
 	require.Contains(t, args, []string{"11111111-1111-1111-1111-111111111111"})
 
-	// An update AND a group is an intersection, the same as on the telemetry
-	// arm: two predicates, not one merged list that would widen the answer.
+	// An update AND a group is an intersection: two predicates, not one merged list.
 	both := grouped
 	both.UpdateIDs = []string{"22222222-2222-2222-2222-222222222222"}
 	where, args, ok = nativeCrashArm(both, false)
@@ -490,15 +442,11 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 	require.Contains(t, args, []string{"22222222-2222-2222-2222-222222222222"})
 	require.Contains(t, args, []string{"11111111-1111-1111-1111-111111111111"})
 
-	// A group that resolved to no update matches nothing, and the arm has no
-	// group column to say so with.
 	empty := base
 	empty.UpdateGroupIDs = []string{"99999999-9999-9999-9999-999999999999"}
 	_, _, ok = nativeCrashArm(empty, false)
 	require.False(t, ok)
 
-	// Build dimensions never reach the registry, so the arm steps aside
-	// instead of showing crashes that contradict the filter.
 	for _, query := range []LogsQuery{
 		withChannels(base, "stable"),
 		withEnvironments(base, "production"),
@@ -507,8 +455,6 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 		require.False(t, ok)
 	}
 
-	// Every one of these is fatal by definition, so a severity that excludes
-	// errors excludes them all.
 	for _, severity := range []string{"info", "warn", "debug"} {
 		quiet := base
 		quiet.Severity = severity
@@ -522,8 +468,6 @@ func TestNativeCrashArmHonoursOnlyWhatItKnows(t *testing.T) {
 		require.True(t, ok, severity)
 	}
 
-	// These records answer to one event name, so the arm joins a stream that
-	// asked for it and steps aside from one that asked for anything else.
 	named := base
 	named.EventNames = []string{"checkout_started"}
 	_, _, ok = nativeCrashArm(named, false)
@@ -543,9 +487,6 @@ func withEnvironments(query LogsQuery, environments ...string) LogsQuery {
 	return query
 }
 
-// Platform is stored lowercase, so a filter that validates but travels in the
-// case it arrived in matches nothing and reads as "no data" rather than as a
-// rejected filter.
 func TestExplorerHandlerNormalizesPlatformCase(t *testing.T) {
 	reader := &recordingExplorer{}
 	recorder := serveExplorer(NewExplorerHandler(reader, nil), "/observe/events?platform=IOS&platform=Android")
@@ -559,8 +500,6 @@ func TestExplorerHandlerRejectsUnknownPlatform(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
-// The window is the only thing standing between a URL and a scan of every
-// telemetry row the deployment has ever kept.
 func TestExplorerHandlerBoundsTheTimeWindow(t *testing.T) {
 	now := time.Now().UTC()
 	rfc := func(t time.Time) string { return t.Format(time.RFC3339) }
@@ -585,8 +524,6 @@ func TestExplorerHandlerBoundsTheTimeWindow(t *testing.T) {
 	require.Equal(t, http.StatusOK, within.Code)
 }
 
-// Logs keep a tighter ceiling than the overview, because a log row is orders of
-// magnitude more numerous than a metric bucket.
 func TestExplorerLogsWindowIsTighterThanOverview(t *testing.T) {
 	now := time.Now().UTC()
 	rfc := func(t time.Time) string { return t.Format(time.RFC3339) }
@@ -598,8 +535,6 @@ func TestExplorerLogsWindowIsTighterThanOverview(t *testing.T) {
 		serveExplorer(NewExplorerHandler(&recordingExplorer{}, nil), "/observe/logs"+window).Code)
 }
 
-// Several names widen the stream to their union, the way every other repeated
-// filter reads.
 func TestExplorerLogsParsesEventNames(t *testing.T) {
 	reader := &recordingExplorer{}
 	recorder := serveExplorer(
@@ -635,8 +570,6 @@ func TestExplorerRejectsLimitsOutOfRange(t *testing.T) {
 	}
 }
 
-// The unavailable stub answers in the shape a caller can read without checking
-// Available first, baseline included.
 func TestExplorerBreakdownStubCarriesABaseline(t *testing.T) {
 	recorder := serveExplorer(NewExplorerHandler(nil, nil), "/observe/breakdown?metric=cold_start&dimension=osVersion")
 	require.Equal(t, http.StatusOK, recorder.Code)
@@ -645,9 +578,6 @@ func TestExplorerBreakdownStubCarriesABaseline(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	overall, ok := response["overall"].(map[string]any)
 	require.True(t, ok, "overall must be an object")
-	// The baseline reads like any other segment, so a caller compares against
-	// it without a special case. A scalar value is why it no longer needs a
-	// hand-built empty list to avoid a null.
 	require.Equal(t, "", overall["value"])
 	require.EqualValues(t, 0, overall["devices"])
 	require.NotNil(t, response["segments"], "segments must be a list, never null")

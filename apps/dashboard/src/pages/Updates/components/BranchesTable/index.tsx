@@ -45,8 +45,8 @@ export const BranchesTable = () => {
   // Branch protection is enterprise: without a valid license the toggle opens
   // the explainer dialog instead of calling the API.
   const [isExplainerOpen, setIsExplainerOpen] = useState(false);
-  // Protecting a branch can lock out CI tokens, so it goes through a
-  // confirmation; unprotecting is immediate.
+  // Protecting is the deliberate direction, so it goes through a confirmation;
+  // unprotecting is immediate.
   const [branchToProtect, setBranchToProtect] = useState<BranchRecord | null>(null);
 
   const licenseQuery = useQuery({
@@ -104,8 +104,8 @@ export const BranchesTable = () => {
       toast({
         title: next ? 'Branch protected' : 'Branch unprotected',
         description: next
-          ? `Only tokens allowed on protected branches can publish to or read "${branch.branchName}" now.`
-          : `Any token can publish to "${branch.branchName}" again.`,
+          ? `"${branch.branchName}" can no longer be deleted, by anyone.`
+          : `"${branch.branchName}" can be deleted again.`,
       });
       setBranchToProtect(null);
     } catch (error) {
@@ -234,9 +234,7 @@ export const BranchesTable = () => {
                 size="icon"
                 className="h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 title={
-                  row.original.protected
-                    ? 'Unprotect this branch before deleting it'
-                    : 'Delete branch'
+                  row.original.protected ? 'Unlock this branch before deleting it' : 'Delete branch'
                 }
                 disabled={row.original.protected}
                 onClick={event => {
@@ -305,9 +303,9 @@ export const BranchesTable = () => {
               <strong className="font-semibold text-foreground">
                 "{branchToProtect?.branchName}"
               </strong>{' '}
-              is protected, only API tokens explicitly allowed on protected branches can publish,
-              roll back or republish on it, or read what is on it. Tokens handed to developers will
-              be blocked, and the branch cannot be deleted until the protection is lifted.
+              is protected, it cannot be deleted, by you or by anyone else, until the protection is
+              lifted. It changes nothing about what is published on it: which tokens may publish
+              there is decided by their own access rules, on the API tokens page.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-4 gap-2 border-t pt-3 sm:gap-0">
@@ -334,7 +332,7 @@ export const BranchesTable = () => {
         feature={{
           name: 'Branch protection',
           description:
-            'Protect critical branches like production. Once a branch is protected, only API tokens you explicitly allow can publish, roll back or republish on it, so a token handed to a developer for staging can never ship to production.',
+            'Protect critical branches like production so they cannot be deleted, by anyone, until the protection is lifted. Restricting who may publish on a branch is a separate feature: it is decided per API token, on the API tokens page.',
         }}
       />
     </div>

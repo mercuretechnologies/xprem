@@ -119,14 +119,12 @@ func TestRenderValue(t *testing.T) {
 	require.Equal(t, "acme", RenderValue("acme"))
 	require.Equal(t, "true", RenderValue(true))
 	require.Equal(t, "false", RenderValue(false))
-	// Integral floats render without a decimal part: 42 identified from JS and
-	// 42.0 re-decoded from JSONB must count as the same value.
+	// Integral floats render without a decimal part, so 42 and 42.0 count as the same value.
 	require.Equal(t, "42", RenderValue(float64(42)))
 	require.Equal(t, "42.5", RenderValue(42.5))
 }
 
-// Containment says AND inside one document and OR across the array, so a
-// conjunction of two keys with several values each is their cross-product.
+// Containment is AND within one document and OR across the array.
 func TestMetadataFiltersContainmentDocs(t *testing.T) {
 	docs, err := MetadataFilters{
 		{Key: "plan", Values: []any{"pro", "enterprise"}},

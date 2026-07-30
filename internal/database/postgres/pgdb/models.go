@@ -11,16 +11,23 @@ import (
 )
 
 type ApiKey struct {
-	ID                         int64              `json:"id"`
-	AppID                      pgtype.UUID        `json:"app_id"`
-	Name                       string             `json:"name"`
-	Hint                       string             `json:"hint"`
-	HashedKey                  string             `json:"hashed_key"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt                 pgtype.Timestamptz `json:"last_used_at"`
-	RevokedAt                  pgtype.Timestamptz `json:"revoked_at"`
-	AllowedIps                 []netip.Prefix     `json:"allowed_ips"`
-	CanAccessProtectedBranches bool               `json:"can_access_protected_branches"`
+	ID         int64              `json:"id"`
+	AppID      pgtype.UUID        `json:"app_id"`
+	Name       string             `json:"name"`
+	Hint       string             `json:"hint"`
+	HashedKey  string             `json:"hashed_key"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	AllowedIps []netip.Prefix     `json:"allowed_ips"`
+}
+
+type ApiKeyBranchRule struct {
+	ID        int64              `json:"id"`
+	ApiKeyID  int64              `json:"api_key_id"`
+	Pattern   string             `json:"pattern"`
+	Actions   []string           `json:"actions"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type App struct {
@@ -159,6 +166,25 @@ type IdentityValueStat struct {
 	Value       string             `json:"value"`
 	DeviceCount int64              `json:"device_count"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type OauthAuthorizationCode struct {
+	ID            pgtype.UUID        `json:"id"`
+	ClientID      pgtype.UUID        `json:"client_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	UsedAt        pgtype.Timestamptz `json:"used_at"`
+}
+
+type OauthClient struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	RedirectUris []string           `json:"redirect_uris"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type RefreshToken struct {

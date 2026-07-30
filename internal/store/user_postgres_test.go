@@ -6,8 +6,7 @@
 //	docker run -d --name eoo-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16-alpine
 //	TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/postgres?sslmode=disable" go test ./internal/store/
 //
-// The package is store_test on purpose: an internal test would create an
-// import cycle (store -> database/postgres -> migrations -> store).
+// The package is store_test to avoid an import cycle (store -> database/postgres -> migrations -> store).
 package store_test
 
 import (
@@ -31,15 +30,12 @@ func setupUserStore(t *testing.T) (*store.PostgresUserStore, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// See the same guard in rollout_postgres_test.go: a skip in CI is a green job
-		// that ran none of these guarded queries.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
-		t.Skip("TEST_DATABASE_URL not set — start a Postgres and set it to run the guarded-query tests")
+		t.Skip("TEST_DATABASE_URL not set, start a Postgres and set it to run the guarded-query tests")
 	}
-	// The seed migration fails fast on an empty database without the
-	// bootstrap pair.
+	// The seed migration fails fast on an empty database without the bootstrap pair.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
 	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(dbURL)
@@ -63,11 +59,8 @@ func insertUser(t *testing.T, userStore *store.PostgresUserStore, email string, 
 		Email:        email,
 		PasswordHash: "irrelevant",
 		IsAdmin:      isAdmin,
-		// Load-bearing: the guards count admins with `is_admin AND enabled`, so
-		// leaving this at Go's zero value builds a fixture with zero ENABLED admins.
-		// The guard then has nothing to protect, every removal passes, and the tests
-		// fail against correct production code. Admins are always created enabled
-		// (UserService.CreateUser); SSO only ever provisions non-admins.
+		// Must be true: the guards count admins as `is_admin AND enabled`, so a
+		// disabled fixture admin wouldn't protect the guard and tests would pass falsely.
 		Enabled: true,
 	})
 	require.NoError(t, err)
@@ -99,15 +92,15 @@ func TestGuardedQueriesRefuseRemovingLastAdmin(t *testing.T) {
 	require.ErrorAs(t, userStore.DeleteUserByID(ctx, uuid.NewString()), &notFoundErr)
 	require.ErrorAs(t, userStore.UpdateUserIsAdmin(ctx, uuid.NewString(), false), &notFoundErr)
 
-	// With a second admin the demotion goes through — once.
+	// With a second admin the demotion goes through, once.
 	insertUser(t, userStore, "second-admin@example.com", true)
 	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, admin.Id, false))
 	require.EqualValues(t, 1, countAdmins(t, pool))
 }
 
-// Two admins remove each other at the same instant, repeatedly. Whatever the
-// interleaving, exactly one operation must win and exactly one admin must
-// remain — this is the FOR UPDATE serialization the fakes cannot cover.
+// TestGuardedQueriesUnderConcurrentRemovals has two admins remove each other at
+// the same instant, repeatedly; exactly one operation must win and exactly one
+// admin must remain.
 func TestGuardedQueriesUnderConcurrentRemovals(t *testing.T) {
 	userStore, pool := setupUserStore(t)
 	ctx := context.Background()
@@ -157,11 +150,8 @@ func TestGuardedQueriesUnderConcurrentRemovals(t *testing.T) {
 	}
 }
 
-// The session version is bumped inside the same statement as the change that
-// justifies it, with a CASE on the column's previous value. Getting that
-// direction wrong is invisible to the in-memory fakes and would either sign
-// people out for nothing (bumping on a promotion) or leave a demoted admin
-// holding an admin session, so it is pinned here against real SQL.
+// TestSessionVersionMovesOnlyWhenAccessIsLost verifies the session version
+// bumps only when access is actually lost, not on every guarded update.
 func TestSessionVersionMovesOnlyWhenAccessIsLost(t *testing.T) {
 	userStore, pool := setupUserStore(t)
 	ctx := context.Background()
@@ -188,8 +178,7 @@ func TestSessionVersionMovesOnlyWhenAccessIsLost(t *testing.T) {
 	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, false))
 	require.EqualValues(t, 2, versionOf())
 
-	// Regaining it does not: approving an account must not sign anybody out,
-	// and there is nothing to revoke.
+	// Regaining access does not: approving an account must not sign anybody out.
 	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, true))
 	require.EqualValues(t, 2, versionOf())
 
@@ -201,9 +190,8 @@ func TestSessionVersionMovesOnlyWhenAccessIsLost(t *testing.T) {
 	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, member.Id, false))
 	require.EqualValues(t, 3, versionOf())
 
-	// And an idempotent write is not a transition: repeating either call on an
-	// account already in that state must leave the version alone, or a
-	// no-op PATCH from the dashboard would sign the account out.
+	// An idempotent write is not a transition: repeating either call on an
+	// account already in that state must leave the version alone.
 	require.NoError(t, userStore.UpdateUserIsAdmin(ctx, member.Id, false))
 	require.NoError(t, userStore.UpdateUserEnabled(ctx, member.Id, true))
 	require.EqualValues(t, 3, versionOf())

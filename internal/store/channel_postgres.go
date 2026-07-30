@@ -132,11 +132,9 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 		Name:  channelName,
 	})
 	if err != nil {
-		// An unknown channel, or one deliberately left unmapped (branch_id is
-		// nilable, and the INNER JOIN on branches then yields no row), is a
-		// 404 for the caller — not a server error. The bucket backend already
-		// reports it as (nil, nil); match it so ResolveManifestBundle's
-		// nil-check stays live in DB mode.
+		// An unknown channel, or one left unmapped, is a 404 for the caller, not a
+		// server error; match the bucket backend's (nil, nil) so ResolveManifestBundle's
+		// nil-check works in DB mode too.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}

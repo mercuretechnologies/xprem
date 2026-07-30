@@ -61,9 +61,9 @@ type SettingsEnv struct {
 	PRIVATE_CLOUDFRONT_KEY_PATH            string `json:"PRIVATE_CLOUDFRONT_KEY_PATH"`
 	PROMETHEUS_ENABLED                     string `json:"PROMETHEUS_ENABLED"`
 	// CDN_TYPE is the CDN the server actually resolved at boot ("cloudfront",
-	// "gcs-direct", "azure-direct", "generic" or "" when assets are served
-	// directly), so the dashboard can display the effective setup instead of
-	// making the user re-derive it from raw variables.
+	// "gcs-direct", "s3-direct", "azure-direct", "generic" or "" when assets
+	// are served directly), so the dashboard can display the effective setup
+	// instead of making the user re-derive it from raw variables.
 	CDN_TYPE string `json:"CDN_TYPE"`
 	// EXPO_ACCOUNT_USERNAME is the Expo account behind the configured access
 	// token. Only resolved in stateless mode (single app, single token) and
@@ -73,26 +73,11 @@ type SettingsEnv struct {
 	// (configured, enabled and licensed), so the dashboard can adapt the
 	// account-management UI. Not an env var: the config lives in the database.
 	SSO_ENABLED bool `json:"SSO_ENABLED"`
-	// Apps lists the configured apps — the single flat-env app in stateless
+	// Apps lists the configured apps, the single flat-env app in stateless
 	// mode, or every app in the database in control-plane mode. Each entry
-	// carries just the id and optional display name — tokens and keys are
+	// carries just the id and optional display name, tokens and keys are
 	// never surfaced here because this endpoint is read by the dashboard UI.
 	Apps []config.AppDescriptor `json:"APPS"`
-}
-
-func resolvedCDNType() string {
-	switch cdn.GetCDN().(type) {
-	case *cdn.CloudfrontCDN:
-		return "cloudfront"
-	case *cdn.GCSDirectCDN:
-		return "gcs-direct"
-	case *cdn.AzureBlobDirectCDN:
-		return "azure-direct"
-	case *cdn.GenericCDN:
-		return "generic"
-	default:
-		return ""
-	}
 }
 
 func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +134,7 @@ func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Requ
 		AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID: config.GetEnv("AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID"),
 		PRIVATE_CLOUDFRONT_KEY_PATH:            config.GetEnv("PRIVATE_CLOUDFRONT_KEY_PATH"),
 		PROMETHEUS_ENABLED:                     config.GetEnv("PROMETHEUS_ENABLED"),
-		CDN_TYPE:                               resolvedCDNType(),
+		CDN_TYPE:                               cdn.ResolvedType(),
 		EXPO_ACCOUNT_USERNAME:                  expoAccountUsername,
 		SSO_ENABLED:                            h.ssoEnabled != nil && h.ssoEnabled(r.Context()),
 		Apps:                                   apps,

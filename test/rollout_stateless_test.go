@@ -17,7 +17,6 @@ import (
 
 	"xprem/internal/update"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,20 +26,19 @@ import (
 func buildRolloutUploadRequest(t *testing.T, projectRoot string, rolloutPercentage string) *httptest.ResponseRecorder {
 	t.Helper()
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
-	requestURL := "http://localhost:3000/requestUploadUrl/DO_NOT_USE?runtimeVersion=1&platform=ios&commitHash=abc123"
+	requestURL := "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1&platform=ios&commitHash=abc123"
 	if rolloutPercentage != "" {
 		requestURL += "&rolloutPercentage=" + rolloutPercentage
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", requestURL, nil)
-	r = mux.SetURLVars(r, map[string]string{"APP_ID": "test-app-id", "BRANCH": "DO_NOT_USE"})
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-4/1/1674170952")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	require.NoError(t, err)
 	r.Body = io.NopCloser(bytes.NewReader(uploadRequestsInputJSON))
-	testContainer().UploadHandler.RequestUploadUrlHandler(w, r)
+	serveThroughRouter(w, r)
 	return w
 }
 

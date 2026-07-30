@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"xprem/internal/auditlog"
 	"xprem/internal/bucket"
+	"xprem/internal/cache"
+	"xprem/internal/dashboard"
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/store"
 	"xprem/internal/types"
@@ -75,6 +77,7 @@ func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchNa
 		// corrupts past 2^53 in the dashboard's JavaScript.
 		Metadata: map[string]any{"branch_id": strconv.FormatInt(branchId, 10)},
 	})
+	cache.GetCache().Delete(dashboard.ComputeGetBranchesCacheKey(appId))
 	return branchId, nil
 }
 
@@ -122,6 +125,9 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 		TargetDisplay: branchName,
 		AppID:         appId,
 	})
+	appCache := cache.GetCache()
+	appCache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
+	appCache.Delete(dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName))
 	go func(bucketRows []pgdb.GetUpdatesMetadataByBranchNameRow) {
 		for _, row := range bucketRows {
 			err := s.bucket.DeleteUpdateFolder(appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))

@@ -15,20 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The cache collapses readers that arrive one after another. This is about the
-// ones that arrive together, which is the case that actually happens: the
-// dashboard refetches on a timer, so every open tab misses the same key within
-// milliseconds of the entry expiring. Without this, ten tabs meant ten
-// simultaneous aggregations of the same rows, and the cache only ever saw the
-// last one.
 func TestConcurrentReadsOfOneKeyComputeOnce(t *testing.T) {
 	key := readCacheKey("test-collapse", uuid.NewString())
 	var computations atomic.Int32
 
 	compute := func(context.Context) (int, error) {
 		computations.Add(1)
-		// Long enough that the others are certainly inside cachedRead while
-		// this one runs, which is what makes the assertion mean something.
 		time.Sleep(50 * time.Millisecond)
 		return 42, nil
 	}
@@ -53,9 +45,6 @@ func TestConcurrentReadsOfOneKeyComputeOnce(t *testing.T) {
 	}
 }
 
-// Two different questions must still be two computations: collapsing is keyed
-// on the fingerprint, so it must not merge readers who would not have shared
-// the answer either.
 func TestConcurrentReadsOfDifferentKeysDoNotCollapse(t *testing.T) {
 	var computations atomic.Int32
 	compute := func(context.Context) (int, error) {
@@ -77,9 +66,6 @@ func TestConcurrentReadsOfDifferentKeysDoNotCollapse(t *testing.T) {
 	require.EqualValues(t, 4, computations.Load())
 }
 
-// A failed computation must not be cached, and must reach every caller waiting
-// on it. Caching the failure would hold a stale error for the whole TTL over
-// something as transient as a ClickHouse blip.
 func TestAFailedReadIsNotCached(t *testing.T) {
 	key := readCacheKey("test-failure", uuid.NewString())
 	var computations atomic.Int32
@@ -95,10 +81,6 @@ func TestAFailedReadIsNotCached(t *testing.T) {
 	require.EqualValues(t, 2, computations.Load(), "a failure must not be served from the cache")
 }
 
-// The collapse must not make one viewer's departure everyone else's problem.
-// Only the leader's closure runs, so before the computation was detached from
-// its caller, a client closing its tab cancelled the shared query and every
-// reader waiting behind it received that cancellation as a 500.
 func TestALeaderGivingUpDoesNotFailTheReadersBehindIt(t *testing.T) {
 	key := readCacheKey("test-detached", uuid.NewString())
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
@@ -108,7 +90,6 @@ func TestALeaderGivingUpDoesNotFailTheReadersBehindIt(t *testing.T) {
 	compute := func(ctx context.Context) (int, error) {
 		computed.Add(1)
 		close(started)
-		// Long enough for the leader to walk away mid-computation.
 		time.Sleep(150 * time.Millisecond)
 		if err := ctx.Err(); err != nil {
 			return 0, err

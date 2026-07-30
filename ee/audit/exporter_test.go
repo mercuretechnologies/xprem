@@ -34,7 +34,6 @@ func (f *fakePutter) PutObject(_ context.Context, key string, body []byte) error
 
 func seededExportRepo() *fakeAuditRepo {
 	occurred := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
-	// Newest first, like every other listResult seed.
 	return &fakeAuditRepo{listResult: []Event{
 		{ID: 3, OccurredAt: occurred, Action: auditlog.ActionUserLogin, ActorType: auditlog.ActorUser, ActorID: "u-1", ActorDisplay: "axel@example.com", TargetType: "user", TargetID: "u-1", Outcome: auditlog.OutcomeSuccess},
 		{ID: 2, OccurredAt: occurred, Action: auditlog.ActionAppRenamed, ActorType: auditlog.ActorUser, ActorID: "u-1", ActorDisplay: "axel@example.com", TargetType: "app", TargetID: "app-1", AppID: "app-1", Outcome: auditlog.OutcomeSuccess, Metadata: map[string]any{"previous_name": "Old"}},
@@ -49,7 +48,6 @@ func TestArchiveExportsBatchesAndAdvancesTheCursor(t *testing.T) {
 
 	exported, err := service.archiveNextBatch(context.Background(), putter)
 	require.NoError(t, err)
-	// Fewer rows than a full batch: nothing more is waiting.
 	require.False(t, exported)
 	require.EqualValues(t, 3, repo.exportCursor)
 
@@ -59,13 +57,11 @@ func TestArchiveExportsBatchesAndAdvancesTheCursor(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
 	require.Len(t, lines, 3)
-	// Same vocabulary as the HTTP API, one JSON object per line.
 	assert.Contains(t, lines[0], `"id":1`)
 	assert.Contains(t, lines[0], `"occurredAt":"2026-07-22T09:00:00Z"`)
 	assert.Contains(t, lines[0], `"outcome":"failure"`)
 	assert.Contains(t, lines[1], `"metadata":{"previous_name":"Old"}`)
 
-	// A second pass has nothing left: no new file, cursor untouched.
 	exported, err = service.archiveNextBatch(context.Background(), putter)
 	require.NoError(t, err)
 	require.False(t, exported)
@@ -73,8 +69,6 @@ func TestArchiveExportsBatchesAndAdvancesTheCursor(t *testing.T) {
 }
 
 func TestArchiveKeysAMultiDayBatchUnderItsFirstEventDate(t *testing.T) {
-	// A batch straddling UTC midnight: the file key must come from the FIRST
-	// event's date, whatever days the rest of the batch spills into.
 	beforeMidnight := time.Date(2026, 7, 21, 23, 59, 0, 0, time.UTC)
 	afterMidnight := time.Date(2026, 7, 22, 0, 1, 0, 0, time.UTC)
 	repo := &fakeAuditRepo{listResult: []Event{
@@ -100,7 +94,6 @@ func TestArchiveLoopsUntilTheBacklogIsDrained(t *testing.T) {
 
 	service.runArchive(context.Background(), putter)
 
-	// 3 events, batches of 2: two files, cursor at the end.
 	require.Len(t, putter.objects, 2)
 	require.Contains(t, putter.objects, "2026/07/22/1-2.ndjson")
 	require.Contains(t, putter.objects, "2026/07/22/3-3.ndjson")
@@ -108,10 +101,6 @@ func TestArchiveLoopsUntilTheBacklogIsDrained(t *testing.T) {
 }
 
 func TestArchiveKeepsDrainingWithoutALicense(t *testing.T) {
-	// Same rule as the viewer reads: a lapsed license stops collection, never
-	// access to what was collected while licensed. Gating the archive would
-	// strand unexported rows forever (the purge spares them, the exporter
-	// would never come for them).
 	repo := seededExportRepo()
 	putter := &fakePutter{}
 	service := NewAuditService(repo)
@@ -131,7 +120,6 @@ func TestArchiveSkipsTheTickWhenAnotherReplicaHoldsTheLock(t *testing.T) {
 
 	service.runArchive(context.Background(), putter)
 
-	// Another replica is exporting: nothing uploaded, cursor untouched.
 	require.Empty(t, putter.objects)
 	require.EqualValues(t, 0, repo.exportCursor)
 }
@@ -154,8 +142,7 @@ func TestArchiveYieldsWhenAnotherReplicaAdvances(t *testing.T) {
 
 	exported, err := service.archiveNextBatch(context.Background(), putter)
 	require.NoError(t, err)
-	// The loser wrote its file (an idempotent overwrite of the winner's),
-	// did not advance the cursor, and yields instead of looping.
+	// The loser's upload is an idempotent overwrite of the winner's file.
 	require.False(t, exported)
 	require.Len(t, putter.objects, 1)
 	require.EqualValues(t, 0, repo.exportCursor)
@@ -168,7 +155,6 @@ func TestArchivePutFailureLeavesTheCursorUntouched(t *testing.T) {
 
 	_, err := service.archiveNextBatch(context.Background(), putter)
 	require.Error(t, err)
-	// Nothing advanced: the batch retries at the next tick, nothing is lost.
 	require.EqualValues(t, 0, repo.exportCursor)
 }
 
@@ -176,8 +162,6 @@ func TestArchiveDeclinesToStartWithoutControlPlane(t *testing.T) {
 	service := NewAuditService(nil)
 	service.licenseValid = func() bool { return true }
 	service.startArchive(context.Background(), time.Minute, &fakePutter{})
-	// Declining must not flip the purge into exported-only mode: a stateless
-	// service has no exporter to ever advance the cursor.
 	require.False(t, service.archiveEnabled)
 }
 
@@ -217,6 +201,5 @@ func TestStartArchiveFromEnvStartsWithAValidDestination(t *testing.T) {
 	service := enabledService(&fakeAuditRepo{})
 
 	require.NoError(t, service.StartArchiveFromEnv(ctx))
-	// The purge-coordination flag flips synchronously (see PurgeOlderThan).
 	require.True(t, service.archiveEnabled)
 }

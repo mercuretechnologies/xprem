@@ -10,9 +10,8 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// stallingBody sends a first byte and then never sends the rest, which is what
-// a slowloris client does: it keeps the request open, and with it a connection
-// and a goroutine, for as long as the server is willing to wait.
+// stallingBody sends a first byte and then never sends the rest, the way a
+// slowloris client does.
 type stallingBody struct {
 	sentFirst bool
 	release   chan struct{}
@@ -30,8 +29,8 @@ func (b *stallingBody) Read(p []byte) (int, error) {
 
 func (b *stallingBody) Close() error { return nil }
 
-// A real server, because this is the one thing a ResponseRecorder cannot
-// exercise: the deadline lives on the connection, and a recorder has none.
+// TestReadDeadlineRefusesABodyThatNeverArrives runs against a real server,
+// since the deadline lives on the connection and a ResponseRecorder has none.
 func TestReadDeadlineRefusesABodyThatNeverArrives(t *testing.T) {
 	router := mux.NewRouter()
 	router.Use(NewReadDeadlineMiddleware(150 * time.Millisecond))
@@ -51,7 +50,7 @@ func TestReadDeadlineRefusesABodyThatNeverArrives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building the request: %v", err)
 	}
-	// Chunked, so the server keeps reading rather than trusting a length.
+	// -1 forces chunked encoding, so the server keeps reading instead of trusting a length.
 	req.ContentLength = -1
 
 	start := time.Now()
@@ -61,8 +60,6 @@ func TestReadDeadlineRefusesABodyThatNeverArrives(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	// Whichever side notices first, the point is that SOMETHING gave up
-	// quickly instead of holding the connection open indefinitely.
 	select {
 	case err := <-readErr:
 		if err == nil {
@@ -76,8 +73,8 @@ func TestReadDeadlineRefusesABodyThatNeverArrives(t *testing.T) {
 	}
 }
 
-// The deadline must not cost anything to a client that behaves. Same
-// middleware, same route, a body sent in one go.
+// TestReadDeadlineLetsANormalBodyThrough checks a body sent in one go is not
+// affected by the deadline.
 func TestReadDeadlineLetsANormalBodyThrough(t *testing.T) {
 	router := mux.NewRouter()
 	router.Use(NewReadDeadlineMiddleware(5 * time.Second))
@@ -107,9 +104,9 @@ func TestReadDeadlineLetsANormalBodyThrough(t *testing.T) {
 	}
 }
 
-// A ResponseWriter that cannot carry a deadline, which is every
-// httptest.ResponseRecorder, must not turn into a 500. Handlers that work
-// under a real server have to keep working under a test one.
+// TestReadDeadlineIsSilentWhereItCannotApply checks that a ResponseWriter
+// that cannot carry a deadline, like httptest.ResponseRecorder, does not
+// turn into a 500.
 func TestReadDeadlineIsSilentWhereItCannotApply(t *testing.T) {
 	router := mux.NewRouter()
 	router.Use(NewReadDeadlineMiddleware(time.Second))

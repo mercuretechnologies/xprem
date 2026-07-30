@@ -20,14 +20,13 @@ func TestBranchResolverCachesPositiveAndNegative(t *testing.T) {
 		if updateUUID == "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10" {
 			return "main", "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", nil
 		}
-		return "", "", nil // unknown update: permanent absence
+		return "", "", nil
 	})
 	ctx := context.Background()
 
 	branch, group := resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
 	assert.Equal(t, "main", branch)
 	assert.Equal(t, "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", group)
-	// Both come from one row and neither can change, so one entry caches both.
 	branch, group = resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
 	assert.Equal(t, "main", branch)
 	assert.Equal(t, "3f7c1d64-1a2b-4c3d-8e9f-0a1b2c3d4e5f", group)
@@ -52,10 +51,8 @@ func TestBranchResolverDoesNotCacheTransientErrors(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	// While the database is down the batch lands with an empty branch...
 	branch, _ := resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
 	assert.Empty(t, branch)
-	// ...and recovery is picked up by the next batch, not poisoned by a cache.
 	broken = false
 	branch, _ = resolver.UpdateOrigin(ctx, "app-1", "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10")
 	assert.Equal(t, "main", branch)

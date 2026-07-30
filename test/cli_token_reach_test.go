@@ -62,7 +62,7 @@ func TestPublishingTokenIsRefusedOnAppScopedReads(t *testing.T) {
 		"/api/apps/test-app-id/channels",
 		"/api/apps/test-app-id/updates",
 		"/api/apps/test-app-id/apiKeys",
-		"/api/apps/test-app-id/apiKeys/restrictions",
+		"/api/apps/test-app-id/apiKeys/access",
 		"/api/apps/test-app-id/identity/schema",
 		"/api/apps/test-app-id/identity/devices",
 		"/api/apps/test-app-id/identity/values",

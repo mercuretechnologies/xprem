@@ -33,16 +33,16 @@ func resolveSeedAdminCredentials() (email string, password string, err error) {
 	// ParseAddress accepts them, but the stored string would never match a
 	// login lookup and the seeded admin could not sign in.
 	if addr, err := mail.ParseAddress(email); err != nil || addr.Address != email {
-		return "", "", fmt.Errorf("ADMIN_EMAIL %q is not a plain email address — use the bare form, e.g. admin@example.com", email)
+		return "", "", fmt.Errorf("ADMIN_EMAIL %q is not a plain email address, use the bare form, e.g. admin@example.com", email)
 	}
-	// The first admin is a dashboard user like any other — hold its bootstrap
+	// The first admin is a dashboard user like any other, hold its bootstrap
 	// password to the same policy users face in the UI, and spell the whole
 	// policy out: the operator reading this log has no checklist in front of
 	// them.
 	if err := crypto.ValidatePasswordPolicy(password); err != nil {
 		return "", "", fmt.Errorf(
 			"ADMIN_PASSWORD seeds the first dashboard admin and must meet the dashboard password policy (%s): %w. "+
-				"Set a compliant ADMIN_PASSWORD and restart the server — it can be changed from the dashboard afterwards",
+				"Set a compliant ADMIN_PASSWORD and restart the server, it can be changed from the dashboard afterwards",
 			crypto.PasswordPolicyDescription, err)
 	}
 	return email, password, nil
@@ -51,7 +51,7 @@ func resolveSeedAdminCredentials() (email string, password string, err error) {
 // UpSeedFirstAdminUser creates the first dashboard user from ADMIN_EMAIL and
 // ADMIN_PASSWORD. In control-plane mode dashboard logins are checked against
 // the users table, so a database with no user would be a dashboard nobody can
-// ever enter — that is why missing values fail the migration (and the boot)
+// ever enter, that is why missing values fail the migration (and the boot)
 // instead of being skipped.
 //
 // The env pair is only read here, once: after this migration is recorded the
@@ -60,14 +60,14 @@ func resolveSeedAdminCredentials() (email string, password string, err error) {
 func UpSeedFirstAdminUser(ctx context.Context, tx *sql.Tx) error {
 	// A user row can already exist when goose replays history against a
 	// restored database whose goose_db_version table was lost. The table being
-	// non-empty means the bootstrap already happened — re-seeding could only
+	// non-empty means the bootstrap already happened, re-seeding could only
 	// conflict with it.
 	var userCount int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&userCount); err != nil {
 		return fmt.Errorf("failed to count existing users: %w", err)
 	}
 	if userCount > 0 {
-		log.Println("⏭️ [DATABASE] Users already exist — skipping first admin user creation.")
+		log.Println("⏭️ [DATABASE] Users already exist, skipping first admin user creation.")
 		return nil
 	}
 

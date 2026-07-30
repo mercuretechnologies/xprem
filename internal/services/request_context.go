@@ -27,12 +27,17 @@ func WithPrincipal(ctx context.Context, principal *DashboardPrincipal) context.C
 type cliAuthContextKey struct{}
 
 // CliCredential identifies the validated app-scoped CLI credential of a
-// request: which app it may act on and which API key it was. KeyID/KeyName
-// are empty in stateless mode, where the credential is the app's Expo token,
-// not a named key.
+// request: which app it may act on and which API key it was. KeyID is 0 and
+// KeyName empty in stateless mode, where the credential is the app's Expo
+// token, not a named key.
+//
+// It says nothing about what the credential is allowed to do. That decision is
+// the router's, taken once per request against the route's declaration, and it
+// is not re-derived downstream: handlers no more re-check a branch scope than
+// they re-check the RBAC permission or the dashboard session.
 type CliCredential struct {
 	AppID   string
-	KeyID   string
+	KeyID   int64
 	KeyName string
 }
 
@@ -63,4 +68,18 @@ func CliAuthAppFromContext(ctx context.Context) string {
 		return credential.AppID
 	}
 	return ""
+}
+
+// PrincipalExtraKey is where the OAuth verifier stores the request's principal
+// in a bearer TokenInfo's Extra map; the MCP tool layer reads it back with
+// PrincipalFromExtra. It lives here for the same reason the context keys do:
+// the identity is this package's domain, and both sides of the contract must
+// share one definition without importing each other.
+const PrincipalExtraKey = "principal"
+
+// PrincipalFromExtra retrieves the principal stored under PrincipalExtraKey,
+// or nil.
+func PrincipalFromExtra(extra map[string]any) *DashboardPrincipal {
+	principal, _ := extra[PrincipalExtraKey].(*DashboardPrincipal)
+	return principal
 }

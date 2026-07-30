@@ -51,10 +51,8 @@ func (s *PostgresBranchStore) DeleteBranchByName(ctx context.Context, appId stri
 		return err
 	}
 	if commandTag.RowsAffected() == 0 {
-		// The DELETE refuses protected branches inside the statement; a miss is
-		// either that refusal or a branch that does not exist. The follow-up
-		// read picks the right error, and an infrastructure failure on that
-		// read must surface as such, not masquerade as a missing branch.
+		// The DELETE refuses protected branches inside the statement, so a miss is
+		// either that refusal or a missing branch; the follow-up read picks the right error.
 		protected, protErr := s.engine.Queries.IsBranchProtected(ctx, pgdb.IsBranchProtectedParams{
 			AppID: pgAppID,
 			Name:  branchName,

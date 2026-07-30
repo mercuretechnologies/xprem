@@ -62,17 +62,10 @@ func TestAppendSnapshotMapsAndClampsDatabaseValues(t *testing.T) {
 	}, batch.values)
 }
 
-// The outbox is where an event stops being a pair of ids and becomes something
-// a segmented chart can group by. The dimensions are resolved once, at
-// delivery, and frozen on the row: that is what stops a chart from relabelling
-// a device's whole history the day it upgrades. This walks the real path,
-// trigger included, because the trigger and the resolving query are the two
-// halves that have to agree.
+// TestOutboxDeliveryFreezesEventDimensions verifies that an event's
+// dimensions are resolved once at delivery and frozen on the row.
 func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
-	// The seed migration refuses without these and RunDBMigrations reports it
-	// with log.Fatalf, which takes the whole package binary down, unit tests
-	// included. Every other store test in the repo sets them for that reason.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
 	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(pgURL)
@@ -104,8 +97,6 @@ func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
 		updateID, branchID, runtimeVersionID)
 	require.NoError(t, err)
 
-	// A telemetry check-in: the only source that knows the hardware and the
-	// store version, and the one the manifest path cannot replace.
 	store := identity.NewPostgresIdentityStore(&database.Engine{Queries: pgdb.New(pool), DB: pool})
 	deviceID := uuid.NewString()
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &identity.CurrentUpdate{ID: updateID, ObservedAt: time.Now().UTC()}, identity.DeviceInfo{
@@ -123,19 +114,14 @@ func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
 		FROM device_health_events WHERE app_id = ? AND eas_client_id = ?`, appID, deviceID,
 	).Scan(&branch, &runtimeVersion, &platform, &osName, &osVersion, &deviceModel, &appVersion))
 
-	// The update side is permanent, so it is exact by construction.
 	require.Equal(t, "production", branch)
 	require.Equal(t, "1.0.0", runtimeVersion)
 	require.Equal(t, "ios", platform)
-	// The device side is what the registry knew when the event was delivered.
 	require.Equal(t, "iOS", osName)
 	require.Equal(t, "26.1", osVersion)
 	require.Equal(t, "iPhone18,2", deviceModel)
 	require.Equal(t, "1.4.0", appVersion)
 
-	// A store release later must not reach back into the event already
-	// written: that row is what the device was then, and rewriting it is the
-	// bug this whole column set exists to avoid.
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, nil, identity.DeviceInfo{AppVersion: "2.0.0"}))
 	var frozen string
 	require.NoError(t, chEngine.Conn.QueryRow(ctx,
@@ -144,17 +130,8 @@ func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
 	require.Equal(t, "1.4.0", frozen)
 }
 
-// The outbox delivers at-least-once by design: the ClickHouse insert no longer
-// runs inside the PostgreSQL transaction, so a crash between the send and the
-// delete replays the batch. That is only safe because every read of
-// device_health_events tolerates a repeated row, and this pins that rather than
-// trusting the reading of three queries.
-//
-// device_health_events is a ReplacingMergeTree keyed on (app_id, outbox_id),
-// but a ReplacingMergeTree only collapses at merge time, so the reads cannot
-// wait for it: the log feed groups by outbox_id, and the segmented health read
-// counts through a DISTINCT population and an ASOF join that matches one row
-// per device and bucket whatever the source holds.
+// TestReplayedOutboxEventIsNotCountedTwice verifies that a duplicated outbox
+// row (an at-least-once replay) does not double-count a device.
 func TestReplayedOutboxEventIsNotCountedTwice(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
@@ -178,8 +155,7 @@ func TestReplayedOutboxEventIsNotCountedTwice(t *testing.T) {
 	updateID, deviceID := uuid.NewString(), uuid.NewString()
 	adopted := time.Now().UTC().Add(-10 * time.Minute)
 
-	// One adoption, written twice under the SAME outbox_id: exactly what a
-	// replay after a crash between the send and the delete produces.
+	// Same outbox_id written twice, simulating a replay.
 	insert := func() {
 		batch, err := chEngine.Conn.PrepareBatch(ctx, `INSERT INTO device_health_events
 			(outbox_id, event_type, app_id, eas_client_id, update_id, previous_update_id,
@@ -203,7 +179,6 @@ func TestReplayedOutboxEventIsNotCountedTwice(t *testing.T) {
 	).Scan(&raw))
 	require.Equal(t, uint64(2), raw, "fixture: the duplicate must really be there, unmerged")
 
-	// And the read that matters still sees one device.
 	history := NewHealthHistory(&database.Engine{Queries: pgdb.New(pool), DB: pool}, chEngine)
 	segments, err := history.ReadBySegment(
 		ctx, appID, []string{updateID}, "country",
@@ -217,10 +192,8 @@ func TestReplayedOutboxEventIsNotCountedTwice(t *testing.T) {
 	}
 }
 
-// Only one replica drains at a time, and that is now a session advisory lock
-// rather than row locks held across the ClickHouse insert. A second drainer
-// finding the lock taken reports nothing delivered instead of delivering the
-// same rows again.
+// TestOutboxDrainIsSerializedAcrossReplicas verifies only one replica drains
+// the outbox at a time, via a session advisory lock.
 func TestOutboxDrainIsSerializedAcrossReplicas(t *testing.T) {
 	_, pgURL := requireLiveStores(t)
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
@@ -237,7 +210,6 @@ func TestOutboxDrainIsSerializedAcrossReplicas(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, locked, "the first drainer takes the lock")
 
-	// A second process, its own pool, the way a second replica would come.
 	otherPool, err := pgxpool.New(ctx, pgURL)
 	require.NoError(t, err)
 	defer otherPool.Close()
@@ -247,8 +219,6 @@ func TestOutboxDrainIsSerializedAcrossReplicas(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, alsoLocked, "a second drainer must stand down while the first holds the lock")
 
-	// And the lock is released, not leaked: once the first is done the second
-	// can take over.
 	release()
 	thirdRelease, freeNow, err := second.lockOutbox(ctx)
 	require.NoError(t, err)
@@ -256,13 +226,9 @@ func TestOutboxDrainIsSerializedAcrossReplicas(t *testing.T) {
 	thirdRelease()
 }
 
-// The fleet snapshot is elected too, on its own lock. It aggregates the whole
-// device_identity table and then joins the failures of every tracked update,
-// and every replica used to run it on its own timer.
-//
-// Its own lock rather than the outbox's: they run on different cadences, one
-// every second and one every minute, and sharing would have let a slow drain
-// starve a capture.
+// TestSnapshotCaptureIsElectedSeparatelyFromTheDrain verifies the fleet
+// snapshot capture is elected on its own advisory lock, separate from the
+// outbox drain.
 func TestSnapshotCaptureIsElectedSeparatelyFromTheDrain(t *testing.T) {
 	_, pgURL := requireLiveStores(t)
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
@@ -292,9 +258,8 @@ func TestSnapshotCaptureIsElectedSeparatelyFromTheDrain(t *testing.T) {
 	releaseDrain()
 
 	releaseSnapshot()
-	// Released, not just checked: a held lock pins a connection out of the
-	// pool, and pgxpool.Close waits for every acquired connection to come
-	// back, so forgetting it hangs the test rather than failing it.
+	// A held lock pins a connection, and pgxpool.Close waits for it: forgetting
+	// this hangs the test rather than failing it.
 	releaseAgain, freeNow, err := postgres.TryAdvisoryLock(ctx, otherPool, snapshotAdvisoryLockID, "health snapshot")
 	require.NoError(t, err)
 	require.True(t, freeNow, "the lock must be released when the capture ends")

@@ -5,7 +5,6 @@
 package identity
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,10 +18,8 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// IdentityHandler serves the dashboard "Identity" section: the metadata
-// allowlist (schema), value autocomplete, and the device inventory. It wraps
-// the same *Service the ingest route uses (handler-over-service, as in
-// ee/audit / ee/rbac). A nil service (stateless, no control plane) answers 400.
+// IdentityHandler serves the dashboard "Identity" section: the metadata allowlist, value
+// autocomplete, and the device inventory. A nil service (stateless mode) answers 400.
 type IdentityHandler struct {
 	service *Service
 }
@@ -48,17 +45,14 @@ func renderIdentityServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrTooManySchemaKeys):
 		handlers.RenderError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrTooManyCombinations):
-		// The caller asked for more attribute combinations than the
-		// containment filter can express. That is a bad request, not a server
-		// fault, however deep in the store it surfaces.
+		// A bad request, not a server fault, however deep in the store it surfaces.
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 	default:
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 	}
 }
 
-// --- Response shapes (camelCase; timestamps RFC3339 UTC) ---
-
+// schemaKeyResponse is the wire shape of a KeySpec (camelCase; timestamps RFC3339 UTC).
 type schemaKeyResponse struct {
 	Key       string `json:"key"`
 	Type      string `json:"type"`
@@ -69,6 +63,7 @@ func schemaKeyResponseFrom(spec KeySpec) schemaKeyResponse {
 	return schemaKeyResponse{Key: spec.Key, Type: string(spec.Type), MaxLength: spec.MaxLength}
 }
 
+// deviceResponse is the wire shape of a Device (camelCase; timestamps RFC3339 UTC).
 type deviceResponse struct {
 	EasClientId string         `json:"easClientId"`
 	Metadata    map[string]any `json:"metadata"`
@@ -79,8 +74,7 @@ type deviceResponse struct {
 	DeviceModel *string        `json:"deviceModel,omitempty"`
 	OsName      *string        `json:"osName,omitempty"`
 	OsVersion   *string        `json:"osVersion,omitempty"`
-	// The update the device runs, and what that update belongs to. Absent
-	// when it is the embedded bundle or an update this server never published.
+	// Absent when the device runs the embedded bundle or an update this server never published.
 	CurrentUpdateId *string `json:"currentUpdateId,omitempty"`
 	Branch          *string `json:"branch,omitempty"`
 	RuntimeVersion  *string `json:"runtimeVersion,omitempty"`
@@ -90,9 +84,7 @@ type deviceResponse struct {
 }
 
 func deviceResponseFrom(d Device) deviceResponse {
-	// A device with no attributes yet carries a nil map, which marshals to
-	// `null` rather than `{}`. Callers iterate this field; hand them the empty
-	// object the field name promises.
+	// A nil Metadata map would marshal to `null`; callers expect the empty object instead.
 	metadata := d.Metadata
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -115,8 +107,6 @@ func deviceResponseFrom(d Device) deviceResponse {
 		LastSeenAt:      d.LastSeenAt.UTC().Format(time.RFC3339),
 	}
 }
-
-// --- Schema (allowlist) ---
 
 func (h *IdentityHandler) GetSchemaHandler(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.requireService(w)
@@ -190,8 +180,6 @@ func (h *IdentityHandler) DeleteSchemaKeyHandler(w http.ResponseWriter, r *http.
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// --- Value autocomplete (searchMetadata) ---
-
 func (h *IdentityHandler) SearchValuesHandler(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.requireService(w)
 	if !ok {
@@ -215,19 +203,12 @@ func (h *IdentityHandler) SearchValuesHandler(w http.ResponseWriter, r *http.Req
 	handlers.RenderJSON(w, http.StatusOK, map[string]any{"values": out})
 }
 
-// --- Device inventory ---
-
-// parseDeviceQuery reads the filter parameters the registry can honor, shared
-// by the inventory page and the online count so the two never diverge on what
-// they accept. It renders the 400 itself and reports false when the request is
-// not answerable.
+// parseDeviceQuery reads the filter parameters shared by the inventory page and the online
+// count. It renders the 400 itself and reports false when the request is not answerable.
 func parseDeviceQuery(w http.ResponseWriter, r *http.Request, service *Service, appID string) (DeviceQuery, bool) {
 	query := r.URL.Query()
 
-	// Repeated parameters, never a separator: a hardware identifier carries a
-	// comma of its own ("iPhone18,2"). Capped per parameter: each list becomes
-	// a text[] in an `= ANY(...)`, and a request line can hold tens of
-	// thousands of repetitions of the same key.
+	// Repeated parameters, never a separator: a hardware identifier carries a comma of its own.
 	tooMany := false
 	values := func(name string) []string {
 		out := make([]string, 0, len(query[name]))
@@ -269,9 +250,7 @@ func parseDeviceQuery(w http.ResponseWriter, r *http.Request, service *Service, 
 			renderIdentityServiceError(w, err)
 			return DeviceQuery{}, false
 		}
-		// An undeclared key or a value that does not fit its type is a 400
-		// rather than an empty list: the registry only ever stores what the
-		// schema accepts, so the question itself is the thing that is wrong.
+		// An undeclared key or a bad-fit value is a 400, not an empty list.
 		filters, err := ParseFilterPairs(schema, pairs)
 		if err != nil {
 			handlers.RenderError(w, http.StatusBadRequest, "'attr' must be key:value pairs of declared Identity attributes.")
@@ -279,8 +258,7 @@ func parseDeviceQuery(w http.ResponseWriter, r *http.Request, service *Service, 
 		}
 		deviceQuery.Metadata = filters
 	}
-	// A malformed update id is a 400, not an empty list: silently dropping the
-	// filter would answer a different question than the one asked.
+	// A malformed update id is a 400, not a silently dropped filter.
 	for name, ids := range map[string][]string{
 		"updateId":      deviceQuery.CurrentUpdateIDs,
 		"updateGroupId": deviceQuery.UpdateGroupIDs,
@@ -309,7 +287,7 @@ func (h *IdentityHandler) ListDevicesHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	cursor, err := decodeDeviceCursor(query.Get("cursor"))
+	cursor, err := DecodeDeviceCursor(query.Get("cursor"))
 	if err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "Invalid cursor.")
 		return
@@ -331,10 +309,8 @@ func (h *IdentityHandler) ListDevicesHandler(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// OnlineDevicesHandler answers "how many devices are live right now". Open to
-// any app viewer: it is a single count with no per-device detail. It takes the
-// same filters as the inventory, so the number can be shown next to filtered
-// figures without reading as a contradiction.
+// OnlineDevicesHandler answers "how many devices are live right now", taking the same
+// filters as the inventory.
 func (h *IdentityHandler) OnlineDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.requireService(w)
 	if !ok {
@@ -352,9 +328,7 @@ func (h *IdentityHandler) OnlineDevicesHandler(w http.ResponseWriter, r *http.Re
 			handlers.RenderError(w, http.StatusBadRequest, "'minutes' must be a positive integer.")
 			return
 		}
-		// Clamped before the multiplication, not after: minutes is unbounded
-		// and time.Minute is 6e10 nanoseconds, so a large enough value wraps
-		// int64 and the reported window comes back negative.
+		// Clamped before the multiplication: an unbounded minutes value can overflow int64.
 		if maximum := int(MaxOnlineWindow / time.Minute); minutes > maximum {
 			minutes = maximum
 		}
@@ -378,8 +352,7 @@ func (h *IdentityHandler) GetDeviceHandler(w http.ResponseWriter, r *http.Reques
 	}
 	appID := mux.Vars(r)["APP_ID"]
 	easClientID := mux.Vars(r)["EAS_CLIENT_ID"]
-	// A non-UUID path segment is definitionally not a device: 404, not a 500
-	// from the store's uuid parse.
+	// A non-UUID path segment is definitionally not a device.
 	if _, err := uuid.Parse(easClientID); err != nil {
 		handlers.RenderError(w, http.StatusNotFound, "No such device.")
 		return
@@ -395,8 +368,6 @@ func (h *IdentityHandler) GetDeviceHandler(w http.ResponseWriter, r *http.Reques
 	}
 	handlers.RenderJSON(w, http.StatusOK, deviceResponseFrom(*device))
 }
-
-// --- helpers ---
 
 func parseLimit(raw string, fallback int) int {
 	if raw == "" {
@@ -415,88 +386,39 @@ func sortSchemaKeys(keys []schemaKeyResponse) {
 	})
 }
 
-// The device cursor is opaque on the wire: base64 of "RFC3339Nano|uuid". The
-// client only echoes nextCursor back, it never parses it.
-func encodeDeviceCursor(c *DeviceCursor) *string {
-	if c == nil {
+// encodeDeviceCursor adapts the shared codec to the nullable wire field.
+func encodeDeviceCursor(cursor *DeviceCursor) *string {
+	encoded := EncodeDeviceCursor(cursor)
+	if encoded == "" {
 		return nil
 	}
-	raw := c.LastSeenAt.UTC().Format(time.RFC3339Nano) + "|" + c.EASClientID
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(raw))
 	return &encoded
 }
 
-func decodeDeviceCursor(encoded string) (*DeviceCursor, error) {
-	if encoded == "" {
-		return nil, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.SplitN(string(decoded), "|", 2)
-	if len(parts) != 2 {
-		return nil, errors.New("malformed cursor")
-	}
-	ts, err := time.Parse(time.RFC3339Nano, parts[0])
-	if err != nil {
-		return nil, err
-	}
-	// Validate the uuid here so a tampered cursor is a 400, not a 500 from the
-	// store's parse.
-	if _, err := uuid.Parse(parts[1]); err != nil {
-		return nil, err
-	}
-	return &DeviceCursor{LastSeenAt: ts, EASClientID: parts[1]}, nil
-}
-
-// --- Update health (adoption + launch failures per update) ---
-
-// maxDeviceFilterValues bounds one device-inventory filter list, the same way
-// maxHealthUpdateIDs bounds the health one. A dashboard multi-select never
-// comes close; a hand-written URL can.
+// maxDeviceFilterValues bounds one device-inventory filter list.
 const maxDeviceFilterValues = 100
 
-// maxHealthUpdateIDs bounds one health request; a branch page shows far
-// fewer updates than this.
+// maxHealthUpdateIDs bounds one update-health request.
 const maxHealthUpdateIDs = 100
 
 type updateHealthResponse struct {
 	DevicesOnUpdate int64 `json:"devicesOnUpdate"`
-	// SuccessfulDevices currently run the update and never reported it as
-	// faulty. Runtime crashes stay on the update, so they are removed here.
+	// SuccessfulDevices currently run the update and never reported it as faulty.
 	SuccessfulDevices int64 `json:"successfulDevices"`
-	// FaultyDevices reported either a launch rollback or a JS runtime crash.
-	// Counted per DEVICE, so a device contributes at most once whether it
-	// re-sends the same crash or reports both kinds for this update.
+	// FaultyDevices is counted per device, whether it reported a rollback, a JS crash, or both.
 	FaultyDevices int64 `json:"faultyDevices"`
-	// LaunchFailures is the same number as faultyDevices, kept for API
-	// compatibility; faultyDevices is the clearer name now that JS runtime
-	// crashes also contribute.
+	// LaunchFailures duplicates faultyDevices, kept for API compatibility.
 	LaunchFailures int64 `json:"launchFailures"`
-	// UpdateIssues: crash at launch reported by the manifest error-recovery
-	// headers; the device rolled back off the update.
-	//
-	// updateIssues and runtimeIssues are NOT a partition of faultyDevices: a
-	// device that reported both kinds for this update is counted in each, so
-	// their sum can exceed faultyDevices. Use them as a breakdown by cause,
-	// never as addends.
-	UpdateIssues int64 `json:"updateIssues"`
-	// RuntimeIssues: JS crash while running the update, reported by the
-	// documented xprem_js_crash observe event; the device is
-	// (usually) still running the update.
+	// UpdateIssues and RuntimeIssues are NOT a partition of faultyDevices: a device reporting
+	// both is counted in each, so their sum can exceed faultyDevices.
+	UpdateIssues  int64 `json:"updateIssues"`
 	RuntimeIssues int64 `json:"runtimeIssues"`
-	// HealthPercent is healthy/attempts over devices that actually attempted
-	// the update; null when nothing attempted it yet. Failed devices still
-	// counted in devicesOnUpdate (runtime crashes without rollback) are
-	// counted once as attempts and excluded from healthy.
+	// HealthPercent is healthy/attempts over devices that attempted the update; nil if none did.
 	HealthPercent *float64 `json:"healthPercent"`
 }
 
-// UpdateHealthHandler serves GET .../identity/update-health?ids=uuid,uuid:
-// the registry-backed instant-T health of a set of updates (the dashboard
-// passes the UUIDs it is displaying). Every id gets an entry, zeroes when
-// nothing was recorded for it.
+// UpdateHealthHandler serves GET .../identity/update-health?ids=uuid,uuid. Every id gets an
+// entry, zeroes when nothing was recorded for it.
 func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.requireService(w)
 	if !ok {
@@ -531,8 +453,6 @@ func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Req
 			continue // non-UUID input: no entry, never an error
 		}
 		entry := health[parsed.String()]
-		// The set size, not the sum of the breakdowns: a device that reported
-		// both a rollback and a JS crash for this update is in both counts.
 		failures := entry.FaultyDevices
 		successes := entry.DevicesOnUpdate - entry.FailedStillOn
 		response := updateHealthResponse{
@@ -543,10 +463,7 @@ func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Req
 			UpdateIssues:      entry.UpdateIssues,
 			RuntimeIssues:     entry.RuntimeIssues,
 		}
-		// A manifest rollback is faulty but no longer current; a JS crash is
-		// both faulty and current. successfulDevices removes that overlap, so
-		// the documented successes/(successes+faulty) formula counts every
-		// device exactly once.
+		// successfulDevices excludes the overlap so successes/(successes+faulty) counts each device once.
 		if attempts := successes + failures; attempts > 0 {
 			percent := 100 * float64(successes) / float64(attempts)
 			response.HealthPercent = &percent

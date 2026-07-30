@@ -25,9 +25,7 @@ func NewPostgresAuditStore(engine *database.Engine) *PostgresAuditStore {
 	return &PostgresAuditStore{engine: engine}
 }
 
-// marshalMetadata keeps a nil map from becoming SQL NULL (the column is NOT
-// NULL, no metadata means '{}') and a non-serializable value from costing the
-// whole entry: the annotation is dropped and logged, the event still lands.
+// marshalMetadata returns "{}" instead of SQL NULL when metadata is empty or fails to serialize.
 func marshalMetadata(action Action, metadata map[string]any) []byte {
 	if len(metadata) == 0 {
 		return []byte("{}")
@@ -58,8 +56,7 @@ func eventFromRow(row pgdb.AuditLogEvent) Event {
 	if row.AppID != nil {
 		event.AppID = *row.AppID
 	}
-	// A row whose metadata does not parse still lists: the entry's facts
-	// matter more than its annotations.
+	// A row whose metadata fails to parse still lists, just without it.
 	if len(row.Metadata) > 0 {
 		var metadata map[string]any
 		if err := json.Unmarshal(row.Metadata, &metadata); err == nil && len(metadata) > 0 {
@@ -77,7 +74,6 @@ func toPgTimestamptz(t *time.Time) pgtype.Timestamptz {
 }
 
 func (s *PostgresAuditStore) Insert(ctx context.Context, event Event) (Event, error) {
-	// The zero *string is SQL NULL, an account-level event without an app.
 	var appID *string
 	if event.AppID != "" {
 		appID = &event.AppID
@@ -162,8 +158,7 @@ func (s *PostgresAuditStore) ExportCursor(ctx context.Context) (int64, error) {
 	return cursor, nil
 }
 
-// exportAdvisoryLockID serializes archive exporters across replicas (see
-// migrationAdvisoryLockID in internal/database/postgres for the convention).
+// exportAdvisoryLockID serializes archive exporters across replicas.
 const exportAdvisoryLockID = 823672943
 
 // TryExportLock claims the "one exporter at a time" advisory lock.

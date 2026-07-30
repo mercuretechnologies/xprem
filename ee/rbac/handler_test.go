@@ -84,7 +84,7 @@ func TestGrantHandlersContract(t *testing.T) {
 	repo.grants["member-1"] = []AppGrant{{
 		AppID:            "app-1",
 		RoleID:           &roleID,
-		RolePermissions:  []Permission{PermBranchProtect},
+		RolePermissions:  []Permission{PermBranchDelete},
 		ExtraPermissions: []Permission{PermCertificateRead},
 	}}
 	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
@@ -98,7 +98,7 @@ func TestGrantHandlersContract(t *testing.T) {
 	require.Len(t, grants, 1)
 	require.Equal(t, "app-1", grants[0].AppId)
 	require.Equal(t, []string{"certificate:read"}, grants[0].ExtraPermissions)
-	require.Equal(t, []string{"certificate:read", "branch:protect"}, grants[0].EffectivePermissions)
+	require.Equal(t, []string{"certificate:read", "branch:delete"}, grants[0].EffectivePermissions)
 
 	// Writes land in the repository as a wholesale replacement.
 	recorder = run(t, http.MethodPut, "/users/member-1/grants",
@@ -108,7 +108,7 @@ func TestGrantHandlersContract(t *testing.T) {
 	require.Equal(t, "app-2", repo.replaced["member-1"][0].AppID)
 
 	// A grants request for an account that does not exist is a 404, not an
-	// empty list that reads like a real permissionless user.
+	// empty list.
 	recorder = run(t, http.MethodGet, "/users/ghost/grants", "", nil)
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 	recorder = run(t, http.MethodPut, "/users/ghost/grants", `[]`, nil)

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form.tsx';
 import { useCallback, useEffect, useState } from 'react';
-import { isAuthenticated, setTokens } from '@/lib/auth.ts';
+import { isAuthenticated, peekReturnTo, setTokens } from '@/lib/auth.ts';
 import { Navigate, useNavigate } from 'react-router';
 import { api, ApiProblemError } from '@/lib/api.ts';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -77,7 +77,11 @@ export const Login = () => {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
     if (ssoToken && ssoRefreshToken) {
       setTokens(ssoToken, ssoRefreshToken);
-      navigate('/');
+      // peek, never clear here: setting the tokens re-renders this component,
+      // whose declarative Navigate reads the entry again; clearing first would
+      // hand that render a null and send the user to the home page. The
+      // destination page clears it.
+      navigate(peekReturnTo() ?? '/');
       return;
     }
     setSignInNotice(SSO_ERROR_MESSAGES[errorCode ?? ''] ?? SSO_ERROR_MESSAGES.sso_failed);
@@ -88,7 +92,7 @@ export const Login = () => {
       try {
         const response = await api.login(data.email, data.password);
         setTokens(response.token, response.refreshToken);
-        navigate('/');
+        navigate(peekReturnTo() ?? '/');
       } catch (error) {
         // A 403 means the credentials were right but the account may not use
         // this door: SSO is enforced for it, or it is waiting for approval.
@@ -120,7 +124,8 @@ export const Login = () => {
   // bounce (closured on a stale value) would win the navigation race. It also
   // sends an already-signed-in visitor of /login straight to the dashboard.
   if (isAuthenticated()) {
-    return <Navigate to="/" replace />;
+    // peek, not clear: render-safe, and the destination page clears the entry.
+    return <Navigate to={peekReturnTo() ?? '/'} replace />;
   }
 
   return (

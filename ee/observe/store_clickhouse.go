@@ -20,9 +20,7 @@ type TelemetrySink interface {
 }
 
 // ClickHouseTelemetrySink writes through the native-protocol batch API: one
-// POST body becomes one insert block per signal, which keeps the insert
-// atomic (a block either lands whole or not at all) and makes identical
-// retried batches produce identical blocks.
+// POST body becomes one insert block per signal.
 type ClickHouseTelemetrySink struct {
 	conn driver.Conn
 }
@@ -40,9 +38,8 @@ func orZeroUUID(value string) string {
 	return value
 }
 
-// ingested_at is deliberately absent from both column lists: the server-side
-// DEFAULT now() stamps it, so a retried batch differs only in ingested_at and
-// query-time dedup on content_key stays honest.
+// ingested_at is absent from the column list: the server-side DEFAULT now()
+// stamps it so query-time dedup on content_key stays honest across retries.
 func (s *ClickHouseTelemetrySink) InsertMetrics(ctx context.Context, rows []MetricRow) error {
 	if len(rows) == 0 {
 		return nil

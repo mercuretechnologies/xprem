@@ -11,84 +11,49 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// NewRouter is the whole routing table in the order it is matched, one line
-// per audience. Each registerX lives in its own routes_*.go, and each of those
-// files opens with what its routes are for and what authentication stands in
-// front of them, because "who may call this" is the question a routing table
-// is read to answer and it was previously spread over three hundred lines.
-//
-// The audiences, and it is worth knowing which is which before reading any of
-// them: the orchestrator and the metrics scraper (infra), the eoas CLI
-// publishing an update (publish), the expo-observe SDK inside every installed
-// app (ingest), expo-updates inside those same apps (client), a browser
-// signing in (pre-auth) and then loading the front-end (dashboard assets), and
-// finally the signed-in dashboard itself (account, app).
-//
-// Only the last two sit behind an authentication middleware. The ones before
-// them are reachable without a credential, which is a property of what calls
-// them rather than an omission: a liveness probe, an installed mobile app and
-// a login page have no credential to present. The publish group is the odd one
-// out and its file says why, the check being inside each handler because what
-// is authorised is a branch and not just an app.
-//
-// The ORDER of these calls is load-bearing in one place, noted again in
-// routes_account.go: the flat /api/apps routes are registered before the
-// /apps/{APP_ID} prefix subrouter that routes_app.go opens, so the prefix
-// cannot claim them first. Everything else matches on disjoint paths, and mux
-// backtracks out of a prefix whose inner routes do not match.
-//
-// This package is also the composition root, so it is the one place under
-// internal/ that reaches into ee/. Enterprise behavior is wired here and
-// nowhere below.
+// branchVarName/branchVar is the only path variable a publishing token may be
+// scoped on.
+const (
+	branchVarName = "BRANCH"
+	branchVar     = "{" + branchVarName + "}"
+)
+
+// NewRouter builds the whole routing table, one registerX call per audience:
+// infra, publish, ingest, client, pre-auth, dashboard assets, then the
+// authenticated account and app routes.
 func NewRouter(container *AppContainer) *mux.Router {
 	r := mux.NewRouter()
-	// No automatic path cleaning. mux answers a path carrying a double slash
-	// or a dot segment with a 301 to the cleaned form, and Go's http.Client
-	// and curl -L both rewrite a 301 on a non-GET method to GET: a client
-	// whose base URL ends in a slash sends DELETE //api/apps/{id}, gets the
-	// redirect, re-issues it as GET, reads 200 and believes the app was
-	// deleted. Neither the dashboard nor eoas normalises its base URL, so that
-	// is one trailing slash in an operator's config away.
-	//
-	// Off, a double slash is a plain 404, which is a refusal a caller cannot
-	// mistake for success. This is the same reasoning that took StrictSlash
-	// off the app subrouter, applied one level up where it covers every route
-	// rather than one group.
-	//
-	// The dashboard's static handler is the one place that saw a benefit from
-	// cleaning, and it does not need it: it joins the request path onto the
-	// dist directory and verifies the result is still under it, which is what
-	// actually stops traversal. See routes_dashboard_assets.go.
+	// SkipClean(true): a double slash or dot segment must 404, not redirect.
+	// A 301 on a non-GET method gets rewritten to GET by callers that follow
+	// redirects, which would turn e.g. a failed DELETE into an apparent success.
 	r.SkipClean(true)
 	r.Use(middleware.LoggingMiddleware)
-	// Every request carries its network context (client IP, user agent) so
-	// audit events can be emitted from any layer below without the request.
 	r.Use(middleware.RequestMetaMiddleware)
 
 	// No authentication below this point.
 	registerInfraRoutes(r)
+	registerMCPRoutes(r, container)
 	registerPublishRoutes(r, container)
 	registerIngestRoutes(r, container)
 	registerClientRoutes(r, container)
 	registerPreAuthRoutes(r, container)
+	registerOAuthRoutes(r, container)
 	registerDashboardAssets(r)
 
-	// Authentication from here on. The middleware guards a route with one of
-	// two unrelated credentials, picked by the Use-Cli-Auth header: a CLI
-	// credential scoped to an app, or the dashboard's own session JWT. Both
-	// travel as `Authorization: Bearer …`, which is why the header decides
-	// which one to expect rather than the credential's shape.
+	// Authentication from here on: the Use-Cli-Auth header picks between a
+	// CLI credential and the dashboard session JWT.
 	apiSubrouter := r.PathPrefix("/api").Subrouter()
+	// CORS first: a preflight carries no Authorization header and must be
+	// answered before the auth middleware; the catch-all makes it match.
+	apiSubrouter.Use(middleware.NewDashboardCORSMiddleware())
+	apiSubrouter.PathPrefix("/").HandlerFunc(func(http.ResponseWriter, *http.Request) {}).Methods(http.MethodOptions)
 	apiSubrouter.Use(middleware.NewAuthMiddleware(container.DashboardAuthService, container.CliAuthService))
 
 	// adminOnly guards the global administration surface (users, roles,
-	// license, SSO, app creation). It wraps individual routes rather than a
-	// subrouter because admin and non-admin routes share path prefixes.
-	//
-	// The app-scoped half has its own vocabulary and builds its own gates from
-	// what each route declares: see the Access type in access.go.
+	// license, SSO, app creation).
 	adminOnly := middleware.NewAdminMiddleware(container.UserRepo)
 
+	registerOAuthApiRoutes(apiSubrouter, container)
 	registerAccountRoutes(apiSubrouter, container, adminOnly)
 	registerAppRoutes(apiSubrouter, container)
 

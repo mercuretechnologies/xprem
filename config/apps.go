@@ -18,7 +18,7 @@ const maxAppIdLen = 64
 
 // reservedAppIds are names that collide with top-level HTTP routes. Gorilla
 // mux resolves static routes before pattern routes, so a config with an app
-// id of "dashboard" would never receive traffic on /{APP_ID}/… — routes would
+// id of "dashboard" would never receive traffic on /{APP_ID}/…, routes would
 // route to the dashboard static handler instead. Rejecting these at boot
 // surfaces the misconfiguration before it becomes a silent outage.
 var reservedAppIds = map[string]struct{}{
@@ -42,7 +42,7 @@ const (
 )
 
 // KeysConfig is a tagged union: exactly one set of fields must be populated,
-// matched by Mode. Validated at LoadConfig time — downstream code assumes a
+// matched by Mode. Validated at LoadConfig time, downstream code assumes a
 // valid config and does not re-check invariants.
 type KeysConfig struct {
 	Mode KeysMode `json:"mode"`
@@ -68,7 +68,7 @@ type KeysConfig struct {
 // is built from the flat env vars; in control-plane mode it is hydrated from
 // a database row. Each app has its own identity (id, accessToken) and signing
 // key pair. Name is optional and used purely as a display label in the
-// dashboard — it does not participate in request routing, which always goes
+// dashboard, it does not participate in request routing, which always goes
 // by Id.
 type AppConfig struct {
 	Id          string        `json:"id"`
@@ -144,7 +144,7 @@ func ReadAppsFromFlatEnv() ([]AppConfig, string, error) {
 //
 // v1 clients predate the header. It is baked into Expo.plist /
 // AndroidManifest.xml at build time, so an already-installed v1 binary can
-// never start sending it without a store release — and an OTA server that
+// never start sending it without a store release, and an OTA server that
 // requires a store release to keep serving OTA updates has defeated its own
 // purpose. EXPO_APP_ID is the Expo project id v1 already identified the deploy
 // by, and the infra→DB migration carries it over verbatim as the apps row key,
@@ -217,7 +217,7 @@ func ValidateAppId(id, fieldPath string) error {
 	if len(id) > maxAppIdLen {
 		return fmt.Errorf("%s %q exceeds max length %d", fieldPath, id, maxAppIdLen)
 	}
-	// Reserved filesystem names — match validateSegment / isValidAppID so
+	// Reserved filesystem names, match validateSegment / isValidAppID so
 	// every id-validation path agrees. "." and ".." would resolve to the
 	// bucket root (or its parent) when interpolated into {appId}/{branch}/…
 	// on the local backend.

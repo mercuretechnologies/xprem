@@ -20,15 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The points read is bounded to the series the caller kept, and the predicate
-// carries a bound argument. Both halves need a real server to be worth
-// anything: a misplaced argument would either error or quietly answer for the
-// wrong window, and no unit test can tell the difference.
+// TestReadMetricPointsAsksOnlyForTheKeptSeries verifies readMetricPoints only
+// returns the series the caller asked to keep.
 func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
-	// The seed migration refuses without these and RunDBMigrations reports it
-	// with log.Fatalf, which takes the whole package binary down, unit tests
-	// included. Every other store test in the repo sets them for that reason.
 	t.Setenv("ADMIN_EMAIL", "seed-admin@example.com")
 	t.Setenv("ADMIN_PASSWORD", "Sup3rSecret!")
 	postgres.RunDBMigrations(pgURL)
@@ -73,16 +68,12 @@ func TestReadMetricPointsAsksOnlyForTheKeptSeries(t *testing.T) {
 	}, false, []string{"expo.app_startup.cold_launch_time"})
 	require.NoError(t, err)
 
-	// The kept series comes back with its real value, which is what proves the
-	// bound arguments still line up with their placeholders.
 	require.Len(t, points, 1)
 	require.Contains(t, points, "expo.app_startup.cold_launch_time")
 	require.Len(t, points["expo.app_startup.cold_launch_time"], 1)
 	require.InDelta(t, 1.5, points["expo.app_startup.cold_launch_time"][0].Value, 0.0001)
-	// The one the caller dropped is not read at all.
 	require.NotContains(t, points, "expo.navigation.cold_ttr")
 
-	// Keeping nothing asks nothing.
 	empty, err := explorer.readMetricPoints(ctx, appID, ExplorerQuery{
 		From: now.Add(-time.Hour), To: now.Add(time.Minute), Bucket: time.Minute,
 	}, false, nil)

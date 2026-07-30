@@ -65,7 +65,7 @@ func (c *CloudfrontCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVers
 		return "", fmt.Errorf("error parsing private key: %w", err)
 	}
 
-	// Must match the v2 bucket layout exactly — if the CloudFront origin is
+	// Must match the v2 bucket layout exactly, if the CloudFront origin is
 	// an S3 bucket, the object sits at {BUCKET_KEY_PREFIX}{appId}/{branch}/…
 	// Operators using BUCKET_KEY_PREFIX must NOT also configure a
 	// CloudFront Origin Path equal to the prefix; the path is part of the

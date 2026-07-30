@@ -11,31 +11,14 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// The principal and CLI-credential context helpers live in services
-// (request_context.go), next to the types and producers they belong to; this
-// package only stamps and reads them through the services accessors.
-
 // NewAuthMiddleware guards a route with one of two unrelated credentials,
-// picked by the Use-Cli-Auth header:
-//   - "true": a CLI credential scoped to an app (an eoo_ API key in DB mode, an
-//     Expo token/session in stateless mode) -> cliAuthService.
-//   - otherwise: the dashboard's own session JWT -> dashboardAuthService. The
-//     resolved principal is stored on the request context for downstream
-//     handlers and the admin gate.
-//
-// Both travel as `Authorization: Bearer …`, which is why the header decides
-// which one to expect rather than the credential's shape.
+// picked by the Use-Cli-Auth header: a CLI credential scoped to an app, or the
+// dashboard's own session JWT. Both travel as `Authorization: Bearer …`.
 func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliAuthService *services.CliAuthService) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			useCliAuth := r.Header.Get("Use-Cli-Auth")
 			if useCliAuth == "true" {
-				// CLI-driven external authentication requires an APP_ID path variable
-				// to locate the correct tenant boundary.
-				// - In DB Mode: Used to check the api_keys table for app-scoped access.
-				// - In Stateless Mode: Relayed to select the correct EXPO_ACCESS_TOKEN.
-				// On global or app-agnostic routes (like /api/settings or /api/apps),
-				// there is no app context anchor, making Use-Cli-Auth invalid.
 				appId := mux.Vars(r)["APP_ID"]
 				if appId == "" {
 					http.Error(w, "Use-Cli-Auth requires an app-scoped route", http.StatusUnauthorized)
@@ -43,28 +26,7 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				}
 
 				auth := helpers.GetAuth(r)
-				// The BRANCH of the matched route, empty when it has none, the
-				// same value the publish handlers pass. It used to be hardcoded
-				// empty here, described as "these routes are branch-less
-				// reads": that was wrong. The two routes a publishing token may
-				// reach both carry a {BRANCH}, and an empty name skips the
-				// protected-branch check entirely (the restriction service only
-				// looks it up when the name is non-empty). A CI key marked as
-				// having no access to protected branches could therefore still
-				// read production's runtime versions and update history: the
-				// restriction meant "cannot write" while reading as "has
-				// nothing to do with protected branches".
-				//
-				// The SPELLING of the variable is load-bearing. This reads
-				// {BRANCH}, and routes_app.go also registers a route spelled
-				// {BRANCH_ID}. No token reaches that one today, so nothing
-				// breaks, but a future token-reachable route spelled
-				// {BRANCH_ID} would silently pass "" here and skip the
-				// protected-branch check again, which is exactly the hole this
-				// line closed.
-				credential, err := cliAuthService.ValidateCliCredential(
-					r.Context(), appId, auth, mux.Vars(r)["BRANCH"], helpers.ClientIP(r),
-				)
+				credential, err := cliAuthService.AuthenticateCliCredential(r.Context(), appId, auth)
 				if err != nil {
 					handlers.RenderCliAuthError(w, err)
 					return
@@ -83,14 +45,9 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 				http.Error(w, "No Authorization header provided", http.StatusUnauthorized)
 				return
 			}
-			// Not just "is this token authentic": the account behind it is
-			// re-read here, so a session dies the moment the account is
-			// deleted, disabled or revoked, instead of surviving up to the
-			// token's two hours.
 			principal, err := dashboardAuthService.AuthenticateSession(r.Context(), bearerToken)
 			if err != nil {
-				// A database outage must not read as a dead session, or a blip
-				// would sign every account out at once.
+				// A database outage must not read as a dead session.
 				if errors.Is(err, services.ErrAuthUnavailable) {
 					http.Error(w, "Could not verify the account", http.StatusInternalServerError)
 					return
@@ -103,18 +60,8 @@ func NewAuthMiddleware(dashboardAuthService *services.DashboardAuthService, cliA
 	}
 }
 
-// NewDashboardOnlyMiddleware refuses a CLI credential on a group of routes,
-// whatever the routes are. It runs after NewAuthMiddleware, which is what put
-// the credential on the context, and it turns "this group takes accounts and
-// nothing else" into something the group carries rather than something a
-// reader has to derive.
-//
-// It exists because the alternative was an invariant nobody checks. A CLI
-// credential is app-scoped, so NewAuthMiddleware already refuses it on any
-// route without an {APP_ID} path variable, which today happens to be every
-// route in routes_account.go. That is a property of the paths, not a decision:
-// the first account route to name an app would silently become CLI-reachable.
-// This says the decision out loud, so adding such a route stays safe.
+// NewDashboardOnlyMiddleware refuses a CLI credential, and refuses a missing
+// principal, on the routes it wraps.
 func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,9 +69,6 @@ func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
 				http.Error(w, "This route requires a dashboard session", http.StatusForbidden)
 				return
 			}
-			// No principal either means the group was wired without an
-			// authentication middleware in front of it. Refusing is the only
-			// safe reading: the routes below expect a signed-in account.
 			if services.PrincipalFromContext(r.Context()) == nil {
 				http.Error(w, "This route requires a dashboard session", http.StatusForbidden)
 				return
@@ -134,18 +78,9 @@ func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
 	}
 }
 
-// NewAdminMiddleware guards a route behind the account-level admin flag. It
-// only accepts dashboard sessions — a CLI credential is app-scoped publishing
-// access, not an account, so it never reaches admin-gated routes.
-//
-// The flag is re-read from the users table here even though the principal now
-// carries a fresh one: NewAuthMiddleware resolves the account on every request,
-// so this read agrees with it by construction. It is kept because this gate is
-// the last thing between a member and the administration surface, and a gate
-// that reads its own decision's input is one that cannot be defeated by a
-// future change to how principals are built. userRepo is nil in stateless mode,
-// where the single ADMIN_EMAIL account is always an admin and the claim alone
-// is authoritative.
+// NewAdminMiddleware guards a route behind the account-level admin flag.
+// userRepo is nil in stateless mode, where the single ADMIN_EMAIL account is
+// always an admin.
 func NewAdminMiddleware(userRepo services.UserRepository) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -157,8 +92,6 @@ func NewAdminMiddleware(userRepo services.UserRepository) mux.MiddlewareFunc {
 			if userRepo != nil {
 				user, err := userRepo.GetUserByID(r.Context(), principal.UserId)
 				if err != nil {
-					// Only a missing row means the account is gone; an
-					// infrastructure failure must not read as a dead session.
 					if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 						http.Error(w, "Invalid token", http.StatusUnauthorized)
 					} else {

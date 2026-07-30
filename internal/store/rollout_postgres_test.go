@@ -1,16 +1,10 @@
-// Integration tests for the progressive-rollout queries: the partial unique index on
-// active rollout rows, the channel_rollouts FK behaviors (deferred NO ACTION on the
-// rollout branch, CASCADE on the channel), the promote transaction, the guarded
-// channel remap, the conditional MarkUpdateAsChecked stamp, and the
-// InsertUpdateWithRollout control resolution. All of that lives in SQL, which
-// the in-memory service fakes cannot exercise. They need a real Postgres and skip
-// unless TEST_DATABASE_URL is set, e.g.:
+// Integration tests for the progressive-rollout queries. They need a real Postgres
+// and skip unless TEST_DATABASE_URL is set, e.g.:
 //
 //	docker run -d --name eoo-pg -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16-alpine
 //	TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/postgres?sslmode=disable" go test ./internal/store/
 //
-// The package is store_test on purpose: an internal test would create an import cycle
-// (store -> database/postgres -> migrations -> store).
+// The package is store_test to avoid an import cycle (store -> database/postgres -> migrations -> store).
 package store_test
 
 import (
@@ -56,9 +50,6 @@ func newRolloutFixture(t *testing.T) *rolloutFixture {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		// Skipping locally keeps `go test ./...` usable without a database, but a skip
-		// in CI is a green job that exercised none of this SQL, which is how it stayed
-		// green through defects these tests exist to catch.
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_DATABASE_URL must be set in CI: these tests cover SQL that the in-memory fakes cannot reach")
 		}
@@ -145,8 +136,7 @@ func TestChannelRolloutInsertGuardsPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows)
 
-	// The guarded INSERT...SELECT reports 0 rows for every refused start; the service
-	// disambiguates from there.
+	// The guarded INSERT...SELECT reports 0 rows for every refused start.
 	rows, err = fixture.rollouts.CreateChannelRollout(ctx, uuid.NewString(), fixture.appId, rolloutTestChannel, rolloutTestDefaultBranch, 10)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, rows, "rollout branch equal to the channel's default must be refused")
@@ -226,7 +216,6 @@ func TestPromoteChannelRolloutPostgres(t *testing.T) {
 	assert.Equal(t, rolloutTestRolloutBranch, mapping.Rollout.BranchName)
 	assert.Equal(t, 30, mapping.Rollout.Percentage)
 
-	// Promote repoints the channel and discards the rollout in one transaction.
 	rows, err := fixture.rollouts.PromoteChannelRollout(ctx, fixture.appId, rolloutTestChannel)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows)
@@ -256,14 +245,11 @@ func TestChannelRolloutBranchAndMappingGuardsPostgres(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, database.IsForeignKeyViolation(err), "expected a foreign key violation, got: %v", err)
 
-	// The friendly pre-check names the blocking channels.
 	channelNames, err := fixture.rollouts.GetChannelRolloutsByBranch(ctx, fixture.appId, rolloutTestRolloutBranch)
 	require.NoError(t, err)
 	assert.Equal(t, []string{rolloutTestChannel}, channelNames)
 
-	// The guarded remap refuses to touch a channel locked by an active rollout: the
-	// UPDATE matches 0 rows, which the store reports as not-found and the service
-	// disambiguates into ErrChannelHasActiveRollout.
+	// The guarded remap refuses to touch a channel locked by an active rollout.
 	channelIdStr := strconv.FormatInt(fixture.channelId, 10)
 	rolloutBranchIdStr := strconv.FormatInt(fixture.rolloutBranchId, 10)
 	err = fixture.branches.UpdateChannelBranchMapping(ctx, fixture.appId, channelIdStr, rolloutBranchIdStr)
@@ -300,7 +286,6 @@ func TestChannelRolloutEndsWithChannelDeletePostgres(t *testing.T) {
 		fixture.appId).Scan(&remainingRollouts))
 	assert.EqualValues(t, 0, remainingRollouts)
 
-	// With the rollout gone the branch is deletable again.
 	require.NoError(t, fixture.branches.DeleteBranchByName(ctx, fixture.appId, rolloutTestRolloutBranch))
 }
 
@@ -308,8 +293,7 @@ func TestPerUpdateRolloutActiveIndexPostgres(t *testing.T) {
 	fixture := newRolloutFixture(t)
 	ctx := context.Background()
 
-	// An unchecked rollout row (the dedupe-406 leftover) is inert: it neither trips
-	// the publish guard nor counts as an active rollout.
+	// An unchecked rollout row is inert: it neither trips the publish guard nor counts as active.
 	firstRollout := fixture.createRolloutUpdate(t, rolloutTestDefaultBranch, 1000, "ios", 10)
 	hasActive, err := fixture.updates.HasActiveRolloutUpdate(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime)
 	require.NoError(t, err)
@@ -324,8 +308,7 @@ func TestPerUpdateRolloutActiveIndexPostgres(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hasActive)
 
-	// A second rollout row on the same (branch, rtv, platform) inserts fine while
-	// unchecked but violates uq_updates_active_rollout when it reaches checked state.
+	// A second rollout row on the same (branch, rtv, platform) violates uq_updates_active_rollout at checked time.
 	secondRollout := fixture.createRolloutUpdate(t, rolloutTestDefaultBranch, 1001, "ios", 20)
 	err = fixture.updates.MarkUpdateAsChecked(ctx, secondRollout)
 	require.Error(t, err)
@@ -440,8 +423,7 @@ func TestInsertUpdateWithRolloutControlResolutionPostgres(t *testing.T) {
 	fixture := newRolloutFixture(t)
 	ctx := context.Background()
 
-	// First update of a branch: there is no control, out-of-bucket devices get
-	// noUpdateAvailable.
+	// First update of a branch: there is no control.
 	firstRollout := fixture.createRolloutUpdate(t, rolloutTestRolloutBranch, 3000, "ios", 10)
 	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, firstRollout))
 	envelope, err := fixture.updates.GetLatestUpdateWithRollout(ctx, fixture.appId, rolloutTestRolloutBranch, rolloutTestRuntime, "ios")
@@ -452,8 +434,7 @@ func TestInsertUpdateWithRolloutControlResolutionPostgres(t *testing.T) {
 	assert.Equal(t, 10, *envelope.RolloutPercentage)
 	assert.Nil(t, envelope.Control)
 
-	// The control is the latest CHECKED update of the same platform: the newer
-	// unchecked row and the other platform's row must both be skipped.
+	// The control is the latest CHECKED update of the same platform.
 	fixture.createUpdate(t, rolloutTestDefaultBranch, 3100, "ios", true)
 	fixture.createUpdate(t, rolloutTestDefaultBranch, 3105, "android", true)
 	fixture.createUpdate(t, rolloutTestDefaultBranch, 3110, "ios", true)
@@ -482,8 +463,7 @@ func TestMarkUpdateAsCheckedConditionalStampPostgres(t *testing.T) {
 	ctx := context.Background()
 
 	// Direction 1: a plain update cannot become visible while a rollout is active
-	// on its (branch, rtv, platform), closing the plain-publish-vs-rollout race
-	// beyond the fail-fast HasActiveRolloutUpdate pre-check.
+	// on its (branch, rtv, platform).
 	fixture.createUpdate(t, rolloutTestDefaultBranch, 4000, "ios", true)
 	activeRollout := fixture.createRolloutUpdate(t, rolloutTestDefaultBranch, 4010, "ios", 20)
 	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, activeRollout))
@@ -500,8 +480,7 @@ func TestMarkUpdateAsCheckedConditionalStampPostgres(t *testing.T) {
 	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, otherPlatform))
 
 	// Direction 2: a rollout update superseded by a newer checked update during its
-	// upload must not activate; a phantom active-but-never-served rollout would
-	// otherwise block every subsequent publish.
+	// upload must not activate.
 	fixture.createUpdate(t, rolloutTestRolloutBranch, 5000, "ios", true)
 	supersededRollout := fixture.createRolloutUpdate(t, rolloutTestRolloutBranch, 5010, "ios", 20)
 	fixture.createUpdate(t, rolloutTestRolloutBranch, 5020, "ios", true)

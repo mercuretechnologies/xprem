@@ -13,8 +13,6 @@ import (
 )
 
 // fakeMutator records the exact call the service dispatched, geo included.
-// The embedded Store supplies the dashboard query methods (unused here) so the
-// fake satisfies identity.Store.
 type fakeMutator struct {
 	Store
 	calledOp Op
@@ -111,9 +109,7 @@ func TestServiceDispatchAndGeo(t *testing.T) {
 	})
 }
 
-// Custom attributes are the enterprise part of identity. The device registry
-// under them is community, so an unlicensed deployment must keep registering
-// devices while collecting none of the metadata.
+// An unlicensed deployment must keep registering devices while collecting none of the metadata.
 func TestCustomAttributesRequireALicense(t *testing.T) {
 	appID, clientID := uuid.NewString(), uuid.NewString()
 
@@ -172,12 +168,10 @@ func TestCustomAttributesRequireALicense(t *testing.T) {
 }
 
 func TestGeoLite2ResolverGuards(t *testing.T) {
-	// Constructor surfaces a clear error on a missing database.
 	_, err := NewGeoLite2Resolver("/nonexistent/GeoLite2-City.mmdb")
 	require.Error(t, err)
 
-	// The IP guards run before any database access, so an empty resolver is
-	// safe: garbage, private, loopback and unspecified IPs resolve to nil.
+	// The IP guards run before any database access, so an empty resolver is safe to call.
 	resolver := &GeoLite2Resolver{}
 	for _, ip := range []string{"", "not-an-ip", "10.1.2.3", "192.168.1.1", "127.0.0.1", "0.0.0.0", "::1", "fd00::1"} {
 		require.Nil(t, resolver.Resolve(ip), "ip %q", ip)

@@ -27,30 +27,17 @@ func getDashboardPath() string {
 	return filepath.Join(exeDir, "apps", "dashboard", "dist")
 }
 
-// The dashboard's own static build, called by a browser loading the single-page
-// app. Anything that is not a known static extension falls back to index.html
-// so client-side routing works on a hard refresh.
-//
-// AUTHENTICATION: none, and none is needed. What is served here is the
-// compiled front-end, which is public by nature: it ships in the binary and
-// contains no data. The application it boots holds no session either, it goes
-// and asks /auth for one, then talks to /api. env.js only tells the page which
-// API base URL to call.
-//
-// The traversal check is what matters instead: a request path is joined onto
-// the dashboard directory, so it is verified to still be under it before the
-// file is served.
+// registerDashboardAssets serves the dashboard's static build. Anything that
+// is not a known static extension falls back to index.html so client-side
+// routing works on a hard refresh. No authentication: the compiled front-end
+// is public by nature and holds no session of its own.
 func registerDashboardAssets(r *mux.Router) {
-	// Resolved before the enable check, as it always has been: it is the call
-	// that aborts the process when the executable path cannot be read, and
-	// that failure is not something a disabled dashboard should hide.
 	dashboardPath := getDashboardPath()
 
 	if !dashutils.IsDashboardEnabled() {
 		return
 	}
 	r.PathPrefix("/dashboard").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Get env.js
 		if r.URL.Path == "/dashboard/env.js" {
 			w.Header().Set("Content-Type", "application/javascript")
 			baseURL := config.GetEnv("BASE_URL")

@@ -2,20 +2,13 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-// Package identity maps expo-eas-client install UUIDs to operator-defined
-// metadata (userId, tenant, ...), fed by the $set / $set_once / $unset log
-// events on the observe ingestion route. The dashboard "Identity" section
-// declares which metadata keys are accepted and with which type; everything
-// else coming from the wire is dropped, so hostile payloads are bounded by
-// construction.
-//
-// The package is EE-licensed AND license-gated: without a valid license the
-// device registry keeps working (it is what update health is built on) but
-// operator-defined attributes are not stored, and the ops report back which
-// keys they dropped.
+// Package identity maps expo-eas-client install UUIDs to operator-defined metadata, fed by the
+// $set / $set_once / $unset log events. Without a valid license the device registry keeps
+// working but operator-defined attributes are not stored.
 package identity
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,15 +18,14 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
-// ErrTooManySchemaKeys is returned when declaring a new allowlist key would
-// exceed MaxSchemaKeys. The dashboard surfaces it as a 409.
+// ErrTooManySchemaKeys is returned when declaring a new allowlist key would exceed MaxSchemaKeys.
 var ErrTooManySchemaKeys = errors.New("identity schema key limit reached")
 
-// ErrRequiresValidLicense is returned when declaring an attribute without a
-// valid enterprise license. The device registry stays community; the
-// operator-defined metadata on top of it is what the license buys.
+// ErrRequiresValidLicense is returned when declaring an attribute without a valid enterprise license.
 var ErrRequiresValidLicense = errors.New("custom attributes require an active enterprise license")
 
 type ValueType string
@@ -45,20 +37,15 @@ const (
 )
 
 const (
-	// DefaultMaxLength bounds string values when the operator does not pick a
-	// limit; MaxLengthCeiling bounds what the operator may pick. Identity
-	// metadata is lookup keys, not payloads.
+	// DefaultMaxLength bounds string values when the operator does not pick a limit.
 	DefaultMaxLength = 256
+	// MaxLengthCeiling bounds what the operator may pick.
 	MaxLengthCeiling = 1024
-	// MaxSchemaKeys caps the allowlist size. Every declared key multiplies the
-	// worst-case device row that the unauthenticated wire can fill, so the
-	// operator-side bound keeps hostile payloads at ~tens of KB per row
-	// instead of megabytes.
+	// MaxSchemaKeys caps the allowlist size, bounding the worst-case device row size.
 	MaxSchemaKeys = 100
 )
 
-// Key names stay path-friendly and unambiguous: they end up in API routes,
-// autocomplete queries and JSONB lookups.
+// keyPattern keeps key names path-friendly: they end up in API routes and JSONB lookups.
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
 // KeySpec is one allowlisted metadata key as declared in the dashboard.
@@ -86,14 +73,8 @@ func ValidateKeySpec(spec KeySpec) error {
 	return nil
 }
 
-// Sanitize filters raw wire metadata down to the allowlist. A value survives
-// only when its key is declared and its JSON type matches the declared type;
-// violations drop the single entry, never the whole operation. Oversized
-// strings are dropped rather than truncated (a truncated userId would corrupt
-// the mapping silently). The dropped keys come back for counters and logs.
-//
-// Client-side validation (expo-app-metrics caps) is irrelevant here: anything
-// can be forged with a plain HTTP request, this is the enforcement point.
+// Sanitize filters raw wire metadata down to the allowlist. A value survives only when its key
+// is declared and its JSON type matches; violations drop the entry, never the whole operation.
 func (s Schema) Sanitize(raw map[string]any) (map[string]any, []string) {
 	sanitized := make(map[string]any, len(raw))
 	var dropped []string
@@ -113,9 +94,7 @@ func (s Schema) Sanitize(raw map[string]any) (map[string]any, []string) {
 	return sanitized, dropped
 }
 
-// coerceValue validates one raw value against its spec. Numbers normalize to
-// float64 (what JSON decoding produces anyway); NaN and infinities are
-// dropped because they do not survive json.Marshal into JSONB.
+// coerceValue validates one raw value against its spec, normalizing numbers to float64.
 func coerceValue(spec KeySpec, value any) (any, bool) {
 	switch spec.Type {
 	case ValueTypeString:
@@ -140,10 +119,8 @@ func coerceValue(spec KeySpec, value any) (any, bool) {
 	return nil, false
 }
 
-// ParseFilterValue turns the text a filter travels as (a URL parameter) into
-// the value its declared type is stored as. Metadata lives in JSONB and is
-// matched by containment, which is type-aware: a boolean stored as `true` is
-// not found by `"true"`, so the schema is what decides how to read the text.
+// ParseFilterValue turns the text a filter travels as (a URL parameter) into the value its
+// declared type is stored as, since JSONB containment matching is type-aware.
 func ParseFilterValue(spec KeySpec, raw string) (any, bool) {
 	switch spec.Type {
 	case ValueTypeString:
@@ -164,17 +141,12 @@ func ParseFilterValue(spec KeySpec, raw string) (any, bool) {
 	return nil, false
 }
 
-// ErrInvalidFilterPair reports a pair that is not `key:value`, names a key the
-// schema does not declare, or carries a value that key's type cannot hold.
+// ErrInvalidFilterPair reports a pair that is not `key:value`, names an undeclared key, or
+// carries a value that key's type cannot hold.
 var ErrInvalidFilterPair = errors.New("invalid attribute filter")
 
-// ParseFilterPairs reads the `key:value` pairs a filter travels as. Pairs
-// repeat, and repeating a key adds a value to it rather than replacing it, so
-// `plan:pro`, `plan:enterprise`, `tenant:globex` reads as "plan is pro or
-// enterprise, and tenant is globex".
-//
-// Keys never contain a colon (keyPattern forbids it), so the first one splits
-// the pair and values keep theirs.
+// ParseFilterPairs reads the `key:value` pairs a filter travels as. Repeating a key adds a
+// value to it rather than replacing it.
 func ParseFilterPairs(schema Schema, pairs []string) (MetadataFilters, error) {
 	filters := MetadataFilters{}
 	index := map[string]int{}
@@ -222,17 +194,14 @@ func toFloat(value any) (float64, bool) {
 	case uint64:
 		return float64(v), true
 	case json.Number:
-		// The future ingest path may decode with UseNumber(); support it now
-		// so numbers do not silently start dropping when it does.
+		// Supported in case a future ingest path decodes with UseNumber().
 		f, err := v.Float64()
 		return f, err == nil
 	}
 	return 0, false
 }
 
-// RenderValue is the canonical text form of a metadata value, used as the
-// identity_value_stats key. Integral floats render without a decimal part so
-// 42 and 42.0 count as the same value.
+// RenderValue is the canonical text form of a metadata value, used as the identity_value_stats key.
 func RenderValue(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -247,8 +216,7 @@ func RenderValue(value any) string {
 	}
 }
 
-// Device is one install of an app and what we know about it. Timestamps stay
-// time.Time here; formatting belongs to the handlers (same split as ee/audit).
+// Device is one install of an app and what we know about it.
 type Device struct {
 	AppID       string
 	EASClientID string
@@ -257,16 +225,11 @@ type Device struct {
 	City        *string
 	Lat         *float64
 	Lng         *float64
-	// Hardware and OS as last reported by telemetry. nil means the device has
-	// never sent any: the manifest path carries no such headers, so a fleet
-	// without expo-observe reports nothing here.
+	// Hardware and OS as last reported by telemetry; nil means it never reported any.
 	DeviceModel *string
 	OSName      *string
 	OSVersion   *string
-	// The update the device is running, and the release dimensions derived
-	// from it. Branch, RuntimeVersion and Platform are nil when the update is
-	// unknown to this server: the embedded bundle reports its own id, which
-	// matches no published update.
+	// Branch, RuntimeVersion and Platform are nil when CurrentUpdateID is unknown to this server.
 	CurrentUpdateID *string
 	Branch          *string
 	RuntimeVersion  *string
@@ -282,28 +245,52 @@ type DeviceCursor struct {
 	EASClientID string
 }
 
-// MetadataFilter narrows the device inventory to installs whose metadata
-// contains the key with one of the given values. Values carry the declared
-// type (string, float64 or bool), not the text they arrived as: metadata is
-// matched by JSONB containment, which never matches `true` against `"true"`.
-// ParseFilterValue is what turns one into the other.
-//
-// One entry is one key, and any of its values matches: "plan is pro or
-// enterprise" is the comparison people actually ask for.
+// EncodeDeviceCursor makes the cursor opaque on the wire: base64 of
+// "RFC3339Nano|uuid". Every surface paginating the inventory shares this
+// codec so a cursor handed out by one is readable by the other.
+func EncodeDeviceCursor(cursor *DeviceCursor) string {
+	if cursor == nil {
+		return ""
+	}
+	raw := cursor.LastSeenAt.UTC().Format(time.RFC3339Nano) + "|" + cursor.EASClientID
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// DecodeDeviceCursor rejects a tampered cursor here rather than letting the
+// store fail on the parse.
+func DecodeDeviceCursor(encoded string) (*DeviceCursor, error) {
+	if encoded == "" {
+		return nil, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return nil, errors.New("malformed cursor")
+	}
+	lastSeenAt, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return nil, err
+	}
+	if _, err := uuid.Parse(parts[1]); err != nil {
+		return nil, err
+	}
+	return &DeviceCursor{LastSeenAt: lastSeenAt, EASClientID: parts[1]}, nil
+}
+
+// MetadataFilter narrows the device inventory to installs whose metadata contains the key
+// with one of the given values. A device matches if any of the values matches.
 type MetadataFilter struct {
 	Key    string
 	Values []any
 }
 
-// MetadataFilters is a conjunction: a device matches when every key matches one
-// of its values. "plan is pro or enterprise, and tenant is globex" narrows the
-// two the way a reader expects, and each key can still be compared over
-// several values.
+// MetadataFilters is a conjunction: a device matches when every key matches one of its values.
 type MetadataFilters []MetadataFilter
 
-// A containment document spells one complete combination, so the count is the
-// product of the value counts. Beyond this the question is better asked as
-// fewer values than as thousands of index probes.
+// MaxContainmentDocs bounds the product of the per-key value counts.
 const MaxContainmentDocs = 128
 
 // ErrTooManyCombinations reports a filter whose keys and values multiply out
@@ -311,9 +298,7 @@ const MaxContainmentDocs = 128
 var ErrTooManyCombinations = errors.New("too many attribute combinations")
 
 // ContainmentDocs renders the conjunction as the set of JSONB documents that
-// `metadata @> ANY(...)` accepts. Containment of `{"plan":"pro","tenant":"globex"}`
-// already means "plan is pro AND tenant is globex", so the AND lives inside
-// each document and the OR is the array: one document per combination.
+// `metadata @> ANY(...)` accepts: one document per combination.
 func (f MetadataFilters) ContainmentDocs() ([][]byte, error) {
 	if len(f) == 0 {
 		return nil, nil
@@ -329,8 +314,7 @@ func (f MetadataFilters) ContainmentDocs() ([][]byte, error) {
 		}
 	}
 
-	// Grown one key at a time: each existing combination is extended with every
-	// value of the next key.
+	// Grown one key at a time: each combination is extended with every value of the next key.
 	combos := []map[string]any{{}}
 	for _, entry := range f {
 		next := make([]map[string]any, 0, len(combos)*len(entry.Values))
@@ -358,25 +342,15 @@ func (f MetadataFilters) ContainmentDocs() ([][]byte, error) {
 	return docs, nil
 }
 
-// DeviceQuery narrows the device inventory. Every field is optional and an
-// empty one means "do not filter". The release dimensions (branch, runtime,
-// platform) are matched against the update each device is currently running,
-// so a device on the embedded bundle matches none of them.
-//
-// Channel, app version, build number, EAS build id and environment are
-// deliberately absent: the registry never learns them. They live only in
-// telemetry resource attributes, and inventing a column for them here would
-// mean a value that is right for SDK users and silently wrong for everyone
-// else.
+// DeviceQuery narrows the device inventory. Every field is optional; an empty one means
+// "do not filter". Channel, app version, build number, EAS build id and environment are
+// deliberately absent since the registry never learns them.
 type DeviceQuery struct {
 	Metadata MetadataFilters
-	// Every dimension is a set, like the telemetry filters: empty means "do
-	// not filter", several values compare populations side by side.
+	// Empty means "do not filter"; several values compare populations side by side.
 	EASClientIDs     []string
 	CurrentUpdateIDs []string
-	// The publish a device's update belongs to. A device stores the update it
-	// runs, never the publish it came from, so this is matched through that
-	// update rather than on the device itself.
+	// Matched through the device's current update, since a device stores no publish id.
 	UpdateGroupIDs  []string
 	Branches        []string
 	RuntimeVersions []string
@@ -388,10 +362,7 @@ type DeviceQuery struct {
 }
 
 const (
-	// OnlineWindow is what "online" means here: a device that pinged the
-	// server, by any route, within this window. Long enough to survive the
-	// check-in debounce and a backgrounded app, short enough that the number
-	// still reads as "right now".
+	// DefaultOnlineWindow is how recently a device must have pinged the server to count as online.
 	DefaultOnlineWindow = 20 * time.Minute
 	MaxOnlineWindow     = 24 * time.Hour
 
@@ -400,11 +371,8 @@ const (
 	MaxDevicesPageSize     = 200
 )
 
-// Geo is an optional enrichment resolved from the request IP (GeoLite2,
-// city-level accuracy: lat/lng is a city centroid, not a device position).
-// Fields are per-field optional because partial resolutions are the norm
-// (country without city is very common); a nil field never overwrites a
-// previously known value, only a present one does.
+// Geo is an optional, per-field-optional enrichment resolved from the request IP. A nil field
+// never overwrites a previously known value.
 type Geo struct {
 	CountryCode *string
 	City        *string
@@ -412,9 +380,7 @@ type Geo struct {
 	Lng         *float64
 }
 
-// Place is what telemetry ingestion keeps of a Geo: the country it filters on
-// and the coordinates it stores for later. The city name is deliberately left
-// behind, since nothing downstream groups or filters on it.
+// Place is what telemetry ingestion keeps of a Geo: the country and coordinates, not the city.
 type Place struct {
 	CountryCode string
 	Lat         *float64

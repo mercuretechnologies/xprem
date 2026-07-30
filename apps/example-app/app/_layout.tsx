@@ -1,4 +1,4 @@
-import { Observe, ObserveRoot, useObserve } from 'expo-observe';
+import { Observe, ObserveRoot } from 'expo-observe';
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
@@ -18,7 +18,6 @@ function RootLayout() {
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
-  const { markInteractive } = useObserve();
 
   useEffect(() => {
     // Once per JS session, not once per render.
@@ -29,19 +28,25 @@ function RootLayout() {
   useEffect(() => {
     if (loaded) {
       SplashScreen.hideAsync();
-      markInteractive()
     }
-  }, [loaded, markInteractive]);
+  }, [loaded]);
 
   if (!loaded) {
     return null;
   }
 
+  // markInteractive is deliberately not called here: the root layout is not a
+  // screen, so the router integration would have no route to attribute the
+  // metric to. Each screen calls it once it is actually usable.
   return (
     <ErrorBoundary>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Stack>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="modal"
+            options={{ presentation: 'modal', title: 'Modal' }}
+          />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />

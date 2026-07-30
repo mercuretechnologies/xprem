@@ -24,19 +24,13 @@ const (
 	healthOutboxInterval   = time.Second
 	healthSnapshotInterval = time.Minute
 	healthDiscardInterval  = time.Minute
-	// Floor between two change-driven snapshots. The outbox drains every
-	// second and any drain that delivered something asks for a fresh
-	// projection, so on a fleet that is never quiet the full-fleet aggregate
-	// over PostgreSQL ran up to sixty times a minute to rewrite a bucket that
-	// is truncated to the minute anyway. Ten seconds keeps a release visible
-	// almost immediately while costing six aggregates a minute instead of
-	// sixty; the minute heartbeat below is unaffected, it is the repair path.
+	// Floor between two change-driven snapshots, to avoid rewriting the same
+	// minute bucket on every outbox drain.
 	healthSnapshotFloor = 10 * time.Second
 )
 
 // HealthHistory projects PostgreSQL's durable health outbox and instant-T
-// state into ClickHouse. PostgreSQL remains authoritative; every operation
-// here is retryable and failures never affect manifest/telemetry requests.
+// state into ClickHouse. PostgreSQL remains authoritative.
 type HealthHistory struct {
 	postgres   *database.Engine
 	clickhouse *clickhouse.Engine
@@ -47,9 +41,7 @@ func NewHealthHistory(postgresEngine *database.Engine, clickhouseEngine *clickho
 }
 
 // StartHealthOutboxDiscarder prevents the outbox from growing forever on a
-// deployment that deliberately has no ClickHouse. Replica configuration is
-// expected to be uniform: a mixed cluster where some replicas configure
-// ClickHouse and others do not is unsupported by the telemetry pipeline too.
+// deployment that has no ClickHouse configured.
 func StartHealthOutboxDiscarder(parent context.Context, postgresEngine *database.Engine) func() {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
@@ -75,9 +67,7 @@ func StartHealthOutboxDiscarder(parent context.Context, postgresEngine *database
 	}
 }
 
-// Start runs the projector until the returned cleanup is called. Outbox
-// delivery is frequent for a responsive graph; absolute snapshots are one
-// minute apart and make historical reads cheap.
+// Start runs the projector until the returned cleanup is called.
 func (h *HealthHistory) Start(parent context.Context) func() {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
@@ -96,20 +86,8 @@ func (h *HealthHistory) Start(parent context.Context) func() {
 	}
 }
 
-// runSegments captures the segmented counters on their own goroutine and their
-// own rhythm.
-//
-// Its own goroutine, because one capture rebuilds a grid over the whole fleet
-// and is allowed minutes to do it. Sharing the loop above meant a slow capture
-// held back outbox delivery and the per-minute snapshot, so a background job
-// feeding a secondary chart could punch a hole in the headline one. The
-// separate advisory lock was there to prevent exactly that and could not, since
-// the two never ran concurrently to begin with.
-//
-// And deliberately NOT on the change trigger the unsplit snapshot follows. That
-// trigger exists so a failing release shows up on the headline chart within
-// seconds; the split is a breakdown a reader opens on purpose, and its finest
-// bucket is five minutes.
+// runSegments captures the segmented counters on their own goroutine and
+// timer, independent of the outbox/snapshot loop.
 func (h *HealthHistory) runSegments(ctx context.Context) {
 	ticker := time.NewTicker(healthSegmentBucket)
 	defer ticker.Stop()
@@ -124,30 +102,12 @@ func (h *HealthHistory) runSegments(ctx context.Context) {
 	}
 }
 
-// captureSegmentWindow writes the bucket that just closed and re-writes the one
-// before it.
-//
-// The rewrite is unconditional, and that is the point: it needs no memory of
-// what failed. A capture is one INSERT ... SELECT, and a ClickHouse insert is
-// not atomic across blocks, so on a fleet large enough for the result to exceed
-// one, a capture cut short by its timeout or by a shutdown leaves the bucket
-// half written. Nothing downstream can tell that apart from a bucket where the
-// fleet really did shrink, since coverage only asks whether a bucket has rows,
-// and the chart would draw a dip at the instant of a restart.
-//
-// Remembering which bucket to redo was tried and was worse. The advisory lock
-// makes "another replica has this" indistinguishable from "this is done", which
-// silently dropped the retry on any multi-replica deployment; a single slot
-// forgot the older of two consecutive failures; and running the retry before
-// computing the current instant let a slow retry push that instant into the
-// next bucket, skipping one and capturing another twice. Every one of those is
-// bookkeeping about a rare event. Two passes over a bucket cost one capture per
-// tick, measured in seconds against a five-minute period, and the second pass
-// supersedes the first through captured_at whether or not the first finished.
+// captureSegmentWindow writes the bucket that just closed and unconditionally
+// re-writes the one before it, to repair a bucket left half-written by an
+// interrupted capture.
 func (h *HealthHistory) captureSegmentWindow(ctx context.Context) {
 	closed := time.Now().UTC().Truncate(healthSegmentBucket)
-	// Oldest first, so the newest capture is the freshest thing in the table
-	// if the pair is interrupted partway.
+	// Oldest first, so the newest capture is the freshest row if interrupted.
 	h.captureSegmentSnapshotsAt(ctx, closed.Add(-healthSegmentBucket))
 	h.captureSegmentSnapshotsAt(ctx, closed)
 }
@@ -161,21 +121,13 @@ func (h *HealthHistory) run(ctx context.Context) {
 	h.drainOutbox(ctx)
 	h.captureSnapshots(ctx)
 	lastCapture := time.Now()
-	// A change waiting for the floor to elapse. Held rather than dropped: on a
-	// quiet fleet the delivering drain is the only one there is, so forgetting
-	// it meant the change waited for the next heartbeat instead of for the
-	// floor, turning a second of staleness into up to a minute for exactly the
-	// deployment where one failing device matters most.
+	// A change waiting for the floor to elapse; held rather than dropped.
 	pending := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-outboxTicker.C:
-			// Health changed: refresh the current minute, but no more often
-			// than the floor. ClickHouse keeps one logical point per minute
-			// via argMax, so anything faster rewrites the same bucket at the
-			// price of another full-fleet read.
 			pending = h.drainOutbox(ctx) || pending
 			if pending && time.Since(lastCapture) >= healthSnapshotFloor {
 				h.captureSnapshots(ctx)
@@ -213,14 +165,11 @@ func (h *HealthHistory) drainOutbox(ctx context.Context) bool {
 // migrationAdvisoryLockID in internal/database/postgres for the convention).
 const outboxAdvisoryLockID = 745103622
 
-// outboxSendTimeout bounds the ClickHouse insert. Nothing held it before, and
-// the drain runs every second: an unreachable ClickHouse meant a delivery that
-// never returned, on a loop.
+// outboxSendTimeout bounds the ClickHouse insert.
 const outboxSendTimeout = 15 * time.Second
 
-// snapshotAdvisoryLockID elects one replica to take fleet snapshots. Separate
-// from the outbox lock so a slow drain never stops a capture, and the other way
-// round: they run on different cadences and neither waits on the other.
+// snapshotAdvisoryLockID elects one replica to take fleet snapshots,
+// separate from the outbox lock.
 const snapshotAdvisoryLockID = 745103623
 
 // lockOutbox elects one drainer across replicas.
@@ -229,27 +178,15 @@ func (h *HealthHistory) lockOutbox(ctx context.Context) (func(), bool, error) {
 }
 
 // deliverOutboxBatch moves one batch of events from PostgreSQL to ClickHouse.
-//
-// Read, send, delete, with NO transaction spanning the send. It used to be one
-// transaction holding FOR UPDATE SKIP LOCKED row locks across the ClickHouse
-// insert, which meant an unreachable ClickHouse pinned a connection and a
-// transaction id for as long as it stayed unreachable, on a loop that fires
-// every second. A transaction id that never advances is what stops vacuum from
-// cleaning a table fed by every device state change.
-//
-// The cost of that shape is that delivery is at-least-once: a crash between
-// the send and the delete replays the batch. That is what the destination was
-// built for, device_health_events being a ReplacingMergeTree keyed on
-// (app_id, outbox_id), so a replayed event collapses into the one already
-// there rather than double-counting.
+// Delivery is at-least-once: device_health_events is a ReplacingMergeTree
+// keyed on (app_id, outbox_id), so a replayed event collapses into the one
+// already there.
 func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 	release, locked, err := h.lockOutbox(ctx)
 	if err != nil {
 		return 0, err
 	}
 	if !locked {
-		// Another replica is draining. Not an error and not a miss: it is
-		// delivering the same rows this one would have.
 		return 0, nil
 	}
 	defer release()
@@ -309,29 +246,21 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 	if err := batch.Send(); err != nil {
 		return 0, fmt.Errorf("sending health event batch: %w", err)
 	}
-	// Delivered. Anything that goes wrong from here replays the batch, which
-	// the destination absorbs.
 	if err := h.postgres.Queries.DeleteDeviceHealthOutbox(ctx, ids); err != nil {
 		return 0, fmt.Errorf("deleting delivered outbox rows: %w", err)
 	}
 	return len(rows), nil
 }
 
+// captureSnapshots aggregates the fleet's current health into one replica's
+// snapshot, guarded by an advisory lock so only one replica runs it.
 func (h *HealthHistory) captureSnapshots(ctx context.Context) {
-	// One replica at a time. ListCurrentUpdateHealthSnapshots aggregates the
-	// whole device_identity table and then joins the failures of every update
-	// it tracks, and every replica used to run it on its own timer: at ten
-	// replicas that is ten identical full-fleet scans a minute, for one set of
-	// numbers that would have been the same from any of them.
 	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, snapshotAdvisoryLockID, "health snapshot")
 	if err != nil {
 		log.Printf("observe: taking the health snapshot lock failed: %v", err)
 		return
 	}
 	if !locked {
-		// Another replica is capturing the same minute. Nothing to do and
-		// nothing lost: the snapshot is a property of the fleet, not of the
-		// replica that reads it.
 		return
 	}
 	defer release()

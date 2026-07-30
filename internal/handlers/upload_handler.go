@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"xprem/config"
 	"xprem/internal/bucket"
-	"xprem/internal/helpers"
 	"xprem/internal/services"
 	"xprem/internal/validation"
 
@@ -18,13 +17,11 @@ import (
 )
 
 type UploadHandler struct {
-	cliAuthService    *services.CliAuthService
 	deploymentService *services.DeploymentService
 }
 
-func NewUploadHandler(cliAuthService *services.CliAuthService, deploymentService *services.DeploymentService) *UploadHandler {
+func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHandler {
 	return &UploadHandler{
-		cliAuthService:    cliAuthService,
 		deploymentService: deploymentService,
 	}
 }
@@ -88,14 +85,6 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		http.Error(w, "No branch provided", http.StatusBadRequest)
 		return
 	}
-	auth := helpers.GetAuth(r)
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, branchName, helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
-		return
-	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
 	runtimeVersion := r.URL.Query().Get("runtimeVersion")
 	if runtimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
@@ -116,7 +105,7 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		RuntimeVersion: runtimeVersion,
 		UpdateID:       updateId,
 	}
-	err = h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
+	err := h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, services.ErrUnauthorized) {
 			RenderCliAuthError(w, err)
@@ -158,17 +147,6 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 	requestID := uuid.New().String()
 	appId := mux.Vars(r)["APP_ID"]
 
-	auth := helpers.GetAuth(r)
-	// No branch here: the signed upload token already binds the file path to
-	// the branch that went through RequestUploadUrlHandler's branch check.
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, "", helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
-		return
-	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
-
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		log.Printf("[RequestID: %s] No token provided", requestID)
@@ -176,12 +154,14 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		return
 	}
 
-	filePath, tokenAppId, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
+	filePath, tokenAppId, _, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error validating upload token: %v", requestID, err)
 		http.Error(w, "Error validating upload token", http.StatusBadRequest)
 		return
 	}
+	// No branch check here: the router already judged the branch this token
+	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
 
 	fileName := filepath.Base(filePath)
 	file, _, err := r.FormFile(fileName)
@@ -235,15 +215,6 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		http.Error(w, "No branch provided", http.StatusBadRequest)
 		return
 	}
-
-	auth := helpers.GetAuth(r)
-	credential, err := h.cliAuthService.ValidateCliCredential(r.Context(), appId, auth, branchName, helpers.ClientIP(r))
-	if err != nil {
-		log.Printf("[RequestID: %s] Error validating auth: %v", requestID, err)
-		RenderCliAuthError(w, err)
-		return
-	}
-	r = r.WithContext(services.WithCliAuth(r.Context(), credential))
 
 	platform := r.URL.Query().Get("platform")
 	if platform != "" && (platform != "ios" && platform != "android") {

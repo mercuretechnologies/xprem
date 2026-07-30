@@ -37,6 +37,11 @@ func GetCDN() CDN {
 			cdnInstance = &gcsCDN
 			return
 		}
+		s3CDN := S3DirectCDN{}
+		if (&s3CDN).isCDNAvailable() {
+			cdnInstance = &s3CDN
+			return
+		}
 		azureCDN := AzureBlobDirectCDN{}
 		if (&azureCDN).isCDNAvailable() {
 			cdnInstance = &azureCDN
@@ -48,4 +53,24 @@ func GetCDN() CDN {
 func ResetCDNInstance() {
 	cdnInstance = nil
 	once = sync.Once{}
+}
+
+// ResolvedType names the CDN the server actually resolved at boot:
+// "cloudfront", "gcs-direct", "s3-direct", "azure-direct", "generic", or ""
+// when assets are served directly.
+func ResolvedType() string {
+	switch GetCDN().(type) {
+	case *CloudfrontCDN:
+		return "cloudfront"
+	case *GCSDirectCDN:
+		return "gcs-direct"
+	case *S3DirectCDN:
+		return "s3-direct"
+	case *AzureBlobDirectCDN:
+		return "azure-direct"
+	case *GenericCDN:
+		return "generic"
+	default:
+		return ""
+	}
 }

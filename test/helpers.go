@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/jarcoal/httpmock"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,7 +39,7 @@ func setup(t *testing.T) func() {
 // refactor; they are now methods on the container's handler structs, so tests
 // resolve them through here (e.g. testContainer().ExpoProtocolHandler.
 // HandleManifest). Built fresh per call so a test that mutates the bucket path
-// or app registry before invoking a handler sees its change — the bucket is a
+// or app registry before invoking a handler sees its change, the bucket is a
 // per-test singleton, so repeated calls reuse the same backend.
 func testContainer() *infrastructure.AppContainer {
 	container, _ := infrastructure.InitDependencies(context.Background())
@@ -96,7 +97,7 @@ func GlobalAfterEach(t *testing.T) {
 			t.Errorf("Error finding project root: %v", err)
 		}
 		// Clean both legacy path (./updates/DO_NOT_USE) and v2 multi-app path
-		// (./updates/test-app-id/DO_NOT_USE) — tests mix both depending on how
+		// (./updates/test-app-id/DO_NOT_USE), tests mix both depending on how
 		// they set LOCAL_BUCKET_BASE_PATH.
 		for _, updatesPath := range []string{
 			filepath.Join(projectRoot, "./updates/DO_NOT_USE"),
@@ -490,4 +491,13 @@ func SetValidConfiguration() {
 	if err := config.LoadAppsFromFlatEnv(); err != nil {
 		panic(err)
 	}
+}
+
+// serveThroughRouter runs a CLI publish request through the real router. It is
+// what these tests must use rather than calling a handler directly:
+// authentication and the per-key access decision live in the routing table
+// now (internal/router/routes_publish.go), so a handler called on its own
+// would answer as if every credential were valid.
+func serveThroughRouter(w *httptest.ResponseRecorder, r *http.Request) {
+	infrastructure.NewRouter(testContainer()).ServeHTTP(w, r)
 }

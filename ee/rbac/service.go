@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"xprem/ee/licensing"
@@ -30,7 +31,7 @@ type Role struct {
 }
 
 // AppGrant is one member's access to one app: an optional role plus direct
-// extra permissions. A grant with neither still matters — it makes the app
+// extra permissions. A grant with neither still matters, it makes the app
 // visible to the member (read access).
 type AppGrant struct {
 	AppID string
@@ -53,7 +54,7 @@ func (g AppGrant) Effective() []Permission {
 		granted[p] = struct{}{}
 	}
 	effective := make([]Permission, 0, len(granted))
-	for _, p := range AllPermissions { // Not interating over the map so the order is catalog order, not random.
+	for _, p := range AllPermissions { // Ranges over the catalog, not the map, to keep the order deterministic.
 		if _, ok := granted[p]; ok {
 			effective = append(effective, p)
 		}
@@ -61,8 +62,7 @@ func (g AppGrant) Effective() []Permission {
 	return effective
 }
 
-// Has reports whether the grant carries the permission, through its role or
-// directly.
+// Has reports whether the grant carries perm, via its role or directly.
 func (g AppGrant) Has(perm Permission) bool {
 	return slices.Contains(g.RolePermissions, perm) || slices.Contains(g.ExtraPermissions, perm)
 }
@@ -75,19 +75,15 @@ type GrantInput struct {
 }
 
 // Subject is the authenticated account an authorization decision is made for.
-// IsAdmin must come from a fresh users-table read (the middleware does one on
-// every guarded request, exactly like the community admin gate), never from
-// the JWT claim alone: a revoked admin loses everything immediately, not at
-// token expiry. Every entry point below handles the admin bypass itself so no
-// call site can forget it.
+// IsAdmin must come from a fresh users-table read, never the JWT claim alone,
+// so a revoked admin loses access immediately.
 type Subject struct {
 	UserID  string
 	IsAdmin bool
 }
 
-// RBACRepository persists roles and grants. GetUserAppGrant and
-// ListAccessibleAppIDs are the enforcement reads on the dashboard request
-// path; a nil grant means the member has no access to the app at all.
+// RBACRepository persists roles and grants. A nil GetUserAppGrant result
+// means the member has no access to the app.
 type RBACRepository interface {
 	ListRoles(ctx context.Context) ([]Role, error)
 	GetRoleByID(ctx context.Context, id string) (Role, error)
@@ -107,14 +103,12 @@ var (
 	ErrRoleNotFound         = errors.New("role not found")
 	// ErrRoleInUse mirrors the ON DELETE RESTRICT on user_app_grants.role_id.
 	ErrRoleInUse = errors.New("this role is still assigned to at least one user: unassign it everywhere first")
-	// ErrNoAppAccess is the member-without-a-grant outcome. Its message reads
-	// like the app resolver's 404 on purpose: an app the member has no grant
-	// on must not even appear to exist.
+	// ErrNoAppAccess is the member-without-a-grant outcome; its message reads
+	// like a 404 on purpose.
 	ErrNoAppAccess = errors.New("app not found")
 )
 
-// ErrPermissionDenied names the permission a granted member is missing, so
-// the 403 tells them what to ask their admin for.
+// ErrPermissionDenied names the permission a granted member is missing.
 type ErrPermissionDenied struct {
 	Permission Permission
 }
@@ -134,21 +128,16 @@ func (e *ValidationError) Error() string {
 }
 
 // RBACService owns the management and the enforcement of user roles and
-// per-app grants. Mutations are license-gated (no valid license, no changes);
-// reads are not, so the dashboard can always show what exists. Enforcement is
-// only consulted while Enabled() is true — without a license the community
-// rules apply unchanged (members are read-only, every app visible).
+// per-app grants. Mutations are license-gated; reads are not, and enforcement
+// is only consulted while Enabled() is true.
 type RBACService struct {
 	repo RBACRepository
-	// userLookup resolves the fresh admin flag behind every authorization
-	// decision and the target of the grants endpoints. Nil in stateless mode,
-	// where the session claim is authoritative.
+	// userLookup resolves the fresh admin flag and the grants-endpoint target;
+	// nil in stateless mode.
 	userLookup UserLookup
-	// licenseValid is the live licensing state; a field so same-package tests
-	// can pin it without minting signed keys.
+	// licenseValid reports whether the enterprise license is active.
 	licenseValid func() bool
-	// onAuditEvent is the audit emission seam the middlewares report refusals
-	// to; nil means denials leave no events.
+	// onAuditEvent is the audit emission seam; nil means denials leave no events.
 	onAuditEvent auditlog.RecordFunc
 }
 
@@ -157,9 +146,8 @@ func (s *RBACService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
-// recordManagement reports one roles/grants mutation. The actor is the admin
-// principal on the request context (these routes are admin-gated, so it is
-// present on every real request).
+// recordManagement reports one roles/grants mutation; the actor is the admin
+// principal on the request context.
 func (s *RBACService) recordManagement(ctx context.Context, action auditlog.Action, targetType string, targetID string, targetDisplay string, metadata map[string]any) {
 	if s.onAuditEvent == nil {
 		return
@@ -191,8 +179,6 @@ func NewRBACService(repo RBACRepository, userLookup UserLookup) *RBACService {
 }
 
 // Enabled reports whether fine-grained roles are being enforced right now.
-// When false, callers fall back to the community model: is_admin decides
-// everything, grants stay dormant in the database.
 func (s *RBACService) Enabled() bool {
 	return s.repo != nil && s.licenseValid()
 }
@@ -281,8 +267,7 @@ func (s *RBACService) DeleteRole(ctx context.Context, id string) error {
 	if err := s.requireWritable(); err != nil {
 		return err
 	}
-	// Read before the delete: afterwards there is no row left to name in the
-	// audit entry. Best-effort, like the entry itself.
+	// Read before the delete since there is no row left afterwards to name it.
 	roleName := id
 	if role, err := s.repo.GetRoleByID(ctx, id); err == nil {
 		roleName = role.Name
@@ -301,8 +286,7 @@ func (s *RBACService) GetUserGrants(ctx context.Context, userID string) ([]AppGr
 	return s.repo.ListUserGrants(ctx, userID)
 }
 
-// GrantCountsByUser backs the Users page warning: a member with zero grants
-// sees an empty dashboard, and an admin should notice that at a glance.
+// GrantCountsByUser backs the Users page warning about members with zero grants.
 func (s *RBACService) GrantCountsByUser(ctx context.Context) (map[string]int64, error) {
 	if s.repo == nil {
 		return nil, ErrRequiresControlPlane
@@ -328,8 +312,7 @@ func (s *RBACService) SetUserGrants(ctx context.Context, userID string, grants [
 	if err := s.repo.ReplaceUserGrants(ctx, userID, grants); err != nil {
 		return err
 	}
-	// Guarded here, not just in recordManagement: the display lookup and the
-	// metadata build must cost nothing when nobody listens.
+	// Guarded here so the lookup and metadata build cost nothing when unused.
 	if s.onAuditEvent != nil {
 		targetDisplay := userID
 		if s.userLookup != nil {
@@ -354,48 +337,33 @@ func (s *RBACService) SetUserGrants(ctx context.Context, userID string, grants [
 	return nil
 }
 
-// Fallback is what a route grants a non-admin member when roles are NOT
-// enforced, which happens in stateless mode and on any deployment without a
-// valid enterprise license. It is declared per route rather than assumed,
-// because the right answer differs: refusing a member the ability to delete a
-// branch is the community edition working as intended, refusing them the
-// update list they have always read would be a regression.
-//
-// There is no valid zero value. A caller that forgets to choose gets a
-// refusal, not a silent grant.
+// Fallback is what a route grants a non-admin member when roles are not
+// enforced. There is no valid zero value; a caller that forgets to choose
+// gets a refusal, not a silent grant.
 type Fallback int
 
 const (
-	// FallbackAdminOnly: without roles, only admins pass. This is what every
-	// permission-gated route did before fallbacks existed.
+	// FallbackAdminOnly: without roles, only admins pass.
 	FallbackAdminOnly Fallback = iota + 1
 	// FallbackAnyMember: without roles, every signed-in member who can see the
-	// app passes. The permission still bites once roles are enforced, which is
-	// what makes granular control the enterprise feature rather than a
-	// restriction community deployments suddenly inherit.
+	// app passes; the permission still applies once roles are enforced.
 	FallbackAnyMember
 )
 
-// Authorize decides one dashboard action on one app. Admins are allowed
-// unconditionally. For members, the distinction between the two refusals is
-// deliberate: no grant at all reads as a 404 (the app does not exist for this
-// member), a missing permission on a granted app reads as a 403 naming the
-// permission.
+// Authorize decides one dashboard action on one app; admins are allowed
+// unconditionally. For members, no grant at all reads as a 404, while a
+// missing permission on a granted app reads as a 403 naming the permission.
 func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID string, perm Permission, fallback Fallback) error {
 	if subject.IsAdmin {
 		return nil
 	}
-	// No control plane means stateless mode, where the only account that can
-	// exist is ADMIN_EMAIL and it is built with IsAdmin true, so a non-admin
-	// subject cannot reach this line. The fallback is deliberately NOT honored
-	// here: this branch exists to refuse if that ever stops holding, and a
-	// branch whose job is to fail closed must not carry a widening.
+	// Unreachable in stateless mode (the only account is admin), but the
+	// fallback is deliberately not honored here since this branch must fail closed.
 	if s.repo == nil {
 		return ErrRequiresControlPlane
 	}
-	// A control plane without a valid license is the reachable case: real
-	// accounts, real members, no enforced roles and no grants to consult. The
-	// route's own fallback is the only thing left that can decide.
+	// A control plane without a valid license is the reachable case; the
+	// route's own fallback is what decides here.
 	if !s.licenseValid() {
 		if fallback == FallbackAnyMember {
 			return nil
@@ -415,9 +383,111 @@ func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID stri
 	return nil
 }
 
-// CanSeeApp is the read-path sibling of Authorize: any grant on the app,
-// whatever its permissions, makes the app visible to a member. Admins see
-// everything.
+// AppPermissions is the whole authorization truth of one account on one app:
+// every catalog permission, held or not.
+type AppPermissions struct {
+	AppID   string
+	Granted []Permission
+	Denied  []Permission
+}
+
+// AccountPermissions is the account's full permission picture, one entry per
+// app it can see. Apps a member holds no grant on are not listed while roles
+// are enforced: they are invisible to the account.
+type AccountPermissions struct {
+	Role          string
+	RolesEnforced bool
+	Apps          []AppPermissions
+}
+
+// DescribeAccountPermissions answers "what may this account do", app by app.
+// allAppIDs is the deployment's app list, supplied by the caller because this
+// service does not own the app store: it is the scope for admins (everything
+// granted) and for members without enforced roles (what the community
+// fallbacks concede, identically on every app).
+func (s *RBACService) DescribeAccountPermissions(ctx context.Context, subject Subject, allAppIDs []string) (AccountPermissions, error) {
+	description := AccountPermissions{Role: "member", RolesEnforced: s.Enabled()}
+	if subject.IsAdmin {
+		description.Role = "admin"
+	}
+
+	if subject.IsAdmin || !description.RolesEnforced {
+		var granted, denied []Permission
+		if subject.IsAdmin {
+			granted = append([]Permission(nil), AllPermissions...)
+		} else {
+			for _, perm := range AllPermissions {
+				if DefaultFallback(perm) == FallbackAnyMember {
+					granted = append(granted, perm)
+				} else {
+					denied = append(denied, perm)
+				}
+			}
+		}
+		sorted := append([]string(nil), allAppIDs...)
+		sort.Strings(sorted)
+		for _, appID := range sorted {
+			description.Apps = append(description.Apps, AppPermissions{AppID: appID, Granted: granted, Denied: denied})
+		}
+		return description, nil
+	}
+
+	byApp, err := s.EffectivePermissionsByApp(ctx, subject.UserID)
+	if err != nil {
+		return AccountPermissions{}, err
+	}
+	grantedAppIDs := make([]string, 0, len(byApp))
+	for appID := range byApp {
+		grantedAppIDs = append(grantedAppIDs, appID)
+	}
+	sort.Strings(grantedAppIDs)
+	for _, appID := range grantedAppIDs {
+		held := make(map[Permission]bool, len(byApp[appID]))
+		for _, perm := range byApp[appID] {
+			held[perm] = true
+		}
+		app := AppPermissions{AppID: appID}
+		for _, perm := range AllPermissions {
+			if held[perm] {
+				app.Granted = append(app.Granted, perm)
+			} else {
+				app.Denied = append(app.Denied, perm)
+			}
+		}
+		description.Apps = append(description.Apps, app)
+	}
+	return description, nil
+}
+
+// HasPermissionSomewhere reports whether the subject could pass Authorize for
+// perm on at least one app; tool surfaces use it to decide visibility. Its
+// branches mirror Authorize, answering false wherever Authorize fails closed.
+func (s *RBACService) HasPermissionSomewhere(ctx context.Context, subject Subject, perm Permission, fallback Fallback) (bool, error) {
+	if subject.IsAdmin {
+		return true, nil
+	}
+	if s.repo == nil {
+		return false, nil
+	}
+	if !s.licenseValid() {
+		return fallback == FallbackAnyMember, nil
+	}
+	byApp, err := s.EffectivePermissionsByApp(ctx, subject.UserID)
+	if err != nil {
+		return false, err
+	}
+	for _, permissions := range byApp {
+		for _, candidate := range permissions {
+			if candidate == perm {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// CanSeeApp is the read-path sibling of Authorize: any grant on the app makes
+// it visible to a member; admins see everything.
 func (s *RBACService) CanSeeApp(ctx context.Context, subject Subject, appID string) (bool, error) {
 	if subject.IsAdmin || !s.Enabled() {
 		return true, nil
@@ -430,8 +500,7 @@ func (s *RBACService) CanSeeApp(ctx context.Context, subject Subject, appID stri
 }
 
 // VisibleApps returns the subject's app scope for list filtering.
-// restricted=false means every app is visible (admin, or community fallback);
-// when true, only the returned ids (possibly none) are.
+// restricted=false means every app is visible.
 func (s *RBACService) VisibleApps(ctx context.Context, subject Subject) (restricted bool, appIDs []string, err error) {
 	if subject.IsAdmin || !s.Enabled() {
 		return false, nil, nil
@@ -443,13 +512,9 @@ func (s *RBACService) VisibleApps(ctx context.Context, subject Subject) (restric
 	return true, ids, nil
 }
 
-// VisibleAppsForPrincipal adapts VisibleApps for the community read handlers
-// (app list, settings), which know the request principal but not the rbac
-// Subject. It resolves the fresh admin flag itself and answers
-// restricted=false whenever nothing must be filtered (admin, CLI, community
-// fallback). A principal whose account no longer exists gets an empty scope
-// rather than an error: a dead session should see nothing, not break the
-// endpoint.
+// VisibleAppsForPrincipal adapts VisibleApps for callers that know the
+// request principal but not the rbac Subject. A deleted account gets an
+// empty scope rather than an error.
 func (s *RBACService) VisibleAppsForPrincipal(ctx context.Context, principal *services.DashboardPrincipal) (restricted bool, visible map[string]bool, err error) {
 	if principal == nil || !s.Enabled() {
 		return false, nil, nil
@@ -477,8 +542,7 @@ func (s *RBACService) VisibleAppsForPrincipal(ctx context.Context, principal *se
 }
 
 // EffectivePermissionsByApp is the dashboard's permission map: for each
-// granted app, the member's effective permissions. Served to the UI so it can
-// hide what the server would refuse anyway.
+// granted app, the member's effective permissions.
 func (s *RBACService) EffectivePermissionsByApp(ctx context.Context, userID string) (map[string][]Permission, error) {
 	if s.repo == nil {
 		return nil, ErrRequiresControlPlane

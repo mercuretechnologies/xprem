@@ -16,9 +16,7 @@ import (
 
 type fakeAuditRepo struct {
 	inserted []Event
-	// ctxErrAtInsert and hadDeadline capture the state of the context Record
-	// hands to the repository, to prove the insert survives request
-	// cancellation while staying time-bounded.
+	// ctxErrAtInsert and hadDeadline capture the context Record hands to the repository.
 	ctxErrAtInsert    error
 	hadDeadline       bool
 	insertErr         error
@@ -29,8 +27,7 @@ type fakeAuditRepo struct {
 	purgeExportedOnly bool
 	purgedCount       int64
 	exportCursor      int64
-	// casLoses makes AdvanceExportCursor lose the optimistic race, like a
-	// concurrent replica advancing first.
+	// casLoses makes AdvanceExportCursor lose the optimistic race.
 	casLoses bool
 	// lockBusy simulates another replica holding the export advisory lock.
 	lockBusy     bool
@@ -49,8 +46,7 @@ func (f *fakeAuditRepo) Insert(ctx context.Context, event Event) (Event, error) 
 	return event, nil
 }
 
-// List honors BeforeID and Limit like the real store (listResult must be
-// seeded newest first), so the handler tests can walk real pages.
+// List honors BeforeID and Limit like the real store; listResult must be seeded newest first.
 func (f *fakeAuditRepo) List(ctx context.Context, params ListParams) ([]Event, error) {
 	f.listParams = params
 	if f.listErr != nil {
@@ -79,8 +75,7 @@ func (f *fakeAuditRepo) PurgeBefore(ctx context.Context, cutoff time.Time, expor
 	return f.purgedCount, nil
 }
 
-// ListAfter mirrors the store: strictly after the cursor, oldest first
-// (listResult is seeded newest first, so it scans backwards).
+// ListAfter mirrors the store: strictly after the cursor, oldest first.
 func (f *fakeAuditRepo) ListAfter(ctx context.Context, afterID int64, limit int) ([]Event, error) {
 	result := make([]Event, 0, limit)
 	for i := len(f.listResult) - 1; i >= 0; i-- {
@@ -137,7 +132,6 @@ func TestRecordCollectsNothingInStatelessMode(t *testing.T) {
 	service := NewAuditService(nil)
 	service.licenseValid = func() bool { return true }
 
-	// Must be a silent no-op, not a nil dereference.
 	service.Record(context.Background(), Event{Action: auditlog.ActionUserLogin})
 	require.False(t, service.Enabled())
 }
@@ -153,8 +147,7 @@ func TestRecordDoesNotFabricateMissingFields(t *testing.T) {
 	})
 
 	require.Len(t, repo.inserted, 1)
-	// An incomplete call site must show as '' (unknown) in the log, not be
-	// papered over with "system"/"success".
+	// An incomplete call site shows as '' (unknown), never fabricated as "system"/"success".
 	require.Empty(t, repo.inserted[0].ActorType)
 	require.Empty(t, repo.inserted[0].Outcome)
 }
@@ -176,7 +169,6 @@ func TestRecordSwallowsInsertErrors(t *testing.T) {
 	repo := &fakeAuditRepo{insertErr: errors.New("database down")}
 	service := enabledService(repo)
 
-	// Best-effort contract: the mutation that emitted the event must not fail.
 	service.Record(context.Background(), Event{Action: auditlog.ActionUserLogin})
 	require.Empty(t, repo.inserted)
 }
@@ -214,8 +206,6 @@ func TestListPagination(t *testing.T) {
 	repo := &fakeAuditRepo{listResult: events}
 	service := enabledService(repo)
 
-	// Three rows available, page size two: a full page and a cursor at its
-	// last row.
 	page, nextCursor, err := service.List(context.Background(), ListParams{Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, page, 2)
@@ -231,8 +221,7 @@ func TestListPagination(t *testing.T) {
 
 func TestPurgeOlderThanUsesTheRetentionCutoff(t *testing.T) {
 	repo := &fakeAuditRepo{purgedCount: 12}
-	// Deliberately unlicensed: retention applies to collected data whatever
-	// the licence state.
+	// Deliberately unlicensed: retention applies regardless of license state.
 	service := NewAuditService(repo)
 	service.licenseValid = func() bool { return false }
 
@@ -252,8 +241,7 @@ func TestPurgeSparesUnarchivedRowsWhileArchiving(t *testing.T) {
 
 	_, err := service.PurgeOlderThan(context.Background(), 550*24*time.Hour)
 	require.NoError(t, err)
-	// Archiving on: expired rows the exporter has not reached yet must
-	// survive, so the purge switches to the exported-only variant.
+	// The purge switches to the exported-only variant while archiving is on.
 	require.True(t, repo.purgeExportedOnly)
 }
 
@@ -262,7 +250,6 @@ func TestPurgeRequiresControlPlane(t *testing.T) {
 	service.licenseValid = func() bool { return true }
 	_, err := service.PurgeOlderThan(context.Background(), time.Hour)
 	require.ErrorIs(t, err, ErrRequiresControlPlane)
-	// And the scheduler declines to start rather than panic.
 	service.startRetentionPurge(context.Background(), time.Hour)
 }
 
@@ -271,8 +258,6 @@ func TestListReadsStayOpenWithoutLicense(t *testing.T) {
 	service := NewAuditService(repo)
 	service.licenseValid = func() bool { return false }
 
-	// A lapsed license stops collection, never read access to what was
-	// collected while licensed.
 	page, _, err := service.List(context.Background(), ListParams{})
 	require.NoError(t, err)
 	require.Len(t, page, 1)

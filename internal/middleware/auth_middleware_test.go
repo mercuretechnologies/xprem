@@ -15,15 +15,12 @@ import (
 )
 
 // runAuthMiddleware sends a request through NewAuthMiddleware on a
-// non-app-scoped route (no APP_ID path variable), so the CLI-auth branch can
-// only ever reject — cliAuthService is never reached and stays nil-backed.
+// non-app-scoped route, so the CLI-auth branch can only ever reject.
 func runAuthMiddleware(t *testing.T, configure func(r *http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
 	router := mux.NewRouter()
-	router.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(nil, nil)))
+	router.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(nil)))
 	router.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
-		// Surface the principal so tests can assert the middleware propagated
-		// it to the handler, not just that authentication passed.
 		if principal := services.PrincipalFromContext(r.Context()); principal != nil {
 			w.Header().Set("X-Principal-Email", principal.Email)
 			w.Header().Set("X-Principal-Admin", strconv.FormatBool(principal.IsAdmin))
@@ -92,8 +89,7 @@ func TestAuthMiddleware(t *testing.T) {
 	})
 }
 
-// fakeCliAuthRepo accepts any credential and answers with key id 0, which
-// skips the access policy exactly like stateless mode does.
+// fakeCliAuthRepo accepts any credential and answers with key id 0.
 type fakeCliAuthRepo struct{}
 
 func (fakeCliAuthRepo) ValidateCliCredential(_ context.Context, _ string, _ types.Auth) (int64, error) {
@@ -113,15 +109,14 @@ func (fakeCliAuthRepo) RevokeApiKeyByID(_ context.Context, _ int64, _ string) (s
 	return "", nil
 }
 
-// The CLI branch must stamp the validated app on the context: downstream
-// gates (ee/rbac's RequireAppVisible) assert this marker instead of inferring
-// "CLI" from a missing principal, and would fail closed without it.
+// TestAuthMiddlewareCliBranchStampsMarker checks that the CLI branch stamps
+// the validated app on the context.
 func TestAuthMiddlewareCliBranchStampsMarker(t *testing.T) {
 	t.Setenv("JWT_SECRET", "test-secret")
 
 	router := mux.NewRouter()
 	appRouter := router.PathPrefix("/{APP_ID}").Subrouter()
-	appRouter.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(fakeCliAuthRepo{}, nil)))
+	appRouter.Use(NewAuthMiddleware(services.NewDashboardAuthService(nil, nil), services.NewCliAuthService(fakeCliAuthRepo{})))
 	appRouter.HandleFunc("/branches", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Cli-App", services.CliAuthAppFromContext(r.Context()))
 		if services.PrincipalFromContext(r.Context()) != nil {

@@ -60,10 +60,7 @@ func addFailure(t *testing.T, pool *pgxpool.Pool, appID, device, updateID, kind 
 	require.NoError(t, err)
 }
 
-// One device holding two faults at once is ONE failing device. Since failure
-// type joined the primary key, a launch rollback and a JS crash on the same
-// update are two rows, and counting rows let the failing curve climb above the
-// population it is drawn against.
+// One device holding two faults at once must count as one failing device.
 func TestADeviceWithTwoFaultsCountsOnce(t *testing.T) {
 	history, pool, appID, updateID := newStateFixture(t)
 	ctx := context.Background()
@@ -83,10 +80,7 @@ func TestADeviceWithTwoFaultsCountsOnce(t *testing.T) {
 	require.Equal(t, uint64(1), last.FailingDevices)
 }
 
-// Two faults that do NOT overlap are two episodes, and the healthy stretch
-// between them has to read as healthy. Collapsing them into one span from the
-// earliest start to the latest end bridged that gap and dated the second fault
-// at the first one's hour.
+// Two non-overlapping faults are two episodes; the healthy stretch between them must read as healthy.
 func TestAHealthyStretchBetweenTwoFaultsReadsAsHealthy(t *testing.T) {
 	history, pool, appID, updateID := newStateFixture(t)
 	ctx := context.Background()

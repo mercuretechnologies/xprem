@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from 'react-router';
 import { isAuthenticated } from '@/lib/auth.ts';
 import { lazy, ReactNode, Suspense, useEffect } from 'react';
 import { Login } from '@/pages/Login';
+import { OAuthConsent } from '@/pages/OAuthConsent';
 import { Toaster } from '@/components/ui/toaster.tsx';
 import { Updates } from '@/pages/Updates';
 import { Settings } from '@/pages/Settings';
@@ -25,7 +26,9 @@ import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Branches } from '@/pages/Branches';
 import { useSettings } from '@/lib/SettingsContext';
 
-const Observe = lazy(() => import('@/ee/pages/Observe').then(module => ({ default: module.Observe })));
+const Observe = lazy(() =>
+  import('@/ee/pages/Observe').then(module => ({ default: module.Observe }))
+);
 
 function withLayout(children: ReactNode) {
   return <Layout>{children}</Layout>;
@@ -88,6 +91,9 @@ export const App = () => {
       <Toaster />
       <Routes>
         <Route path="/login" element={<Login />} />
+        {/* Standalone like /login: the OAuth bounce lands here for any account,
+            and the page handles the not-signed-in case itself (returnTo). */}
+        <Route path="/oauth/consent" element={<OAuthConsent />} />
         <Route
           path="*"
           element={

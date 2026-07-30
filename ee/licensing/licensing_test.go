@@ -92,7 +92,7 @@ func TestRejectsTamperedKey(t *testing.T) {
 	key := signTestKey(t, priv, in(24*time.Hour))
 	other := signTestKey(t, priv, in(48*time.Hour))
 	// Graft other's dataset onto key's signature. Each part is genuine on its
-	// own — the datasets are guaranteed to differ (24h vs 48h expiry), so
+	// own, the datasets are guaranteed to differ (24h vs 48h expiry), so
 	// only signature verification over the full payload catches the mix.
 	dataset := strings.SplitN(strings.TrimPrefix(other, keyPrefix), ".", 2)[0]
 	signature := strings.SplitN(strings.TrimPrefix(key, keyPrefix), ".", 2)[1]

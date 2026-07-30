@@ -1,7 +1,7 @@
 // Package validation holds the input-validation rules for user-supplied
 // dashboard values (resource names, display labels). Services call these before
 // persisting so bad input fails fast with a caller-facing 400 instead of a deep
-// store/bucket error — or, worse, a malformed row/key that only breaks later.
+// store/bucket error, or, worse, a malformed row/key that only breaks later.
 package validation
 
 import (
@@ -20,6 +20,11 @@ const maxNameLen = 128
 // maxDisplayNameLen caps human-facing labels (app name, API key name). These
 // are never path segments, so the limit is only about sane storage/UI bounds.
 const maxDisplayNameLen = 255
+
+// maxPatternLen caps branch patterns, matching the VARCHAR(255) of
+// api_key_branch_rules.pattern. Wider than maxNameLen so a rule can name a
+// legacy branch that predates the maxNameLen cap.
+const maxPatternLen = 255
 
 // Error is a validation failure on user-supplied input. Handlers detect it with
 // errors.As and map it to HTTP 400, surfacing Message to the caller, while
@@ -55,15 +60,43 @@ func Errorf(field, format string, args ...any) *Error {
 // Name validates a resource name used as a single storage-path segment and DB
 // value (branch, channel, release channel).
 //
-// The rules are a mirror of internal/bucket.validateSegment — keep the two in
+// The rules are a mirror of internal/bucket.validateSegment, keep the two in
 // sync. Rejects empties, path separators, "." / "..", null bytes, control
 // characters, and anything over maxNameLen.
+//
+// It also rejects "*", the wildcard of the branch patterns API key access
+// rules are written in (NamePattern below), so no branch can be named
+// something a rule already means.
+//
+// The rejection is not limited to creation: several callers validate a name
+// they are only reading, so a deployment already holding a branch named with
+// "*" answers 400 on the dashboard and CLI routes that name it. Devices are
+// unaffected, the update protocol goes through bucket.validateSegment, which
+// still accepts it.
 func Name(field, value string) error {
+	if strings.Contains(value, "*") {
+		return fail(field, "must not contain %q, which is reserved as the wildcard of API key access rules", "*")
+	}
+	return namePattern(field, value, maxNameLen)
+}
+
+// NamePattern validates a branch pattern used in an API key's access rules: a
+// branch name, or a name with "*" standing for any run of characters, empty
+// included ("pr-*", "*-staging", "*"). Every other rule of Name applies except
+// the length cap (maxPatternLen), so a pattern without a wildcard is exactly a
+// branch name and matches only that branch.
+func NamePattern(field, value string) error {
+	return namePattern(field, value, maxPatternLen)
+}
+
+// namePattern is Name without the wildcard rule and with a caller-chosen
+// length cap, which is all the two differ by.
+func namePattern(field, value string, maxLen int) error {
 	if value == "" {
 		return fail(field, "must not be empty")
 	}
-	if len(value) > maxNameLen {
-		return fail(field, "exceeds max length %d", maxNameLen)
+	if len(value) > maxLen {
+		return fail(field, "exceeds max length %d", maxLen)
 	}
 	if strings.ContainsAny(value, "/\\") {
 		return fail(field, "must not contain path separators")
@@ -83,7 +116,7 @@ func Name(field, value string) error {
 }
 
 // DisplayName validates a human-facing label (app name, API key name). Looser
-// than Name — it is never a path segment, so spaces and unicode are allowed —
+// than Name, it is never a path segment, so spaces and unicode are allowed -
 // but still non-empty (ignoring surrounding whitespace), bounded, and free of
 // control characters (log / UI injection).
 func DisplayName(field, value string) error {

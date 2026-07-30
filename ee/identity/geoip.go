@@ -13,18 +13,13 @@ import (
 	"github.com/oschwald/geoip2-golang"
 )
 
-// GeoResolver turns a request IP into an optional Geo enrichment. Resolvers
-// must be nil-tolerant on the value they return: no resolution is a normal
-// outcome (private IP, unknown range, no database configured), never an error
-// worth failing an operation over.
+// GeoResolver turns a request IP into an optional Geo enrichment. A nil result is a normal
+// outcome, not an error.
 type GeoResolver interface {
 	Resolve(ip string) *Geo
 }
 
-// GeoLite2Resolver resolves against a local MaxMind GeoLite2/GeoIP2 City
-// database (mmdb file). The operator downloads the database with their own
-// MaxMind license key; without a configured file the feature is simply off.
-// City-level accuracy: lat/lng is a city centroid, not a device position.
+// GeoLite2Resolver resolves IPs against a local MaxMind GeoLite2/GeoIP2 City database (mmdb file).
 type GeoLite2Resolver struct {
 	db *geoip2.Reader
 }
@@ -34,9 +29,7 @@ func NewGeoLite2Resolver(path string) (*GeoLite2Resolver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening GeoLite2 database %q: %w", path, err)
 	}
-	// Open succeeds on ANY valid mmdb (ASN, ISP...), after which every City()
-	// lookup fails silently and the operator would see geo mysteriously never
-	// resolve. Fail loud at boot instead.
+	// Open succeeds on any mmdb type; check for City/Country here so a wrong database fails loud at boot.
 	if dbType := db.Metadata().DatabaseType; !strings.Contains(dbType, "City") && !strings.Contains(dbType, "Country") {
 		_ = db.Close()
 		return nil, fmt.Errorf("GeoLite2 database %q has type %q; a City or Country database is required", path, dbType)
@@ -74,8 +67,7 @@ func (r *GeoLite2Resolver) Resolve(ipStr string) *Geo {
 		geo.City = &city
 		resolved = true
 	}
-	// 0,0 (Null Island) is what the database reports when it has no location;
-	// treat it as absent rather than pinning devices in the Gulf of Guinea.
+	// 0,0 (Null Island) means the database has no location; treat it as absent.
 	if record.Location.Latitude != 0 || record.Location.Longitude != 0 {
 		lat, lng := record.Location.Latitude, record.Location.Longitude
 		geo.Lat = &lat

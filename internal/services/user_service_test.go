@@ -170,7 +170,7 @@ func TestCreateUserValidations(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid email address")
 
 	// Mailbox forms parse, but would be stored verbatim and never match a
-	// login lookup — refused.
+	// login lookup, refused.
 	_, err = service.CreateUser(context.Background(), "Jane <jane@example.com>", "Sup3rSecret!", false)
 	assert.ErrorContains(t, err, "invalid email address")
 
@@ -191,7 +191,7 @@ func TestSetUserAdminGuardsOwnFlagAndLastAdmin(t *testing.T) {
 	service, _, admin, member := seedUserService(t)
 	ctx := context.Background()
 
-	// Nobody can touch their own flag — not even to "remove their admin".
+	// Nobody can touch their own flag, not even to "remove their admin".
 	assert.ErrorIs(t, service.SetUserAdmin(ctx, admin.Id, admin.Id, false), ErrCannotChangeOwnAdminFlag)
 
 	// Promoting the member works, and demoting the original admin then does

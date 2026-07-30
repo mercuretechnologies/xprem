@@ -11,18 +11,12 @@ import (
 	"testing"
 )
 
-// Direct unit tests of the allowlist normalization contract in cidr.go:
-// parseCidrs on the input side, ipAllowed on the matching side. The service
-// wiring on top of them is covered in service_test.go.
-
 func TestParseCidrsNormalizes(t *testing.T) {
 	got, err := parseCidrs([]string{" 192.168.1.5/24 ", "10.1.2.3", "2001:db8::1", "192.168.1.0/24", ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// 192.168.1.5/24 masks to 192.168.1.0/24 (postgres cidr rejects host
-	// bits), the duplicate masked entry collapses, bare addresses become
-	// single-host prefixes.
+	// 192.168.1.5/24 masks to 192.168.1.0/24 since postgres cidr rejects host bits.
 	expected := []netip.Prefix{
 		netip.MustParsePrefix("192.168.1.0/24"),
 		netip.MustParsePrefix("10.1.2.3/32"),
@@ -33,10 +27,7 @@ func TestParseCidrsNormalizes(t *testing.T) {
 	}
 }
 
-// Entries written in IPv4-mapped IPv6 form (::ffff:x.y.z.w, the shape an
-// IPv4 caller has in dual-stack server logs) are stored in plain IPv4 form:
-// ipAllowed compares callers unmapped, so a mapped entry kept in IPv6 form
-// would never match anyone.
+// Entries in IPv4-mapped IPv6 form (::ffff:x.y.z.w) are stored in plain IPv4 form.
 func TestParseCidrsNormalizesMappedIpv4(t *testing.T) {
 	got, err := parseCidrs([]string{
 		"::ffff:10.1.2.3",        // bare mapped address becomes an IPv4 /32
@@ -65,9 +56,7 @@ func TestParseCidrsRejectsInvalidEntries(t *testing.T) {
 	for _, entry := range []string{
 		"not-an-ip",
 		"10.1.2.3/33",
-		// Mapped prefixes wider than /96 cover more than the ::ffff: block
-		// and have no IPv4 equivalent; stored as-is they would silently
-		// never match.
+		// Mapped prefixes wider than /96 have no IPv4 equivalent.
 		"::ffff:0.0.0.0/95",
 		"::ffff:10.1.2.3/64",
 		"::ffff:0.0.0.0/0",
@@ -78,8 +67,7 @@ func TestParseCidrsRejectsInvalidEntries(t *testing.T) {
 	}
 }
 
-// An empty allowlist parses to nil, never an empty slice, so the column can
-// store NULL (= no IP restriction) rather than an empty array.
+// An empty allowlist parses to nil, never an empty slice.
 func TestParseCidrsEmptyInputIsNil(t *testing.T) {
 	got, err := parseCidrs([]string{"", "  "})
 	if err != nil {

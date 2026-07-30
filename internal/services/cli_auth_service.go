@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"strconv"
 	"time"
 	"xprem/internal/auditlog"
@@ -19,6 +18,15 @@ var ErrUnauthorized = fmt.Errorf("unauthorized")
 // but is rejected by per-key access restrictions (enterprise). Handlers map
 // it to a 403 with the wrapped reason, instead of the generic auth 401.
 var ErrCliAccessDenied = fmt.Errorf("access denied")
+
+// ErrCliAuthUnavailable marks a CLI request that could not be JUDGED, as
+// opposed to one that was judged and refused: the control plane was
+// unreachable while resolving what the key is allowed to do. Handlers map it
+// to a 500, the same way NewAuthMiddleware refuses to let ErrAuthUnavailable
+// read as a dead dashboard session. Without it a database blip tells a CI job
+// its key is invalid, and the remediation an operator reaches for is rotating
+// a key that was never the problem.
+var ErrCliAuthUnavailable = fmt.Errorf("could not verify this credential")
 
 // CliAuthRepository validates the credential a CLI client presents for an app,
 // and stores the API keys that back it. ValidateCliCredential means a different
@@ -37,22 +45,16 @@ type CliAuthRepository interface {
 	RevokeApiKeyByID(ctx context.Context, apiKeyId int64, appId string) (string, error)
 }
 
-// CliAccessPolicy authorizes an authenticated CLI request against per-key
-// access restrictions. It is the enterprise hook point: the community edition
-// runs without one (nil policy, everything allowed); the implementation lives
-// in ee/apikeyrestrictions and is wired in from wire.go. branchName is empty for
-// requests that do not target a branch (reads, local file uploads); clientIP
-// is the zero Addr when the caller's address could not be resolved.
-type CliAccessPolicy interface {
-	AuthorizeCliRequest(ctx context.Context, appId string, apiKeyID int64, branchName string, clientIP netip.Addr) error
-}
-
 // CliAuthService authenticates CLI clients (eoas) against a given app and
 // manages the API keys backing that access in DB mode. The dashboard's own
 // login and session tokens are a separate concern; see DashboardAuthService.
+//
+// It answers "is this credential real, and for this app", and stops there.
+// What the credential may then DO is decided in the router, which is the only
+// layer holding the route, its branch and its action at once; the enterprise
+// implementation of that decision lives in ee/apikeyrestrictions.
 type CliAuthService struct {
 	authRepo CliAuthRepository
-	policy   CliAccessPolicy
 	// onAuditEvent is the audit emission seam; nil (community) means key
 	// changes leave no events.
 	onAuditEvent auditlog.RecordFunc
@@ -63,11 +65,8 @@ type CliAuthService struct {
 	auditActive func() bool
 }
 
-func NewCliAuthService(authRepo CliAuthRepository, policy CliAccessPolicy) *CliAuthService {
-	return &CliAuthService{
-		authRepo: authRepo,
-		policy:   policy,
-	}
+func NewCliAuthService(authRepo CliAuthRepository) *CliAuthService {
+	return &CliAuthService{authRepo: authRepo}
 }
 
 // SetAuditActive plugs the live "audit is collecting" signal. Nil-safe.
@@ -81,17 +80,15 @@ func (s *CliAuthService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
-// ValidateCliCredential authenticates the credential, then runs the access
-// policy on the authenticated key. A key id of 0 (stateless mode) carries no
-// restrictions, so the policy is skipped.
-func (s *CliAuthService) ValidateCliCredential(ctx context.Context, appId string, auth types.Auth, branchName string, clientIP netip.Addr) (CliCredential, error) {
+// AuthenticateCliCredential resolves the credential against the app. A key id
+// of 0 means stateless mode, where no API key exists to carry access rules.
+func (s *CliAuthService) AuthenticateCliCredential(ctx context.Context, appId string, auth types.Auth) (CliCredential, error) {
 	apiKeyID, err := s.authRepo.ValidateCliCredential(ctx, appId, auth)
 	if err != nil {
 		return CliCredential{}, fmt.Errorf("failed to validate auth: %w", err)
 	}
-	credential := CliCredential{AppID: appId}
+	credential := CliCredential{AppID: appId, KeyID: apiKeyID}
 	if apiKeyID != 0 {
-		credential.KeyID = strconv.FormatInt(apiKeyID, 10)
 		// The name only serves the audit trail's actor display: skipped
 		// entirely while nothing is collected (community edition never pays
 		// the lookup), and best-effort when it runs, an unreadable key list
@@ -101,12 +98,6 @@ func (s *CliAuthService) ValidateCliCredential(ctx context.Context, appId string
 				credential.KeyName = name
 			}
 		}
-	}
-	if s.policy == nil || apiKeyID == 0 {
-		return credential, nil
-	}
-	if err := s.policy.AuthorizeCliRequest(ctx, appId, apiKeyID, branchName, clientIP); err != nil {
-		return CliCredential{}, err
 	}
 	return credential, nil
 }

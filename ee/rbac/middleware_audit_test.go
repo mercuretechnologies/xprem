@@ -61,7 +61,7 @@ func TestRequirePermissionRecordsDenials(t *testing.T) {
 
 func TestRequirePermissionCommunityFallbackRecordsNothing(t *testing.T) {
 	// Without a license the refusal is the community admin-only gate, not an
-	// enterprise denial — and the real recorder would drop the event anyway.
+	// enterprise denial.
 	repo := newFakeRepo()
 	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
 	service := withLookup(unlicensedService(repo), lookup)

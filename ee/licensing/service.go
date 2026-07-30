@@ -20,7 +20,7 @@ type StoredLicense struct {
 	UpdatedAt time.Time
 }
 
-// LicenseRepository is the enterprise_license table — a single row holding the
+// LicenseRepository is the enterprise_license table, a single row holding the
 // key. It has no bucket implementation on purpose: license activation only
 // exists on the control plane, stateless deployments run community edition.
 type LicenseRepository interface {
@@ -36,7 +36,7 @@ type LicenseRepository interface {
 var ErrLicenseRequiresControlPlane = errors.New("the enterprise license is managed in the database: this deployment runs in stateless mode, which is community edition only")
 
 // LicenseStatus describes the stored key and what it unlocks. License is set
-// whenever the key's signature verifies — including for an expired license, so
+// whenever the key's signature verifies, including for an expired license, so
 // the dashboard can show *when* it expired. Err carries the reason the key is
 // not usable (malformed, bad signature, expired); a valid active license has
 // License != nil and Err == nil.
@@ -57,7 +57,7 @@ func (s LicenseStatus) Valid() bool {
 type LicenseService struct {
 	repo LicenseRepository
 	// onAuditEvent is the audit emission seam; nil means license changes
-	// leave no events. Only the admin-called Activate/Remove emit — the boot
+	// leave no events. Only the admin-called Activate/Remove emit, the boot
 	// load and the sync poll are state convergence, not actions.
 	onAuditEvent auditlog.RecordFunc
 }
@@ -173,8 +173,8 @@ func (s *LicenseService) Remove(ctx context.Context) error {
 }
 
 // ActivateFromStore loads the stored key at boot and activates it when valid.
-// A missing, invalid or expired key means community edition — never a boot
-// failure — so it only returns infrastructure errors (database unreachable).
+// A missing, invalid or expired key means community edition, never a boot
+// failure, so it only returns infrastructure errors (database unreachable).
 // Steady-state changes are picked up by StartSync afterwards.
 func (s *LicenseService) ActivateFromStore(ctx context.Context) error {
 	if s.repo == nil {
@@ -185,12 +185,12 @@ func (s *LicenseService) ActivateFromStore(ctx context.Context) error {
 		return err
 	}
 	if stored == nil {
-		log.Println("🏘️  [LICENSE] No enterprise license key stored — running community edition")
+		log.Println("🏘️  [LICENSE] No enterprise license key stored, running community edition")
 		return nil
 	}
 	license, err := Activate(stored.Key)
 	if err != nil {
-		log.Printf("⚠️  [LICENSE] Stored enterprise license key is not usable (%v) — running community edition", err)
+		log.Printf("⚠️  [LICENSE] Stored enterprise license key is not usable (%v), running community edition", err)
 		return nil
 	}
 	if license.Expiry != nil {
@@ -234,9 +234,9 @@ func equalExpiry(a, b *time.Time) bool {
 }
 
 // syncFromStore reconciles the process-wide activation state with the stored
-// key. Re-activation is unconditional when the stored key verifies — one
+// key. Re-activation is unconditional when the stored key verifies, one
 // Ed25519 check per interval is negligible and it also propagates renewals
-// (same license id, new expiry) — but transitions are only logged when the
+// (same license id, new expiry), but transitions are only logged when the
 // active license actually changed, so the loop stays silent in steady state.
 func (s *LicenseService) syncFromStore(ctx context.Context) {
 	stored, err := s.repo.GetLicense(ctx)
@@ -248,7 +248,7 @@ func (s *LicenseService) syncFromStore(ctx context.Context) {
 	if stored == nil {
 		Deactivate()
 		if previous != nil {
-			log.Println("🏘️  [LICENSE] Enterprise license removed from the database — dropping to community edition")
+			log.Println("🏘️  [LICENSE] Enterprise license removed from the database, dropping to community edition")
 		}
 		return
 	}
@@ -258,7 +258,7 @@ func (s *LicenseService) syncFromStore(ctx context.Context) {
 		// unusable stored key must drop the in-memory license explicitly.
 		Deactivate()
 		if previous != nil {
-			log.Printf("⚠️  [LICENSE] Stored enterprise license key is no longer usable (%v) — dropping to community edition", err)
+			log.Printf("⚠️  [LICENSE] Stored enterprise license key is no longer usable (%v), dropping to community edition", err)
 		}
 		return
 	}

@@ -35,6 +35,8 @@ const (
 	scopeRefreshIP      = "refresh_ip"
 	scopePasswordChange = "password_change"
 	scopeSSOCallbackIP  = "sso_callback_ip"
+	scopeOAuthRegister  = "oauth_register_ip"
+	scopeOAuthTokenIP   = "oauth_token_ip"
 )
 
 // The limits. They are constants and not configuration: an operator is not
@@ -170,6 +172,30 @@ func (l *Limiter) CheckSSOCallback(ip netip.Addr) Decision {
 
 func (l *Limiter) RecordSSOCallbackFailure(ip netip.Addr) {
 	l.recordIP(scopeSSOCallbackIP, ip, l.ipLimit())
+}
+
+// CheckOAuthToken and RecordOAuthTokenFailure bound guessing at authorization
+// codes and refresh tokens on the OAuth token endpoint. Same threat as the
+// dashboard's refresh scope, but a separate counter on purpose: a looping MCP
+// client must not burn the budget dashboard sessions refresh under.
+func (l *Limiter) CheckOAuthToken(ip netip.Addr) Decision {
+	return l.checkIP(scopeOAuthTokenIP, ip, l.ipLimit())
+}
+
+func (l *Limiter) RecordOAuthTokenFailure(ip netip.Addr) {
+	l.recordIP(scopeOAuthTokenIP, ip, l.ipLimit())
+}
+
+// CheckOAuthRegister and RecordOAuthRegister bound how many OAuth clients one
+// address may create. Unlike every other scope this counts SUCCESSES: dynamic
+// client registration is unauthenticated by design (RFC 7591), so the thing to
+// bound is rows written, not credentials guessed.
+func (l *Limiter) CheckOAuthRegister(ip netip.Addr) Decision {
+	return l.checkIP(scopeOAuthRegister, ip, l.ipLimit())
+}
+
+func (l *Limiter) RecordOAuthRegister(ip netip.Addr) {
+	l.recordIP(scopeOAuthRegister, ip, l.ipLimit())
 }
 
 func normalizeEmail(email string) string {

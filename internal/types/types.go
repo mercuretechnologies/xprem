@@ -231,7 +231,9 @@ type BranchMapping struct {
 	BranchId       *string `json:"branchId"`
 	ReleaseChannel *string `json:"releaseChannel"`
 	CreatedAt      *string `json:"createdAt"`
-	// Enterprise branch protection; always false in stateless mode.
+	// Branch protection: a protected branch refuses to be deleted, by anyone.
+	// It says nothing about what may be published on it, which is decided per
+	// API token. Always false in stateless mode.
 	Protected bool `json:"protected"`
 	// Latest runtime's active rollout update, or its latest checked update.
 	// Populated in control-plane mode only.

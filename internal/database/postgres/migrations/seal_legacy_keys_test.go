@@ -122,7 +122,7 @@ func TestSealLegacyKeysIntoDBPreservesEnvironmentKeyPair(t *testing.T) {
 		t.Fatalf("failed to unseal private key: %v", err)
 	}
 	// Sealed content must be the decoded PEM, matching what mode=database
-	// stores when the dashboard generates a pair — not the b64 wrapper.
+	// stores when the dashboard generates a pair, not the b64 wrapper.
 	if string(unsealedPriv) != priv {
 		t.Error("private key did not survive the seal/unseal round trip")
 	}

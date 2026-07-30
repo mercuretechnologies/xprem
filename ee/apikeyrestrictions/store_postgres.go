@@ -7,107 +7,133 @@ package apikeyrestrictions
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/store"
 )
 
-type PostgresApiKeyRestrictionStore struct {
+type PostgresApiKeyAccessStore struct {
 	engine *database.Engine
 }
 
-func NewPostgresApiKeyRestrictionStore(engine *database.Engine) *PostgresApiKeyRestrictionStore {
-	return &PostgresApiKeyRestrictionStore{engine: engine}
+func NewPostgresApiKeyAccessStore(engine *database.Engine) *PostgresApiKeyAccessStore {
+	return &PostgresApiKeyAccessStore{engine: engine}
 }
 
-func (s *PostgresApiKeyRestrictionStore) GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error) {
+func (s *PostgresApiKeyAccessStore) GetApiKeyName(ctx context.Context, appID string, apiKeyID int64) (string, error) {
 	return s.engine.Queries.GetApiKeyNameByID(ctx, pgdb.GetApiKeyNameByIDParams{
 		ID:    apiKeyID,
 		AppID: store.ToPgUUID(appID),
 	})
 }
 
-// GetRestrictionsByAppID returns one entry per API key that has at least one
-// restriction set; keys in the default state (no protected access, no IP
-// allowlist) are simply absent.
-func (s *PostgresApiKeyRestrictionStore) GetRestrictionsByAppID(ctx context.Context, appID string) ([]ApiKeyRestrictions, error) {
-	rows, err := s.engine.Queries.GetApiKeyRestrictionsByAppID(ctx, store.ToPgUUID(appID))
+// GetAccess is the enforcement read for one authenticated key; no app check
+// is repeated here since the key was already validated against its app.
+// Zero rows means the key is gone; a key with no rule still yields one row.
+func (s *PostgresApiKeyAccessStore) GetAccess(ctx context.Context, apiKeyID int64) (ApiKeyAccess, error) {
+	rows, err := s.engine.Queries.GetApiKeyAccess(ctx, apiKeyID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read api key restrictions: %w", err)
+		return ApiKeyAccess{}, fmt.Errorf("failed to read api key access: %w", err)
 	}
-	result := make([]ApiKeyRestrictions, 0, len(rows))
+	if len(rows) == 0 {
+		return ApiKeyAccess{}, ErrApiKeyNotFound
+	}
+	access := ApiKeyAccess{ApiKeyID: apiKeyID, AllowedIps: rows[0].AllowedIps}
 	for _, row := range rows {
-		if !row.CanAccessProtectedBranches && len(row.AllowedIps) == 0 {
+		if row.Pattern == nil {
 			continue
 		}
-		result = append(result, ApiKeyRestrictions{
-			ApiKeyID:                   row.ID,
-			CanAccessProtectedBranches: row.CanAccessProtectedBranches,
-			AllowedIps:                 row.AllowedIps,
+		access.BranchRules = append(access.BranchRules, BranchRule{
+			Pattern: *row.Pattern,
+			Actions: toActions(row.Actions),
 		})
 	}
-	return result, nil
+	return access, nil
 }
 
-func (s *PostgresApiKeyRestrictionStore) SetRestrictions(ctx context.Context, appID string, apiKeyID int64, canAccessProtectedBranches bool, allowedIps []netip.Prefix) error {
-	updated, err := s.engine.Queries.UpdateApiKeyRestrictions(ctx, pgdb.UpdateApiKeyRestrictionsParams{
-		AllowedIps:                 allowedIps,
-		CanAccessProtectedBranches: canAccessProtectedBranches,
-		ID:                         apiKeyID,
-		AppID:                      store.ToPgUUID(appID),
-	})
+// GetAccessByAppID returns the access of every live key of one app, including
+// keys still at their default.
+func (s *PostgresApiKeyAccessStore) GetAccessByAppID(ctx context.Context, appID string) ([]ApiKeyAccess, error) {
+	rows, err := s.engine.Queries.GetApiKeyAccessByAppID(ctx, store.ToPgUUID(appID))
 	if err != nil {
-		return fmt.Errorf("failed to update api key restrictions: %w", err)
+		return nil, fmt.Errorf("failed to read api key access: %w", err)
 	}
-	if updated == 0 {
-		return ErrApiKeyNotFound
-	}
-	return nil
+	return foldAccessRows(rows), nil
 }
 
-// GetRestrictions is the enforcement read for one authenticated key. The key
-// was validated against its app just before, so no app check is repeated here.
-func (s *PostgresApiKeyRestrictionStore) GetRestrictions(ctx context.Context, apiKeyID int64) (ApiKeyRestrictions, error) {
-	row, err := s.engine.Queries.GetApiKeyRestrictions(ctx, apiKeyID)
-	if err != nil {
-		return ApiKeyRestrictions{}, fmt.Errorf("failed to read api key restrictions: %w", err)
-	}
-	return ApiKeyRestrictions{
-		ApiKeyID:                   apiKeyID,
-		CanAccessProtectedBranches: row.CanAccessProtectedBranches,
-		AllowedIps:                 row.AllowedIps,
-	}, nil
-}
-
-func (s *PostgresApiKeyRestrictionStore) SetBranchProtection(ctx context.Context, appID string, branchName string, protected bool) error {
-	updated, err := s.engine.Queries.SetBranchProtected(ctx, pgdb.SetBranchProtectedParams{
-		Protected: protected,
-		AppID:     store.ToPgUUID(appID),
-		Name:      branchName,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update branch protection: %w", err)
-	}
-	if updated == 0 {
-		return ErrBranchNotFound
-	}
-	return nil
-}
-
-// IsBranchProtected answers false for a branch that does not exist yet: the
-// CLI creates branches on first publish, and a brand-new branch cannot be
-// protected before it exists.
-func (s *PostgresApiKeyRestrictionStore) IsBranchProtected(ctx context.Context, appID string, branchName string) (bool, error) {
-	protected, err := s.engine.Queries.IsBranchProtected(ctx, pgdb.IsBranchProtectedParams{
-		AppID: store.ToPgUUID(appID),
-		Name:  branchName,
-	})
-	if err != nil {
-		if database.IsNoRows(err) {
-			return false, nil
+// foldAccessRows turns the LEFT JOIN's one-row-per-rule shape back into one
+// entry per key. It relies on the query's ORDER BY k.id, so rows of one key
+// are contiguous.
+func foldAccessRows(rows []pgdb.GetApiKeyAccessByAppIDRow) []ApiKeyAccess {
+	result := make([]ApiKeyAccess, 0, len(rows))
+	for _, row := range rows {
+		if len(result) == 0 || result[len(result)-1].ApiKeyID != row.ID {
+			result = append(result, ApiKeyAccess{ApiKeyID: row.ID, AllowedIps: row.AllowedIps})
 		}
-		return false, fmt.Errorf("failed to read branch protection: %w", err)
+		if row.Pattern == nil {
+			continue
+		}
+		// Re-derived after each append: holding this pointer across appends would
+		// dangle if the slice reallocates.
+		current := &result[len(result)-1]
+		current.BranchRules = append(current.BranchRules, BranchRule{
+			Pattern: *row.Pattern,
+			Actions: toActions(row.Actions),
+		})
 	}
-	return protected, nil
+	return result
+}
+
+// SetAccess replaces one key's whole access, the IP allow-list and the rule
+// list, in one transaction; rules are deleted then re-inserted rather than
+// diffed.
+func (s *PostgresApiKeyAccessStore) SetAccess(ctx context.Context, appID string, access ApiKeyAccess) error {
+	return s.engine.WithTx(ctx, func(q *pgdb.Queries) error {
+		updated, err := q.UpdateApiKeyAccess(ctx, pgdb.UpdateApiKeyAccessParams{
+			AllowedIps: access.AllowedIps,
+			ID:         access.ApiKeyID,
+			AppID:      store.ToPgUUID(appID),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update api key access: %w", err)
+		}
+		// Checked before rules are touched, so a key in another app or revoked
+		// cannot end up with rules.
+		if updated == 0 {
+			return ErrApiKeyNotFound
+		}
+		if err := q.DeleteApiKeyBranchRules(ctx, access.ApiKeyID); err != nil {
+			return fmt.Errorf("failed to clear api key branch rules: %w", err)
+		}
+		for _, rule := range access.BranchRules {
+			if err := q.InsertApiKeyBranchRule(ctx, pgdb.InsertApiKeyBranchRuleParams{
+				ApiKeyID: access.ApiKeyID,
+				Pattern:  rule.Pattern,
+				Actions:  fromActions(rule.Actions),
+			}); err != nil {
+				return fmt.Errorf("failed to insert api key branch rule: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+// toActions drops any value that is not a known action, which can only come
+// from a hand-written row.
+func toActions(raw []string) []Action {
+	actions := make([]Action, 0, len(raw))
+	for _, value := range raw {
+		if IsValidAction(value) {
+			actions = append(actions, Action(value))
+		}
+	}
+	return actions
+}
+
+func fromActions(actions []Action) []string {
+	raw := make([]string, 0, len(actions))
+	for _, action := range actions {
+		raw = append(raw, string(action))
+	}
+	return raw
 }

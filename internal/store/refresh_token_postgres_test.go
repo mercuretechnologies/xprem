@@ -1,8 +1,6 @@
-// Integration tests for the refresh-token ledger. The single-use claim is
-// enforced by SQL (a conditional UPDATE ... RETURNING), which the in-memory
-// fake in internal/services cannot exercise: it is exactly the property that
-// decides whether two concurrent presentations of one token both succeed.
-// Same harness and skip rules as user_postgres_test.go.
+// Integration tests for the refresh-token ledger; the single-use claim is
+// enforced by SQL (a conditional UPDATE ... RETURNING). Same harness and skip
+// rules as user_postgres_test.go.
 package store_test
 
 import (
@@ -81,11 +79,8 @@ func TestRefreshTokenLedgerLifecycle(t *testing.T) {
 	assert.Equal(t, user.Id, successor.UserId)
 	assert.Nil(t, successor.UsedAt)
 
-	// Rotated once, never again: the second attempt finds nothing to claim,
-	// while the row itself is still readable and now carries both its rotation
-	// stamp and the successor it points at. That is what tells a replay apart
-	// from an unknown token, and what a replay inside the grace is answered
-	// with.
+	// Rotated once, never again: the second attempt finds nothing to claim, while
+	// the row is still readable and carries its rotation stamp and successor.
 	notFoundErr := (*store.ErrResourceNotFound)(nil)
 	_, err = tokenStore.RotateRefreshToken(ctx, store.RotateRefreshTokenParameters{
 		OldID: tokenId, NewID: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour),
@@ -166,8 +161,8 @@ func TestPurgeOnlyDropsExpiredTokensOfThatUser(t *testing.T) {
 	require.NoError(t, err, "the purge is scoped to one account")
 }
 
-// Deleting an account takes its refresh chains with it, so a token cannot
-// outlive the row the authentication path looks up.
+// TestDeletingAUserCascadesToItsRefreshTokens verifies deleting an account
+// cascades to its refresh token rows.
 func TestDeletingAUserCascadesToItsRefreshTokens(t *testing.T) {
 	tokenStore, userStore, pool := setupRefreshTokenStore(t)
 	ctx := context.Background()
@@ -183,9 +178,8 @@ func TestDeletingAUserCascadesToItsRefreshTokens(t *testing.T) {
 	require.ErrorAs(t, err, &notFoundErr)
 }
 
-// Two requests present the same refresh token at the same instant, repeatedly.
-// Exactly one must claim it: if both did, rotation would hand out two live
-// successors and the replay would never be detected.
+// TestConcurrentConsumeClaimsATokenOnce has two requests present the same
+// refresh token at the same instant, repeatedly; exactly one must claim it.
 func TestConcurrentConsumeClaimsATokenOnce(t *testing.T) {
 	tokenStore, userStore, pool := setupRefreshTokenStore(t)
 	ctx := context.Background()
@@ -232,8 +226,7 @@ func TestBumpUserSessionVersion(t *testing.T) {
 	user := insertUser(t, userStore, "ledger@example.com", false)
 
 	// Read back rather than trusting the insert's return value, which does not
-	// carry the column: every account starts at generation 0, which is what
-	// makes the DEFAULT on the migrated rows match the tokens already signed.
+	// carry the column.
 	fresh, err := userStore.GetUserByID(ctx, user.Id)
 	require.NoError(t, err)
 	require.EqualValues(t, 0, fresh.SessionVersion)

@@ -54,7 +54,7 @@ func validateSegment(name, value string) error {
 
 // validateRelativePath validates multi-segment paths supplied for fileName /
 // assetPath. Nested paths are allowed (e.g. "assets/image.png") but no
-// absolute paths and no ".." segments. Backslashes are rejected outright —
+// absolute paths and no ".." segments. Backslashes are rejected outright -
 // on Windows filepath.Join treats them as separators, so allowing them would
 // let an attacker escape the intended directory via a path like
 // "assets\..\..\etc\passwd".
@@ -102,7 +102,7 @@ func validateUpdate(u *types.Update) error {
 // the local backend escape its BasePath.
 //
 // Exported because the CDN builders need the same prefix when signing
-// object URLs — a CloudFront or GCS-direct URL that omits the prefix
+// object URLs, a CloudFront or GCS-direct URL that omits the prefix
 // points to a non-existent object and 404s.
 func ResolveKeyPrefix() string {
 	return resolveKeyPrefix()

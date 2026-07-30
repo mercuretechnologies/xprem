@@ -29,7 +29,7 @@ func (r channelRolloutCapableRepo) DeleteChannelRollout(_ context.Context, _, _ 
 
 func cliPublishCtx() context.Context {
 	return WithCliAuth(context.Background(),
-		CliCredential{AppID: "app-1", KeyID: "42", KeyName: "ci-production"})
+		CliCredential{AppID: "app-1", KeyID: 42, KeyName: "ci-production"})
 }
 
 func TestUpdateRolloutEventsAndInternalSplit(t *testing.T) {

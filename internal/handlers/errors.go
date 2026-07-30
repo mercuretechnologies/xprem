@@ -61,13 +61,19 @@ func RenderJSON(w http.ResponseWriter, status int, payload interface{}) {
 // rollout. The republish and rollback commands print it verbatim.
 const activeRolloutConflictMessage = "A progressive rollout is already active for this branch and runtime version. Finish or revert it from the dashboard first."
 
-// RenderCliAuthError distinguishes a credential that failed to authenticate
-// (401, generic message so nothing leaks about why) from one that
-// authenticated but is blocked by per-key access restrictions (403, with the
-// reason so the CLI user knows what to fix).
+// RenderCliAuthError distinguishes three outcomes: a credential that failed to
+// authenticate (401, generic message so nothing leaks about why), one that
+// authenticated but is blocked by its access rules (403, with the reason so
+// the CLI user knows what to fix), and one that could not be judged at all
+// because the control plane was unreachable (500, because "your key is
+// invalid" is the wrong thing to tell a CI job during a database blip).
 func RenderCliAuthError(w http.ResponseWriter, err error) {
 	if errors.Is(err, services.ErrCliAccessDenied) {
 		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, services.ErrCliAuthUnavailable) {
+		http.Error(w, "Could not verify this credential", http.StatusInternalServerError)
 		return
 	}
 	http.Error(w, "Error validating auth", http.StatusUnauthorized)

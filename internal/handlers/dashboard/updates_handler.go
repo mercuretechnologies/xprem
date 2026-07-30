@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,12 +30,6 @@ const (
 	maxPublishBodyBytes = 4 << 10
 )
 
-type updateFeedCursor struct {
-	CreatedAt time.Time `json:"createdAt"`
-	BranchID  int64     `json:"branchId"`
-	UpdateID  int64     `json:"updateId"`
-}
-
 func parseUpdateFeedDate(raw string, endOfDay bool) (*time.Time, error) {
 	if raw == "" {
 		return nil, nil
@@ -52,35 +45,6 @@ func parseUpdateFeedDate(raw string, endOfDay bool) (*time.Time, error) {
 		parsed = parsed.Add(24*time.Hour - time.Nanosecond)
 	}
 	return &parsed, nil
-}
-
-func decodeUpdateFeedCursor(raw string) (*updateFeedCursor, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return nil, err
-	}
-	var cursor updateFeedCursor
-	if err := json.Unmarshal(decoded, &cursor); err != nil {
-		return nil, err
-	}
-	return &cursor, nil
-}
-
-func encodeUpdateFeedCursor(item types.UpdateFeedItem) string {
-	encoded, _ := json.Marshal(updateFeedCursor{
-		CreatedAt: item.FeedCreatedAt,
-		BranchID:  item.BranchID,
-		UpdateID:  mustParseUpdateID(item.UpdateId),
-	})
-	return base64.RawURLEncoding.EncodeToString(encoded)
-}
-
-func mustParseUpdateID(value string) int64 {
-	parsed, _ := strconv.ParseInt(value, 10, 64)
-	return parsed
 }
 
 type UpdateHandler struct {
@@ -396,7 +360,7 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 		handlers.RenderError(w, http.StatusBadRequest, "to must be an RFC3339 timestamp or YYYY-MM-DD date")
 		return
 	}
-	cursor, err := decodeUpdateFeedCursor(params.Get("cursor"))
+	cursor, err := types.DecodeUpdateFeedCursor(params.Get("cursor"))
 	if err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, "cursor is invalid")
 		return
@@ -428,7 +392,13 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 	page := types.UpdateFeedPage{Items: updates}
 	if len(updates) > limit {
 		page.Items = updates[:limit]
-		page.NextCursor = encodeUpdateFeedCursor(page.Items[len(page.Items)-1])
+		cursor, err := types.EncodeUpdateFeedCursor(page.Items[len(page.Items)-1])
+		if err != nil {
+			// The page is valid; only paging past it is not. Serving it
+			// without a cursor beats failing the whole request.
+			log.Printf("could not encode the update feed cursor for app %s: %v", appId, err)
+		}
+		page.NextCursor = cursor
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

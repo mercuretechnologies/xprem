@@ -78,7 +78,7 @@ func TestGetFile_SiblingDirWithSharedPrefixBlocked(t *testing.T) {
 		UpdateId:       "123",
 	}
 
-	// updateId="123" — assetPath escapes into sibling "1234abc" which shares the "123" string prefix.
+	// updateId="123", assetPath escapes into sibling "1234abc" which shares the "123" string prefix.
 	file, err := b.GetFile(update, "../1234abc/secret")
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid asset path")
@@ -126,7 +126,7 @@ func TestLocalBucket_CrossAppIsolation(t *testing.T) {
 	assert.Equal(t, "2.0", rv2[0].RuntimeVersion)
 
 	// Cross queries fall back to the filesystem "dir not found" error
-	// instead of silently leaking the other tenant's data — that's the
+	// instead of silently leaking the other tenant's data, that's the
 	// safe default. We assert on emptiness of the result set, not on the
 	// nil-vs-error distinction.
 	u1, _ := b.GetUpdates("app-1", "branch-b", "2.0")

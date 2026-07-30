@@ -21,13 +21,12 @@ func createRollbackRequest(projectRoot, branch, runtimeVersion, headerKey, heade
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
 	var q string
 	if commitHash != "" {
-		q = fmt.Sprintf("http://localhost:3000/rollback/%s?runtimeVersion=%s&platform=%s&commitHash=%s", branch, runtimeVersion, platform, commitHash)
+		q = fmt.Sprintf("http://localhost:3000/test-app-id/rollback/%s?runtimeVersion=%s&platform=%s&commitHash=%s", branch, runtimeVersion, platform, commitHash)
 	} else {
-		q = fmt.Sprintf("http://localhost:3000/rollback/%s?runtimeVersion=%s&platform=%s", branch, runtimeVersion, platform)
+		q = fmt.Sprintf("http://localhost:3000/test-app-id/rollback/%s?runtimeVersion=%s&platform=%s", branch, runtimeVersion, platform)
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
-	r = mux.SetURLVars(r, map[string]string{"APP_ID": "test-app-id", "BRANCH": branch})
 	r.Header.Set(headerKey, headerValue)
 	return w, mux.NewRouter(), nil, r
 }
@@ -41,7 +40,7 @@ func TestToRollbackWithBadBearer(t *testing.T) {
 		t.Fatalf("Error finding project root: %v", err)
 	}
 	w, _, _, r := createRollbackRequest(projectRoot, "DO_NOT_USE", "1", "Authorization", "Bearer expo_bad_token", "ios", "hash")
-	testContainer().RollbackHandler.HandleRollback(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 401, w.Code, "Expected status code 401")
 	assert.Equal(t, "Error validating auth\n", w.Body.String(), "Expected error message")
 }
@@ -55,7 +54,7 @@ func TestGoodRollback(t *testing.T) {
 		t.Fatalf("Error finding project root: %v", err)
 	}
 	w, _, _, r := createRollbackRequest(projectRoot, "DO_NOT_USE", "1", "Authorization", "Bearer expo_test_token", "ios", "hash")
-	testContainer().RollbackHandler.HandleRollback(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	type Response struct {
 		Branch         string `json:"branch"`
@@ -93,7 +92,7 @@ func TestGoodRollbackWithoutCommitHash(t *testing.T) {
 		t.Fatalf("Error finding project root: %v", err)
 	}
 	w, _, _, r := createRollbackRequest(projectRoot, "DO_NOT_USE", "1", "Authorization", "Bearer expo_test_token", "ios", "")
-	testContainer().RollbackHandler.HandleRollback(w, r)
+	serveThroughRouter(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	type Response struct {
 		Branch         string `json:"branch"`
@@ -131,7 +130,7 @@ func TestGoodRollbackWithoutCommitHash(t *testing.T) {
 // concurrent /manifest request in that window would miss the cache, scan
 // the bucket, see the new update on disk WITHOUT a .check file, filter it
 // out via IsUpdateValid, fall back to the previous update, and re-cache
-// it under the lastUpdate key for the full 1800s TTL — serving a stale
+// it under the lastUpdate key for the full 1800s TTL, serving a stale
 // manifest for up to 30 minutes after the publish/rollback.
 //
 // The fix reorders MarkUpdateAsChecked to write .check before deleting
@@ -183,7 +182,7 @@ func TestRollbackDoesNotPoisonLatestUpdateCache(t *testing.T) {
 	// can actually point at a stale value.
 	warmed, err := updateService.GetLatestUpdate(ctx, appId, branchName, runtimeVersion, platform)
 	require.NoError(t, err)
-	require.NotNil(t, warmed, "fixture setup: planted update not picked up — check LOCAL_BUCKET_BASE_PATH wiring")
+	require.NotNil(t, warmed, "fixture setup: planted update not picked up, check LOCAL_BUCKET_BASE_PATH wiring")
 	require.Equal(t, staleUpdateId, warmed.UpdateId, "fixture setup: expected cache warmed with planted update")
 
 	// Hammer the read path from many goroutines. The old ordering would
@@ -211,7 +210,7 @@ func TestRollbackDoesNotPoisonLatestUpdateCache(t *testing.T) {
 
 	// Fire the rollback while readers are hammering.
 	w, _, _, r := createRollbackRequest(projectRoot, branchName, runtimeVersion, "Authorization", "Bearer expo_test_token", platform, "hash")
-	testContainer().RollbackHandler.HandleRollback(w, r)
+	serveThroughRouter(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "rollback handler failed: %s", w.Body.String())
 
 	close(stop)

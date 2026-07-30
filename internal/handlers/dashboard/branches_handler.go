@@ -62,9 +62,6 @@ func (h *BranchHandler) CreateBranchHandler(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
 
-	cache := cache2.GetCache()
-	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(appId)
-	cache.Delete(branchesCacheKey)
 }
 
 func (h *BranchHandler) DeleteBranchHandler(w http.ResponseWriter, r *http.Request) {
@@ -90,12 +87,12 @@ func (h *BranchHandler) DeleteBranchHandler(w http.ResponseWriter, r *http.Reque
 			handlers.RenderError(w, http.StatusConflict, branchErr.Error())
 			return
 		}
-		if rolloutErr := (*store.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
-			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
-			return
-		}
 		if protectedErr := (*store.ErrBranchProtected)(nil); errors.As(err, &protectedErr) {
 			handlers.RenderError(w, http.StatusConflict, protectedErr.Error())
+			return
+		}
+		if rolloutErr := (*store.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
+			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
 			return
 		}
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while deleting the branch.")
@@ -103,11 +100,6 @@ func (h *BranchHandler) DeleteBranchHandler(w http.ResponseWriter, r *http.Reque
 	}
 	w.WriteHeader(http.StatusNoContent)
 
-	cache := cache2.GetCache()
-	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(appId)
-	runtimeCacheKey := dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName)
-	cache.Delete(branchesCacheKey)
-	cache.Delete(runtimeCacheKey)
 }
 
 func (h *BranchHandler) GetBranchesHandler(w http.ResponseWriter, r *http.Request) {

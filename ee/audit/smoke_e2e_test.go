@@ -18,11 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEndToEndArchiveSmoke runs the whole real chain at once: real Postgres
-// store, real StartArchiveFromEnv (destination resolution, advisory lock,
-// cursor CAS, boot catch-up goroutine), real NDJSON files on a real local
-// destination. The layer-by-layer tests prove each mechanism; this one proves
-// they are actually wired to each other.
+// TestEndToEndArchiveSmoke exercises the real Postgres store, real archive export, and
+// real NDJSON files on a local destination together, end to end.
 func TestEndToEndArchiveSmoke(t *testing.T) {
 	auditStore, pool := setupAuditStore(t)
 	archiveDir := t.TempDir()
@@ -35,8 +32,7 @@ func TestEndToEndArchiveSmoke(t *testing.T) {
 
 	service := NewAuditService(auditStore)
 	service.licenseValid = func() bool { return true }
-	// Unique like every other DB test here: the table and the export cursor
-	// are shared across runs, a fixed actor would collide with itself.
+	// Unique per run since the table and export cursor are shared across test runs.
 	actorID := "smoke-" + uuid.NewString()
 	var lastID int64
 	for range 3 {
@@ -48,8 +44,7 @@ func TestEndToEndArchiveSmoke(t *testing.T) {
 		require.NoError(t, err)
 		lastID = inserted.ID
 	}
-	// Age the rows past the 30s visibility lag, like a real deployment where
-	// the exporter only ever sees settled rows.
+	// Age the rows past the 30s visibility lag so the exporter sees them as settled.
 	_, err := pool.Exec(ctx,
 		"UPDATE audit_log_events SET occurred_at = now() - interval '1 minute' WHERE actor_id = $1",
 		actorID)
@@ -57,8 +52,6 @@ func TestEndToEndArchiveSmoke(t *testing.T) {
 
 	require.NoError(t, service.StartArchiveFromEnv(ctx))
 
-	// The boot catch-up export runs in its goroutine: wait for the cursor to
-	// pass our rows, then check the bytes actually on disk.
 	require.Eventually(t, func() bool {
 		cursor, cursorErr := auditStore.ExportCursor(ctx)
 		return cursorErr == nil && cursor >= lastID

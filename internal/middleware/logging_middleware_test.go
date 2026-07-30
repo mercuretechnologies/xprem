@@ -28,3 +28,20 @@ func TestLoggingMiddlewareRecoversTelemetryPanics(t *testing.T) {
 		})
 	}
 }
+
+func TestLoggingMiddlewarePreservesFlush(t *testing.T) {
+	// The SSE transport flushes after each event through ResponseController,
+	// which must traverse the statusRecorder wrapper (Unwrap) or find Flush.
+	handler := LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: hello\n\n"))
+		require.NoError(t, http.NewResponseController(w).Flush())
+
+		_, directlyFlushable := w.(http.Flusher)
+		require.True(t, directlyFlushable, "http.Flusher must stay visible through the wrapper")
+	}))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	require.True(t, recorder.Flushed, "the flush must reach the underlying writer")
+}

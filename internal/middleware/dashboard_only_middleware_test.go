@@ -11,8 +11,7 @@ import (
 )
 
 // runDashboardOnly sends a request through NewDashboardOnlyMiddleware with the
-// context an upstream authentication middleware would have produced, which is
-// the only input this gate reads.
+// context an upstream authentication middleware would have produced.
 func runDashboardOnly(t *testing.T, stamp func(*http.Request) *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	router := mux.NewRouter()
@@ -31,13 +30,12 @@ func runDashboardOnly(t *testing.T, stamp func(*http.Request) *http.Request) *ht
 	return recorder
 }
 
-// A publishing credential is app-scoped power over one app, not an account.
-// The account surface is about the installation and the person signed into it,
-// so it refuses one even though the credential is perfectly valid.
+// TestDashboardOnlyRefusesAValidatedCliCredential checks that a valid CLI
+// credential is still refused on the account surface.
 func TestDashboardOnlyRefusesAValidatedCliCredential(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request {
 		return r.WithContext(services.WithCliAuth(r.Context(), services.CliCredential{
-			AppID: "test-app-id", KeyID: "key-1", KeyName: "ci",
+			AppID: "test-app-id", KeyID: 1, KeyName: "ci",
 		}))
 	})
 	if recorder.Code != http.StatusForbidden {
@@ -45,18 +43,16 @@ func TestDashboardOnlyRefusesAValidatedCliCredential(t *testing.T) {
 	}
 }
 
-// The same refusal, with a principal ALSO on the context so the missing-account
-// check cannot be what produces it. NewAuthMiddleware stamps one or the other
-// and never both, so this state does not occur in production: it is here
-// because without it the test above passes whether or not the CLI check exists,
-// and a test that cannot fail proves nothing about the branch it names.
+// TestDashboardOnlyRefusesACliCredentialEvenBesideAPrincipal checks that the
+// CLI credential itself is what triggers the refusal, with a principal also
+// on the context so the missing-account check cannot be the cause instead.
 func TestDashboardOnlyRefusesACliCredentialEvenBesideAPrincipal(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request {
 		ctx := services.WithPrincipal(r.Context(), &services.DashboardPrincipal{
 			Email: "admin@xprem.dev", IsAdmin: true,
 		})
 		return r.WithContext(services.WithCliAuth(ctx, services.CliCredential{
-			AppID: "test-app-id", KeyID: "key-1", KeyName: "ci",
+			AppID: "test-app-id", KeyID: 1, KeyName: "ci",
 		}))
 	})
 	if recorder.Code != http.StatusForbidden {
@@ -75,9 +71,8 @@ func TestDashboardOnlyLetsASignedInAccountThrough(t *testing.T) {
 	}
 }
 
-// An empty context means the group was mounted without an authentication
-// middleware in front of it. Refusing is the only safe reading of that, and it
-// is what keeps this gate from failing open on a wiring mistake.
+// TestDashboardOnlyRefusesAnUnauthenticatedContext checks that a request with
+// no credential at all is refused rather than let through.
 func TestDashboardOnlyRefusesAnUnauthenticatedContext(t *testing.T) {
 	recorder := runDashboardOnly(t, func(r *http.Request) *http.Request { return r })
 	if recorder.Code != http.StatusForbidden {

@@ -18,10 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The testdata files are real wire payloads captured from the iOS and Android
-// SDKs (pretty-printed JSON on Android, resource attribute sets per platform,
-// uppercase UUIDs on iOS). now is fixed so clamp assertions are stable; the
-// fixture timestamps are January 2026.
+// flattenNow is fixed so clamp assertions are stable.
 var flattenNow = time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -170,8 +167,7 @@ func TestFlattenDeterministicHashes(t *testing.T) {
 	rows1 := FlattenLogs("app-1", batch1, flattenNow)
 	rows2 := FlattenLogs("app-1", batch2, flattenNow.Add(time.Hour))
 	require.Equal(t, len(rows1), len(rows2))
-	// A retried batch hashes identically whenever it re-arrives: the hash
-	// reads the raw wire nano, never the (time-dependent) clamped value.
+	// A retried batch hashes identically since the hash reads the raw wire nano, not the clamped value.
 	for i := range rows1 {
 		assert.Equal(t, rows1[i].ContentKey, rows2[i].ContentKey, "row %d", i)
 	}
@@ -183,9 +179,7 @@ func TestDecodeToleratesUnknownFields(t *testing.T) {
 	assert.NotEmpty(t, batch.Resources)
 }
 
-// logsWithoutSession is the shape that makes the hash's device component load
-// bearing: no session.id anywhere, which normalizeSessionID folds onto the zero
-// uuid for every record of every device.
+// logsWithoutSession builds a log payload with no session.id anywhere.
 func logsWithoutSession(clientID, body string) []byte {
 	return []byte(`{"resourceLogs":[{"resource":{"attributes":[
 		{"key":"expo.eas_client.id","value":{"stringValue":"` + clientID + `"}}]},
@@ -203,23 +197,18 @@ func hashOfSingleLog(t *testing.T, body []byte) uuid.UUID {
 	return rows[0].ContentKey
 }
 
-// Two phones logging the same line at the same instant are two records, and the
-// dedup key has to say so. Without the device in the hash they shared one, since
-// a missing session collapses onto a single value for the whole fleet.
+// TestContentKeySeparatesDevicesWithoutASession checks two devices sharing no session don't collide in the hash.
 func TestContentKeySeparatesDevicesWithoutASession(t *testing.T) {
 	first := hashOfSingleLog(t, logsWithoutSession("8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "fetch failed"))
 	second := hashOfSingleLog(t, logsWithoutSession("7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d", "fetch failed"))
 	require.NotEqual(t, first, second, "two devices must not share one dedup identity")
 
-	// And the same device still hashes to itself, which is what makes a
-	// re-sent batch collapse rather than double.
 	repeated := hashOfSingleLog(t, logsWithoutSession("8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "fetch failed"))
 	require.Equal(t, first, repeated)
 }
 
-// is_fatal and severity_text are stored columns pulled out of the attributes, so
-// they are not covered by the attributes JSON the hash already carries. Two rows
-// that read differently on screen must not share an identity.
+// TestContentKeySeparatesFatalFromNonFatal checks that is_fatal and severity_text, stripped from the attributes
+// JSON, still separate the hash of two rows that read differently.
 func TestContentKeySeparatesFatalFromNonFatal(t *testing.T) {
 	const client = "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
 	plain := logsWithoutSession(client, "boom")
@@ -233,11 +222,7 @@ func TestContentKeySeparatesFatalFromNonFatal(t *testing.T) {
 		"severity_text is stored, so it is part of what a row is")
 }
 
-// Every content field is bounded, at the same limits the client already
-// enforces before it stores anything. None of these columns has a length of
-// its own: ClickHouse String is unbounded, and the per-batch ceiling counts
-// records rather than bytes, so one forged record could otherwise carry
-// megabytes.
+// TestContentFieldsAreBounded checks every content field is truncated at the client's own validation limits.
 func TestContentFieldsAreBounded(t *testing.T) {
 	huge := strings.Repeat("A", 200_000)
 	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"
@@ -273,16 +258,10 @@ func TestContentFieldsAreBounded(t *testing.T) {
 	assert.Len(t, []rune(metrics[0].CustomParams), maxCustomParamsRunes)
 }
 
-// The ceiling has to hold for what an attribute can actually BE, not only for
-// the strings it is easiest to test with. OTLP carries arrayValue and
-// kvlistValue, which arrive here as []any and map[string]any and nest as deep
-// as the body allows. Charging them a flat 64 bytes and then serializing them
-// in full let a single attribute walk the whole batch past this ceiling and
-// into a stored row, which is precisely the amplification it exists to stop.
+// TestNestedAttributesAreChargedWhatTheyCost checks that nested OTLP values (arrayValue, kvlistValue) are charged
+// by their serialized size, not a flat per-attribute cost.
 func TestNestedAttributesAreChargedWhatTheyCost(t *testing.T) {
 	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"
-	// One array and one object, each far past the ceiling on their own, and
-	// each worth 64 bytes under the old accounting.
 	fat := make([]any, 40_000)
 	for i := range fat {
 		fat[i] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -304,8 +283,6 @@ func TestNestedAttributesAreChargedWhatTheyCost(t *testing.T) {
 	assert.LessOrEqual(t, len(logs[0].Attributes), maxAttributesBytes+1024,
 		"a nested attribute must be charged what it serializes to, not a flat guess")
 
-	// And a nested value that FITS is still stored, unflattened: the fix is a
-	// measurement, not a ban on structure.
 	small := map[string]any{"plan": "pro", "seats": float64(3)}
 	kept := FlattenLogs("app-1", LogBatch{Resources: []ResourceLogs{{
 		Attributes: map[string]any{EASClientIDKey: client},
@@ -319,9 +296,8 @@ func TestNestedAttributesAreChargedWhatTheyCost(t *testing.T) {
 	assert.JSONEq(t, `{"context":{"plan":"pro","seats":3}}`, kept[0].Attributes)
 }
 
-// The attribute map is bounded in COUNT as well as in bytes, and the survivors
-// are the alphabetically first, which is the rule the client applies too: both
-// ends then keep the same attributes rather than each keeping its own set.
+// TestAttributeCountIsBoundedAlphabetically checks the attribute map is bounded in count, keeping the
+// alphabetically first entries to match the client's own rule.
 func TestAttributeCountIsBoundedAlphabetically(t *testing.T) {
 	attrs := map[string]any{}
 	for i := 0; i < maxAttributesPerRecord+50; i++ {
@@ -337,8 +313,7 @@ func TestAttributeCountIsBoundedAlphabetically(t *testing.T) {
 		"the alphabetically last must be the one dropped")
 }
 
-// An honest client is never touched: it truncated itself first, so the server
-// bound must be a no-op on anything inside the contract.
+// TestBoundsLeaveAnHonestRecordAlone checks the server's bounds are a no-op on a record already inside the client's own contract.
 func TestBoundsLeaveAnHonestRecordAlone(t *testing.T) {
 	body := strings.Repeat("b", maxBodyRunes)
 	client := "4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"

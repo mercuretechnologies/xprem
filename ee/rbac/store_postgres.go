@@ -147,7 +147,7 @@ func (s *PostgresRBACStore) ListUserGrants(ctx context.Context, userID string) (
 }
 
 // GetUserAppGrant returns nil (no error) when the member has no grant on the
-// app. RoleName stays nil here — the enforcement path only needs the
+// app. RoleName stays nil here, the enforcement path only needs the
 // permissions, ListUserGrants is the display read.
 func (s *PostgresRBACStore) GetUserAppGrant(ctx context.Context, userID string, appID string) (*AppGrant, error) {
 	row, err := s.engine.Queries.GetUserAppGrant(ctx, pgdb.GetUserAppGrantParams{
@@ -182,7 +182,7 @@ func (s *PostgresRBACStore) ReplaceUserGrants(ctx context.Context, userID string
 			return err
 		}
 		for _, grant := range grants {
-			// The zero pgtype.UUID (Valid: false) is SQL NULL — a grant
+			// The zero pgtype.UUID (Valid: false) is SQL NULL, a grant
 			// without a role.
 			var roleID pgtype.UUID
 			if grant.RoleID != nil {
