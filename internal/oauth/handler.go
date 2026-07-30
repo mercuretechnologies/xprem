@@ -194,7 +194,17 @@ func (h *OAuthHandler) ConsentHandler(w http.ResponseWriter, r *http.Request) {
 		handlers.RenderError(w, http.StatusBadRequest, "invalid form body")
 		return
 	}
-	redirectURL, err := h.service.CreateAuthorizationCode(r.Context(), principal.UserId, authorizationRequestFromValues(r.PostForm))
+	var redirectURL string
+	var err error
+	switch r.PostForm.Get("decision") {
+	case "approve":
+		redirectURL, err = h.service.CreateAuthorizationCode(r.Context(), principal.UserId, authorizationRequestFromValues(r.PostForm))
+	case "deny":
+		redirectURL, err = h.service.DenyAuthorization(r.Context(), authorizationRequestFromValues(r.PostForm))
+	default:
+		handlers.RenderError(w, http.StatusBadRequest, "decision must be approve or deny")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, ErrInvalidAuthorizationRequest) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())

@@ -71,6 +71,26 @@ func (s *OAuthService) ValidateAuthorizationRequest(ctx context.Context, req Aut
 	return client, nil
 }
 
+// DenyAuthorization answers a refused consent: no code, but the client waiting
+// on its redirect_uri still gets told, with the same validation as an
+// approval so a forged request cannot turn the denial into an open redirect.
+func (s *OAuthService) DenyAuthorization(ctx context.Context, req AuthorizationRequest) (string, error) {
+	if _, err := s.ValidateAuthorizationRequest(ctx, req); err != nil {
+		return "", err
+	}
+	redirect, err := url.Parse(req.RedirectURI)
+	if err != nil {
+		return "", err
+	}
+	query := redirect.Query()
+	query.Set("error", "access_denied")
+	if req.State != "" {
+		query.Set("state", req.State)
+	}
+	redirect.RawQuery = query.Encode()
+	return redirect.String(), nil
+}
+
 // CreateAuthorizationCode turns an approved consent into a single-use code and
 // returns the full redirect URL delivering it to the client.
 func (s *OAuthService) CreateAuthorizationCode(ctx context.Context, userId string, req AuthorizationRequest) (string, error) {

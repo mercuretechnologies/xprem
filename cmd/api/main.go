@@ -11,8 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorilla/handlers"
-
 	_ "expo-open-ota/internal/bucketmigrations"
 )
 
@@ -70,13 +68,9 @@ func main() {
 	container, cleanup := infrastructure.InitDependencies(context.Background())
 	defer cleanup()
 	router := infrastructure.NewRouter(container)
-	corsOptions := handlers.CORS(
-		handlers.AllowedHeaders([]string{"Authorization", "Content-Type"}),
-		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
-		handlers.AllowedOrigins([]string{"*"}),
-		handlers.AllowCredentials(),
-	)
-	ready := http.Handler(corsOptions(router))
+	// No global CORS: each surface declares its own where its routes are
+	// registered (dashboard subrouters, OAuth endpoints, /mcp).
+	ready := http.Handler(router)
 	handler.Store(&ready)
 	log.Println("✅ Server is ready to serve traffic.")
 	select {}

@@ -102,6 +102,7 @@ func TestConsentMintsCode(t *testing.T) {
 	clientID := seedClient(t, clientRepo, "http://127.0.0.1:53422/callback")
 
 	form := validAuthorizeQuery(clientID)
+	form.Set("decision", "approve")
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/consent", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req = req.WithContext(services.WithPrincipal(context.Background(), &services.DashboardPrincipal{UserId: "user-1"}))
@@ -135,11 +136,41 @@ func TestConsentMintsCode(t *testing.T) {
 	}
 }
 
+func TestConsentDeny(t *testing.T) {
+	handler, clientRepo, codeRepo := newTestHandlerWithCodes(t)
+	clientID := seedClient(t, clientRepo, "http://127.0.0.1:53422/callback")
+
+	form := validAuthorizeQuery(clientID)
+	form.Set("decision", "deny")
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/consent", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = req.WithContext(services.WithPrincipal(context.Background(), &services.DashboardPrincipal{UserId: "user-1"}))
+	res := httptest.NewRecorder()
+	handler.ConsentHandler(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+	body := decodeJSON(t, res)
+	redirectURL, err := url.Parse(body["redirectUrl"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := redirectURL.Query()
+	if query.Get("error") != "access_denied" || query.Get("state") != "xyz" || query.Get("code") != "" {
+		t.Fatalf("a denial must deliver error=access_denied and no code, got %s", redirectURL)
+	}
+	if len(codeRepo.inserted) != 0 {
+		t.Error("a denial must not mint a code")
+	}
+}
+
 func TestConsentWithoutPrincipal(t *testing.T) {
 	handler, clientRepo, _ := newTestHandlerWithCodes(t)
 	clientID := seedClient(t, clientRepo, "http://127.0.0.1:53422/callback")
 
 	form := validAuthorizeQuery(clientID)
+	form.Set("decision", "approve")
 	req := httptest.NewRequest(http.MethodPost, "/api/oauth/consent", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res := httptest.NewRecorder()

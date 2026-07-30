@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"expo-open-ota/internal/middleware"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -11,6 +12,8 @@ import (
 // exchange.
 func registerPreAuthRoutes(r *mux.Router, container *AppContainer) {
 	corsSubrouter := r.PathPrefix("/auth").Subrouter()
+	corsSubrouter.Use(middleware.NewDashboardCORSMiddleware())
+	corsSubrouter.PathPrefix("/").HandlerFunc(func(http.ResponseWriter, *http.Request) {}).Methods(http.MethodOptions)
 	corsSubrouter.HandleFunc("/login", container.AuthHandler.LoginHandler).Methods(http.MethodPost)
 	corsSubrouter.HandleFunc("/refreshToken", container.AuthHandler.RefreshTokenHandler).Methods(http.MethodPost)
 

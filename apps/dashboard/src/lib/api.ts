@@ -1,4 +1,4 @@
-import { getRefreshToken, getToken, logout, setTokens } from '@/lib/auth.ts';
+import { getRefreshToken, getToken, logout, saveReturnTo, setTokens } from '@/lib/auth.ts';
 
 export type APIProblemPayload = {
   title: string;
@@ -892,6 +892,7 @@ export class ApiClient {
     } catch (error) {
       // A network failure is the same story as a 5xx: unreachable, not revoked.
       console.error('Failed to refresh token:', error);
+      this.endSession(refreshToken);
     }
   }
 
@@ -910,7 +911,13 @@ export class ApiClient {
       return;
     }
     logout();
-    window.location.assign('/login');
+    // Remember where the session died so the next sign-in resumes there; the
+    // stored path is router-relative, so the /dashboard basename is stripped.
+    const currentPath = window.location.pathname.replace(/^\/dashboard/, '');
+    if (currentPath && currentPath !== '/login') {
+      saveReturnTo(currentPath + window.location.search);
+    }
+    window.location.assign('/dashboard/login');
   }
 
   public async login(email: string, password: string) {
@@ -918,6 +925,37 @@ export class ApiClient {
     form.append('email', email);
     form.append('password', password);
     return this.request<{ token: string; refreshToken: string }>(`/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+  }
+
+  // The OAuth consent screen echoes back the authorization request it was
+  // opened with, plus the user's decision; the server re-validates everything
+  // and answers with the redirect delivering the code (or the denial).
+  public async submitOAuthConsent(
+    authorizationParams: URLSearchParams,
+    decision: 'approve' | 'deny'
+  ) {
+    const form = new URLSearchParams();
+    for (const name of [
+      'client_id',
+      'redirect_uri',
+      'response_type',
+      'code_challenge',
+      'code_challenge_method',
+      'scope',
+      'state',
+      'resource',
+    ]) {
+      const value = authorizationParams.get(name);
+      if (value) {
+        form.append(name, value);
+      }
+    }
+    form.append('decision', decision);
+    return this.request<{ redirectUrl: string }>(`/api/oauth/consent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),

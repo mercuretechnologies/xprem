@@ -43,6 +43,10 @@ func NewRouter(container *AppContainer) *mux.Router {
 	// Authentication from here on: the Use-Cli-Auth header picks between a
 	// CLI credential and the dashboard session JWT.
 	apiSubrouter := r.PathPrefix("/api").Subrouter()
+	// CORS first: a preflight carries no Authorization header and must be
+	// answered before the auth middleware; the catch-all makes it match.
+	apiSubrouter.Use(middleware.NewDashboardCORSMiddleware())
+	apiSubrouter.PathPrefix("/").HandlerFunc(func(http.ResponseWriter, *http.Request) {}).Methods(http.MethodOptions)
 	apiSubrouter.Use(middleware.NewAuthMiddleware(container.DashboardAuthService, container.CliAuthService))
 
 	// adminOnly guards the global administration surface (users, roles,
