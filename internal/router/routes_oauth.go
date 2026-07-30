@@ -24,6 +24,7 @@ func registerOAuthRoutes(r *mux.Router, container *AppContainer) {
 	r.HandleFunc("/.well-known/oauth-authorization-server", oauth.WithCORS(h.AuthorizationServerMetadataHandler)).Methods(http.MethodGet, http.MethodOptions)
 
 	r.HandleFunc("/oauth/register", oauth.WithCORS(h.RegisterHandler)).Methods(http.MethodPost, http.MethodOptions)
+	r.HandleFunc("/oauth/token", oauth.WithCORS(h.TokenHandler)).Methods(http.MethodPost, http.MethodOptions)
 	// Top-level browser navigation, no CORS involved.
 	r.HandleFunc("/oauth/authorize", h.AuthorizeHandler).Methods(http.MethodGet)
 }

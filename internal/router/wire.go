@@ -253,7 +253,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthService *oauth.OAuthService
 	var oauthHandler *oauth.OAuthHandler
 	if oauthClientRepo != nil {
-		oauthService = oauth.NewOAuthService(oauthClientRepo, oauthCodeRepo, userRepo)
+		oauthService = oauth.NewOAuthService(oauthClientRepo, oauthCodeRepo, refreshTokenRepo, userRepo)
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 	}
 

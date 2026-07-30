@@ -164,6 +164,32 @@ func (q *Queries) ClearUpdateRollout(ctx context.Context, arg ClearUpdateRollout
 	return result.RowsAffected(), nil
 }
 
+const consumeOAuthAuthorizationCode = `-- name: ConsumeOAuthAuthorizationCode :one
+UPDATE oauth_authorization_codes
+SET used_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+RETURNING id, client_id, user_id, redirect_uri, code_challenge, scope, created_at, expires_at, used_at
+`
+
+// Single-use claim, atomic on purpose: two exchanges presenting the same code
+// concurrently must not both succeed. The loser gets no row.
+func (q *Queries) ConsumeOAuthAuthorizationCode(ctx context.Context, id pgtype.UUID) (OauthAuthorizationCode, error) {
+	row := q.db.QueryRow(ctx, consumeOAuthAuthorizationCode, id)
+	var i OauthAuthorizationCode
+	err := row.Scan(
+		&i.ID,
+		&i.ClientID,
+		&i.UserID,
+		&i.RedirectUri,
+		&i.CodeChallenge,
+		&i.Scope,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.UsedAt,
+	)
+	return i, err
+}
+
 const consumeRefreshToken = `-- name: ConsumeRefreshToken :one
 UPDATE refresh_tokens
 SET used_at = CURRENT_TIMESTAMP, replaced_by = $1

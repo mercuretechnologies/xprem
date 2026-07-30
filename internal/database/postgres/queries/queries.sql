@@ -2285,3 +2285,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: DeleteExpiredOAuthAuthorizationCodes :exec
 DELETE FROM oauth_authorization_codes WHERE expires_at < CURRENT_TIMESTAMP;
+
+-- name: ConsumeOAuthAuthorizationCode :one
+-- Single-use claim, atomic on purpose: two exchanges presenting the same code
+-- concurrently must not both succeed. The loser gets no row.
+UPDATE oauth_authorization_codes
+SET used_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+RETURNING *;

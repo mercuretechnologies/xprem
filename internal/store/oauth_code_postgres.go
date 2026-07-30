@@ -10,6 +10,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// OAuthAuthorizationCode is the consent context a consumed code was frozen
+// with; the token exchange verifies the request against it.
+type OAuthAuthorizationCode struct {
+	ID            string
+	ClientID      string
+	UserID        string
+	RedirectURI   string
+	CodeChallenge string
+	Scope         string
+	ExpiresAt     time.Time
+}
+
 type InsertOAuthAuthorizationCodeParameters struct {
 	ID            string
 	ClientID      string
@@ -43,6 +55,28 @@ func (s *PostgresOAuthCodeStore) InsertOAuthAuthorizationCode(ctx context.Contex
 		return fmt.Errorf("failed to insert oauth authorization code into database: %w", err)
 	}
 	return nil
+}
+
+// ConsumeOAuthAuthorizationCode claims a code, atomically and exactly once.
+// ErrResourceNotFound means it was not claimable: unknown, expired, or
+// already exchanged.
+func (s *PostgresOAuthCodeStore) ConsumeOAuthAuthorizationCode(ctx context.Context, id string) (OAuthAuthorizationCode, error) {
+	row, err := s.engine.Queries.ConsumeOAuthAuthorizationCode(ctx, ToPgUUID(id))
+	if err != nil {
+		if database.IsNoRows(err) {
+			return OAuthAuthorizationCode{}, &ErrResourceNotFound{Resource: "oauth authorization code", Identifier: id}
+		}
+		return OAuthAuthorizationCode{}, fmt.Errorf("failed to consume oauth authorization code in database: %w", err)
+	}
+	return OAuthAuthorizationCode{
+		ID:            row.ID.String(),
+		ClientID:      row.ClientID.String(),
+		UserID:        row.UserID.String(),
+		RedirectURI:   row.RedirectUri,
+		CodeChallenge: row.CodeChallenge,
+		Scope:         row.Scope,
+		ExpiresAt:     row.ExpiresAt.Time,
+	}, nil
 }
 
 // DeleteExpiredOAuthAuthorizationCodes purges dead codes; called inline when a

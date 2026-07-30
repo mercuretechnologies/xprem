@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeClientRepo struct {
@@ -30,11 +31,37 @@ func (f *fakeClientRepo) GetOAuthClient(_ context.Context, id string) (store.OAu
 
 type fakeCodeRepo struct {
 	inserted []store.InsertOAuthAuthorizationCodeParameters
+	consumed map[string]bool
 }
 
 func (f *fakeCodeRepo) InsertOAuthAuthorizationCode(_ context.Context, params store.InsertOAuthAuthorizationCodeParameters) error {
 	f.inserted = append(f.inserted, params)
 	return nil
+}
+
+func (f *fakeCodeRepo) ConsumeOAuthAuthorizationCode(_ context.Context, id string) (store.OAuthAuthorizationCode, error) {
+	for i, params := range f.inserted {
+		if params.ID != id {
+			continue
+		}
+		if f.consumed[id] || time.Now().After(params.ExpiresAt) {
+			break
+		}
+		if f.consumed == nil {
+			f.consumed = map[string]bool{}
+		}
+		f.consumed[id] = true
+		return store.OAuthAuthorizationCode{
+			ID:            params.ID,
+			ClientID:      params.ClientID,
+			UserID:        params.UserID,
+			RedirectURI:   params.RedirectURI,
+			CodeChallenge: params.CodeChallenge,
+			Scope:         params.Scope,
+			ExpiresAt:     f.inserted[i].ExpiresAt,
+		}, nil
+	}
+	return store.OAuthAuthorizationCode{}, &store.ErrResourceNotFound{Resource: "oauth authorization code", Identifier: id}
 }
 
 func (f *fakeCodeRepo) DeleteExpiredOAuthAuthorizationCodes(_ context.Context) error {
@@ -54,7 +81,7 @@ func newTestHandlerWithCodes(t *testing.T) (*OAuthHandler, *fakeClientRepo, *fak
 	codeRepo := &fakeCodeRepo{}
 	// A nil limiter allows everything; rate limiting has its own tests, and
 	// token verification (the userRepo) has its own in internal/middleware.
-	return NewOAuthHandler(NewOAuthService(clientRepo, codeRepo, nil), nil), clientRepo, codeRepo
+	return NewOAuthHandler(NewOAuthService(clientRepo, codeRepo, nil, nil), nil), clientRepo, codeRepo
 }
 
 func decodeJSON(t *testing.T, res *httptest.ResponseRecorder) map[string]interface{} {

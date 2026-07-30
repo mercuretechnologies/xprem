@@ -32,6 +32,10 @@ func (f *fakeOAuthUserRepo) GetUserByID(_ context.Context, id string) (store.Use
 	return f.user, nil
 }
 
+func (f *fakeOAuthUserRepo) BumpUserSessionVersion(_ context.Context, _ string) error {
+	return nil
+}
+
 // principalCapture records what the middleware put in the context of the
 // request that reached the wrapped handler.
 type principalCapture struct {
@@ -42,7 +46,7 @@ func oauthTestSetup(t *testing.T, repo *fakeOAuthUserRepo) (*oauth.OAuthService,
 	t.Helper()
 	t.Setenv("BASE_URL", "https://ota.example.com")
 	t.Setenv("JWT_SECRET", "test-secret")
-	service := oauth.NewOAuthService(nil, nil, repo)
+	service := oauth.NewOAuthService(nil, nil, nil, repo)
 
 	capture := &principalCapture{}
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

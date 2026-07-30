@@ -206,6 +206,64 @@ func (h *OAuthHandler) ConsentHandler(w http.ResponseWriter, r *http.Request) {
 	handlers.RenderJSON(w, http.StatusOK, map[string]string{"redirectUrl": redirectURL})
 }
 
+// TokenHandler implements the token endpoint for the authorization_code and
+// refresh_token grants (RFC 6749 request and error shapes).
+func (h *OAuthHandler) TokenHandler(w http.ResponseWriter, r *http.Request) {
+	// Tokens in the body: no cache anywhere.
+	w.Header().Set("Cache-Control", "no-store")
+	clientIP := helpers.ClientIP(r)
+	if decision := h.limiter.CheckRefresh(clientIP); !decision.Allowed {
+		handlers.RenderThrottled(w, decision.RetryAfter)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		renderTokenError(w, "invalid_request", "request body is not a valid form")
+		return
+	}
+
+	var response *TokenResponse
+	var err error
+	switch r.PostForm.Get("grant_type") {
+	case "authorization_code":
+		response, err = h.service.ExchangeAuthorizationCode(r.Context(), ExchangeAuthorizationCodeRequest{
+			Code:         r.PostForm.Get("code"),
+			ClientID:     r.PostForm.Get("client_id"),
+			RedirectURI:  r.PostForm.Get("redirect_uri"),
+			CodeVerifier: r.PostForm.Get("code_verifier"),
+			Resource:     r.PostForm.Get("resource"),
+		})
+	case "refresh_token":
+		response, err = h.service.RefreshAccessToken(r.Context(), r.PostForm.Get("refresh_token"))
+	default:
+		renderTokenError(w, "unsupported_grant_type", "supported grant types are authorization_code and refresh_token")
+		return
+	}
+	if err != nil {
+		if errors.Is(err, ErrInvalidGrant) {
+			h.limiter.RecordRefreshFailure(clientIP)
+			renderTokenError(w, "invalid_grant", "the grant is invalid, expired, or was already used")
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "Could not process the token request, try again later")
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, map[string]interface{}{
+		"access_token":  response.AccessToken,
+		"token_type":    "Bearer",
+		"expires_in":    response.ExpiresIn,
+		"refresh_token": response.RefreshToken,
+		"scope":         response.Scope,
+	})
+}
+
+// renderTokenError uses the RFC 6749 error shape, which token clients parse.
+func renderTokenError(w http.ResponseWriter, code string, description string) {
+	handlers.RenderJSON(w, http.StatusBadRequest, map[string]string{
+		"error":             code,
+		"error_description": description,
+	})
+}
+
 // renderRegistrationError uses the RFC 7591 error shape, which registering
 // clients parse, instead of this server's own error envelope.
 func renderRegistrationError(w http.ResponseWriter, description string) {

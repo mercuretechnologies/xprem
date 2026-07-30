@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"expo-open-ota/config"
+	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
 	"fmt"
 	"net/url"
@@ -31,12 +32,16 @@ type ClientRepository interface {
 // CodeRepository is the authorization-code ledger.
 type CodeRepository interface {
 	InsertOAuthAuthorizationCode(ctx context.Context, params store.InsertOAuthAuthorizationCodeParameters) error
+	ConsumeOAuthAuthorizationCode(ctx context.Context, id string) (store.OAuthAuthorizationCode, error)
 	DeleteExpiredOAuthAuthorizationCodes(ctx context.Context) error
 }
 
-// UserRepository is the slice of the users table token verification needs.
+// UserRepository is the slice of the users table the token flows need.
 type UserRepository interface {
 	GetUserByID(ctx context.Context, id string) (store.User, error)
+	// BumpUserSessionVersion is the replay response: it retires every session
+	// of the account, dashboard included.
+	BumpUserSessionVersion(ctx context.Context, id string) error
 }
 
 // Client is a registered OAuth client: a public client (no secret) pinned to
@@ -48,18 +53,20 @@ type Client struct {
 }
 
 type OAuthService struct {
-	clientRepo ClientRepository
-	codeRepo   CodeRepository
-	userRepo   UserRepository
-	secret     string
+	clientRepo  ClientRepository
+	codeRepo    CodeRepository
+	refreshRepo services.RefreshTokenRepository
+	userRepo    UserRepository
+	secret      string
 }
 
-func NewOAuthService(clientRepo ClientRepository, codeRepo CodeRepository, userRepo UserRepository) *OAuthService {
+func NewOAuthService(clientRepo ClientRepository, codeRepo CodeRepository, refreshRepo services.RefreshTokenRepository, userRepo UserRepository) *OAuthService {
 	return &OAuthService{
-		clientRepo: clientRepo,
-		codeRepo:   codeRepo,
-		userRepo:   userRepo,
-		secret:     config.GetEnv("JWT_SECRET"),
+		clientRepo:  clientRepo,
+		codeRepo:    codeRepo,
+		refreshRepo: refreshRepo,
+		userRepo:    userRepo,
+		secret:      config.GetEnv("JWT_SECRET"),
 	}
 }
 
