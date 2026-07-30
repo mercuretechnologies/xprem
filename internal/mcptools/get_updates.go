@@ -101,7 +101,13 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 		output := GetUpdatesOutput{Updates: updates}
 		if len(updates) > limit {
 			output.Updates = updates[:limit]
-			output.NextCursor = types.EncodeUpdateFeedCursor(output.Updates[len(output.Updates)-1])
+			cursor, err := types.EncodeUpdateFeedCursor(output.Updates[len(output.Updates)-1])
+			if err != nil {
+				// The page is valid; only paging past it is not. Answer it
+				// without a cursor rather than failing the call.
+				log.Printf("mcp get_updates could not encode the cursor for app %s: %v", input.AppId, err)
+			}
+			output.NextCursor = cursor
 		}
 		return nil, output, nil
 	}

@@ -392,7 +392,13 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 	page := types.UpdateFeedPage{Items: updates}
 	if len(updates) > limit {
 		page.Items = updates[:limit]
-		page.NextCursor = types.EncodeUpdateFeedCursor(page.Items[len(page.Items)-1])
+		cursor, err := types.EncodeUpdateFeedCursor(page.Items[len(page.Items)-1])
+		if err != nil {
+			// The page is valid; only paging past it is not. Serving it
+			// without a cursor beats failing the whole request.
+			log.Printf("could not encode the update feed cursor for app %s: %v", appId, err)
+		}
+		page.NextCursor = cursor
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
