@@ -48,5 +48,6 @@ func registerGetApps(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_apps",
 		Description: "The apps this account can see, with their id and name. Apps not listed are not visible to this account. Use the id as the appId argument of the other tools.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "List apps", ReadOnlyHint: true},
 	}, getAppsHandler(deps))
 }

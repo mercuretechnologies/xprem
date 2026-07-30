@@ -89,5 +89,6 @@ func registerGetServerConfig(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_server_config",
 		Description: "This deployment's configuration, as the dashboard settings page shows it: base URL, server version, control plane, cache/redis, storage and buckets, CDN (resolved type and base URL), Prometheus, SSO. Key-like values are masked. Use get_apps for the app list.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "Server configuration", ReadOnlyHint: true},
 	}, getServerConfigHandler(deps))
 }

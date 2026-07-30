@@ -66,11 +66,6 @@ func (h *ChannelHandler) CreateChannelHandler(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
 
-	channelsCacheKey := dashboard.ComputeGetChannelsCacheKey(appId)
-	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(appId)
-	cache := cache2.GetCache()
-	cache.Delete(channelsCacheKey)
-	cache.Delete(branchesCacheKey)
 }
 
 func (h *ChannelHandler) DeleteChannelHandler(w http.ResponseWriter, r *http.Request) {
@@ -97,11 +92,6 @@ func (h *ChannelHandler) DeleteChannelHandler(w http.ResponseWriter, r *http.Req
 	}
 	w.WriteHeader(http.StatusNoContent)
 
-	channelsCacheKey := dashboard.ComputeGetChannelsCacheKey(appId)
-	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(appId)
-	cache := cache2.GetCache()
-	cache.Delete(channelsCacheKey)
-	cache.Delete(branchesCacheKey)
 }
 
 func (h *ChannelHandler) GetChannelsHandler(w http.ResponseWriter, r *http.Request) {

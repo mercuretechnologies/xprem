@@ -111,5 +111,6 @@ func registerGetUpdates(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_updates",
 		Description: "The published updates of an app (appId required), newest first, max 50 per call. Narrow with branch, runtimeVersion, platform, updateUUID, publishGroup, commitHash, or a from/to date range; when nextCursor is present, pass it back as cursor for the next page.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "List updates", ReadOnlyHint: true},
 	}, getUpdatesHandler(deps))
 }

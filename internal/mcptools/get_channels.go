@@ -61,6 +61,7 @@ func registerGetChannels(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_channels",
 		Description: "The release channels of an app (appId required, from get_apps), with their linked branch, current updates, and the active progressive rollout if any. Pass name or id to fetch a single channel.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "List channels", ReadOnlyHint: true},
 	}, getChannelsHandler(deps))
 }
 
@@ -108,5 +109,6 @@ func registerGetChannelRollouts(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_channel_rollouts",
 		Description: "The active progressive rollouts between branches on the channels of an app (appId required). An empty list means no channel rollout is in progress. Pass name or id to check a single channel.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "Channel rollouts", ReadOnlyHint: true},
 	}, getChannelRolloutsHandler(deps))
 }

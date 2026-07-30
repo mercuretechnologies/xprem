@@ -47,5 +47,6 @@ func registerWhoami(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "whoami",
 		Description: "The account this MCP connection acts as, with its full permission picture: role, and for each app the account can see, every permission granted or denied. Apps not listed are not visible to this account. Every other tool runs with these permissions.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "Current account", ReadOnlyHint: true},
 	}, whoamiHandler(deps))
 }

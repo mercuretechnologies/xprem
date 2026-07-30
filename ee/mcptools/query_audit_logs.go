@@ -138,5 +138,6 @@ func registerQueryAuditLogs(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "query_audit_logs",
 		Description: "The deployment's audit log (admin only), newest first, max 100 per call. Narrow with actorId, action, appId, outcome, or a from/to range; page older events by passing nextCursor back as beforeId.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "Audit log", ReadOnlyHint: true},
 	}, queryAuditLogsHandler(deps))
 }

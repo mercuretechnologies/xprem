@@ -23,14 +23,9 @@ type GetCertificateOutput struct {
 
 func getCertificateHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolRequest, input GetCertificateInput) (*mcpprot.CallToolResult, GetCertificateOutput, error) {
 	return func(ctx context.Context, req *mcpprot.CallToolRequest, input GetCertificateInput) (*mcpprot.CallToolResult, GetCertificateOutput, error) {
-		principal := PrincipalFromRequest(req)
-		if principal == nil {
-			return nil, GetCertificateOutput{}, errors.New("no authenticated account on this session")
-		}
-		if input.AppId == "" {
-			return nil, GetCertificateOutput{}, errors.New("appId is required; list the apps with get_apps")
-		}
-		if err := deps.Authorize(ctx, principal, input.AppId, certificateAccess); err != nil {
+		// This read is audited by the service, hence the principal-bearing ctx.
+		ctx, _, err := requireAppPermission(ctx, deps, req, input.AppId, certificateAccess)
+		if err != nil {
 			return nil, GetCertificateOutput{}, err
 		}
 		certificate, err := deps.Certificates.RetrieveAppCertificate(ctx, input.AppId)
@@ -46,5 +41,6 @@ func registerGetCertificate(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_certificate",
 		Description: "The public code-signing certificate of an app (appId required), PEM-encoded. Requires the certificate:read permission on the app; the download is recorded in the audit log.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "App certificate", ReadOnlyHint: true},
 	}, getCertificateHandler(deps))
 }

@@ -57,6 +57,7 @@ func registerGetBranches(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_branches",
 		Description: "The branches of an app (appId required, from get_apps), with their release channel, protection flag and current update. Pass name or id to fetch a single branch.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "List branches", ReadOnlyHint: true},
 	}, getBranchesHandler(deps))
 }
 
@@ -94,5 +95,6 @@ func registerGetRuntimeVersions(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_runtime_versions",
 		Description: "The runtime versions published on a branch (appId and branch name required, from get_branches), with update counts, last publication date and active rollout state.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "List runtime versions", ReadOnlyHint: true},
 	}, getRuntimeVersionsHandler(deps))
 }

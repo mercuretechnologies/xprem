@@ -53,5 +53,6 @@ func registerGetUpdateRollout(server *mcpprot.Server, deps Deps) {
 	mcpprot.AddTool(server, &mcpprot.Tool{
 		Name:        "get_update_rollout",
 		Description: "The progressive rollout state of the latest update on one branch and runtime version (appId, branch and runtimeVersion required): the rolled-out percentage per platform, or active=false when no rollout is in progress.",
+		Annotations: &mcpprot.ToolAnnotations{Title: "Update rollout state", ReadOnlyHint: true},
 	}, getUpdateRolloutHandler(deps))
 }

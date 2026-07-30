@@ -6,6 +6,7 @@ package rbac
 
 import (
 	"context"
+	eemcptools "expo-open-ota/ee/mcptools"
 	"expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/services"
 	"testing"
@@ -45,4 +46,14 @@ func TestMCPDecisionFunctions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "admin", adminDescription.Role)
 	require.Len(t, adminDescription.Apps[0].Granted, len(AllPermissions))
+}
+
+func TestMustValidateMCPTools(t *testing.T) {
+	// The permissions the shipped tool tables declare must all exist.
+	require.NotPanics(t, func() {
+		MustValidateMCPTools(mcptools.DeclaredPermissions(), eemcptools.DeclaredPermissions())
+	})
+	require.Panics(t, func() {
+		MustValidateMCPTools([]string{"certificat:read"})
+	})
 }

@@ -79,3 +79,17 @@ func permissionNames(permissions []Permission) []string {
 	}
 	return names
 }
+
+// MustValidateMCPTools checks that every permission the MIT tool tables gate
+// on exists in this catalog, and panics at boot otherwise. The tool packages
+// are MIT and hold those permissions as plain strings; this is what keeps a
+// typo from silently turning a tool admin-only.
+func MustValidateMCPTools(declared ...[]string) {
+	for _, perms := range declared {
+		for _, perm := range perms {
+			if !IsValidPermission(perm) {
+				panic("mcp tools: unknown permission " + perm)
+			}
+		}
+	}
+}

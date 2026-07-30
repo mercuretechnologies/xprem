@@ -3,12 +3,22 @@ package services
 import (
 	"context"
 	"expo-open-ota/internal/auditlog"
+	"expo-open-ota/internal/cache"
+	"expo-open-ota/internal/dashboard"
 	"expo-open-ota/internal/providers/expo"
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/validation"
 	"fmt"
 	"strconv"
 )
+
+// invalidateChannelCaches drops the dashboard list caches a channel write
+// stales, so every write surface (dashboard, MCP) stays coherent.
+func invalidateChannelCaches(appId string) {
+	appCache := cache.GetCache()
+	appCache.Delete(dashboard.ComputeGetChannelsCacheKey(appId))
+	appCache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
+}
 
 type ChannelService struct {
 	branchRepo  BranchRepository
@@ -74,6 +84,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, appId string, branch
 		AppID:         appId,
 		Metadata:      metadata,
 	})
+	invalidateChannelCaches(appId)
 	return channelId, nil
 }
 
@@ -92,6 +103,7 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelName string, 
 		TargetDisplay: channelName,
 		AppID:         appId,
 	})
+	invalidateChannelCaches(appId)
 	return nil
 }
 

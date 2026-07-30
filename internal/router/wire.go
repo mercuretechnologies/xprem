@@ -257,6 +257,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		oauthService = oauth.NewOAuthService(oauthClientRepo, oauthCodeRepo, refreshTokenRepo, userRepo)
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 
+		rbac.MustValidateMCPTools(mcptools.DeclaredPermissions(), eemcptools.DeclaredPermissions())
 		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService(
 			mcptools.Configurator(mcptools.Deps{
 				Apps:                appRepo,
@@ -265,6 +266,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				UpdateFeed:          updateService,
 				UpdateRollouts:      rolloutService,
 				Certificates:        appService,
+				BranchWriter:        branchService,
+				ChannelWriter:       channelService,
+				Deployments:         deploymentService,
 				SSOEnabled:          ssoService.Enabled,
 				VisibleApps:         rbacService.VisibleAppsForPrincipal,
 				CanUseSomewhere:     rbacService.MCPCanUseSomewhere,

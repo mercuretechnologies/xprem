@@ -33,6 +33,18 @@ var registrations = []struct {
 	{register: registerQueryAuditLogs, access: &mittools.Access{Fallback: mittools.FallbackAdminOnly}},
 }
 
+// DeclaredPermissions lists the permission strings this table gates on, for
+// the boot-time catalog check (see rbac.MustValidateMCPTools).
+func DeclaredPermissions() []string {
+	perms := make([]string, 0, len(registrations))
+	for _, registration := range registrations {
+		if registration.access != nil && registration.access.Perm != "" {
+			perms = append(perms, registration.access.Perm)
+		}
+	}
+	return perms
+}
+
 // Configurator populates one session's server with the enterprise tools its
 // principal may use.
 func Configurator(deps Deps) func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server) {

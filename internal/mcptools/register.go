@@ -71,6 +71,22 @@ type CertificateReader interface {
 	RetrieveAppCertificate(ctx context.Context, appId string) (string, error)
 }
 
+type BranchWriter interface {
+	CreateBranch(ctx context.Context, appId string, branchName string) (int64, error)
+	DeleteBranch(ctx context.Context, branchName string, appId string) error
+}
+
+type ChannelWriter interface {
+	CreateChannel(ctx context.Context, appId string, branchName *string, channelName string) (int64, error)
+	DeleteChannel(ctx context.Context, channelName string, appId string) error
+}
+
+type DeploymentWriter interface {
+	CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
+	RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error)
+	RepublishPublishGroup(ctx context.Context, appId, branchName, runtimeVersion, publishGroup string) (*services.GroupOperationResult, error)
+}
+
 // Deps carries what tools need from the composition root: MIT data access
 // injected as-is, and decision functions whose implementations live in ee.
 // Every field is a plain method value; wire assembles the struct without a
@@ -83,6 +99,9 @@ type Deps struct {
 	UpdateFeed     UpdateFeedReader
 	UpdateRollouts UpdateRolloutReader
 	Certificates   CertificateReader
+	BranchWriter   BranchWriter
+	ChannelWriter  ChannelWriter
+	Deployments    DeploymentWriter
 	// SSOEnabled reports whether enterprise SSO is active; get_server_config
 	// surfaces it.
 	SSOEnabled func(ctx context.Context) bool
@@ -116,6 +135,26 @@ var registrations = []struct {
 	{register: registerGetUpdateRollout},
 	{register: registerGetCertificate, access: &certificateAccess},
 	{register: registerGetServerConfig},
+	{register: registerCreateBranch, access: &branchCreateAccess},
+	{register: registerDeleteBranch, access: &branchDeleteAccess},
+	{register: registerCreateChannel, access: &channelCreateAccess},
+	{register: registerDeleteChannel, access: &channelDeleteAccess},
+	{register: registerRollback, access: &publishAccess},
+	{register: registerRepublish, access: &publishAccess},
+}
+
+// DeclaredPermissions lists the permission strings the tool table gates on.
+// This package is MIT and cannot import the ee catalog those strings belong
+// to, so ee validates them against it at boot (see rbac.MustValidateMCPTools):
+// a typo here would silently make a tool admin-only instead of failing.
+func DeclaredPermissions() []string {
+	perms := make([]string, 0, len(registrations))
+	for _, registration := range registrations {
+		if registration.access != nil && registration.access.Perm != "" {
+			perms = append(perms, registration.access.Perm)
+		}
+	}
+	return perms
 }
 
 // Configurator returns what NewMCPService needs: a function that populates
