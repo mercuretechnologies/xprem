@@ -529,6 +529,15 @@ func (q *Queries) DeleteEnterpriseLicense(ctx context.Context) error {
 	return err
 }
 
+const deleteExpiredOAuthAuthorizationCodes = `-- name: DeleteExpiredOAuthAuthorizationCodes :exec
+DELETE FROM oauth_authorization_codes WHERE expires_at < CURRENT_TIMESTAMP
+`
+
+func (q *Queries) DeleteExpiredOAuthAuthorizationCodes(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredOAuthAuthorizationCodes)
+	return err
+}
+
 const deleteExpiredRefreshTokensForUser = `-- name: DeleteExpiredRefreshTokensForUser :exec
 DELETE FROM refresh_tokens
 WHERE user_id = $1
@@ -1610,6 +1619,22 @@ func (q *Queries) GetLatestUpdateWithRollout(ctx context.Context, arg GetLatestU
 	return i, err
 }
 
+const getOAuthClient = `-- name: GetOAuthClient :one
+SELECT id, name, redirect_uris, created_at FROM oauth_clients WHERE id = $1
+`
+
+func (q *Queries) GetOAuthClient(ctx context.Context, id pgtype.UUID) (OauthClient, error) {
+	row := q.db.QueryRow(ctx, getOAuthClient, id)
+	var i OauthClient
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.RedirectUris,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRefreshToken = `-- name: GetRefreshToken :one
 SELECT id, user_id, family_id, created_at, expires_at, used_at, replaced_by,
        (used_at IS NOT NULL AND used_at > CURRENT_TIMESTAMP - $1::interval) AS used_recently
@@ -2661,6 +2686,34 @@ func (q *Queries) InsertChannelRollout(ctx context.Context, arg InsertChannelRol
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertOAuthAuthorizationCode = `-- name: InsertOAuthAuthorizationCode :exec
+INSERT INTO oauth_authorization_codes (id, client_id, user_id, redirect_uri, code_challenge, scope, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertOAuthAuthorizationCodeParams struct {
+	ID            pgtype.UUID        `json:"id"`
+	ClientID      pgtype.UUID        `json:"client_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertOAuthAuthorizationCode(ctx context.Context, arg InsertOAuthAuthorizationCodeParams) error {
+	_, err := q.db.Exec(ctx, insertOAuthAuthorizationCode,
+		arg.ID,
+		arg.ClientID,
+		arg.UserID,
+		arg.RedirectUri,
+		arg.CodeChallenge,
+		arg.Scope,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const insertOAuthClient = `-- name: InsertOAuthClient :exec

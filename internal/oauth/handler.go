@@ -7,10 +7,16 @@ import (
 	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/helpers"
 	"expo-open-ota/internal/ratelimit"
+	"expo-open-ota/internal/services"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// consentPath is the dashboard route the authorize endpoint bounces to; the
+// SPA holds the session (localStorage), so only it can ask who is consenting.
+const consentPath = "/dashboard/oauth/consent"
 
 // The single coarse scope this server issues; finer scopes wait until the MCP
 // server exposes tools worth splitting over.
@@ -124,6 +130,80 @@ func (h *OAuthHandler) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		"response_types":             []string{"code"},
 		"client_id_issued_at":        time.Now().Unix(),
 	})
+}
+
+func authorizationRequestFromValues(values url.Values) AuthorizationRequest {
+	return AuthorizationRequest{
+		ClientID:            values.Get("client_id"),
+		RedirectURI:         values.Get("redirect_uri"),
+		ResponseType:        values.Get("response_type"),
+		CodeChallenge:       values.Get("code_challenge"),
+		CodeChallengeMethod: values.Get("code_challenge_method"),
+		Scope:               values.Get("scope"),
+		State:               values.Get("state"),
+		Resource:            values.Get("resource"),
+	}
+}
+
+// AuthorizeHandler validates an authorization request and bounces it to the
+// consent screen. Invalid requests are answered in place, never redirected:
+// the redirect_uri cannot be trusted before it is validated.
+func (h *OAuthHandler) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
+	req := authorizationRequestFromValues(r.URL.Query())
+	client, err := h.service.ValidateAuthorizationRequest(r.Context(), req)
+	if err != nil {
+		if errors.Is(err, ErrInvalidAuthorizationRequest) {
+			handlers.RenderError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "Could not validate the authorization request, try again later")
+		return
+	}
+
+	consent := url.Values{}
+	consent.Set("client_id", req.ClientID)
+	// The registered name, resolved server-side for the consent screen; a
+	// name in the query could be forged.
+	consent.Set("client_name", client.Name)
+	consent.Set("redirect_uri", req.RedirectURI)
+	consent.Set("response_type", req.ResponseType)
+	consent.Set("code_challenge", req.CodeChallenge)
+	consent.Set("code_challenge_method", req.CodeChallengeMethod)
+	if req.Scope != "" {
+		consent.Set("scope", req.Scope)
+	}
+	if req.State != "" {
+		consent.Set("state", req.State)
+	}
+	if req.Resource != "" {
+		consent.Set("resource", req.Resource)
+	}
+	http.Redirect(w, r, baseURL()+consentPath+"?"+consent.Encode(), http.StatusFound)
+}
+
+// ConsentHandler turns an approved consent into an authorization code. It sits
+// behind the dashboard auth middleware; the caller is the consent screen
+// acting with the user's own session.
+func (h *OAuthHandler) ConsentHandler(w http.ResponseWriter, r *http.Request) {
+	principal := services.PrincipalFromContext(r.Context())
+	if principal == nil {
+		handlers.RenderError(w, http.StatusUnauthorized, "This action requires a dashboard session")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		handlers.RenderError(w, http.StatusBadRequest, "invalid form body")
+		return
+	}
+	redirectURL, err := h.service.CreateAuthorizationCode(r.Context(), principal.UserId, authorizationRequestFromValues(r.PostForm))
+	if err != nil {
+		if errors.Is(err, ErrInvalidAuthorizationRequest) {
+			handlers.RenderError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "Could not record the consent, try again later")
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, map[string]string{"redirectUrl": redirectURL})
 }
 
 // renderRegistrationError uses the RFC 7591 error shape, which registering

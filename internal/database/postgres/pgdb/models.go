@@ -168,6 +168,18 @@ type IdentityValueStat struct {
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type OauthAuthorizationCode struct {
+	ID            pgtype.UUID        `json:"id"`
+	ClientID      pgtype.UUID        `json:"client_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	UsedAt        pgtype.Timestamptz `json:"used_at"`
+}
+
 type OauthClient struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

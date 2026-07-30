@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"expo-open-ota/internal/middleware"
 	"expo-open-ota/internal/oauth"
 	"net/http"
 
@@ -23,4 +24,17 @@ func registerOAuthRoutes(r *mux.Router, container *AppContainer) {
 	r.HandleFunc("/.well-known/oauth-authorization-server", oauth.WithCORS(h.AuthorizationServerMetadataHandler)).Methods(http.MethodGet, http.MethodOptions)
 
 	r.HandleFunc("/oauth/register", oauth.WithCORS(h.RegisterHandler)).Methods(http.MethodPost, http.MethodOptions)
+	// Top-level browser navigation, no CORS involved.
+	r.HandleFunc("/oauth/authorize", h.AuthorizeHandler).Methods(http.MethodGet)
+}
+
+// registerOAuthApiRoutes mounts the consent endpoint behind the dashboard
+// session; api is the authenticated /api subrouter.
+func registerOAuthApiRoutes(api *mux.Router, container *AppContainer) {
+	if container.OAuthHandler == nil {
+		return
+	}
+	consentRouter := api.PathPrefix("/oauth").Subrouter()
+	consentRouter.Use(middleware.NewDashboardOnlyMiddleware())
+	consentRouter.HandleFunc("/consent", container.OAuthHandler.ConsentHandler).Methods(http.MethodPost)
 }

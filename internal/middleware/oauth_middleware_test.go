@@ -42,7 +42,7 @@ func oauthTestSetup(t *testing.T, repo *fakeOAuthUserRepo) (*oauth.OAuthService,
 	t.Helper()
 	t.Setenv("BASE_URL", "https://ota.example.com")
 	t.Setenv("JWT_SECRET", "test-secret")
-	service := oauth.NewOAuthService(nil, repo)
+	service := oauth.NewOAuthService(nil, nil, repo)
 
 	capture := &principalCapture{}
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

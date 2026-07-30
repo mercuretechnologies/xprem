@@ -49,6 +49,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 	// license, SSO, app creation).
 	adminOnly := middleware.NewAdminMiddleware(container.UserRepo)
 
+	registerOAuthApiRoutes(apiSubrouter, container)
 	registerAccountRoutes(apiSubrouter, container, adminOnly)
 	registerAppRoutes(apiSubrouter, container)
 

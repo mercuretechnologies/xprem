@@ -7,6 +7,14 @@ import (
 	"fmt"
 )
 
+// OAuthClient is a dynamically registered OAuth client: a public client
+// pinned to the redirect URIs it declared at registration.
+type OAuthClient struct {
+	Id           string
+	Name         string
+	RedirectURIs []string
+}
+
 type InsertOAuthClientParameters struct {
 	ID           string
 	Name         string
@@ -21,6 +29,21 @@ func NewPostgresOAuthClientStore(engine *database.Engine) *PostgresOAuthClientSt
 	return &PostgresOAuthClientStore{
 		engine: engine,
 	}
+}
+
+func (s *PostgresOAuthClientStore) GetOAuthClient(ctx context.Context, id string) (OAuthClient, error) {
+	row, err := s.engine.Queries.GetOAuthClient(ctx, ToPgUUID(id))
+	if err != nil {
+		if database.IsNoRows(err) {
+			return OAuthClient{}, &ErrResourceNotFound{Resource: "oauth client", Identifier: id}
+		}
+		return OAuthClient{}, fmt.Errorf("failed to retrieve oauth client from database: %w", err)
+	}
+	return OAuthClient{
+		Id:           row.ID.String(),
+		Name:         row.Name,
+		RedirectURIs: row.RedirectUris,
+	}, nil
 }
 
 func (s *PostgresOAuthClientStore) InsertOAuthClient(ctx context.Context, params InsertOAuthClientParameters) error {

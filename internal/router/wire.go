@@ -85,6 +85,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var userRepo services.UserRepository
 	var refreshTokenRepo services.RefreshTokenRepository
 	var oauthClientRepo oauth.ClientRepository
+	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
 	var licenseRepo licensing.LicenseRepository
@@ -138,6 +139,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		userRepo = store.NewPostgresUserStore(dbEngine)
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
 		oauthClientRepo = store.NewPostgresOAuthClientStore(dbEngine)
+		oauthCodeRepo = store.NewPostgresOAuthCodeStore(dbEngine)
 		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService())
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
@@ -251,7 +253,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthService *oauth.OAuthService
 	var oauthHandler *oauth.OAuthHandler
 	if oauthClientRepo != nil {
-		oauthService = oauth.NewOAuthService(oauthClientRepo, userRepo)
+		oauthService = oauth.NewOAuthService(oauthClientRepo, oauthCodeRepo, userRepo)
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 	}
 

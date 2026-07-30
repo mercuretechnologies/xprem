@@ -19,13 +19,42 @@ func (f *fakeClientRepo) InsertOAuthClient(_ context.Context, params store.Inser
 	return nil
 }
 
+func (f *fakeClientRepo) GetOAuthClient(_ context.Context, id string) (store.OAuthClient, error) {
+	for _, params := range f.inserted {
+		if params.ID == id {
+			return store.OAuthClient{Id: params.ID, Name: params.Name, RedirectURIs: params.RedirectURIs}, nil
+		}
+	}
+	return store.OAuthClient{}, &store.ErrResourceNotFound{Resource: "oauth client", Identifier: id}
+}
+
+type fakeCodeRepo struct {
+	inserted []store.InsertOAuthAuthorizationCodeParameters
+}
+
+func (f *fakeCodeRepo) InsertOAuthAuthorizationCode(_ context.Context, params store.InsertOAuthAuthorizationCodeParameters) error {
+	f.inserted = append(f.inserted, params)
+	return nil
+}
+
+func (f *fakeCodeRepo) DeleteExpiredOAuthAuthorizationCodes(_ context.Context) error {
+	return nil
+}
+
 func newTestHandler(t *testing.T) (*OAuthHandler, *fakeClientRepo) {
 	t.Helper()
+	handler, clientRepo, _ := newTestHandlerWithCodes(t)
+	return handler, clientRepo
+}
+
+func newTestHandlerWithCodes(t *testing.T) (*OAuthHandler, *fakeClientRepo, *fakeCodeRepo) {
+	t.Helper()
 	t.Setenv("BASE_URL", "https://ota.example.com")
-	repo := &fakeClientRepo{}
+	clientRepo := &fakeClientRepo{}
+	codeRepo := &fakeCodeRepo{}
 	// A nil limiter allows everything; rate limiting has its own tests, and
 	// token verification (the userRepo) has its own in internal/middleware.
-	return NewOAuthHandler(NewOAuthService(repo, nil), nil), repo
+	return NewOAuthHandler(NewOAuthService(clientRepo, codeRepo, nil), nil), clientRepo, codeRepo
 }
 
 func decodeJSON(t *testing.T, res *httptest.ResponseRecorder) map[string]interface{} {

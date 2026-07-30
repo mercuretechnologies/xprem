@@ -25,6 +25,13 @@ var ErrInvalidClientMetadata = errors.New("invalid client metadata")
 
 type ClientRepository interface {
 	InsertOAuthClient(ctx context.Context, params store.InsertOAuthClientParameters) error
+	GetOAuthClient(ctx context.Context, id string) (store.OAuthClient, error)
+}
+
+// CodeRepository is the authorization-code ledger.
+type CodeRepository interface {
+	InsertOAuthAuthorizationCode(ctx context.Context, params store.InsertOAuthAuthorizationCodeParameters) error
+	DeleteExpiredOAuthAuthorizationCodes(ctx context.Context) error
 }
 
 // UserRepository is the slice of the users table token verification needs.
@@ -42,13 +49,15 @@ type Client struct {
 
 type OAuthService struct {
 	clientRepo ClientRepository
+	codeRepo   CodeRepository
 	userRepo   UserRepository
 	secret     string
 }
 
-func NewOAuthService(clientRepo ClientRepository, userRepo UserRepository) *OAuthService {
+func NewOAuthService(clientRepo ClientRepository, codeRepo CodeRepository, userRepo UserRepository) *OAuthService {
 	return &OAuthService{
 		clientRepo: clientRepo,
+		codeRepo:   codeRepo,
 		userRepo:   userRepo,
 		secret:     config.GetEnv("JWT_SECRET"),
 	}

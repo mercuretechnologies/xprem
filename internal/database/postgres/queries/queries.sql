@@ -2275,3 +2275,13 @@ LEFT JOIN LATERAL (
 -- name: InsertOAuthClient :exec
 INSERT INTO oauth_clients (id, name, redirect_uris)
 VALUES ($1, $2, $3);
+
+-- name: GetOAuthClient :one
+SELECT * FROM oauth_clients WHERE id = $1;
+
+-- name: InsertOAuthAuthorizationCode :exec
+INSERT INTO oauth_authorization_codes (id, client_id, user_id, redirect_uri, code_challenge, scope, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: DeleteExpiredOAuthAuthorizationCodes :exec
+DELETE FROM oauth_authorization_codes WHERE expires_at < CURRENT_TIMESTAMP;
