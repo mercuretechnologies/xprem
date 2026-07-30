@@ -3,6 +3,7 @@ package mcptools
 import (
 	"context"
 	"errors"
+	"expo-open-ota/config"
 	"expo-open-ota/internal/services"
 	"testing"
 
@@ -22,18 +23,30 @@ func callToolRequestFor(principal *services.DashboardPrincipal) *mcpprot.CallToo
 	}
 }
 
+type fakeAppLister struct{}
+
+func (fakeAppLister) GetApps(context.Context) ([]config.AppDescriptor, error) {
+	return []config.AppDescriptor{{Id: "app-1"}}, nil
+}
+
 func testDeps() Deps {
 	return Deps{
+		Apps: fakeAppLister{},
+		VisibleApps: func(_ context.Context, _ *services.DashboardPrincipal) (bool, map[string]bool, error) {
+			return false, nil, nil
+		},
 		CanUseSomewhere: func(_ context.Context, principal *services.DashboardPrincipal, _ Access) bool {
 			return principal != nil && principal.IsAdmin
 		},
 		Authorize: func(_ context.Context, _ *services.DashboardPrincipal, _ string, _ Access) error {
 			return errors.New("denied")
 		},
-		DescribePermissions: func(_ context.Context, principal *services.DashboardPrincipal) (AccountPermissions, error) {
-			return AccountPermissions{Role: "member", Apps: []AppPermissions{
-				{AppID: "app-1", Granted: []string{"observe:read"}, Denied: []string{"app:delete"}},
-			}}, nil
+		DescribePermissions: func(_ context.Context, principal *services.DashboardPrincipal, appIDs []string) (AccountPermissions, error) {
+			apps := make([]AppPermissions, len(appIDs))
+			for i, appID := range appIDs {
+				apps[i] = AppPermissions{AppID: appID, Granted: []string{"observe:read"}, Denied: []string{"app:delete"}}
+			}
+			return AccountPermissions{Role: "member", Apps: apps}, nil
 		},
 	}
 }

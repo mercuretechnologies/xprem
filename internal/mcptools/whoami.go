@@ -3,6 +3,7 @@ package mcptools
 import (
 	"context"
 	"errors"
+	"log"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,7 +22,16 @@ func whoamiHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolReq
 		if principal == nil {
 			return nil, WhoamiOutput{}, errors.New("no authenticated account on this session")
 		}
-		permissions, err := deps.DescribePermissions(ctx, principal)
+		apps, err := deps.Apps.GetApps(ctx)
+		if err != nil {
+			log.Printf("mcp whoami could not list apps: %v", err)
+			return nil, WhoamiOutput{}, errors.New("could not resolve the account's permissions, try again later")
+		}
+		appIDs := make([]string, len(apps))
+		for i, app := range apps {
+			appIDs[i] = app.Id
+		}
+		permissions, err := deps.DescribePermissions(ctx, principal, appIDs)
 		if err != nil {
 			return nil, WhoamiOutput{}, errors.New("could not resolve the account's permissions, try again later")
 		}

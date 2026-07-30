@@ -8,6 +8,7 @@ import (
 	"expo-open-ota/ee/branchprotection"
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/ee/licensing"
+	eemcptools "expo-open-ota/ee/mcptools"
 	"expo-open-ota/ee/observe"
 	"expo-open-ota/ee/rbac"
 	"expo-open-ota/ee/sso"
@@ -257,7 +258,16 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 
 		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService(
-			mcptools.Configurator(rbacService.MCPToolDeps(appRepo)),
+			mcptools.Configurator(mcptools.Deps{
+				Apps:                appRepo,
+				VisibleApps:         rbacService.VisibleAppsForPrincipal,
+				CanUseSomewhere:     rbacService.MCPCanUseSomewhere,
+				Authorize:           rbacService.MCPAuthorizeTool,
+				DescribePermissions: rbacService.MCPDescribePermissions,
+			}),
+			eemcptools.Configurator(eemcptools.Deps{
+				CanUseSomewhere: rbacService.MCPCanUseSomewhere,
+			}),
 		))
 	}
 

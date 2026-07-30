@@ -2,6 +2,7 @@ package mcptools
 
 import (
 	"context"
+	"expo-open-ota/config"
 	"expo-open-ota/internal/services"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,10 +40,21 @@ type AccountPermissions struct {
 	Apps          []AppPermissions `json:"apps"`
 }
 
-// Deps carries what tools need from the composition root. The seams keep
-// this package MIT: the rbac logic behind them lives in ee and is injected by
-// wire.
+// AppLister is the slice of the app store the tools need.
+type AppLister interface {
+	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
+}
+
+// Deps carries what tools need from the composition root: MIT data access
+// injected as-is, and decision functions whose implementations live in ee.
+// Every field is a plain method value; wire assembles the struct without a
+// line of logic, and tools compose data with decisions.
 type Deps struct {
+	// Apps is the app store; visibility is decided by VisibleApps, never here.
+	Apps AppLister
+	// VisibleApps is the visibility decision: restricted=false means every
+	// app is visible to the principal.
+	VisibleApps func(ctx context.Context, principal *services.DashboardPrincipal) (restricted bool, visible map[string]bool, err error)
 	// CanUseSomewhere decides tool visibility at session creation: whether
 	// the principal may use an access-gated tool on at least one app.
 	CanUseSomewhere func(ctx context.Context, principal *services.DashboardPrincipal, access Access) bool
@@ -50,8 +62,8 @@ type Deps struct {
 	// as a route guard.
 	Authorize func(ctx context.Context, principal *services.DashboardPrincipal, appID string, access Access) error
 	// DescribePermissions answers whoami: the account's full permission
-	// picture, granted and denied.
-	DescribePermissions func(ctx context.Context, principal *services.DashboardPrincipal) (AccountPermissions, error)
+	// picture over the given apps, granted and denied.
+	DescribePermissions func(ctx context.Context, principal *services.DashboardPrincipal, appIDs []string) (AccountPermissions, error)
 }
 
 // registrations is the tool table: one line per tool, the MCP twin of a
@@ -61,6 +73,7 @@ var registrations = []struct {
 	access   *Access
 }{
 	{register: registerWhoami},
+	{register: registerGetApps},
 }
 
 // Configurator returns what NewMCPService needs: a function that populates

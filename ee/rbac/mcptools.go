@@ -6,70 +6,58 @@ package rbac
 
 import (
 	"context"
-	"expo-open-ota/config"
 	"expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/services"
 	"log"
 )
 
-// AppLister is the slice of the app store the tool deps need.
-type AppLister interface {
-	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
+// The MCP-facing decision functions: each one matches a mcptools.Deps field,
+// speaks the MIT tool vocabulary, and fails closed. Wire assigns them as
+// method values; this package never builds the Deps itself.
+
+// MCPCanUseSomewhere decides tool visibility at session creation.
+func (s *RBACService) MCPCanUseSomewhere(ctx context.Context, principal *services.DashboardPrincipal, access mcptools.Access) bool {
+	if principal == nil {
+		return false
+	}
+	allowed, err := s.HasPermissionSomewhere(ctx, subjectFor(principal), Permission(access.Perm), fallbackFor(access.Fallback))
+	if err != nil {
+		log.Printf("mcp tool visibility check failed for user %s: %v", principal.UserId, err)
+		return false
+	}
+	return allowed
 }
 
-// MCPToolDeps implements the MIT tool seams against this service: tool
-// visibility, per-app authorization, and the whoami permission picture.
-func (s *RBACService) MCPToolDeps(apps AppLister) mcptools.Deps {
-	return mcptools.Deps{
-		CanUseSomewhere: func(ctx context.Context, principal *services.DashboardPrincipal, access mcptools.Access) bool {
-			if principal == nil {
-				return false
-			}
-			allowed, err := s.HasPermissionSomewhere(ctx, subjectFor(principal), Permission(access.Perm), fallbackFor(access.Fallback))
-			if err != nil {
-				log.Printf("mcp tool visibility check failed for user %s: %v", principal.UserId, err)
-				return false
-			}
-			return allowed
-		},
-		Authorize: func(ctx context.Context, principal *services.DashboardPrincipal, appID string, access mcptools.Access) error {
-			if principal == nil {
-				return ErrNoAppAccess
-			}
-			return s.Authorize(ctx, subjectFor(principal), appID, Permission(access.Perm), fallbackFor(access.Fallback))
-		},
-		DescribePermissions: func(ctx context.Context, principal *services.DashboardPrincipal) (mcptools.AccountPermissions, error) {
-			if principal == nil {
-				return mcptools.AccountPermissions{}, ErrNoAppAccess
-			}
-			descriptors, err := apps.GetApps(ctx)
-			if err != nil {
-				log.Printf("mcp whoami could not list apps: %v", err)
-				return mcptools.AccountPermissions{}, err
-			}
-			allAppIDs := make([]string, len(descriptors))
-			for i, descriptor := range descriptors {
-				allAppIDs[i] = descriptor.Id
-			}
-			description, err := s.DescribeAccountPermissions(ctx, subjectFor(principal), allAppIDs)
-			if err != nil {
-				log.Printf("mcp whoami could not describe the permissions of user %s: %v", principal.UserId, err)
-				return mcptools.AccountPermissions{}, err
-			}
-			result := mcptools.AccountPermissions{
-				Role:          description.Role,
-				RolesEnforced: description.RolesEnforced,
-			}
-			for _, app := range description.Apps {
-				result.Apps = append(result.Apps, mcptools.AppPermissions{
-					AppID:   app.AppID,
-					Granted: permissionNames(app.Granted),
-					Denied:  permissionNames(app.Denied),
-				})
-			}
-			return result, nil
-		},
+// MCPAuthorizeTool gates one tool execution on one app.
+func (s *RBACService) MCPAuthorizeTool(ctx context.Context, principal *services.DashboardPrincipal, appID string, access mcptools.Access) error {
+	if principal == nil {
+		return ErrNoAppAccess
 	}
+	return s.Authorize(ctx, subjectFor(principal), appID, Permission(access.Perm), fallbackFor(access.Fallback))
+}
+
+// MCPDescribePermissions answers whoami over the given apps.
+func (s *RBACService) MCPDescribePermissions(ctx context.Context, principal *services.DashboardPrincipal, appIDs []string) (mcptools.AccountPermissions, error) {
+	if principal == nil {
+		return mcptools.AccountPermissions{}, ErrNoAppAccess
+	}
+	description, err := s.DescribeAccountPermissions(ctx, subjectFor(principal), appIDs)
+	if err != nil {
+		log.Printf("mcp whoami could not describe the permissions of user %s: %v", principal.UserId, err)
+		return mcptools.AccountPermissions{}, err
+	}
+	result := mcptools.AccountPermissions{
+		Role:          description.Role,
+		RolesEnforced: description.RolesEnforced,
+	}
+	for _, app := range description.Apps {
+		result.Apps = append(result.Apps, mcptools.AppPermissions{
+			AppID:   app.AppID,
+			Granted: permissionNames(app.Granted),
+			Denied:  permissionNames(app.Denied),
+		})
+	}
+	return result, nil
 }
 
 func subjectFor(principal *services.DashboardPrincipal) Subject {
