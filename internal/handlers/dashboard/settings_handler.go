@@ -61,9 +61,9 @@ type SettingsEnv struct {
 	PRIVATE_CLOUDFRONT_KEY_PATH            string `json:"PRIVATE_CLOUDFRONT_KEY_PATH"`
 	PROMETHEUS_ENABLED                     string `json:"PROMETHEUS_ENABLED"`
 	// CDN_TYPE is the CDN the server actually resolved at boot ("cloudfront",
-	// "gcs-direct", "azure-direct", "generic" or "" when assets are served
-	// directly), so the dashboard can display the effective setup instead of
-	// making the user re-derive it from raw variables.
+	// "gcs-direct", "s3-direct", "azure-direct", "generic" or "" when assets
+	// are served directly), so the dashboard can display the effective setup
+	// instead of making the user re-derive it from raw variables.
 	CDN_TYPE string `json:"CDN_TYPE"`
 	// EXPO_ACCOUNT_USERNAME is the Expo account behind the configured access
 	// token. Only resolved in stateless mode (single app, single token) and

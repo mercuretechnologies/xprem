@@ -24,6 +24,75 @@ func clearCDNEnv(t *testing2.T) {
 	t.Setenv("AZURE_STORAGE_ACCOUNT_NAME", "")
 	t.Setenv("AZURE_STORAGE_ACCOUNT_KEY", "")
 	t.Setenv("AZURE_BLOB_ENDPOINT", "")
+	t.Setenv("DISABLE_S3_DIRECT_CDN", "")
+	t.Setenv("AWS_BASE_ENDPOINT", "")
+	t.Setenv("AWS_S3_FORCE_PATH_STYLE", "")
+}
+
+// The aws package builds its S3 client once per process, so every s3-direct
+// test must set the exact same AWS env before the first presign.
+func setS3CDNEnv(t *testing2.T) {
+	t.Setenv("STORAGE_MODE", "s3")
+	t.Setenv("S3_BUCKET_NAME", "test-bucket")
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+}
+
+func TestGetCDNReturnsS3DirectWhenS3Configured(t *testing2.T) {
+	clearCDNEnv(t)
+	setS3CDNEnv(t)
+	ResetCDNInstance()
+	c := GetCDN()
+	if c == nil {
+		t.Fatalf("expected CDN instance, got nil")
+	}
+	if _, ok := c.(*S3DirectCDN); !ok {
+		t.Fatalf("expected *S3DirectCDN, got %T", c)
+	}
+}
+
+func TestGetCDNReturnsGenericWithCDNBaseURLOnS3(t *testing2.T) {
+	clearCDNEnv(t)
+	setS3CDNEnv(t)
+	// s3-direct is always available in s3 mode with credentials, so the
+	// explicitly configured base URL must win.
+	t.Setenv("CDN_BASE_URL", "https://cdn.example.com")
+	ResetCDNInstance()
+	c := GetCDN()
+	if _, ok := c.(*GenericCDN); !ok {
+		t.Fatalf("expected *GenericCDN, got %T", c)
+	}
+}
+
+func TestGetCDNSkipsS3DirectWhenDisabled(t *testing2.T) {
+	clearCDNEnv(t)
+	setS3CDNEnv(t)
+	t.Setenv("DISABLE_S3_DIRECT_CDN", "true")
+	ResetCDNInstance()
+	if c := GetCDN(); c != nil {
+		t.Fatalf("expected no CDN with s3-direct disabled, got %T", c)
+	}
+}
+
+func TestS3DirectComputeRedirectionURL(t *testing2.T) {
+	clearCDNEnv(t)
+	setS3CDNEnv(t)
+	t.Setenv("BUCKET_KEY_PREFIX", "prefix")
+	c := &S3DirectCDN{}
+	got, err := c.ComputeRedirectionURLForAsset("app-1", "production", "1", "1674170951", "bundles/android.js")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantPrefix := "https://test-bucket.s3.us-east-1.amazonaws.com/prefix/app-1/production/1/1674170951/bundles/android.js?"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("expected URL to start with %q, got %q", wantPrefix, got)
+	}
+	for _, param := range []string{"X-Amz-Signature=", "X-Amz-Expires=900", "X-Amz-Credential="} {
+		if !strings.Contains(got, param) {
+			t.Fatalf("expected URL to contain %q, got %q", param, got)
+		}
+	}
 }
 
 func setAzureCDNEnv(t *testing2.T) {

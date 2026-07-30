@@ -746,7 +746,7 @@ export type ServerSettings = {
   AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID: string;
   PRIVATE_CLOUDFRONT_KEY_PATH: string;
   PROMETHEUS_ENABLED: string;
-  CDN_TYPE: '' | 'cloudfront' | 'gcs-direct' | 'azure-direct' | 'generic';
+  CDN_TYPE: '' | 'cloudfront' | 'gcs-direct' | 's3-direct' | 'azure-direct' | 'generic';
   EXPO_ACCOUNT_USERNAME: string;
   SSO_ENABLED: boolean;
   APPS: { id: string; name?: string }[];

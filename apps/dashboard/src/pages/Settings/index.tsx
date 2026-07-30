@@ -235,6 +235,18 @@ export const Settings = () => {
               </Row>
             </>
           )}
+          {settings.CDN_TYPE === 's3-direct' && (
+            <>
+              <Row
+                label="Provider"
+                hint="Assets are served through presigned Amazon S3 URLs.">
+                <span className="font-medium">Amazon S3</span>
+              </Row>
+              <Row label="Bucket">
+                <Mono>{settings.S3_BUCKET_NAME}</Mono>
+              </Row>
+            </>
+          )}
           {settings.CDN_TYPE === 'azure-direct' && (
             <>
               <Row
