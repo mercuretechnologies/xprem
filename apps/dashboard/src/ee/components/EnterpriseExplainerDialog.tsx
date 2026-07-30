@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-export const ENTERPRISE_CONTACT_EMAIL = 'contact@mercuretechnologies.com';
+export const ENTERPRISE_CONTACT_EMAIL = 'contact@xprem.dev';
 
 // The upsell dialog shown when someone reaches for an enterprise feature
 // without a valid license. Used by EnterpriseFeatureGate for masked blocks,

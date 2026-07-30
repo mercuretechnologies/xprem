@@ -37,7 +37,7 @@ export default class Init extends Command {
     const { appId } = await promptAsync({
       message:
         'Enter the project id for this project (sent as the expo-app-id header).\n' +
-        '  See https://mercure-technologies.gitbook.io/expo-open-ota/stateless-mode/getting-started for details.',
+        '  See https://mercure-technologies.gitbook.io/xprem/stateless-mode/getting-started for details.',
       name: 'appId',
       type: 'text',
       initial: detectedAppId,

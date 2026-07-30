@@ -1,11 +1,11 @@
-# EOAS (Expo Open Application Services)
+# EOAS
 
-EOAS ((Expo Open Application Services) is a powerful helper package designed to simplify the setup and update publication process for the [xprem](https://github.com/mercuretechnologies/xprem) project.
+EOAS is a powerful helper package designed to simplify the setup and update publication process for the [xprem](https://github.com/mercuretechnologies/xprem) project.
 
 ## Quick Start
 
 To get started with EOAS, check out the official documentation:
-[EOAS Official Documentation](https://mercure-technologies.gitbook.io/expo-open-ota/eoas/overview)
+[EOAS Official Documentation](https://mercure-technologies.gitbook.io/xprem/eoas/overview)
 
 ## Learn More
 For detailed information and to explore the core functionalities of xprem, visit the main repository:

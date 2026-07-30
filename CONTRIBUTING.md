@@ -34,4 +34,4 @@ External pull requests touching `ee/` directories are not accepted for now: this
 
 ## Questions
 
-Open an issue, or reach out at [contact@mercuretechnologies.com](mailto:contact@mercuretechnologies.com).
+Open an issue, or reach out at [contact@xprem.dev](mailto:contact@xprem.dev).

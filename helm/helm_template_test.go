@@ -119,6 +119,12 @@ func TestControlPlaneModeStillRendersLegacyFlatEnvVars(t *testing.T) {
 		t.Fatal("expected DB_URL to be required in control-plane mode")
 	}
 
+	for _, name := range []string{"DB_MAX_CONN_LIFETIME", "DB_MAX_CONN_IDLE_TIME"} {
+		if !secretKeyRefOptional(env[name]) {
+			t.Fatalf("expected %s to be an optional secret key ref in control-plane mode", name)
+		}
+	}
+
 	// Key vars of the non-selected storage modes stay hidden.
 	for _, name := range []string{
 		"PUBLIC_LOCAL_EXPO_KEY_PATH",
@@ -177,9 +183,22 @@ func TestOptionalTuningVarsAreRendered(t *testing.T) {
 		"AWS_BASE_ENDPOINT",
 		"AWS_S3_FORCE_PATH_STYLE",
 		"SKIP_LEGACY_APP_ID_FALLBACK",
+		"CACHE_KEY_PREFIX",
+		"DISABLE_S3_DIRECT_CDN",
+		"BUCKET_MIGRATION_CONCURRENCY",
+		"CLICKHOUSE_URL",
+		"GEOIP_MMDB_PATH",
+		"DISABLE_DEVICE_TELEMETRY",
 	} {
 		if !secretKeyRefOptional(env[name]) {
 			t.Fatalf("expected %s to be rendered as an optional secret key ref", name)
+		}
+	}
+
+	// The pool tuning pair only exists in control-plane mode.
+	for _, name := range []string{"DB_MAX_CONN_LIFETIME", "DB_MAX_CONN_IDLE_TIME"} {
+		if _, ok := env[name]; ok {
+			t.Fatalf("did not expect %s with controlPlane=false", name)
 		}
 	}
 }

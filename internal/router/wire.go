@@ -194,7 +194,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	} else {
 		log.Println("⚙️  [STATELESS] Initializing Stateless Mode (Flat-Env Mode)...")
 		if err := config.LoadAppsFromFlatEnv(); err != nil {
-			log.Fatalf("Invalid apps config: %v\nSee https://mercure-technologies.gitbook.io/expo-open-ota/stateless-mode/getting-started for the stateless (flat-env) config format.", err)
+			log.Fatalf("Invalid apps config: %v\nSee https://mercure-technologies.gitbook.io/xprem/stateless-mode/getting-started for the stateless (flat-env) config format.", err)
 		}
 		authRepo = store.NewBucketAuthStore(resolvedBucket)
 		appRepo = store.NewBucketAppStore(resolvedBucket)

@@ -143,6 +143,11 @@ environment:
           - "redis-sentinel"
       - key: "useRedisTLS"
         is: "true"
+  # Optional prefix on every cache key, for a Redis shared with other apps.
+  - name: "CACHE_KEY_PREFIX"
+    value: ""
+    enabled: true
+    required: false
   - name: "STORAGE_MODE"
     key: "storageMode"
     required: true
@@ -210,12 +215,25 @@ environment:
     required:
       - key: "storageMode"
         is: "s3"
+  # Set to "true" to stop redirecting asset requests to presigned S3 URLs and
+  # keep streaming assets through the server, for buckets on an endpoint the
+  # devices cannot reach (a MinIO on a private network).
+  - name: "DISABLE_S3_DIRECT_CDN"
+    value: ""
+    enabled: true
+    required: false
   - name: "BUCKET_KEY_PREFIX"
     value: ""
     enabled: true
     required: false
   # TODO: remove S3_KEY_PREFIX once users have migrated to BUCKET_KEY_PREFIX
   - name: "S3_KEY_PREFIX"
+    value: ""
+    enabled: true
+    required: false
+  # Parallelism of the one-shot v2 bucket re-path on remote backends
+  # (default 16).
+  - name: "BUCKET_MIGRATION_CONCURRENCY"
     value: ""
     enabled: true
     required: false
@@ -466,6 +484,31 @@ environment:
     required:
       - key: "controlPlane"
         is: "true"
+  - name: "DB_MAX_CONN_LIFETIME"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+  - name: "DB_MAX_CONN_IDLE_TIME"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+  # ClickHouse DSN the Observe feature persists telemetry through, e.g.
+  # clickhouse://user:password@host:9000/database. Requires controlPlane="true";
+  # unset leaves Observe (identity included) disabled.
+  - name: "CLICKHOUSE_URL"
+    value: ""
+    enabled: true
+    required: false
+  # Path to a GeoLite2 .mmdb file inside the container, used to locate devices
+  # in the Identity dashboard. Unset leaves devices unlocated.
+  - name: "GEOIP_MMDB_PATH"
+    value: ""
+    enabled: true
+    required: false
   # Set to "true" to record nothing about the devices being served: no device
   # registry, no update-health state, no telemetry ingestion. Updates are
   # delivered exactly the same; the Observe and Identity dashboards report the
