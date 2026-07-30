@@ -11,10 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
-// principalExtraKey carries the resolved principal through the SDK's
-// TokenInfo.Extra, from the verifier to the inner middleware.
-const principalExtraKey = "principal"
-
 // NewOAuthMiddleware guards the MCP endpoint behind an OAuth access token.
 // It wraps the SDK's RequireBearerToken rather than checking the header
 // itself: that is the only way to plant the TokenInfo the streamable
@@ -38,7 +34,7 @@ func NewOAuthMiddleware(oauthService *oauth.OAuthService) mux.MiddlewareFunc {
 			UserID:     principal.UserId,
 			Scopes:     []string{oauth.ScopeMCP},
 			Expiration: expiresAt,
-			Extra:      map[string]any{principalExtraKey: principal},
+			Extra:      map[string]any{services.PrincipalExtraKey: principal},
 		}, nil
 	}
 	requireBearer := auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
@@ -53,12 +49,10 @@ func NewOAuthMiddleware(oauthService *oauth.OAuthService) mux.MiddlewareFunc {
 // context key the rest of the codebase reads.
 func principalFromTokenInfo(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		info := auth.TokenInfoFromContext(r.Context())
-		if info == nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		var principal *services.DashboardPrincipal
+		if info := auth.TokenInfoFromContext(r.Context()); info != nil {
+			principal = services.PrincipalFromExtra(info.Extra)
 		}
-		principal, _ := info.Extra[principalExtraKey].(*services.DashboardPrincipal)
 		if principal == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

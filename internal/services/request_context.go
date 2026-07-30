@@ -69,3 +69,17 @@ func CliAuthAppFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+// PrincipalExtraKey is where the OAuth verifier stores the request's principal
+// in a bearer TokenInfo's Extra map; the MCP tool layer reads it back with
+// PrincipalFromExtra. It lives here for the same reason the context keys do:
+// the identity is this package's domain, and both sides of the contract must
+// share one definition without importing each other.
+const PrincipalExtraKey = "principal"
+
+// PrincipalFromExtra retrieves the principal stored under PrincipalExtraKey,
+// or nil.
+func PrincipalFromExtra(extra map[string]any) *DashboardPrincipal {
+	principal, _ := extra[PrincipalExtraKey].(*DashboardPrincipal)
+	return principal
+}

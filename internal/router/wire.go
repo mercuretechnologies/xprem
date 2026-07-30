@@ -20,6 +20,7 @@ import (
 	"expo-open-ota/internal/handlers"
 	dashhandlers "expo-open-ota/internal/handlers/dashboard"
 	"expo-open-ota/internal/mcp"
+	"expo-open-ota/internal/mcptools"
 	"expo-open-ota/internal/oauth"
 	"expo-open-ota/internal/ratelimit"
 	"expo-open-ota/internal/services"
@@ -140,7 +141,6 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
 		oauthClientRepo = store.NewPostgresOAuthClientStore(dbEngine)
 		oauthCodeRepo = store.NewPostgresOAuthCodeStore(dbEngine)
-		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService())
 		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
 		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
 		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyAccessStore(dbEngine)
@@ -255,6 +255,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	if oauthClientRepo != nil {
 		oauthService = oauth.NewOAuthService(oauthClientRepo, oauthCodeRepo, refreshTokenRepo, userRepo)
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
+
+		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService(
+			mcptools.Configurator(rbacService.MCPToolDeps(appRepo)),
+		))
 	}
 
 	container := &AppContainer{

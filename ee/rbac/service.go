@@ -13,6 +13,7 @@ import (
 	"expo-open-ota/internal/store"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -380,6 +381,109 @@ func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID stri
 		return &ErrPermissionDenied{Permission: perm}
 	}
 	return nil
+}
+
+// AppPermissions is the whole authorization truth of one account on one app:
+// every catalog permission, held or not.
+type AppPermissions struct {
+	AppID   string
+	Granted []Permission
+	Denied  []Permission
+}
+
+// AccountPermissions is the account's full permission picture, one entry per
+// app it can see. Apps a member holds no grant on are not listed while roles
+// are enforced: they are invisible to the account.
+type AccountPermissions struct {
+	Role          string
+	RolesEnforced bool
+	Apps          []AppPermissions
+}
+
+// DescribeAccountPermissions answers "what may this account do", app by app.
+// allAppIDs is the deployment's app list, supplied by the caller because this
+// service does not own the app store: it is the scope for admins (everything
+// granted) and for members without enforced roles (what the community
+// fallbacks concede, identically on every app).
+func (s *RBACService) DescribeAccountPermissions(ctx context.Context, subject Subject, allAppIDs []string) (AccountPermissions, error) {
+	description := AccountPermissions{Role: "member", RolesEnforced: s.Enabled()}
+	if subject.IsAdmin {
+		description.Role = "admin"
+	}
+
+	if subject.IsAdmin || !description.RolesEnforced {
+		var granted, denied []Permission
+		if subject.IsAdmin {
+			granted = append([]Permission(nil), AllPermissions...)
+		} else {
+			for _, perm := range AllPermissions {
+				if DefaultFallback(perm) == FallbackAnyMember {
+					granted = append(granted, perm)
+				} else {
+					denied = append(denied, perm)
+				}
+			}
+		}
+		sorted := append([]string(nil), allAppIDs...)
+		sort.Strings(sorted)
+		for _, appID := range sorted {
+			description.Apps = append(description.Apps, AppPermissions{AppID: appID, Granted: granted, Denied: denied})
+		}
+		return description, nil
+	}
+
+	byApp, err := s.EffectivePermissionsByApp(ctx, subject.UserID)
+	if err != nil {
+		return AccountPermissions{}, err
+	}
+	grantedAppIDs := make([]string, 0, len(byApp))
+	for appID := range byApp {
+		grantedAppIDs = append(grantedAppIDs, appID)
+	}
+	sort.Strings(grantedAppIDs)
+	for _, appID := range grantedAppIDs {
+		held := make(map[Permission]bool, len(byApp[appID]))
+		for _, perm := range byApp[appID] {
+			held[perm] = true
+		}
+		app := AppPermissions{AppID: appID}
+		for _, perm := range AllPermissions {
+			if held[perm] {
+				app.Granted = append(app.Granted, perm)
+			} else {
+				app.Denied = append(app.Denied, perm)
+			}
+		}
+		description.Apps = append(description.Apps, app)
+	}
+	return description, nil
+}
+
+// HasPermissionSomewhere reports whether the subject could pass Authorize for
+// perm on at least one app; tool surfaces use it to decide visibility. Its
+// branches mirror Authorize, answering false wherever Authorize fails closed.
+func (s *RBACService) HasPermissionSomewhere(ctx context.Context, subject Subject, perm Permission, fallback Fallback) (bool, error) {
+	if subject.IsAdmin {
+		return true, nil
+	}
+	if s.repo == nil {
+		return false, nil
+	}
+	if !s.licenseValid() {
+		return fallback == FallbackAnyMember, nil
+	}
+	byApp, err := s.EffectivePermissionsByApp(ctx, subject.UserID)
+	if err != nil {
+		return false, err
+	}
+	for _, permissions := range byApp {
+		for _, candidate := range permissions {
+			if candidate == perm {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // CanSeeApp is the read-path sibling of Authorize: any grant on the app makes

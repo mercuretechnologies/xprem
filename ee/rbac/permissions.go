@@ -88,3 +88,20 @@ func IsValidPermission(p string) bool {
 	_, ok := permissionSet[Permission(p)]
 	return ok
 }
+
+// anyMemberPermissions are the catalog entries whose canonical fallback is
+// FallbackAnyMember; everything else falls back to admin-only. The route and
+// tool declarations pair the same values.
+var anyMemberPermissions = map[Permission]bool{
+	PermIdentityRead: true,
+	PermObserveRead:  true,
+}
+
+// DefaultFallback is what gates a permission's actions when roles are not
+// enforced.
+func DefaultFallback(p Permission) Fallback {
+	if anyMemberPermissions[p] {
+		return FallbackAnyMember
+	}
+	return FallbackAdminOnly
+}

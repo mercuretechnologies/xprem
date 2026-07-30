@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"context"
+	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/version"
 	"net/http"
 	"time"
@@ -8,20 +10,33 @@ import (
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// ConfigureServer populates one session's server for its principal; the tool
+// packages provide these, the composition root passes them in.
+type ConfigureServer func(ctx context.Context, principal *services.DashboardPrincipal, server *mcpprot.Server)
+
 type MCPService struct {
-	server     *mcpprot.Server
 	streamable *mcpprot.StreamableHTTPHandler
 }
 
-func NewMCPService() *MCPService {
-	server := mcpprot.NewServer(&mcpprot.Implementation{
-		Name:    "Expo-Open-Ota",
-		Version: version.Version,
-		Title:   "Expo Open OTA",
-	}, nil)
+func NewMCPService(configurators ...ConfigureServer) *MCPService {
+	// One server per session, built at initialize: the tool list is per
+	// account, so what a session's tools/list shows is already filtered to
+	// what its principal may use.
+	newSessionServer := func(req *http.Request) *mcpprot.Server {
+		server := mcpprot.NewServer(&mcpprot.Implementation{
+			Name:    "Expo-Open-Ota",
+			Version: version.Version,
+			Title:   "Expo Open OTA",
+		}, nil)
+		principal := services.PrincipalFromContext(req.Context())
+		for _, configure := range configurators {
+			configure(req.Context(), principal, server)
+		}
+		return server
+	}
 
 	streamable := mcpprot.NewStreamableHTTPHandler(
-		func(*http.Request) *mcpprot.Server { return server },
+		newSessionServer,
 		&mcpprot.StreamableHTTPOptions{
 			// The SDK's DNS-rebinding guard 403s any loopback connection
 			// carrying a public Host header, which is exactly a reverse proxy
@@ -34,5 +49,5 @@ func NewMCPService() *MCPService {
 			SessionTimeout: 30 * time.Minute,
 		},
 	)
-	return &MCPService{server: server, streamable: streamable}
+	return &MCPService{streamable: streamable}
 }
