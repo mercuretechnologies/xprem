@@ -6,6 +6,7 @@ import (
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/store"
 	"fmt"
+	"log"
 	"net/url"
 	"slices"
 	"time"
@@ -99,7 +100,9 @@ func (s *OAuthService) CreateAuthorizationCode(ctx context.Context, userId strin
 	}
 	code := uuid.New().String()
 	if err := s.codeRepo.DeleteExpiredOAuthAuthorizationCodes(ctx); err != nil {
-		return "", err
+		// Best-effort housekeeping: an unrelated sweep failure must not block
+		// this user's consent.
+		log.Printf("failed to sweep expired oauth authorization codes: %v", err)
 	}
 	if err := s.codeRepo.InsertOAuthAuthorizationCode(ctx, store.InsertOAuthAuthorizationCodeParameters{
 		ID:            code,
