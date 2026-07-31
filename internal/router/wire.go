@@ -8,6 +8,7 @@ import (
 	"xprem/ee/apikeyrestrictions"
 	"xprem/ee/audit"
 	"xprem/ee/branchprotection"
+	"xprem/ee/geoip"
 	"xprem/ee/identity"
 	"xprem/ee/licensing"
 	eemcptools "xprem/ee/mcptools"
@@ -159,17 +160,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
-			// Without a configured GeoLite2 database, devices stay unlocated.
-			var geoResolver identity.GeoResolver
-			if mmdbPath := config.GetEnv("GEOIP_MMDB_PATH"); mmdbPath != "" {
-				resolver, err := identity.NewGeoLite2Resolver(mmdbPath)
-				if err != nil {
-					log.Fatalf("🚨 [IDENTITY] %v", err)
-				}
-				geoResolver = resolver
-				addCleanup(resolver.Close)
-			}
-			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine), geoResolver)
+			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine))
 			checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
 			var observeClickHouse *clickhouse.Engine
 
@@ -202,6 +193,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
 	}
+
+	// The router starts the geo resolver in every mode, so its cleanup does
+	// not belong to the DB branch.
+	addCleanup(geoip.CloseResolver)
 
 	logLegacyAppIdFallback()
 

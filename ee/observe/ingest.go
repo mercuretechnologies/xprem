@@ -16,7 +16,6 @@ import (
 	"time"
 	"xprem/ee/identity"
 	"xprem/internal/handlers"
-	"xprem/internal/helpers"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -83,7 +82,6 @@ func recordCheckIns[R any](
 	ctx context.Context,
 	checkIns *CheckInRecorder,
 	appID string,
-	remoteIP string,
 	rows []R,
 	envelopeOf func(R) Envelope,
 ) {
@@ -105,7 +103,6 @@ func recordCheckIns[R any](
 		checkIns.Record(ctx, handlers.DeviceCheckIn{
 			AppID:           appID,
 			EASClientID:     device,
-			RemoteIP:        remoteIP,
 			CurrentUpdateID: envelope.UpdateID,
 			DeviceModel:     envelope.DeviceModel,
 			OSName:          envelope.OSName,
@@ -139,15 +136,6 @@ func namesOneInstallation[R any](resources []R, attributesOf func(R) map[string]
 		}
 	}
 	return true
-}
-
-// clientIP renders the request's client address, "" when it cannot be trusted
-// or parsed. Geo resolution and the registry both key on it.
-func clientIP(r *http.Request) string {
-	if ip := helpers.ClientIP(r); ip.IsValid() {
-		return ip.String()
-	}
-	return ""
 }
 
 // resolveOrigin fills MetricRow/LogRow.Branch and .UpdateGroupID.
@@ -294,12 +282,11 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appID := mux.Vars(r)["APP_ID"]
-	remoteIP := clientIP(r)
 	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 
 	if h.identityService != nil {
 		requests := keepNewestIdentityWork(
-			identity.CoalesceRequests(identityRequestsFromBatch(batch, appID, remoteIP)))
+			identity.CoalesceRequests(identityRequestsFromBatch(batch, appID)))
 		phaseContext, cancelPhase := context.WithTimeout(r.Context(), identityPhaseTimeout)
 		defer cancelPhase()
 		for _, req := range requests {
@@ -325,12 +312,12 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.telemetry != nil {
-		place := h.identityService.PlaceOf(remoteIP)
+		place := h.identityService.PlaceOf(r.Context())
 		for i := range rows {
 			rows[i].CountryCode, rows[i].Lat, rows[i].Lng = place.CountryCode, place.Lat, place.Lng
 		}
 	}
-	recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
+	recordCheckIns(r.Context(), h.checkIns, appID, rows,
 		func(row LogRow) Envelope { return row.Envelope })
 	if h.telemetry == nil {
 		observeRecordsDropped(reasonTelemetry, len(rows))
@@ -502,7 +489,7 @@ func jsCrashMessage(attributes string) string {
 // identityRequestsFromBatch extracts the identity operations a decoded logs
 // batch carries, dropping and counting records that cannot be attributed or
 // are telemetry, not identity.
-func identityRequestsFromBatch(batch LogBatch, appID, remoteIP string) []identity.Request {
+func identityRequestsFromBatch(batch LogBatch, appID string) []identity.Request {
 	var requests []identity.Request
 	for _, resource := range batch.Resources {
 		clientID, _ := resource.Attributes[EASClientIDKey].(string)
@@ -515,7 +502,7 @@ func identityRequestsFromBatch(batch LogBatch, appID, remoteIP string) []identit
 			if !identity.IsIdentityOp(eventName) {
 				continue
 			}
-			if req, ok := identity.RequestFromRecord(appID, clientID, identity.Op(eventName), record.Attributes, remoteIP); ok {
+			if req, ok := identity.RequestFromRecord(appID, clientID, identity.Op(eventName), record.Attributes); ok {
 				requests = append(requests, req)
 			}
 		}
@@ -548,14 +535,13 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appID := mux.Vars(r)["APP_ID"]
-	remoteIP := clientIP(r)
 	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 	rows := FlattenMetrics(appID, batch, time.Now().UTC())
-	place := h.identityService.PlaceOf(remoteIP)
+	place := h.identityService.PlaceOf(r.Context())
 	for i := range rows {
 		rows[i].CountryCode, rows[i].Lat, rows[i].Lng = place.CountryCode, place.Lat, place.Lng
 	}
-	recordCheckIns(r.Context(), h.checkIns, appID, remoteIP, rows,
+	recordCheckIns(r.Context(), h.checkIns, appID, rows,
 		func(row MetricRow) Envelope { return row.Envelope })
 	if len(rows) > 0 {
 		resolveRowOrigins(r.Context(), h.resolveOrigin, appID, rows,

@@ -123,7 +123,7 @@ func waitCurrent(t *testing.T, store *fakeTouchStore, want string) {
 func TestRecordDebouncesSteadyState(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, handlers.DeviceCheckIn{AppID: testAppID, EASClientID: "not-a-uuid"})
@@ -142,7 +142,7 @@ func TestRecordDebouncesSteadyState(t *testing.T) {
 func TestRecordStateTransitionBustsDebounce(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))
@@ -156,7 +156,7 @@ func TestRecordStateTransitionBustsDebounce(t *testing.T) {
 func TestRecordRecordsFailures(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	raw := `"` + testUpdateB + `"`
@@ -178,7 +178,7 @@ func TestRecordRecordsFailures(t *testing.T) {
 func TestRecordFailureWithoutCurrentDoesNotAssignFailedUpdate(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 
 	recorder.Record(context.Background(), checkInWith("", `"`+testUpdateB+`"`, "launch failed"))
 	waitRecorded(t, localCache, 1, store)
@@ -193,7 +193,7 @@ func TestRecordErrorCooldown(t *testing.T) {
 	store := &fakeTouchStore{}
 	store.failing.Store(true)
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, checkInWith("", "", ""))
@@ -234,7 +234,7 @@ func TestParseFailedUpdateIDs(t *testing.T) {
 func TestRecordCrossSourceEquivalence(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, checkInWith("9B3B89B6-5A0D-4A57-B1F5-6E1D5B7C2A10", "", ""))
@@ -250,7 +250,7 @@ func TestRecordFatalBypassesCooldown(t *testing.T) {
 	store := &fakeTouchStore{}
 	store.failing.Store(true)
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, checkInWith("", "", ""))
@@ -266,7 +266,7 @@ func TestRecordFatalStashSurvivesFailuresOutage(t *testing.T) {
 	store := &fakeTouchStore{}
 	store.failFailures.Store(true)
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	raw := `"` + testUpdateB + `"`
@@ -291,7 +291,7 @@ func TestRecordFatalStashSurvivesFailuresOutage(t *testing.T) {
 func TestRecordRejectedPollStashesOnlyTheCrashDetail(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	rejected := checkInWith(testUpdateA, `"`+testUpdateB+`"`, "FATAL BOOM")
@@ -319,7 +319,7 @@ func TestRecordRejectedPollStashesOnlyTheCrashDetail(t *testing.T) {
 func TestRecordRejectedPollWithoutCrashDetailIsIgnored(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 
 	rejected := checkInWith(testUpdateA, `"`+testUpdateB+`"`, "")
 	rejected.Rejected = true
@@ -333,7 +333,7 @@ func TestRecordRejectedPollWithoutCrashDetailIsIgnored(t *testing.T) {
 func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -342,7 +342,7 @@ func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: now.Add(-1 * time.Hour)}},
 		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateB, Timestamp: now}},
 	}
-	recordCheckIns(ctx, recorder, testAppID, "", rows,
+	recordCheckIns(ctx, recorder, testAppID, rows,
 		func(row LogRow) Envelope { return row.Envelope })
 	require.Eventually(t, func() bool {
 		store.mu.Lock()
@@ -356,7 +356,7 @@ func TestRecordsPicksNewestRowPerDevice(t *testing.T) {
 func TestRecordsPicksTheLastRowWhenTimestampsTie(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	clamped := time.Now()
@@ -365,7 +365,7 @@ func TestRecordsPicksTheLastRowWhenTimestampsTie(t *testing.T) {
 		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateA, Timestamp: clamped}},
 		{Envelope: Envelope{EASClientID: testDeviceID, UpdateID: testUpdateB, Timestamp: clamped}},
 	}
-	recordCheckIns(ctx, recorder, testAppID, "", rows,
+	recordCheckIns(ctx, recorder, testAppID, rows,
 		func(row LogRow) Envelope { return row.Envelope })
 
 	require.Eventually(t, func() bool {
@@ -382,7 +382,7 @@ func TestRecordsPicksTheLastRowWhenTimestampsTie(t *testing.T) {
 func TestRecordCarriesReportedHardware(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	recorder.Record(ctx, handlers.DeviceCheckIn{
@@ -406,7 +406,7 @@ func TestRecordCarriesReportedHardware(t *testing.T) {
 func TestRecordWritesThroughHardwareChange(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
 	base := handlers.DeviceCheckIn{
@@ -446,7 +446,7 @@ func TestParseCachedCheckInAcceptsLegacyValue(t *testing.T) {
 func TestFatalErrorIsBoundedBeforeItIsStoredAnywhere(t *testing.T) {
 	store := &fakeTouchStore{}
 	localCache := cache.NewLocalCache()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), localCache)
+	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 
 	huge := strings.Repeat("é", maxFatalErrorRunes*3)
 	recorder.Record(context.Background(), checkInWith(testUpdateA, `"`+testUpdateB+`"`, huge))
@@ -466,7 +466,7 @@ func TestFatalErrorIsBoundedBeforeItIsStoredAnywhere(t *testing.T) {
 func TestConcurrentCheckInsOfOneDeviceCollapseToOneWrite(t *testing.T) {
 	store := &fakeTouchStore{}
 	release := store.hold()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), cache.NewLocalCache())
+	recorder := NewCheckInRecorder(identity.NewService(store), cache.NewLocalCache())
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -489,7 +489,7 @@ func TestConcurrentCheckInsOfOneDeviceCollapseToOneWrite(t *testing.T) {
 func TestACheckInCarryingACrashIgnoresTheClaim(t *testing.T) {
 	store := &fakeTouchStore{}
 	release := store.hold()
-	recorder := NewCheckInRecorder(identity.NewService(store, nil), cache.NewLocalCache())
+	recorder := NewCheckInRecorder(identity.NewService(store), cache.NewLocalCache())
 	ctx := context.Background()
 
 	recorder.Record(ctx, checkInWith(testUpdateA, "", ""))

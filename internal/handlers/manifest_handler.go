@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 	"xprem/config"
-	"xprem/internal/helpers"
 	"xprem/internal/services"
 	"xprem/internal/types"
 
@@ -23,7 +22,6 @@ import (
 type DeviceCheckIn struct {
 	AppID       string
 	EASClientID string
-	RemoteIP    string
 	// CurrentUpdateID is the update the device is RUNNING (the launched
 	// update: one that crashed at launch never appears here). A device on the
 	// embedded bundle reports the embedded update's OWN id, which no updates
@@ -203,14 +201,9 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 	// update is as alive as any other. The check-in carries the update-health
 	// signals the same headers already delivered.
 	if h.onDeviceCheckIn != nil && params.ClientID != "" {
-		remoteIP := ""
-		if clientIP := helpers.ClientIP(r); clientIP.IsValid() {
-			remoteIP = clientIP.String()
-		}
 		h.onDeviceCheckIn(r.Context(), DeviceCheckIn{
 			AppID:              appId,
 			EASClientID:        params.ClientID,
-			RemoteIP:           remoteIP,
 			CurrentUpdateID:    params.CurrentUpdateID,
 			FailedUpdateIDsRaw: params.RecentFailedUpdateIDs,
 			FatalError:         params.ExpoFatalError,

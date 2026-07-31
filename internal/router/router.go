@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"net/http"
+	"xprem/ee/geoip"
 	"xprem/internal/middleware"
 
 	"github.com/gorilla/mux"
@@ -29,6 +30,9 @@ func NewRouter(container *AppContainer) *mux.Router {
 	r.SkipClean(true)
 	r.Use(middleware.LoggingMiddleware)
 	r.Use(middleware.RequestMetaMiddleware)
+	if geoMiddleware := geoip.GetMiddleware(); geoMiddleware != nil {
+		r.Use(geoMiddleware)
+	}
 
 	// No authentication below this point.
 	registerInfraRoutes(r)

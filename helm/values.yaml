@@ -524,6 +524,51 @@ environment:
     value: ""
     enabled: true
     required: false
+  # Set to "true" to locate devices from the visitor-location headers your
+  # CDN or load balancer adds (Cloudflare, CloudFront, Vercel, Akamai, or the
+  # generic X-Geo-* set), instead of a local GeoIP database. Only enable it
+  # when the server is reachable exclusively through that proxy, since a
+  # direct client could otherwise forge its own location.
+  - name: "TRUST_GEOIP_HEADERS"
+    value: ""
+    enabled: true
+    required: false
+  # Explicit header names replacing the recognized catalog, for proxies that
+  # let you name the headers yourself.
+  - name: "GEOIP_HEADER_COUNTRY"
+    value: ""
+    enabled: true
+    required: false
+  - name: "GEOIP_HEADER_CITY"
+    value: ""
+    enabled: true
+    required: false
+  - name: "GEOIP_HEADER_LATITUDE"
+    value: ""
+    enabled: true
+    required: false
+  - name: "GEOIP_HEADER_LONGITUDE"
+    value: ""
+    enabled: true
+    required: false
+  # MaxMind account credentials (free GeoLite2 account). When both are set the
+  # server downloads the GeoLite2 City database itself at startup, so devices
+  # get located on the Identity dashboard without mounting any file.
+  # TRUST_GEOIP_HEADERS wins when both approaches are configured.
+  - name: "MAXMIND_ACCOUNT_ID"
+    value: ""
+    enabled: true
+    required: false
+  - name: "MAXMIND_LICENSE_KEY"
+    value: ""
+    enabled: true
+    required: false
+  # Directory the downloaded database is cached in (defaults to the user
+  # cache dir; set it when the filesystem is read-only except for a volume).
+  - name: "GEOIP_CACHE_DIR"
+    value: ""
+    enabled: true
+    required: false
   - name: "JWT_SECRET"
     value: ""
     required: true

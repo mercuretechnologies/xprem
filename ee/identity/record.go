@@ -20,8 +20,8 @@ const unsetKeysAttributeKey = "keys"
 // return is false when the record carries nothing applicable (an empty $unset or $set).
 // The caller's attributes map is never mutated; the payload is copied into a map this
 // request owns.
-func RequestFromRecord(appID string, easClientID string, op Op, attributes map[string]any, remoteIP string) (Request, bool) {
-	req := Request{AppID: appID, EASClientID: easClientID, Op: op, RemoteIP: remoteIP}
+func RequestFromRecord(appID string, easClientID string, op Op, attributes map[string]any) (Request, bool) {
+	req := Request{AppID: appID, EASClientID: easClientID, Op: op}
 	switch op {
 	case OpUnset:
 		rawKeys, _ := attributes[unsetKeysAttributeKey].([]any)
@@ -146,7 +146,6 @@ func CoalesceRequests(requests []Request) []Request {
 					AppID:       requests[0].AppID,
 					EASClientID: requests[0].EASClientID,
 					Op:          decided.op,
-					RemoteIP:    requests[0].RemoteIP,
 				}
 				if decided.op != OpUnset {
 					bucket.Attributes = map[string]any{}

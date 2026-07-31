@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
-
+	"xprem/ee/geoip"
 	"xprem/ee/licensing"
 )
 
@@ -72,18 +72,17 @@ type Store interface {
 	UpdateHealthByIDs(ctx context.Context, appID string, updateIDs []string) (map[string]UpdateHealth, error)
 }
 
-// Service owns the store and the geo resolver. The ingest route calls Apply; the dashboard
+// Service owns the store. The ingest route calls Apply; the dashboard
 // handler calls the read/CRUD methods below.
 type Service struct {
 	store Store
-	geo   GeoResolver
 	// licenseValid is a field, not a direct call, so tests can pin it without a signed key.
 	licenseValid func() bool
 }
 
-// NewService builds the identity service; geo may be nil, in which case devices stay unlocated.
-func NewService(store Store, geo GeoResolver) *Service {
-	return &Service{store: store, geo: geo, licenseValid: licensing.IsEnterprise}
+// NewService builds the identity service.
+func NewService(store Store) *Service {
+	return &Service{store: store, licenseValid: licensing.IsEnterprise}
 }
 
 // Enabled reports whether custom attributes are being collected right now; the device
@@ -160,13 +159,13 @@ func (d DeviceInfo) IsZero() bool {
 	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == ""
 }
 
-// PlaceOf resolves the country and the city centroid of a request IP; without a GeoLite2
-// database it returns a zero Place, read as "not resolved".
-func (s *Service) PlaceOf(remoteIP string) Place {
-	if s == nil || s.geo == nil || remoteIP == "" {
+// PlaceOf reads the country and the city centroid the geo middleware stamped
+// on the request context; a zero Place reads as "not resolved".
+func (s *Service) PlaceOf(ctx context.Context) Place {
+	if s == nil {
 		return Place{}
 	}
-	geo := s.geo.Resolve(remoteIP)
+	geo := geoip.FromContext(ctx)
 	if geo == nil {
 		return Place{}
 	}
@@ -179,12 +178,8 @@ func (s *Service) PlaceOf(remoteIP string) Place {
 
 // TouchDevice is Apply's passive sibling: every check-in a device makes registers it in
 // device_identity, without touching its metadata.
-func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, remoteIP string, current *CurrentUpdate, device DeviceInfo) error {
-	var geo *Geo
-	if s.geo != nil && remoteIP != "" {
-		geo = s.geo.Resolve(remoteIP)
-	}
-	return s.store.TouchDevice(ctx, appID, easClientID, geo, current, device)
+func (s *Service) TouchDevice(ctx context.Context, appID string, easClientID string, current *CurrentUpdate, device DeviceInfo) error {
+	return s.store.TouchDevice(ctx, appID, easClientID, geoip.FromContext(ctx), current, device)
 }
 
 // RecordUpdateFailures is the failure sink for both sources: manifest error recovery and
@@ -210,18 +205,12 @@ type Request struct {
 	Attributes map[string]any
 	// UnsetKeys carries the key names of $unset.
 	UnsetKeys []string
-	// RemoteIP is the already-resolved client IP of the HTTP request that
-	// delivered the batch (proxy handling happens upstream).
-	RemoteIP string
 }
 
 func (s *Service) Apply(ctx context.Context, req Request) (ApplyResult, error) {
 	start := time.Now()
 
-	var geo *Geo
-	if s.geo != nil && req.RemoteIP != "" {
-		geo = s.geo.Resolve(req.RemoteIP)
-	}
+	geo := geoip.FromContext(ctx)
 
 	// Without a license, attributes are dropped but the device is still registered ($unset
 	// keeps its keys, since it only ever removes data).

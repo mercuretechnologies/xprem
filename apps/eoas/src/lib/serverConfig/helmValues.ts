@@ -348,6 +348,13 @@ function validateSecretValues(env: Record<string, string>): ValidationIssue[] {
         'Both DB_KEYS_MASTER_KEY_B64 and AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID are set; the server requires exactly one master key source.',
     });
   }
+  if (!!env.MAXMIND_ACCOUNT_ID !== !!env.MAXMIND_LICENSE_KEY) {
+    issues.push({
+      level: 'error',
+      message:
+        'MAXMIND_ACCOUNT_ID and MAXMIND_LICENSE_KEY must be set together; the server refuses to start with only one of them.',
+    });
+  }
   if (env.ADMIN_PASSWORD && !isPlaceholder(env.ADMIN_PASSWORD)) {
     const missing = missingPasswordRules(env.ADMIN_PASSWORD);
     if (missing.length > 0) {

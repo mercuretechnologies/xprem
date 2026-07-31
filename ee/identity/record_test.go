@@ -18,18 +18,17 @@ func TestRequestFromRecord(t *testing.T) {
 			"event.name": "$set",
 			"session.id": "aaaa",
 			"userId":     "u1",
-		}, "203.0.113.7")
+		})
 		require.True(t, ok)
 		require.Equal(t, OpSet, req.Op)
 		require.Equal(t, map[string]any{"userId": "u1"}, req.Attributes)
-		require.Equal(t, "203.0.113.7", req.RemoteIP)
 	})
 
 	t.Run("set with only envelope is skipped", func(t *testing.T) {
 		_, ok := RequestFromRecord("app", "client", OpSet, map[string]any{
 			"event.name": "$set",
 			"session.id": "aaaa",
-		}, "")
+		})
 		require.False(t, ok)
 	})
 
@@ -37,20 +36,20 @@ func TestRequestFromRecord(t *testing.T) {
 		req, ok := RequestFromRecord("app", "client", OpUnset, map[string]any{
 			"event.name": "$unset",
 			"keys":       []any{"userId", "", 42, "tenant"},
-		}, "")
+		})
 		require.True(t, ok)
 		require.Equal(t, []string{"userId", "tenant"}, req.UnsetKeys)
 	})
 
 	t.Run("unset without usable keys is skipped", func(t *testing.T) {
-		_, ok := RequestFromRecord("app", "client", OpUnset, map[string]any{"event.name": "$unset"}, "")
+		_, ok := RequestFromRecord("app", "client", OpUnset, map[string]any{"event.name": "$unset"})
 		require.False(t, ok)
-		_, ok = RequestFromRecord("app", "client", OpUnset, map[string]any{"keys": "userId"}, "")
+		_, ok = RequestFromRecord("app", "client", OpUnset, map[string]any{"keys": "userId"})
 		require.False(t, ok)
 	})
 
 	t.Run("unknown op is skipped", func(t *testing.T) {
-		_, ok := RequestFromRecord("app", "client", Op("identify"), map[string]any{"userId": "u1"}, "")
+		_, ok := RequestFromRecord("app", "client", Op("identify"), map[string]any{"userId": "u1"})
 		require.False(t, ok)
 	})
 }

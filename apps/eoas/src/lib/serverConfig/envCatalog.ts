@@ -331,16 +331,40 @@ export const ENV_SECTIONS: EnvSection[] = [
   {
     title: 'Geolocation',
     note: c =>
-      c.geoip && c.deployment === 'docker'
-        ? 'Ship the GeoLite2 database with docker-compose.geoip.yml (needs a free MaxMind account).'
+      c.geoip && c.geoipStrategy === 'proxy-headers'
+        ? 'GEOIP_HEADER_COUNTRY/CITY/LATITUDE/LONGITUDE replace the recognized header names when your proxy uses custom ones.'
         : undefined,
     vars: [
       {
-        name: 'GEOIP_MMDB_PATH',
-        applies: c => c.geoip,
+        name: 'TRUST_GEOIP_HEADERS',
+        applies: c => c.geoip && c.geoipStrategy === 'proxy-headers',
         required: true,
-        value: c => or(c.geoipMmdbPath, '<path/to/GeoLite2-City.mmdb>'),
-        comment: 'GeoLite2 City database used to locate devices in the Identity dashboard.',
+        value: () => 'true',
+        comment:
+          'Locate devices from the visitor-location headers of your proxy or CDN (Cloudflare, CloudFront, Vercel, X-Geo-*). Only safe when the server is reachable exclusively through it.',
+      },
+      {
+        name: 'MAXMIND_ACCOUNT_ID',
+        applies: c => c.geoip && c.geoipStrategy === 'maxmind',
+        required: true,
+        value: c => or(c.maxmindAccountId, '<maxmind-account-id>'),
+        comment:
+          'The server downloads the free GeoLite2 City database itself at startup; both MAXMIND_* variables must be set together.',
+      },
+      {
+        name: 'MAXMIND_LICENSE_KEY',
+        applies: c => c.geoip && c.geoipStrategy === 'maxmind',
+        required: true,
+        value: c => or(c.maxmindLicenseKey, '<maxmind-license-key>'),
+        comment: 'Generate one in the MaxMind account portal (free GeoLite2 signup).',
+      },
+      {
+        name: 'GEOIP_CACHE_DIR',
+        applies: c => c.geoip && c.geoipStrategy === 'maxmind',
+        required: false,
+        value: () => '',
+        comment:
+          'Where the downloaded database is cached; point it at a writable volume when the filesystem is read-only.',
       },
     ],
   },
@@ -513,7 +537,17 @@ export function inferChoicesFromEnv(env: Record<string, string>): ServerChoices 
     adminPassword: env.ADMIN_PASSWORD,
     deployment: 'docker',
     observe: !!env.CLICKHOUSE_URL,
-    geoip: !!env.GEOIP_MMDB_PATH,
+    geoip:
+      env.TRUST_GEOIP_HEADERS === 'true' || !!env.MAXMIND_ACCOUNT_ID || !!env.MAXMIND_LICENSE_KEY,
+    // Headers win over MaxMind server-side; the inference mirrors that.
+    geoipStrategy:
+      env.TRUST_GEOIP_HEADERS === 'true'
+        ? 'proxy-headers'
+        : env.MAXMIND_ACCOUNT_ID || env.MAXMIND_LICENSE_KEY
+          ? 'maxmind'
+          : undefined,
+    maxmindAccountId: env.MAXMIND_ACCOUNT_ID,
+    maxmindLicenseKey: env.MAXMIND_LICENSE_KEY,
   };
 }
 
@@ -590,6 +624,12 @@ export function validateEnvMap(
   if (env.DB_KEYS_MASTER_KEY_B64 && env.AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID) {
     error(
       'Both DB_KEYS_MASTER_KEY_B64 and AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID are set; the server requires exactly one master key source.'
+    );
+  }
+
+  if (!!env.MAXMIND_ACCOUNT_ID !== !!env.MAXMIND_LICENSE_KEY) {
+    error(
+      'MAXMIND_ACCOUNT_ID and MAXMIND_LICENSE_KEY must be set together; the server refuses to start with only one of them.'
     );
   }
 

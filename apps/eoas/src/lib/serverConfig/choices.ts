@@ -10,6 +10,7 @@ export type AwsAuth = 'iam-role' | 'access-keys';
 export type CacheMode = 'redis' | 'redis-sentinel' | 'local';
 export type Replicas = 'single' | 'multi';
 export type Deployment = 'docker' | 'binary' | 'helm';
+export type GeoipStrategy = 'proxy-headers' | 'maxmind';
 
 export type ServerChoices = {
   baseUrl?: string;
@@ -44,7 +45,9 @@ export type ServerChoices = {
   observe: boolean;
   clickhouseUrl?: string;
   geoip: boolean;
-  geoipMmdbPath?: string;
+  geoipStrategy?: GeoipStrategy;
+  maxmindAccountId?: string;
+  maxmindLicenseKey?: string;
 };
 
 /**

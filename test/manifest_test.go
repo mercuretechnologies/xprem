@@ -902,9 +902,7 @@ func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
 		assert.Len(t, recorded, 1)
 		assert.True(t, recorded[0].Rejected, "the recorder must know this poll was refused")
 		assert.Equal(t, "TypeError: undefined is not a function", recorded[0].FatalError)
-		// Nothing else travels: no address to resolve a place from, for a
-		// device that is not being registered.
-		assert.Equal(t, "", recorded[0].RemoteIP)
+		// Nothing else travels for a device that is not being registered.
 		assert.Equal(t, "", recorded[0].CurrentUpdateID)
 	})
 

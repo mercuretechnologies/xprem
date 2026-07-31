@@ -18,6 +18,7 @@ import {
   type AwsAuth,
   type CacheMode,
   type Deployment,
+  type GeoipStrategy,
   type S3Provider,
   S3_PROVIDER_DEFAULTS,
   type ServerChoices,
@@ -131,7 +132,9 @@ type WizardState = {
   observe?: boolean;
   clickhouseUrl?: string;
   geoip?: boolean;
-  geoipMmdbPath?: string;
+  geoipStrategy?: GeoipStrategy;
+  maxmindAccountId?: string;
+  maxmindLicenseKey?: string;
 };
 
 type StepResult = 'back' | 'next';
@@ -162,7 +165,12 @@ function summaryLines(state: WizardState): string {
     ['Cache', set(state.cacheMode ?? 'local')],
     ['Dashboard admin', state.adminEmail ? set(state.adminEmail) : later],
     ['Observe', state.observe ? set('on') : chalk.dim('off')],
-    ['Geolocation', state.geoip ? set('on') : chalk.dim('off')],
+    [
+      'Geolocation',
+      state.geoip
+        ? set(state.geoipStrategy === 'maxmind' ? 'MaxMind GeoLite2' : 'proxy headers')
+        : chalk.dim('off'),
+    ],
     [
       'Deployment',
       set(
@@ -536,19 +544,48 @@ export default class ServerInit extends Command {
               return 'back';
             }
             state.geoip = geoip;
-            if (geoip) {
-              const mmdbPath = await textStep('Path to the GeoLite2 City .mmdb file', {
+            if (!geoip) {
+              return 'next';
+            }
+            const strategy = await selectStep<GeoipStrategy>(
+              'How should devices be located?',
+              [
+                {
+                  title: 'Proxy or CDN headers',
+                  description: 'your edge (Cloudflare, CloudFront...) sends the location',
+                  value: 'proxy-headers',
+                },
+                {
+                  title: 'MaxMind GeoLite2',
+                  description: 'the server downloads the free GeoIP database itself',
+                  value: 'maxmind',
+                },
+              ],
+              { allowBack: true, initial: state.geoipStrategy }
+            );
+            if (strategy === BACK) {
+              continue;
+            }
+            state.geoipStrategy = strategy;
+            if (strategy === 'maxmind') {
+              const accountId = await textStep('MaxMind account ID', {
+                optional: true,
                 allowBack: true,
-                initial:
-                  state.geoipMmdbPath ??
-                  (state.deployment === 'binary'
-                    ? './GeoLite2-City.mmdb'
-                    : '/usr/share/GeoIP/GeoLite2-City.mmdb'),
+                initial: state.maxmindAccountId,
               });
-              if (mmdbPath === BACK) {
+              if (accountId === BACK) {
                 continue;
               }
-              state.geoipMmdbPath = mmdbPath;
+              state.maxmindAccountId = accountId;
+              const licenseKey = await textStep('MaxMind license key', {
+                optional: true,
+                allowBack: true,
+                initial: state.maxmindLicenseKey,
+              });
+              if (licenseKey === BACK) {
+                continue;
+              }
+              state.maxmindLicenseKey = licenseKey;
             }
             return 'next';
           }
@@ -606,7 +643,9 @@ export default class ServerInit extends Command {
       observe: state.observe ?? false,
       clickhouseUrl: state.clickhouseUrl,
       geoip: state.geoip ?? false,
-      geoipMmdbPath: state.geoipMmdbPath,
+      geoipStrategy: state.geoipStrategy,
+      maxmindAccountId: state.maxmindAccountId,
+      maxmindLicenseKey: state.maxmindLicenseKey,
     };
 
     let content: string;
@@ -665,11 +704,6 @@ export default class ServerInit extends Command {
     const nextSteps: string[] = [];
     if (deployment === 'docker') {
       nextSteps.push(`docker run --env-file ${writtenLabel} -p 3000:3000 ${DOCKER_IMAGE}`);
-      if (choices.geoip) {
-        nextSteps.push(
-          'The GeoLite2 database ships with docker-compose.geoip.yml (needs a free MaxMind account).'
-        );
-      }
     } else if (deployment === 'binary') {
       nextSteps.push(
         `Rename ${writtenLabel} to .env next to the binary: the server loads .env at startup.`

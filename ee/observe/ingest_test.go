@@ -122,13 +122,13 @@ func TestHandleLogsResponseContract(t *testing.T) {
 	})
 
 	t.Run("unreadable body is a permanent 400", func(t *testing.T) {
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte("not json"))
 		require.Equal(t, http.StatusBadRequest, recorder.Code)
 	})
 
 	t.Run("oversized body is acknowledged so the device can move on", func(t *testing.T) {
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}), nil, nil, nil)
 		big := append([]byte(`{"resourceLogs":[{"resource":{"attributes":[{"key":"pad","value":{"stringValue":"`),
 			bytes.Repeat([]byte("x"), maxBatchBodyBytes+1)...)
 		big = append(big, []byte(`"}}]}}]}`)...)
@@ -148,7 +148,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 	t.Run("over the record cap is a partial success, never a rejection", func(t *testing.T) {
 		const surplus = 4
 		sink := &capturingSink{}
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), sink, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}), sink, nil, nil)
 		body := logsBodyWithRecords([]string{"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}, maxRecordsPerBatch+surplus)
 
 		recorder := serveIngest(handler, http.MethodPost, logsPath, body)
@@ -168,7 +168,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 
 	t.Run("identity operations are capped per batch", func(t *testing.T) {
 		mutator := &recordingMutator{}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 
 		var records []string
 		for i := 0; i < maxIdentityOpsPerBatch*3; i++ {
@@ -190,7 +190,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 	})
 
 	t.Run("two installations in one body is a permanent 400", func(t *testing.T) {
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), &capturingSink{}, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}), &capturingSink{}, nil, nil)
 		body := logsBodyWithRecords([]string{
 			"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
 			"7a6b5c4d-3e2f-1a0b-9c8d-7e6f5a4b3c2d",
@@ -201,7 +201,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 	})
 
 	t.Run("one installation spelled two ways is still one installation", func(t *testing.T) {
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), &capturingSink{}, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{}), &capturingSink{}, nil, nil)
 		body := logsBodyWithRecords([]string{
 			"8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
 			"8B9C1FE0-93B3-4B3A-8C1D-2F4A5E6B7C8D",
@@ -212,14 +212,14 @@ func TestHandleLogsResponseContract(t *testing.T) {
 	})
 
 	t.Run("store failure is a retryable 503, never 500", func(t *testing.T) {
-		handler := NewIngestHandler(identity.NewService(&recordingMutator{fail: true}, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(&recordingMutator{fail: true}), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(androidLogsFixture))
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 	})
 
 	t.Run("telemetry-only batch is acknowledged untouched", func(t *testing.T) {
 		mutator := &recordingMutator{}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 		body := strings.ReplaceAll(androidLogsFixture, "$set", "exception")
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(body))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
@@ -228,7 +228,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 
 	t.Run("forged client id skips records without failing the batch", func(t *testing.T) {
 		mutator := &recordingMutator{}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 		body := strings.ReplaceAll(androidLogsFixture, "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "not-a-uuid")
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(body))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
@@ -237,7 +237,7 @@ func TestHandleLogsResponseContract(t *testing.T) {
 
 	t.Run("identity ops reach the service", func(t *testing.T) {
 		mutator := &recordingMutator{}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(androidLogsFixture))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
 		require.True(t, mutator.hadDeadline, "each identity apply must have a request-scoped deadline")
@@ -322,7 +322,7 @@ const jsCrashLogsFixture = `{
 func TestHandleLogsJSCrashProjection(t *testing.T) {
 	t.Run("crash events land as runtime failures, deduped per device+update", func(t *testing.T) {
 		mutator := &recordingMutator{}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(jsCrashLogsFixture))
 		require.Equal(t, http.StatusNoContent, recorder.Code)
 		require.Len(t, mutator.runtime, 1)
@@ -334,7 +334,7 @@ func TestHandleLogsJSCrashProjection(t *testing.T) {
 
 	t.Run("failure-store outage is a retryable 503", func(t *testing.T) {
 		mutator := &recordingMutator{failFailures: true}
-		handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+		handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 		recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(jsCrashLogsFixture))
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 	})
@@ -367,7 +367,7 @@ const runtimeRecoveryLogsFixture = `{
 
 func TestHandleLogsRuntimeRecoveryUsesEventOrder(t *testing.T) {
 	mutator := &recordingMutator{}
-	handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+	handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(runtimeRecoveryLogsFixture))
 	require.Equal(t, http.StatusNoContent, recorder.Code)
 	require.Equal(t, []recordedRuntimeSignal{
@@ -433,7 +433,7 @@ func TestIngestEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	handler := NewIngestHandler(identity.NewService(identityStore, nil), nil, nil, nil)
+	handler := NewIngestHandler(identity.NewService(identityStore), nil, nil, nil)
 	path := "/observe/" + appID + "/whatever-project/v1/logs"
 	recorder := serveIngest(handler, http.MethodPost, path, []byte(androidLogsFixture))
 	require.Equal(t, http.StatusNoContent, recorder.Code)
@@ -447,25 +447,24 @@ func TestIngestEndToEnd(t *testing.T) {
 func TestIdentityRequestsFromBatch(t *testing.T) {
 	batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 	require.NoError(t, err)
-	requests := identityRequestsFromBatch(batch, "app-1", "203.0.113.7")
+	requests := identityRequestsFromBatch(batch, "app-1")
 	require.Len(t, requests, 1)
 	require.Equal(t, identity.OpSet, requests[0].Op)
 	require.Equal(t, "app-1", requests[0].AppID)
-	require.Equal(t, "203.0.113.7", requests[0].RemoteIP)
 	require.Equal(t, "user_42", requests[0].Attributes["userId"])
 
 	t.Run("forged client id yields no requests", func(t *testing.T) {
 		body := strings.ReplaceAll(androidLogsFixture, "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d", "not-a-uuid")
 		b, err := DecodeLogs(bytes.NewReader([]byte(body)))
 		require.NoError(t, err)
-		require.Empty(t, identityRequestsFromBatch(b, "app-1", ""))
+		require.Empty(t, identityRequestsFromBatch(b, "app-1"))
 	})
 
 	t.Run("telemetry records yield no requests", func(t *testing.T) {
 		body := strings.ReplaceAll(androidLogsFixture, "$set", "exception")
 		b, err := DecodeLogs(bytes.NewReader([]byte(body)))
 		require.NoError(t, err)
-		require.Empty(t, identityRequestsFromBatch(b, "app-1", ""))
+		require.Empty(t, identityRequestsFromBatch(b, "app-1"))
 	})
 }
 
@@ -475,7 +474,7 @@ func TestIdentityPassLeavesTelemetryRecognizable(t *testing.T) {
 			batch, err := DecodeLogs(bytes.NewReader([]byte(strings.ReplaceAll(androidLogsFixture, "$set", op))))
 			require.NoError(t, err)
 
-			requests := identityRequestsFromBatch(batch, "app-1", "203.0.113.7")
+			requests := identityRequestsFromBatch(batch, "app-1")
 			require.Len(t, requests, 1)
 			require.Equal(t, "user_42", requests[0].Attributes["userId"])
 
@@ -491,7 +490,7 @@ func TestIdentityPassLeavesTelemetryRecognizable(t *testing.T) {
 	t.Run("coalescing does not write back into the records", func(t *testing.T) {
 		batch, err := DecodeLogs(bytes.NewReader([]byte(androidLogsFixture)))
 		require.NoError(t, err)
-		requests := identityRequestsFromBatch(batch, "app-1", "")
+		requests := identityRequestsFromBatch(batch, "app-1")
 		require.Len(t, requests, 1)
 
 		folded := identity.CoalesceRequests(append(requests, identity.Request{
@@ -521,7 +520,7 @@ func (s *capturingSink) InsertLogs(_ context.Context, rows []LogRow) error {
 
 func TestHandleLogsEnrichesRowsWithPlace(t *testing.T) {
 	sink := &capturingSink{}
-	handler := NewIngestHandler(identity.NewService(&recordingMutator{}, nil), sink, nil, nil)
+	handler := NewIngestHandler(identity.NewService(&recordingMutator{}), sink, nil, nil)
 	body := strings.ReplaceAll(androidLogsFixture, "$set", "exception")
 	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(body))
 	require.Equal(t, http.StatusNoContent, recorder.Code)
@@ -564,7 +563,7 @@ func TestFlattenBoundsHostileResourceAttributes(t *testing.T) {
 
 func TestRuntimeHealthBoundsTheNumberOfGroups(t *testing.T) {
 	mutator := &recordingMutator{}
-	handler := NewIngestHandler(identity.NewService(mutator, nil), nil, nil, nil)
+	handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
 
 	device := "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"
 	var resources []string

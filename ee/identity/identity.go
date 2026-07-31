@@ -20,6 +20,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"xprem/ee/geoip"
 )
 
 // ErrTooManySchemaKeys is returned when declaring a new allowlist key would exceed MaxSchemaKeys.
@@ -371,14 +373,9 @@ const (
 	MaxDevicesPageSize     = 200
 )
 
-// Geo is an optional, per-field-optional enrichment resolved from the request IP. A nil field
-// never overwrites a previously known value.
-type Geo struct {
-	CountryCode *string
-	City        *string
-	Lat         *float64
-	Lng         *float64
-}
+// Geo is the identity vocabulary for a resolved location; the resolvers and
+// their middleware live in ee/geoip.
+type Geo = geoip.Location
 
 // Place is what telemetry ingestion keeps of a Geo: the country and coordinates, not the city.
 type Place struct {

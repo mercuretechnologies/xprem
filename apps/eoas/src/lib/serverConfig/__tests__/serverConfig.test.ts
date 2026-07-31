@@ -44,7 +44,28 @@ describe('renderEnvFile', () => {
     // IAM role auth keeps access keys out of the file.
     expect(content).not.toContain('AWS_ACCESS_KEY_ID');
     expect(content).not.toContain('CLICKHOUSE_URL');
-    expect(content).not.toContain('GEOIP_MMDB_PATH');
+    expect(content).not.toContain('TRUST_GEOIP_HEADERS');
+    expect(content).not.toContain('MAXMIND_ACCOUNT_ID');
+  });
+
+  it('renders the proxy-headers geolocation strategy', () => {
+    const content = renderEnvFile({ ...baseChoices, geoip: true, geoipStrategy: 'proxy-headers' });
+    expect(content).toContain('TRUST_GEOIP_HEADERS=true');
+    expect(content).toContain('GEOIP_HEADER_COUNTRY/CITY/LATITUDE/LONGITUDE');
+    expect(content).not.toContain('MAXMIND_ACCOUNT_ID');
+  });
+
+  it('renders the maxmind geolocation strategy with the collected credentials', () => {
+    const content = renderEnvFile({
+      ...baseChoices,
+      geoip: true,
+      geoipStrategy: 'maxmind',
+      maxmindAccountId: '123456',
+    });
+    expect(content).toContain('MAXMIND_ACCOUNT_ID=123456');
+    expect(content).toContain('MAXMIND_LICENSE_KEY=<maxmind-license-key>');
+    expect(content).toContain('# GEOIP_CACHE_DIR=');
+    expect(content).not.toContain('TRUST_GEOIP_HEADERS');
   });
 
   it('renders optional vars commented out', () => {
@@ -144,6 +165,27 @@ describe('validateEnvMap', () => {
     const issues = validateEnvMap(env);
     expect(issues.some(i => i.level === 'error' && i.message.includes('DB_URL'))).toBe(true);
   });
+
+  it('rejects a half-set MaxMind credential pair, even with headers trusted', () => {
+    const env = parseEnvFile(renderEnvFile(baseChoices));
+    env.TRUST_GEOIP_HEADERS = 'true';
+    env.MAXMIND_ACCOUNT_ID = '123456';
+    const issues = validateEnvMap(env);
+    expect(issues.some(i => i.level === 'error' && i.message.includes('set together'))).toBe(true);
+  });
+
+  it('accepts a filled maxmind configuration', () => {
+    const env = parseEnvFile(
+      renderEnvFile({
+        ...baseChoices,
+        geoip: true,
+        geoipStrategy: 'maxmind',
+        maxmindAccountId: '123456',
+        maxmindLicenseKey: 'abcdef',
+      })
+    );
+    expect(validateEnvMap(env)).toEqual([]);
+  });
 });
 
 describe('inferChoicesFromEnv', () => {
@@ -157,6 +199,20 @@ describe('inferChoicesFromEnv', () => {
     expect(choices.storage).toBe('s3-compatible');
     expect(choices.delivery).toBe('generic-cdn');
     expect(choices.masterKeySource).toBe('aws-secrets-manager');
+  });
+
+  it('detects the geolocation strategy, headers winning over maxmind', () => {
+    expect(inferChoicesFromEnv({ TRUST_GEOIP_HEADERS: 'true' }).geoipStrategy).toBe(
+      'proxy-headers'
+    );
+    const maxmind = inferChoicesFromEnv({ MAXMIND_ACCOUNT_ID: '123456' });
+    expect(maxmind.geoip).toBe(true);
+    expect(maxmind.geoipStrategy).toBe('maxmind');
+    expect(
+      inferChoicesFromEnv({ TRUST_GEOIP_HEADERS: 'true', MAXMIND_ACCOUNT_ID: '123456' })
+        .geoipStrategy
+    ).toBe('proxy-headers');
+    expect(inferChoicesFromEnv({}).geoip).toBe(false);
   });
 });
 
@@ -183,6 +239,22 @@ describe('helm values', () => {
     expect(content).not.toContain('jwt-secret');
     expect(content).not.toContain('Str0ng!pass');
     expect(content).not.toContain('bWFzdGVyLWtleQ==');
+  });
+
+  it('routes the maxmind credentials through the secrets overlay', () => {
+    const geoChoices: ServerChoices = {
+      ...helmChoices,
+      geoip: true,
+      geoipStrategy: 'maxmind',
+      maxmindAccountId: '123456',
+      maxmindLicenseKey: 'abcdef',
+    };
+    const [values, secretEnv] = renderPair(geoChoices);
+    expect(renderHelmValues(geoChoices)).toContain('- name: "MAXMIND_ACCOUNT_ID"');
+    expect(renderHelmValues(geoChoices)).not.toContain('abcdef');
+    expect(secretEnv?.MAXMIND_ACCOUNT_ID).toBe('123456');
+    expect(secretEnv?.MAXMIND_LICENSE_KEY).toBe('abcdef');
+    expect(validateHelmPair(values, secretEnv).filter(i => i.level === 'error')).toEqual([]);
   });
 
   it('keeps the toggle-computed vars out of the secrets overlay', () => {
