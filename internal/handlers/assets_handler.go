@@ -23,17 +23,16 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 	channelName := r.Header.Get("expo-channel-name")
 
 	params := services.AssetResolutionParams{
-		RequestID:             requestID,
-		AppID:                 appId,
-		ChannelName:           channelName,
-		AssetName:             r.URL.Query().Get("asset"),
-		RuntimeVersion:        r.URL.Query().Get("runtimeVersion"),
-		Platform:              r.URL.Query().Get("platform"),
-		PreventCDNRedirection: r.Header.Get("prevent-cdn-redirection") == "true",
-		ClientID:              r.Header.Get("EAS-Client-ID"),
-		Branch:                r.URL.Query().Get("branch"),
-		UpdateID:              r.URL.Query().Get("updateId"),
-		RequestedUpdateID:     r.Header.Get("Expo-Requested-Update-ID"),
+		RequestID:         requestID,
+		AppID:             appId,
+		ChannelName:       channelName,
+		AssetName:         r.URL.Query().Get("asset"),
+		RuntimeVersion:    r.URL.Query().Get("runtimeVersion"),
+		Platform:          r.URL.Query().Get("platform"),
+		ClientID:          r.Header.Get("EAS-Client-ID"),
+		Branch:            r.URL.Query().Get("branch"),
+		UpdateID:          r.URL.Query().Get("updateId"),
+		RequestedUpdateID: r.Header.Get("Expo-Requested-Update-ID"),
 	}
 
 	result, err := h.protocolService.ResolveAssetBundle(r.Context(), params)

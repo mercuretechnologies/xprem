@@ -54,13 +54,12 @@ type ExpoProtocolError struct {
 }
 
 type AssetResolutionParams struct {
-	RequestID             string
-	AppID                 string
-	ChannelName           string
-	AssetName             string
-	RuntimeVersion        string
-	Platform              string
-	PreventCDNRedirection bool
+	RequestID      string
+	AppID          string
+	ChannelName    string
+	AssetName      string
+	RuntimeVersion string
+	Platform       string
 	// ClientID is the device's EAS-Client-ID header.
 	ClientID string
 	// Branch and UpdateID are the query params baked into manifest asset URLs; when
@@ -360,7 +359,7 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 
 	cdn := cdn2.GetCDN()
 
-	if cdn == nil || params.PreventCDNRedirection {
+	if cdn == nil {
 		resp, err := assets.HandleAssetsWithFile(req)
 		if err != nil {
 			return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
