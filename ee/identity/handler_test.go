@@ -87,8 +87,8 @@ func (f *fakeStore) UpdateHealthByIDs(_ context.Context, _ string, updateIDs []s
 }
 
 // licensedService builds a service with the enterprise gate open.
-func licensedService(store Store, geo GeoResolver) *Service {
-	service := NewService(store, geo)
+func licensedService(store Store) *Service {
+	service := NewService(store)
 	service.licenseValid = func() bool { return true }
 	return service
 }
@@ -128,7 +128,7 @@ func TestNilStoreAnswers400(t *testing.T) {
 
 func TestSchemaCRUDHandlers(t *testing.T) {
 	store := newFakeStore()
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/schema", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -163,14 +163,14 @@ func TestSchemaCRUDHandlers(t *testing.T) {
 func TestUpsertSchemaKeyLimitIs409(t *testing.T) {
 	store := newFakeStore()
 	store.upsertErr = ErrTooManySchemaKeys
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 	rec := serve(h, http.MethodPut, appPath+"/schema/userId", `{"type":"string"}`)
 	require.Equal(t, http.StatusConflict, rec.Code)
 }
 
 // A 403 the dashboard can read, not an opaque 500.
 func TestUpsertSchemaKeyWithoutLicenseIs403(t *testing.T) {
-	service := NewService(newFakeStore(), nil)
+	service := NewService(newFakeStore())
 	service.licenseValid = func() bool { return false }
 	rec := serve(NewIdentityHandler(service), http.MethodPut, appPath+"/schema/plan", `{"type":"string"}`)
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -180,7 +180,7 @@ func TestUpsertSchemaKeyWithoutLicenseIs403(t *testing.T) {
 func TestSearchValuesHandler(t *testing.T) {
 	store := newFakeStore()
 	store.values = []ValueCount{{Value: "acme", DeviceCount: 3}, {Value: "globex", DeviceCount: 1}}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/values", "")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -205,7 +205,7 @@ func TestGetDeviceHandler(t *testing.T) {
 		FirstSeenAt: now,
 		LastSeenAt:  now,
 	}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/devices/"+deviceID, "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -226,7 +226,7 @@ func TestGetDeviceHandler(t *testing.T) {
 
 func TestListDevicesTamperedCursorIs400(t *testing.T) {
 	store := newFakeStore()
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 	// Valid base64 and timestamp, but a non-uuid second segment.
 	tampered := base64.RawURLEncoding.EncodeToString([]byte("2026-01-01T00:00:00Z|not-a-uuid"))
 	rec := serve(h, http.MethodGet, appPath+"/devices?cursor="+tampered, "")
@@ -246,7 +246,7 @@ func TestListDevicesHandlerPaginationAndFilter(t *testing.T) {
 	}
 	// A filter is only accepted against a declared attribute, since the type decides how it's read.
 	store.schema = Schema{"userId": {Key: "userId", Type: ValueTypeString, MaxLength: 256}}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/devices?attr=userId:u1", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -283,7 +283,7 @@ func TestListDevicesFilterCarriesTheDeclaredType(t *testing.T) {
 		gotQuery = query
 		return nil, nil, nil
 	}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/devices?attr=canaryUser:true", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -336,7 +336,7 @@ func TestUpdateHealthHandler(t *testing.T) {
 		// One device reported both a rollback and a JS crash; FaultyDevices counts it once.
 		both: {DevicesOnUpdate: 4, FaultyDevices: 1, UpdateIssues: 1, RuntimeIssues: 1, FailedStillOn: 1},
 	}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/update-health?ids="+healthy+","+broken+","+crashy+","+both+","+untried+",garbage", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -394,7 +394,7 @@ func TestOnlineDevicesHandler(t *testing.T) {
 	store := newFakeStore()
 	store.devices["a"] = &Device{EASClientID: "a"}
 	store.devices["b"] = &Device{EASClientID: "b"}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	rec := serve(h, http.MethodGet, appPath+"/online", "")
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -432,7 +432,7 @@ func TestOnlineDevicesHandler(t *testing.T) {
 func TestOnlineDevicesHandlerAppliesFilters(t *testing.T) {
 	store := newFakeStore()
 	store.devices["a"] = &Device{EASClientID: "a"}
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	update := "9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10"
 	rec := serve(h, http.MethodGet, appPath+"/online?platform=ios&branch=main&branch=staging&updateId="+update+"&countryCode=FR", "")
@@ -448,7 +448,7 @@ func TestOnlineDevicesHandlerAppliesFilters(t *testing.T) {
 // A hand-written URL can repeat one filter key far more times than any dashboard control would.
 func TestListDevicesRejectsOversizedFilterLists(t *testing.T) {
 	store := newFakeStore()
-	h := NewIdentityHandler(licensedService(store, nil))
+	h := NewIdentityHandler(licensedService(store))
 
 	query := strings.Repeat("&deviceModel=SM-A546B", maxDeviceFilterValues+1)
 	rec := serve(h, http.MethodGet, appPath+"/devices?"+strings.TrimPrefix(query, "&"), "")

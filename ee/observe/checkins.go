@@ -263,7 +263,7 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 	if state.currentUpdateID != "" {
 		currentUpdate = &identity.CurrentUpdate{ID: state.currentUpdateID, ObservedAt: state.observedAt}
 	}
-	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, checkIn.RemoteIP, currentUpdate, state.device)
+	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, currentUpdate, state.device)
 }
 
 const maxFailedUpdateIDsPerCheckIn = 5

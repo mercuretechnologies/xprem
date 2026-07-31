@@ -2,7 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-package identity
+package geoip
 
 import (
 	"archive/tar"
@@ -81,7 +81,7 @@ func newMaxMindServer(t *testing.T, fixture *maxmindFixture) *httptest.Server {
 	return server
 }
 
-func testResolver(t *testing.T, server *httptest.Server) *MaxMindResolver {
+func testResolver(t *testing.T, server *httptest.Server) *maxMindResolver {
 	t.Helper()
 	resolver := newMaxMindResolver("12345", "license", t.TempDir())
 	resolver.baseURL = server.URL
@@ -119,7 +119,9 @@ func TestMaxMindRefreshDownloadsVerifiesAndWrites(t *testing.T) {
 	if resolver.loaded() {
 		t.Fatal("a rejected database must leave the resolver unloaded")
 	}
-	if geo := resolver.Resolve("203.0.113.7"); geo != nil {
+	unloadedReq := httptest.NewRequest(http.MethodGet, "/manifest", nil)
+	unloadedReq.RemoteAddr = "203.0.113.7:4242"
+	if geo := resolver.Resolve(unloadedReq); geo != nil {
 		t.Fatalf("expected nil resolution while unloaded, got %#v", geo)
 	}
 }
@@ -188,4 +190,24 @@ func TestResolveGeoipCacheDir(t *testing.T) {
 	if got := resolveGeoipCacheDir(""); got == "" {
 		t.Fatal("the default cache dir must never be empty")
 	}
+}
+
+func TestMMDBReaderGuards(t *testing.T) {
+	if _, err := openMMDBReader("/nonexistent/GeoLite2-City.mmdb"); err == nil {
+		t.Fatal("expected an error for a missing database file")
+	}
+
+	// The IP guards run before any database access, so an empty reader is safe to call.
+	reader := &mmdbReader{}
+	for _, ip := range []string{"", "not-an-ip", "10.1.2.3", "192.168.1.1", "127.0.0.1", "0.0.0.0", "::1", "fd00::1"} {
+		if location := reader.resolveLocationFromIP(ip); location != nil {
+			t.Fatalf("ip %q must not resolve, got %#v", ip, location)
+		}
+	}
+	// Public IP with no database still resolves to nil instead of panicking.
+	if location := reader.resolveLocationFromIP("203.0.113.7"); location != nil {
+		t.Fatalf("expected nil without a database, got %#v", location)
+	}
+	reader.close()
+	(*mmdbReader)(nil).close()
 }

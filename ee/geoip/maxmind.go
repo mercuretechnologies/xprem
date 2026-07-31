@@ -2,7 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-package identity
+package geoip
 
 import (
 	"archive/tar"
@@ -15,12 +15,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oschwald/geoip2-golang"
 )
 
 const (
@@ -34,11 +37,11 @@ const (
 	maxmindMaxArchiveSize = 512 << 20
 )
 
-// MaxMindResolver keeps a GeoLite2 City database downloaded and fresh using
+// maxMindResolver keeps a GeoLite2 City database downloaded and fresh using
 // MaxMind account credentials, so deployments do not have to mount an .mmdb
 // file. Resolve answers nil until the first database is available; a failed
 // download never blocks the server.
-type MaxMindResolver struct {
+type maxMindResolver struct {
 	accountID       string
 	licenseKey      string
 	dbPath          string
@@ -48,17 +51,17 @@ type MaxMindResolver struct {
 	retryInterval   time.Duration
 
 	mu       sync.RWMutex
-	resolver *GeoLite2Resolver
+	resolver *mmdbReader
 
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
 }
 
-// NewMaxMindResolverFromEnv builds the resolver from MAXMIND_ACCOUNT_ID,
+// newMaxMindResolverFromEnv builds the resolver from MAXMIND_ACCOUNT_ID,
 // MAXMIND_LICENSE_KEY and the optional GEOIP_CACHE_DIR. It returns nil when
 // no credentials are configured; a half-set pair is a fatal misconfiguration.
-func NewMaxMindResolverFromEnv() *MaxMindResolver {
+func newMaxMindResolverFromEnv() *maxMindResolver {
 	accountID, licenseKey := config.GetEnv("MAXMIND_ACCOUNT_ID"), config.GetEnv("MAXMIND_LICENSE_KEY")
 	if accountID == "" && licenseKey == "" {
 		return nil
@@ -73,8 +76,8 @@ func NewMaxMindResolverFromEnv() *MaxMindResolver {
 
 // newMaxMindResolver builds the resolver without starting the refresh loop,
 // for tests that drive refresh directly.
-func newMaxMindResolver(accountID, licenseKey, cacheDir string) *MaxMindResolver {
-	return &MaxMindResolver{
+func newMaxMindResolver(accountID, licenseKey, cacheDir string) *maxMindResolver {
+	return &maxMindResolver{
 		accountID:       accountID,
 		licenseKey:      licenseKey,
 		dbPath:          filepath.Join(resolveGeoipCacheDir(cacheDir), maxmindEdition+".mmdb"),
@@ -97,7 +100,15 @@ func resolveGeoipCacheDir(configured string) string {
 	return filepath.Join(os.TempDir(), "expo-open-ota-geoip")
 }
 
-func (r *MaxMindResolver) run() {
+func (r *maxMindResolver) loadFromDisk() {
+	resolver, err := openMMDBReader(r.dbPath)
+	if err != nil {
+		return
+	}
+	r.swap(resolver)
+}
+
+func (r *maxMindResolver) run() {
 	defer close(r.done)
 	// A database cached by a previous run serves immediately, before any
 	// network call.
@@ -118,33 +129,25 @@ func (r *MaxMindResolver) run() {
 	}
 }
 
-func (r *MaxMindResolver) loaded() bool {
+func (r *maxMindResolver) loaded() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.resolver != nil
 }
 
-func (r *MaxMindResolver) loadFromDisk() {
-	resolver, err := NewGeoLite2Resolver(r.dbPath)
-	if err != nil {
-		return
-	}
-	r.swap(resolver)
-}
-
-func (r *MaxMindResolver) swap(next *GeoLite2Resolver) {
+func (r *maxMindResolver) swap(next *mmdbReader) {
 	r.mu.Lock()
 	old := r.resolver
 	r.resolver = next
 	// In-flight Resolve calls hold the read lock, so closing here cannot
 	// race them.
-	old.Close()
+	old.close()
 	r.mu.Unlock()
 }
 
 // refresh downloads the database when MaxMind has a newer build than the
 // cached file, verifies its checksum, and swaps it in.
-func (r *MaxMindResolver) refresh() error {
+func (r *maxMindResolver) refresh() error {
 	req, err := r.downloadRequest("tar.gz")
 	if err != nil {
 		return err
@@ -186,7 +189,7 @@ func (r *MaxMindResolver) refresh() error {
 	if err := r.writeAtomically(mmdb, resp.Header.Get("Last-Modified")); err != nil {
 		return err
 	}
-	resolver, err := NewGeoLite2Resolver(r.dbPath)
+	resolver, err := openMMDBReader(r.dbPath)
 	if err != nil {
 		return fmt.Errorf("downloaded GeoLite2 database is not usable: %w", err)
 	}
@@ -194,7 +197,7 @@ func (r *MaxMindResolver) refresh() error {
 	return nil
 }
 
-func (r *MaxMindResolver) downloadRequest(suffix string) (*http.Request, error) {
+func (r *maxMindResolver) downloadRequest(suffix string) (*http.Request, error) {
 	url := fmt.Sprintf("%s/geoip/databases/%s/download?suffix=%s", r.baseURL, maxmindEdition, suffix)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -204,7 +207,7 @@ func (r *MaxMindResolver) downloadRequest(suffix string) (*http.Request, error) 
 	return req, nil
 }
 
-func (r *MaxMindResolver) verifyChecksum(archive []byte) error {
+func (r *maxMindResolver) verifyChecksum(archive []byte) error {
 	req, err := r.downloadRequest("tar.gz.sha256")
 	if err != nil {
 		return err
@@ -257,7 +260,7 @@ func extractMmdb(archive []byte) ([]byte, error) {
 	return nil, errors.New("no .mmdb entry in the MaxMind archive")
 }
 
-func (r *MaxMindResolver) writeAtomically(mmdb []byte, lastModified string) error {
+func (r *maxMindResolver) writeAtomically(mmdb []byte, lastModified string) error {
 	dir := filepath.Dir(r.dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -286,7 +289,7 @@ func (r *MaxMindResolver) writeAtomically(mmdb []byte, lastModified string) erro
 	return nil
 }
 
-func (r *MaxMindResolver) Resolve(ip string) *Geo {
+func (r *maxMindResolver) Resolve(req *http.Request) *Location {
 	if r == nil {
 		return nil
 	}
@@ -295,18 +298,80 @@ func (r *MaxMindResolver) Resolve(ip string) *Geo {
 	if r.resolver == nil {
 		return nil
 	}
-	return r.resolver.Resolve(ip)
+	return r.resolver.resolveLocationFromIP(clientIPString(req))
 }
 
 // Close stops the refresh loop and releases the loaded database.
-func (r *MaxMindResolver) Close() {
+func (r *maxMindResolver) Close() {
 	if r == nil {
 		return
 	}
 	r.stopOnce.Do(func() { close(r.stop) })
 	<-r.done
 	r.mu.Lock()
-	r.resolver.Close()
+	r.resolver.close()
 	r.resolver = nil
 	r.mu.Unlock()
+}
+
+// mmdbReader resolves IPs against a local MaxMind GeoLite2/GeoIP2 City
+// database (mmdb file); it is the storage layer under maxMindResolver.
+type mmdbReader struct {
+	db *geoip2.Reader
+}
+
+func openMMDBReader(path string) (*mmdbReader, error) {
+	db, err := geoip2.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening GeoLite2 database %q: %w", path, err)
+	}
+	// Open succeeds on any mmdb type; check for City/Country here so a wrong database fails loud at boot.
+	if dbType := db.Metadata().DatabaseType; !strings.Contains(dbType, "City") && !strings.Contains(dbType, "Country") {
+		_ = db.Close()
+		return nil, fmt.Errorf("GeoLite2 database %q has type %q; a City or Country database is required", path, dbType)
+	}
+	log.Printf("🌍 [GEOIP] GeoLite2 database loaded from %s", path)
+	return &mmdbReader{db: db}, nil
+}
+
+func (r *mmdbReader) close() {
+	if r != nil && r.db != nil {
+		_ = r.db.Close()
+	}
+}
+
+func (r *mmdbReader) resolveLocationFromIP(ipStr string) *Location {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() {
+		return nil
+	}
+	if r == nil || r.db == nil {
+		return nil
+	}
+	record, err := r.db.City(ip)
+	if err != nil {
+		return nil
+	}
+
+	location := &Location{}
+	resolved := false
+	if code := record.Country.IsoCode; code != "" {
+		location.CountryCode = &code
+		resolved = true
+	}
+	if city := record.City.Names["en"]; city != "" {
+		location.City = &city
+		resolved = true
+	}
+	// 0,0 (Null Island) means the database has no location; treat it as absent.
+	if record.Location.Latitude != 0 || record.Location.Longitude != 0 {
+		lat, lng := record.Location.Latitude, record.Location.Longitude
+		location.Lat = &lat
+		location.Lng = &lng
+		resolved = true
+	}
+	if !resolved {
+		return nil
+	}
+	return location
 }

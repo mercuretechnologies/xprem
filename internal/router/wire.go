@@ -6,6 +6,7 @@ import (
 	"expo-open-ota/ee/apikeyrestrictions"
 	"expo-open-ota/ee/audit"
 	"expo-open-ota/ee/branchprotection"
+	"expo-open-ota/ee/geoip"
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/ee/licensing"
 	eemcptools "expo-open-ota/ee/mcptools"
@@ -159,13 +160,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
-			// Without MaxMind credentials, devices stay unlocated.
-			var geoResolver identity.GeoResolver
-			if resolver := identity.NewMaxMindResolverFromEnv(); resolver != nil {
-				geoResolver = resolver
-				addCleanup(resolver.Close)
-			}
-			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine), geoResolver)
+			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine))
+			addCleanup(geoip.CloseResolver)
 			checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
 			var observeClickHouse *clickhouse.Engine
 
