@@ -1,6 +1,5 @@
 import { Env } from '@expo/eas-build-job';
 import { Command, Flags } from '@oclif/core';
-import ora from 'ora';
 
 import { getAuthHeaders, retrieveCredentials, validateCredentials } from '../lib/auth';
 import {
@@ -10,6 +9,7 @@ import {
 } from '../lib/expoConfig';
 import { fetchWithRetries } from '../lib/fetch';
 import Log from '../lib/log';
+import { ora } from '../lib/ora';
 import { isExpoInstalled } from '../lib/package';
 import { promptAsync } from '../lib/prompts';
 import {

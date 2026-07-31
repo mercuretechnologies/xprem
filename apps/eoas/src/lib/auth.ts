@@ -22,7 +22,9 @@ export function retrieveCredentials(): Credentials {
 }
 
 export function validateCredentials(credentials: Credentials): boolean {
-  if (!credentials) return false;
+  if (!credentials) {
+    return false;
+  }
   return !!(credentials.token || credentials.sessionSecret);
 }
 

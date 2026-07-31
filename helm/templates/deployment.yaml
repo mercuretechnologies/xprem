@@ -13,9 +13,14 @@ spec:
       {{- include "xprem.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations .Values.secretEnv }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.secretEnv }}
+        checksum/secret-env: {{ .Values.secretEnv | toYaml | sha256sum }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "xprem.selectorLabels" . | nindent 8 }}

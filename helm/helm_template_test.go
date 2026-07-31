@@ -303,6 +303,73 @@ func TestProbePaths(t *testing.T) {
 	}
 }
 
+// setting secretEnv makes the chart deploy the secretName Secret itself and
+// stamp its checksum on the pods so a value change re-rolls them.
+func TestSecretEnvRendersSecretAndChecksumAnnotation(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+
+	cmd := exec.Command("helm", "template", "xprem", ".")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template failed: %v\n%s", err, out)
+	}
+	if doc := manifestOfKind(t, out, "Secret"); doc != nil {
+		t.Fatalf("did not expect a Secret to be rendered without secretEnv, got %#v", doc)
+	}
+
+	cmd = exec.Command(
+		"helm",
+		"template",
+		"xprem",
+		".",
+		"--set-string",
+		"secretEnv.JWT_SECRET=test-jwt",
+	)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template failed: %v\n%s", err, out)
+	}
+
+	secret := manifestOfKind(t, out, "Secret")
+	if secret == nil {
+		t.Fatal("expected a Secret to be rendered with secretEnv set")
+	}
+	if name := asMap(t, secret["metadata"])["name"]; name != "xprem-secrets" {
+		t.Fatalf("expected the Secret to be named xprem-secrets, got %v", name)
+	}
+	if value := asMap(t, secret["stringData"])["JWT_SECRET"]; value != "test-jwt" {
+		t.Fatalf("expected stringData JWT_SECRET=test-jwt, got %v", value)
+	}
+
+	deployment := manifestOfKind(t, out, "Deployment")
+	annotations := asMap(t, asMap(t, asMap(t, asMap(t, deployment["spec"])["template"])["metadata"])["annotations"])
+	if _, ok := annotations["checksum/secret-env"]; !ok {
+		t.Fatal("expected the pod template to carry the checksum/secret-env annotation")
+	}
+}
+
+func manifestOfKind(t *testing.T, manifest []byte, kind string) map[string]any {
+	t.Helper()
+
+	decoder := yaml.NewDecoder(bytes.NewReader(manifest))
+	for {
+		var doc map[string]any
+		err := decoder.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("failed to decode manifest: %v", err)
+		}
+		if doc["kind"] == kind {
+			return doc
+		}
+	}
+	return nil
+}
+
 func deploymentContainer(t *testing.T, manifest []byte) map[string]any {
 	t.Helper()
 

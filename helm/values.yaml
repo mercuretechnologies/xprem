@@ -24,6 +24,13 @@ serviceAccount:
   name: "xprem-sa"
 
 secretName: "xprem-secrets" # If set, environment variables will be read from this secret, else they will be read from the values.yaml file or passed in via the helm command line
+
+# Environment values the chart itself turns into the secretName Secret. Leave
+# empty to manage that Secret out of band (kubectl, external-secrets...).
+# `eoas server:init` generates a secrets.yaml overlay holding this map; deploy
+# with `-f values.yaml -f secrets.yaml`. Changing a value re-rolls the pods
+# through the checksum/secret-env pod annotation.
+secretEnv: {}
 storageMode: "s3"
 keysStorageType: "aws-secrets-manager"
 useCloudfrontRedirect: "false"

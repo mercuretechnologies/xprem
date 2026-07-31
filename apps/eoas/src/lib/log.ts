@@ -1,9 +1,12 @@
-// This file is copied from eas-cli[https://github.com/expo/eas-cli] to ensure consistent user experience across the CLI.
+// Rendering for every command's output, drawn with the @clack/prompts
+// primitives so the whole CLI shares one visual identity (gutter, symbols,
+// notes). The static API is kept from the original eas-cli logger so call
+// sites did not have to change.
+import * as clack from '@clack/prompts';
 import chalk from 'chalk';
-import figures from 'figures';
 import { boolish } from 'getenv';
-import logSymbols from 'log-symbols';
 import terminalLink from 'terminal-link';
+import { format } from 'util';
 
 type Color = (...text: string[]) => string;
 
@@ -11,11 +14,12 @@ export default class Log {
   public static readonly isDebug = boolish('DEBUG', false);
 
   public static log(...args: any[]): void {
-    Log.consoleLog(...args);
+    Log.write(format(...args));
   }
 
   public static newLine(): void {
-    Log.consoleLog();
+    Log.write('');
+    Log.isLastLineNewLine = true;
   }
 
   public static addNewLineIfNone(): void {
@@ -25,21 +29,23 @@ export default class Log {
   }
 
   public static error(...args: any[]): void {
-    Log.consoleLog(...Log.withTextColor(args, chalk.red));
+    Log.track();
+    clack.log.error(Log.withTextColor(args, chalk.red).join(' '));
   }
 
   public static warn(...args: any[]): void {
-    Log.consoleLog(...Log.withTextColor(args, chalk.yellow));
+    Log.track();
+    clack.log.warn(Log.withTextColor(args, chalk.yellow).join(' '));
   }
 
   public static debug(...args: any[]): void {
     if (Log.isDebug) {
-      Log.consoleLog(...args);
+      Log.write(format(...args));
     }
   }
 
   public static gray(...args: any[]): void {
-    Log.consoleLog(...Log.withTextColor(args, chalk.gray));
+    Log.write(Log.withTextColor(args, chalk.gray).join(' '));
   }
 
   public static warnDeprecatedFlag(flag: string, message: string): void {
@@ -47,43 +53,59 @@ export default class Log {
   }
 
   public static fail(message: string): void {
-    Log.log(`${chalk.red(logSymbols.error)} ${message}`);
+    Log.track();
+    clack.log.error(message);
   }
 
   public static succeed(message: string): void {
-    Log.log(`${chalk.green(logSymbols.success)} ${message}`);
+    Log.track();
+    clack.log.success(message);
   }
 
   public static withTick(...args: any[]): void {
-    Log.consoleLog(chalk.green(figures.tick), ...args);
+    Log.track();
+    clack.log.success(format(...args));
   }
 
   public static withInfo(...args: any[]): void {
-    Log.consoleLog(chalk.green(figures.info), ...args);
+    Log.track();
+    clack.log.info(format(...args));
   }
 
-  private static consoleLog(...args: any[]): void {
-    Log.updateIsLastLineNewLine(args);
-    // eslint-disable-next-line no-console
-    console.log(...args);
+  /** Opens a clack session frame; every line after it hangs on the gutter. */
+  public static intro(title: string): void {
+    Log.track();
+    clack.intro(title);
+  }
+
+  /** Closes the clack session frame opened by intro. */
+  public static outro(message: string): void {
+    Log.track();
+    clack.outro(message);
+  }
+
+  public static note(content: string, title?: string): void {
+    Log.track();
+    clack.note(content, title);
+  }
+
+  public static cancel(message: string): void {
+    Log.track();
+    clack.cancel(message);
+  }
+
+  private static write(text: string): void {
+    Log.track(text);
+    clack.log.message(text);
   }
 
   private static withTextColor(args: any[], chalkColor: Color): string[] {
-    return args.map(arg => chalkColor(arg));
+    return args.map(arg => chalkColor(format(arg)));
   }
 
   private static isLastLineNewLine = false;
-  private static updateIsLastLineNewLine(args: any[]): void {
-    if (args.length === 0) {
-      Log.isLastLineNewLine = true;
-    } else {
-      const lastArg = args[args.length - 1];
-      if (typeof lastArg === 'string' && (lastArg === '' || lastArg.match(/[\r\n]$/))) {
-        Log.isLastLineNewLine = true;
-      } else {
-        Log.isLastLineNewLine = false;
-      }
-    }
+  private static track(text?: string): void {
+    Log.isLastLineNewLine = text !== undefined && text === '';
   }
 }
 

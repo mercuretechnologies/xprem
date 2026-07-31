@@ -46,7 +46,9 @@ export function resolvePackageRunner(explicit?: string, projectDir?: string): st
 
   if (projectDir) {
     const detected = detectRunnerFromPackageJson(projectDir);
-    if (detected) return detected;
+    if (detected) {
+      return detected;
+    }
   }
 
   return DEFAULT_PACKAGE_RUNNER;

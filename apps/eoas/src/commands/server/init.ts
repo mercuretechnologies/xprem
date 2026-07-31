@@ -1,0 +1,690 @@
+import { Command } from '@oclif/core';
+import chalk from 'chalk';
+import { randomBytes } from 'crypto';
+import fs from 'fs-extra';
+import path from 'path';
+
+import Log from '../../lib/log';
+import {
+  BACK,
+  BACK_INPUT,
+  type SelectStepChoice,
+  confirmStep,
+  selectStep,
+  textStep,
+  yesNoStep,
+} from '../../lib/prompts';
+import {
+  type AwsAuth,
+  type CacheMode,
+  type Deployment,
+  type S3Provider,
+  S3_PROVIDER_DEFAULTS,
+  type ServerChoices,
+  type Storage,
+  cacheOptionsFor,
+  deliveryOptionsFor,
+} from '../../lib/serverConfig/choices';
+import { renderEnvFile } from '../../lib/serverConfig/envCatalog';
+import {
+  HELM_SECRETS_FILE,
+  renderHelmSecretsValues,
+  renderHelmValues,
+} from '../../lib/serverConfig/helmValues';
+import { missingPasswordRules } from '../../lib/serverConfig/passwordPolicy';
+
+const DOCKER_IMAGE = 'ghcr.io/mercuretechnologies/xprem:latest';
+const HELM_CHART = 'oci://ghcr.io/mercuretechnologies/charts/xprem';
+
+const ACCENT = chalk.hex('#818cf8');
+const BADGE = chalk.bgHex('#4f46e5').white.bold;
+
+function generateSecret(): string {
+  return randomBytes(32).toString('base64');
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function shortPasswordHint(missing: string[]): string {
+  const short = missing.map(rule =>
+    rule
+      .replace('at least 8 characters', '8+ chars')
+      .replace('an uppercase letter', 'uppercase')
+      .replace('a lowercase letter', 'lowercase')
+      .replace('a digit', 'digit')
+      .replace('a special character', 'special char')
+  );
+  return `Missing: ${short.join(', ')}`;
+}
+
+const AWS_AUTH_CHOICES: SelectStepChoice<AwsAuth>[] = [
+  {
+    title: 'IAM role',
+    value: 'iam-role',
+    description: 'role on the runtime, no keys in the env',
+  },
+  {
+    title: 'Access key pair in the env',
+    value: 'access-keys',
+    description: 'AWS_ACCESS_KEY_ID + SECRET in the env',
+  },
+];
+
+type StoragePick = { storage: Storage; provider?: S3Provider };
+
+const STORAGE_CHOICES: SelectStepChoice<StoragePick>[] = [
+  { title: 'AWS S3', value: { storage: 'aws-s3' } },
+  ...(Object.keys(S3_PROVIDER_DEFAULTS) as S3Provider[]).map(provider => ({
+    title: S3_PROVIDER_DEFAULTS[provider].label,
+    value: { storage: 's3-compatible' as const, provider },
+    description: 'S3-compatible',
+  })),
+  { title: 'Google Cloud Storage', value: { storage: 'gcs' } },
+  { title: 'Azure Blob Storage', value: { storage: 'azure' } },
+];
+
+const DELIVERY_CHOICES: Record<string, { title: string; description: string }> = {
+  cloudfront: {
+    title: 'CloudFront',
+    description: 'signed URLs, the bucket stays private',
+  },
+  presigned: {
+    title: 'Pre-signed storage URLs',
+    description: 'signed URLs straight to the private bucket',
+  },
+  'through-server': {
+    title: 'Through the server',
+    description: 'the server streams assets, costs bandwidth',
+  },
+  'generic-cdn': {
+    title: 'Generic CDN',
+    description: 'a CDN in front of a public bucket',
+  },
+};
+
+type WizardState = {
+  baseUrl?: string;
+  jwtSecret?: string;
+  dbUrl?: string;
+  awsAuth?: AwsAuth;
+  storagePick?: StoragePick;
+  s3BucketName?: string;
+  awsRegion?: string;
+  awsBaseEndpoint?: string;
+  gcsBucketName?: string;
+  azureContainerName?: string;
+  azureAccountName?: string;
+  delivery?: ServerChoices['delivery'];
+  cdnBaseUrl?: string;
+  multiReplica?: boolean;
+  cacheMode?: CacheMode;
+  adminEmail?: string;
+  adminPassword?: string;
+  deployment?: Deployment;
+  observe?: boolean;
+  clickhouseUrl?: string;
+  geoip?: boolean;
+  geoipMmdbPath?: string;
+};
+
+type StepResult = 'back' | 'next';
+
+type WizardStep = {
+  id: string;
+  run: (allowBack: boolean) => Promise<StepResult>;
+};
+
+function summaryLines(state: WizardState): string {
+  const storageChoice = STORAGE_CHOICES.find(choice => choice.value === state.storagePick);
+  const set = ACCENT;
+  const later = chalk.dim('to fill later');
+  const rows: [string, string][] = [
+    ['Base URL', state.baseUrl ? set(state.baseUrl) : later],
+    ['JWT secret', state.jwtSecret ? set('generated') : later],
+    ['PostgreSQL', state.dbUrl ? set(state.dbUrl) : later],
+    ['Master key', set('generated, keep a backup')],
+    [
+      'Storage',
+      set(storageChoice?.title ?? 'AWS S3') +
+        (state.awsAuth
+          ? chalk.dim(` · ${state.awsAuth === 'iam-role' ? 'IAM role' : 'access keys'}`)
+          : ''),
+    ],
+    ['Delivery', set(DELIVERY_CHOICES[state.delivery ?? 'presigned'].title)],
+    ['Replicas', set(state.multiReplica ? 'multiple' : 'single')],
+    ['Cache', set(state.cacheMode ?? 'local')],
+    ['Dashboard admin', state.adminEmail ? set(state.adminEmail) : later],
+    ['Observe', state.observe ? set('on') : chalk.dim('off')],
+    ['Geolocation', state.geoip ? set('on') : chalk.dim('off')],
+    [
+      'Deployment',
+      set(
+        state.deployment === 'helm'
+          ? 'Helm (values.yaml + secrets.yaml)'
+          : state.deployment === 'binary'
+            ? 'Binary (.env.xprem)'
+            : 'Docker (.env.xprem)'
+      ),
+    ],
+  ];
+  return rows.map(([label, value]) => `${label.padEnd(16)}${value}`).join('\n');
+}
+
+export default class ServerInit extends Command {
+  static override args = {};
+  static override description =
+    'Interactive wizard that generates a pre-filled server configuration: .env.xprem for Docker or a binary, xprem-helm/ (values.yaml + secrets.yaml) for Helm';
+  static override examples = ['<%= config.bin %> <%= command.id %>'];
+  static override flags = {};
+
+  public async run(): Promise<void> {
+    Log.intro(`${BADGE(' xprem ')} ${chalk.bold('server setup')} ${chalk.dim('· control plane')}`);
+    Log.gray('Answers shape the generated config; skipped secrets stay as <placeholders>.');
+    Log.gray(
+      `Pick "← Back" in a list, or type "${BACK_INPUT}" in a text answer, to go back one step.`
+    );
+
+    const state: WizardState = {};
+
+    const steps: WizardStep[] = [
+      {
+        id: 'base-url',
+        run: async () => {
+          const value = await textStep('Public HTTPS URL of the server', {
+            optional: true,
+            initial: state.baseUrl,
+            validate: v => isHttpUrl(v) || 'Must be a valid http(s) URL',
+          });
+          if (value === BACK) {
+            return 'back';
+          }
+          state.baseUrl = value;
+          return 'next';
+        },
+      },
+      {
+        id: 'jwt',
+        run: async allowBack => {
+          while (true) {
+            const mode = await selectStep(
+              'JWT secret (signs sessions and upload tokens)',
+              [
+                { title: 'Generate one now', value: 'generate' as const },
+                { title: 'Paste my own', value: 'provide' as const },
+                { title: 'Set it later', value: 'later' as const },
+              ],
+              { allowBack }
+            );
+            if (mode === BACK) {
+              return 'back';
+            }
+            if (mode === 'generate') {
+              state.jwtSecret = generateSecret();
+              Log.succeed('JWT secret generated.');
+            } else if (mode === 'provide') {
+              const value = await textStep('JWT secret', { secret: true, allowBack: true });
+              if (value === BACK) {
+                continue;
+              }
+              state.jwtSecret = value;
+            } else {
+              state.jwtSecret = undefined;
+            }
+            return 'next';
+          }
+        },
+      },
+      {
+        id: 'db-url',
+        run: async allowBack => {
+          const value = await textStep('PostgreSQL connection string', {
+            optional: true,
+            allowBack,
+            initial: state.dbUrl,
+          });
+          if (value === BACK) {
+            return 'back';
+          }
+          state.dbUrl = value;
+          return 'next';
+        },
+      },
+      {
+        id: 'storage',
+        run: async allowBack => {
+          const pick = await selectStep(
+            'Where are the published updates stored?',
+            STORAGE_CHOICES,
+            {
+              allowBack,
+              initial: state.storagePick,
+            }
+          );
+          if (pick === BACK) {
+            return 'back';
+          }
+          state.storagePick = pick;
+          return 'next';
+        },
+      },
+      {
+        id: 'storage-details',
+        run: async () => {
+          const pick = state.storagePick ?? { storage: 'aws-s3' as const };
+          if (pick.storage === 'aws-s3') {
+            const auth = await selectStep<AwsAuth>(
+              'How does the server authenticate against S3?',
+              AWS_AUTH_CHOICES,
+              { allowBack: true, initial: state.awsAuth }
+            );
+            if (auth === BACK) {
+              return 'back';
+            }
+            state.awsAuth = auth;
+            const bucket = await textStep('S3 bucket name', {
+              optional: true,
+              allowBack: true,
+              initial: state.s3BucketName,
+            });
+            if (bucket === BACK) {
+              return 'back';
+            }
+            state.s3BucketName = bucket;
+            const region = await textStep('AWS region', {
+              optional: true,
+              allowBack: true,
+              initial: state.awsRegion ?? 'eu-west-1',
+            });
+            if (region === BACK) {
+              return 'back';
+            }
+            state.awsRegion = region;
+          } else if (pick.storage === 's3-compatible' && pick.provider) {
+            const defaults = S3_PROVIDER_DEFAULTS[pick.provider];
+            const endpoint = await textStep("Provider's S3 endpoint", {
+              optional: true,
+              allowBack: true,
+              initial: state.awsBaseEndpoint ?? defaults.endpoint,
+            });
+            if (endpoint === BACK) {
+              return 'back';
+            }
+            state.awsBaseEndpoint = endpoint;
+            const region = await textStep('Region', {
+              optional: true,
+              allowBack: true,
+              initial: state.awsRegion ?? defaults.region,
+            });
+            if (region === BACK) {
+              return 'back';
+            }
+            state.awsRegion = region;
+            const bucket = await textStep('Bucket name', {
+              optional: true,
+              allowBack: true,
+              initial: state.s3BucketName,
+            });
+            if (bucket === BACK) {
+              return 'back';
+            }
+            state.s3BucketName = bucket;
+          } else if (pick.storage === 'gcs') {
+            const bucket = await textStep('GCS bucket name', {
+              optional: true,
+              allowBack: true,
+              initial: state.gcsBucketName,
+            });
+            if (bucket === BACK) {
+              return 'back';
+            }
+            state.gcsBucketName = bucket;
+          } else {
+            const container = await textStep('Blob container name', {
+              optional: true,
+              allowBack: true,
+              initial: state.azureContainerName,
+            });
+            if (container === BACK) {
+              return 'back';
+            }
+            state.azureContainerName = container;
+            const account = await textStep('Storage account name', {
+              optional: true,
+              allowBack: true,
+              initial: state.azureAccountName,
+            });
+            if (account === BACK) {
+              return 'back';
+            }
+            state.azureAccountName = account;
+          }
+          return 'next';
+        },
+      },
+      {
+        id: 'delivery',
+        run: async allowBack => {
+          while (true) {
+            const storage = state.storagePick?.storage ?? 'aws-s3';
+            const options = deliveryOptionsFor(storage);
+            const delivery = await selectStep(
+              'How do devices download the update assets?',
+              options.map(option => ({ ...DELIVERY_CHOICES[option], value: option })),
+              {
+                allowBack,
+                initial:
+                  state.delivery && options.includes(state.delivery) ? state.delivery : undefined,
+              }
+            );
+            if (delivery === BACK) {
+              return 'back';
+            }
+            state.delivery = delivery;
+            if (delivery === 'generic-cdn') {
+              const url = await textStep('CDN base URL', {
+                optional: true,
+                allowBack: true,
+                initial: state.cdnBaseUrl,
+              });
+              if (url === BACK) {
+                continue;
+              }
+              state.cdnBaseUrl = url;
+            }
+            return 'next';
+          }
+        },
+      },
+      {
+        id: 'replicas',
+        run: async allowBack => {
+          const multi = await yesNoStep('Will you run more than one replica of the server?', {
+            allowBack,
+            initial: state.multiReplica ?? false,
+          });
+          if (multi === BACK) {
+            return 'back';
+          }
+          state.multiReplica = multi;
+          if (multi && state.cacheMode === 'local') {
+            state.cacheMode = undefined;
+          }
+          return 'next';
+        },
+      },
+      {
+        id: 'cache',
+        run: async allowBack => {
+          const replicas = state.multiReplica ? ('multi' as const) : ('single' as const);
+          const cacheMode = await selectStep<CacheMode>(
+            state.multiReplica ? 'Which shared cache? (required with replicas)' : 'Which cache?',
+            cacheOptionsFor(replicas).map(option =>
+              option === 'redis'
+                ? { title: 'Redis', value: option }
+                : option === 'redis-sentinel'
+                  ? { title: 'Redis Sentinel', value: option }
+                  : {
+                      title: 'In-memory',
+                      value: option,
+                      description: 'single replica only',
+                    }
+            ),
+            { allowBack, initial: state.cacheMode }
+          );
+          if (cacheMode === BACK) {
+            return 'back';
+          }
+          state.cacheMode = cacheMode;
+          return 'next';
+        },
+      },
+      {
+        id: 'admin',
+        run: async () => {
+          while (true) {
+            const email = await textStep('Dashboard admin email (seeded at first boot)', {
+              allowBack: true,
+              initial: state.adminEmail,
+              validate: v => /^\S+@\S+\.\S+$/.test(v) || 'Must be an email address',
+            });
+            if (email === BACK) {
+              return 'back';
+            }
+            state.adminEmail = email;
+            const password = await textStep('Admin password', {
+              secret: true,
+              allowBack: true,
+              validate: v => {
+                const missing = missingPasswordRules(v);
+                return missing.length === 0 || shortPasswordHint(missing);
+              },
+            });
+            if (password === BACK) {
+              continue;
+            }
+            state.adminPassword = password;
+            return 'next';
+          }
+        },
+      },
+      {
+        id: 'deployment',
+        run: async allowBack => {
+          const deployment = await selectStep<Deployment>(
+            'How will you deploy the server?',
+            [
+              { title: 'Docker', value: 'docker', description: 'generates .env.xprem' },
+              { title: 'Binary', value: 'binary', description: 'generates .env.xprem' },
+              {
+                title: 'Helm (Kubernetes)',
+                value: 'helm',
+                description: 'generates xprem-helm/ (values + secrets)',
+              },
+            ],
+            { allowBack, initial: state.deployment }
+          );
+          if (deployment === BACK) {
+            return 'back';
+          }
+          state.deployment = deployment;
+          return 'next';
+        },
+      },
+      {
+        id: 'observe',
+        run: async allowBack => {
+          while (true) {
+            const observe = await yesNoStep('Enable Observe (device metrics, needs ClickHouse)?', {
+              allowBack,
+              initial: state.observe ?? false,
+            });
+            if (observe === BACK) {
+              return 'back';
+            }
+            state.observe = observe;
+            if (observe) {
+              const url = await textStep('ClickHouse URL', {
+                optional: true,
+                allowBack: true,
+                initial: state.clickhouseUrl,
+              });
+              if (url === BACK) {
+                continue;
+              }
+              state.clickhouseUrl = url;
+            }
+            return 'next';
+          }
+        },
+      },
+      {
+        id: 'geoip',
+        run: async allowBack => {
+          while (true) {
+            const geoip = await yesNoStep('Locate devices on the Identity dashboard?', {
+              allowBack,
+              initial: state.geoip ?? false,
+            });
+            if (geoip === BACK) {
+              return 'back';
+            }
+            state.geoip = geoip;
+            if (geoip) {
+              const mmdbPath = await textStep('Path to the GeoLite2 City .mmdb file', {
+                allowBack: true,
+                initial:
+                  state.geoipMmdbPath ??
+                  (state.deployment === 'binary'
+                    ? './GeoLite2-City.mmdb'
+                    : '/usr/share/GeoIP/GeoLite2-City.mmdb'),
+              });
+              if (mmdbPath === BACK) {
+                continue;
+              }
+              state.geoipMmdbPath = mmdbPath;
+            }
+            return 'next';
+          }
+        },
+      },
+      {
+        id: 'summary',
+        run: async () => {
+          Log.note(summaryLines(state), 'Configuration');
+          const action = await selectStep(
+            'Generate the configuration?',
+            [{ title: 'Generate', value: 'generate' as const }],
+            { allowBack: true }
+          );
+          return action === BACK ? 'back' : 'next';
+        },
+      },
+    ];
+
+    let index = 0;
+    while (index < steps.length) {
+      const result = await steps[index].run(index > 0);
+      index = result === 'back' ? Math.max(0, index - 1) : index + 1;
+    }
+
+    const storagePick = state.storagePick ?? { storage: 'aws-s3' as const };
+    const deployment = state.deployment ?? 'docker';
+    const choices: ServerChoices = {
+      baseUrl: state.baseUrl,
+      jwtSecret: state.jwtSecret,
+      dbUrl: state.dbUrl,
+      // The wizard always seals the master key in the env; storing it in AWS
+      // Secrets Manager (AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID) is a hand edit.
+      masterKeySource: 'environment',
+      masterKey: generateSecret(),
+      awsAuth: state.awsAuth,
+      storage: storagePick.storage,
+      s3Provider: storagePick.provider,
+      s3BucketName: state.s3BucketName,
+      awsRegion: state.awsRegion,
+      awsBaseEndpoint: state.awsBaseEndpoint,
+      forcePathStyle: storagePick.provider
+        ? S3_PROVIDER_DEFAULTS[storagePick.provider].forcePathStyle
+        : undefined,
+      gcsBucketName: state.gcsBucketName,
+      azureContainerName: state.azureContainerName,
+      azureAccountName: state.azureAccountName,
+      delivery: state.delivery ?? 'presigned',
+      cdnBaseUrl: state.cdnBaseUrl,
+      replicas: state.multiReplica ? 'multi' : 'single',
+      cacheMode: state.cacheMode ?? 'local',
+      adminEmail: state.adminEmail,
+      adminPassword: state.adminPassword,
+      deployment,
+      observe: state.observe ?? false,
+      clickhouseUrl: state.clickhouseUrl,
+      geoip: state.geoip ?? false,
+      geoipMmdbPath: state.geoipMmdbPath,
+    };
+
+    let content: string;
+    let writtenLabel: string;
+    let validateTarget: string;
+    if (deployment === 'helm') {
+      const outDir = path.resolve(process.cwd(), 'xprem-helm');
+      const valuesPath = path.join(outDir, 'values.yaml');
+      const secretsPath = path.join(outDir, HELM_SECRETS_FILE);
+      if ((await fs.pathExists(valuesPath)) || (await fs.pathExists(secretsPath))) {
+        const overwrite = await confirmStep(
+          'xprem-helm/ already holds a generated pair. Overwrite it?'
+        );
+        if (!overwrite) {
+          Log.cancel('Aborted, nothing was written.');
+          return;
+        }
+      }
+      await fs.mkdirp(outDir);
+      const valuesContent = renderHelmValues(choices);
+      const secretsContent = renderHelmSecretsValues(choices);
+      await fs.writeFile(valuesPath, valuesContent);
+      await fs.writeFile(secretsPath, secretsContent);
+      content = valuesContent + secretsContent;
+      writtenLabel = `xprem-helm/values.yaml and xprem-helm/${HELM_SECRETS_FILE}`;
+      validateTarget = 'xprem-helm';
+    } else {
+      const fileName = '.env.xprem';
+      const filePath = path.resolve(process.cwd(), fileName);
+      if (await fs.pathExists(filePath)) {
+        const overwrite = await confirmStep(`${fileName} already exists. Overwrite it?`);
+        if (!overwrite) {
+          Log.cancel('Aborted, nothing was written.');
+          return;
+        }
+      }
+      content = renderEnvFile(choices);
+      await fs.writeFile(filePath, content);
+      writtenLabel = fileName;
+      validateTarget = fileName;
+    }
+
+    Log.succeed(`Wrote ${chalk.bold(writtenLabel)}`);
+    const placeholders = new Set(content.match(/<[^>\n]+>/g) ?? []);
+    if (placeholders.size > 0) {
+      Log.withInfo(
+        `${placeholders.size} placeholder(s) left to fill: ${chalk.dim(
+          [...placeholders].join(', ')
+        )}`
+      );
+    }
+    Log.warn(
+      'DB_KEYS_MASTER_KEY_B64 was generated in the file. Back it up now; it is not recoverable.'
+    );
+
+    const nextSteps: string[] = [];
+    if (deployment === 'docker') {
+      nextSteps.push(`docker run --env-file ${writtenLabel} -p 3000:3000 ${DOCKER_IMAGE}`);
+      if (choices.geoip) {
+        nextSteps.push(
+          'The GeoLite2 database ships with docker-compose.geoip.yml (needs a free MaxMind account).'
+        );
+      }
+    } else if (deployment === 'binary') {
+      nextSteps.push(
+        `Rename ${writtenLabel} to .env next to the binary: the server loads .env at startup.`
+      );
+    } else {
+      nextSteps.push(
+        `helm install xprem ${HELM_CHART} \\`,
+        `  -f xprem-helm/values.yaml -f xprem-helm/${HELM_SECRETS_FILE} -n <namespace>`,
+        `Gitignore xprem-helm/${HELM_SECRETS_FILE}; values.yaml is safe to commit.`,
+        'To change a secret later: edit it there and helm upgrade with the same flags.'
+      );
+    }
+    Log.note(nextSteps.join('\n'), 'Next steps');
+    Log.outro(
+      `Check the configuration anytime: ${ACCENT(`npx eoas server:validate ${validateTarget}`)}`
+    );
+  }
+}
