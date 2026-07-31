@@ -173,12 +173,6 @@ They live in [`ee/`](./ee) directories in the same repository and ship in the sa
 - **Branch protection**: mark the branches that reach real users as protected, then decide per API key whether it may publish to them. A sandbox CI job or a developer testing on staging gets a token that cannot touch production, instead of the one token that can do everything.
 - **Custom device attributes**: attach your own attributes to logs, metrics and events, then slice by them. Your plan tier, your tenant, your feature flag, whatever your app knows about the device.
 
-<table>
-  <tr>
-    <td><img src=".github/img/dashboard-token-restrictions.jpg" alt="API token access restrictions with protected branches and an IP allowlist" /></td>
-    <td><img src=".github/img/dashboard-sso.jpg" alt="Single sign-on configuration page supporting any OIDC identity provider" /></td>
-  </tr>
-</table>
 
 For a license, [contact us](mailto:contact@xprem.dev).
 
