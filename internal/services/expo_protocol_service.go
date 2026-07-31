@@ -120,13 +120,34 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 // payload is reused before being recomputed.
 const signatureCacheTTLSeconds = 3600
 
+// signingAppConfigCacheTTLSeconds bounds how stale the app config used for
+// signing can be after a change in the database.
+const signingAppConfigCacheTTLSeconds = 10
+
+func signingAppConfigCacheKey(appId string) string {
+	return "manifest-signing-app:" + appId
+}
+
 func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId string, content interface{}, expectSignatureHeader string) (string, error) {
 	if expectSignatureHeader == "" {
 		return "", nil
 	}
-	appConfig, err := s.appRepo.GetAppByID(ctx, appId)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
+	signingCache := cache2.GetCache()
+	var appConfig config.AppConfig
+	appConfigCached := false
+	if cached := signingCache.Get(signingAppConfigCacheKey(appId)); cached != "" {
+		appConfigCached = json.Unmarshal([]byte(cached), &appConfig) == nil
+	}
+	if !appConfigCached {
+		var err error
+		appConfig, err = s.appRepo.GetAppByID(ctx, appId)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
+		}
+		if payload, marshalErr := json.Marshal(appConfig); marshalErr == nil {
+			ttl := signingAppConfigCacheTTLSeconds
+			_ = signingCache.Set(signingAppConfigCacheKey(appId), string(payload), &ttl)
+		}
 	}
 	privateKey := keyStore.GetPrivateExpoKey(appConfig)
 	contentJSON, err := json.Marshal(content)
@@ -144,8 +165,7 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 		return "", fmt.Errorf("error hashing signed content: %w", err)
 	}
 	signatureCacheKey := fmt.Sprintf("manifest-signature:%s:%s:%s", appId, keyFingerprint, contentHash)
-	signatureCache := cache2.GetCache()
-	if signedHash := signatureCache.Get(signatureCacheKey); signedHash != "" {
+	if signedHash := signingCache.Get(signatureCacheKey); signedHash != "" {
 		return signedHash, nil
 	}
 	signedHash, err := crypto.SignRSASHA256(string(contentJSON), privateKey)
@@ -153,7 +173,7 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 		return "", fmt.Errorf("error signing content hash: %w", err)
 	}
 	ttl := signatureCacheTTLSeconds
-	_ = signatureCache.Set(signatureCacheKey, signedHash, &ttl)
+	_ = signingCache.Set(signatureCacheKey, signedHash, &ttl)
 	return signedHash, nil
 }
 

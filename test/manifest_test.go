@@ -1036,7 +1036,8 @@ func TestManifestSignatureCache(t *testing.T) {
 	assert.Equal(t, firstSignature, secondParts[0].Headers["Expo-Signature"])
 	assert.True(t, ValidateSignatureHeader("test-app-id", secondParts[0].Headers["Expo-Signature"], secondParts[0].Body))
 
-	// A rotated key must miss the cache: with the new key unreadable, signing
+	// Once the app-config entry expires (simulated by the Delete), a rotated
+	// key must miss the signature cache: with the new key unreadable, signing
 	// has to fail rather than serve the signature made with the old key.
 	os.Setenv("PRIVATE_LOCAL_EXPO_KEY_PATH", filepath.Join(projectRoot, "/test/keys/rotated-missing.pem"))
 	config.ResetAppsForTest()
@@ -1044,6 +1045,7 @@ func TestManifestSignatureCache(t *testing.T) {
 		t.Fatalf("LoadAppsFromFlatEnv: %v", err)
 	}
 	defer SetValidConfiguration()
+	cache2.GetCache().Delete("manifest-signing-app:test-app-id")
 	third := signedManifestRequest()
 	assert.Equal(t, 500, third.Code)
 	assert.Equal(t, "Error signing content\n", third.Body.String())
