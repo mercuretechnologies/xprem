@@ -12,6 +12,7 @@ import (
 	"time"
 	"xprem/config"
 	"xprem/internal/assets"
+	cache2 "xprem/internal/cache"
 	cdn2 "xprem/internal/cdn"
 	"xprem/internal/crypto"
 	"xprem/internal/keyStore"
@@ -115,6 +116,10 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 	return writer, &buf, nil
 }
 
+// signatureCacheTTLSeconds bounds how long the signature of an unchanged
+// payload is reused before being recomputed.
+const signatureCacheTTLSeconds = 3600
+
 func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId string, content interface{}, expectSignatureHeader string) (string, error) {
 	if expectSignatureHeader == "" {
 		return "", nil
@@ -128,10 +133,27 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 	if err != nil {
 		return "", fmt.Errorf("error stringifying content: %w", err)
 	}
+	// The key fingerprint is part of the cache key so a key rotation misses
+	// the cache instead of serving a signature made with the old key.
+	keyFingerprint, err := crypto.CreateHash([]byte(privateKey), "sha256", "hex")
+	if err != nil {
+		return "", fmt.Errorf("error hashing signing key fingerprint: %w", err)
+	}
+	contentHash, err := crypto.CreateHash(contentJSON, "sha256", "hex")
+	if err != nil {
+		return "", fmt.Errorf("error hashing signed content: %w", err)
+	}
+	signatureCacheKey := fmt.Sprintf("manifest-signature:%s:%s:%s", appId, keyFingerprint, contentHash)
+	signatureCache := cache2.GetCache()
+	if signedHash := signatureCache.Get(signatureCacheKey); signedHash != "" {
+		return signedHash, nil
+	}
 	signedHash, err := crypto.SignRSASHA256(string(contentJSON), privateKey)
 	if err != nil {
 		return "", fmt.Errorf("error signing content hash: %w", err)
 	}
+	ttl := signatureCacheTTLSeconds
+	_ = signatureCache.Set(signatureCacheKey, signedHash, &ttl)
 	return signedHash, nil
 }
 

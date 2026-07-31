@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"xprem/config"
 	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
+	crypto2 "xprem/internal/crypto"
 	"xprem/internal/handlers"
 	"xprem/internal/services"
 	"xprem/internal/types"
@@ -987,4 +989,62 @@ func TestManifestChecksInOnlyAfterResolution(t *testing.T) {
 		assert.Equal(t, "manifest", parts[0].Name, "this poll must be answered with an update, not a directive")
 		assert.Len(t, recorded, 1)
 	})
+}
+
+func TestManifestSignatureCache(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+
+	signedManifestRequest := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+		r.Header.Add("expo-platform", "ios")
+		r.Header.Add("expo-runtime-version", "nop")
+		r.Header.Add("expo-protocol-version", "1")
+		r.Header.Add("expo-expect-signature", "true")
+		r.Header.Add("expo-channel-name", "staging")
+		r.Header.Add("expo-app-id", "test-app-id")
+		mockWorkingExpoResponse("staging")
+		testContainer().ExpoProtocolHandler.HandleManifest(w, r)
+		return w
+	}
+
+	first := signedManifestRequest()
+	assert.Equal(t, 200, first.Code)
+	firstParts, err := ParseMultipartMixedResponse(first.Header().Get("Content-Type"), first.Body.Bytes())
+	assert.NoError(t, err)
+	assert.Len(t, firstParts, 1)
+	firstSignature := firstParts[0].Headers["Expo-Signature"]
+	assert.True(t, ValidateSignatureHeader("test-app-id", firstSignature, firstParts[0].Body))
+
+	projectRoot, err := findProjectRoot()
+	assert.NoError(t, err)
+	privateKeyPEM, err := os.ReadFile(filepath.Join(projectRoot, "/test/keys/private-key-test.pem"))
+	assert.NoError(t, err)
+	keyFingerprint, err := crypto2.CreateHash(privateKeyPEM, "sha256", "hex")
+	assert.NoError(t, err)
+	contentHash, err := crypto2.CreateHash([]byte(firstParts[0].Body), "sha256", "hex")
+	assert.NoError(t, err)
+	cachedSignature := cache2.GetCache().Get("manifest-signature:test-app-id:" + keyFingerprint + ":" + contentHash)
+	assert.NotEqual(t, "", cachedSignature, "the first signed response must store its signature in the cache")
+	assert.True(t, strings.Contains(firstSignature, cachedSignature), "the served signature and the cached one must match")
+
+	second := signedManifestRequest()
+	assert.Equal(t, 200, second.Code)
+	secondParts, err := ParseMultipartMixedResponse(second.Header().Get("Content-Type"), second.Body.Bytes())
+	assert.NoError(t, err)
+	assert.Equal(t, firstSignature, secondParts[0].Headers["Expo-Signature"])
+	assert.True(t, ValidateSignatureHeader("test-app-id", secondParts[0].Headers["Expo-Signature"], secondParts[0].Body))
+
+	// A rotated key must miss the cache: with the new key unreadable, signing
+	// has to fail rather than serve the signature made with the old key.
+	os.Setenv("PRIVATE_LOCAL_EXPO_KEY_PATH", filepath.Join(projectRoot, "/test/keys/rotated-missing.pem"))
+	config.ResetAppsForTest()
+	if err := config.LoadAppsFromFlatEnv(); err != nil {
+		t.Fatalf("LoadAppsFromFlatEnv: %v", err)
+	}
+	defer SetValidConfiguration()
+	third := signedManifestRequest()
+	assert.Equal(t, 500, third.Code)
+	assert.Equal(t, "Error signing content\n", third.Body.String())
 }
