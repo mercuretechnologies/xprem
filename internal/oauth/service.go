@@ -108,6 +108,20 @@ func (s *OAuthService) RegisterClient(ctx context.Context, name string, redirect
 	return client, nil
 }
 
+// executableSchemes are the schemes a browser runs instead of navigating to.
+// The consent screen hands the approved redirect_uri to location.assign, so one
+// of these would execute on the dashboard origin.
+var executableSchemes = map[string]bool{
+	"javascript":  true,
+	"data":        true,
+	"vbscript":    true,
+	"blob":        true,
+	"file":        true,
+	"about":       true,
+	"filesystem":  true,
+	"view-source": true,
+}
+
 // validateRedirectURI accepts https URIs, custom app schemes, and plain http
 // only towards a loopback host, per the OAuth 2.1 rules for public clients.
 func validateRedirectURI(raw string) error {
@@ -120,6 +134,15 @@ func validateRedirectURI(raw string) error {
 	}
 	if u.Fragment != "" {
 		return fmt.Errorf("%w: redirect_uri %q must not contain a fragment", ErrInvalidClientMetadata, raw)
+	}
+	// url.Parse lowercases the scheme, so this matches JaVaScRiPt: too.
+	if executableSchemes[u.Scheme] {
+		return fmt.Errorf("%w: redirect_uri %q uses a scheme the browser executes", ErrInvalidClientMetadata, raw)
+	}
+	// Opaque is non-empty for scheme:payload forms; a redirect target is always
+	// hierarchical (scheme://host/path or scheme:/path).
+	if u.Opaque != "" {
+		return fmt.Errorf("%w: redirect_uri %q is not a hierarchical URI", ErrInvalidClientMetadata, raw)
 	}
 	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
 		return fmt.Errorf("%w: redirect_uri %q uses http on a non-loopback host", ErrInvalidClientMetadata, raw)

@@ -198,6 +198,15 @@ func TestRegisterClientRejections(t *testing.T) {
 		{"http on a public host", map[string]interface{}{"redirect_uris": []string{"http://evil.example.com/callback"}}},
 		{"relative uri", map[string]interface{}{"redirect_uris": []string{"/callback"}}},
 		{"fragment in uri", map[string]interface{}{"redirect_uris": []string{"https://a.example.com/cb#frag"}}},
+		{"javascript scheme", map[string]interface{}{"redirect_uris": []string{"javascript:alert(document.domain)"}}},
+		// The consent redirect appends ?code=...; a trailing // comments it out,
+		// so the hierarchical form executes just as well as the opaque one.
+		{"javascript scheme, hierarchical", map[string]interface{}{"redirect_uris": []string{"javascript:/**/alert(document.domain)//"}}},
+		{"javascript scheme, mixed case", map[string]interface{}{"redirect_uris": []string{"JaVaScRiPt:alert(1)"}}},
+		{"data scheme", map[string]interface{}{"redirect_uris": []string{"data:text/html,<script>alert(1)</script>"}}},
+		{"file scheme", map[string]interface{}{"redirect_uris": []string{"file:///etc/passwd"}}},
+		{"opaque custom scheme", map[string]interface{}{"redirect_uris": []string{"myapp:payload"}}},
+		{"one bad uri among good ones", map[string]interface{}{"redirect_uris": []string{"https://a.example.com/cb", "javascript:alert(1)"}}},
 		{"confidential auth method", map[string]interface{}{
 			"redirect_uris":              []string{"https://a.example.com/cb"},
 			"token_endpoint_auth_method": "client_secret_basic",
@@ -219,6 +228,20 @@ func TestRegisterClientRejections(t *testing.T) {
 				t.Error("a rejected registration must not store a client")
 			}
 		})
+	}
+}
+
+func TestRegisterClientNativeAppSchemesAllowed(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	// Both private-use forms RFC 8252 describes: authority-based and path-only.
+	for _, uri := range []string{"myapp://callback", "com.example.app:/oauth2redirect"} {
+		res := httptest.NewRecorder()
+		handler.RegisterHandler(res, httptest.NewRequest(http.MethodPost, "/oauth/register", registerBody(t, map[string]interface{}{
+			"redirect_uris": []string{uri},
+		})))
+		if res.Code != http.StatusCreated {
+			t.Errorf("%s: expected 201, got %d: %s", uri, res.Code, res.Body.String())
+		}
 	}
 }
 
