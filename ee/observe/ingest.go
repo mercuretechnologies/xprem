@@ -10,7 +10,6 @@ import (
 	"errors"
 	"expo-open-ota/ee/identity"
 	"expo-open-ota/internal/handlers"
-	"expo-open-ota/internal/helpers"
 	"fmt"
 	"io"
 	"log"
@@ -137,15 +136,6 @@ func namesOneInstallation[R any](resources []R, attributesOf func(R) map[string]
 		}
 	}
 	return true
-}
-
-// clientIP renders the request's client address, "" when it cannot be trusted
-// or parsed. Geo resolution and the registry both key on it.
-func clientIP(r *http.Request) string {
-	if ip := helpers.ClientIP(r); ip.IsValid() {
-		return ip.String()
-	}
-	return ""
 }
 
 // resolveOrigin fills MetricRow/LogRow.Branch and .UpdateGroupID.
