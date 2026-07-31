@@ -26,9 +26,11 @@ import {
   cacheOptionsFor,
   deliveryOptionsFor,
 } from '../../lib/serverConfig/choices';
-import { renderEnvFile } from '../../lib/serverConfig/envCatalog';
+import { isPlaceholder, parseEnvFile, renderEnvFile } from '../../lib/serverConfig/envCatalog';
 import {
   HELM_SECRETS_FILE,
+  extractSecretEnv,
+  parseYamlFile,
   renderHelmSecretsValues,
   renderHelmValues,
 } from '../../lib/serverConfig/helmValues';
@@ -40,8 +42,40 @@ const HELM_CHART = 'oci://ghcr.io/mercuretechnologies/charts/xprem';
 const ACCENT = chalk.hex('#818cf8');
 const BADGE = chalk.bgHex('#4f46e5').white.bold;
 
+const ENV_FILE_NAME = '.env.xprem';
+const HELM_OUT_DIR = 'xprem-helm';
+const MASTER_KEY_VAR = 'DB_KEYS_MASTER_KEY_B64';
+
 function generateSecret(): string {
   return randomBytes(32).toString('base64');
+}
+
+/** A master key found in the file the wizard is about to replace. `unreadable`
+ * distinguishes "the file has no key" from "the file could not be parsed". */
+type ExistingMasterKey = { key?: string; unreadable: boolean };
+
+// The master key seals the OTA signing keys and the OIDC client secret already
+// in the database, so a re-run reuses it instead of minting a new one.
+export async function readExistingMasterKey(deployment: Deployment): Promise<ExistingMasterKey> {
+  const filePath =
+    deployment === 'helm'
+      ? path.resolve(process.cwd(), HELM_OUT_DIR, HELM_SECRETS_FILE)
+      : path.resolve(process.cwd(), ENV_FILE_NAME);
+  if (!(await fs.pathExists(filePath))) {
+    return { unreadable: false };
+  }
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    const env =
+      deployment === 'helm' ? extractSecretEnv(parseYamlFile(content)) : parseEnvFile(content);
+    const key = env?.[MASTER_KEY_VAR];
+    if (!key || isPlaceholder(key)) {
+      return { unreadable: false };
+    }
+    return { key, unreadable: false };
+  } catch {
+    return { unreadable: true };
+  }
 }
 
 function isHttpUrl(value: string): boolean {
@@ -613,6 +647,19 @@ export default class ServerInit extends Command {
 
     const storagePick = state.storagePick ?? { storage: 'aws-s3' as const };
     const deployment = state.deployment ?? 'docker';
+
+    const existingMasterKey = await readExistingMasterKey(deployment);
+    if (existingMasterKey.unreadable) {
+      Log.warn(`Could not read ${MASTER_KEY_VAR} from the existing configuration.`);
+      const proceed = await confirmStep(
+        `Generate a new master key? Signing keys and the SSO client secret sealed with the current one become unreadable.`
+      );
+      if (!proceed) {
+        Log.cancel('Aborted, nothing was written.');
+        return;
+      }
+    }
+
     const choices: ServerChoices = {
       baseUrl: state.baseUrl,
       jwtSecret: state.jwtSecret,
@@ -620,7 +667,7 @@ export default class ServerInit extends Command {
       // The wizard always seals the master key in the env; storing it in AWS
       // Secrets Manager (AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID) is a hand edit.
       masterKeySource: 'environment',
-      masterKey: generateSecret(),
+      masterKey: existingMasterKey.key ?? generateSecret(),
       awsAuth: state.awsAuth,
       storage: storagePick.storage,
       s3Provider: storagePick.provider,
@@ -652,7 +699,7 @@ export default class ServerInit extends Command {
     let writtenLabel: string;
     let validateTarget: string;
     if (deployment === 'helm') {
-      const outDir = path.resolve(process.cwd(), 'xprem-helm');
+      const outDir = path.resolve(process.cwd(), HELM_OUT_DIR);
       const valuesPath = path.join(outDir, 'values.yaml');
       const secretsPath = path.join(outDir, HELM_SECRETS_FILE);
       if ((await fs.pathExists(valuesPath)) || (await fs.pathExists(secretsPath))) {
@@ -673,7 +720,7 @@ export default class ServerInit extends Command {
       writtenLabel = `xprem-helm/values.yaml and xprem-helm/${HELM_SECRETS_FILE}`;
       validateTarget = 'xprem-helm';
     } else {
-      const fileName = '.env.xprem';
+      const fileName = ENV_FILE_NAME;
       const filePath = path.resolve(process.cwd(), fileName);
       if (await fs.pathExists(filePath)) {
         const overwrite = await confirmStep(`${fileName} already exists. Overwrite it?`);
@@ -697,9 +744,13 @@ export default class ServerInit extends Command {
         )}`
       );
     }
-    Log.warn(
-      'DB_KEYS_MASTER_KEY_B64 was generated in the file. Back it up now; it is not recoverable.'
-    );
+    if (existingMasterKey.key) {
+      Log.withInfo(`${MASTER_KEY_VAR} was carried over from the previous configuration.`);
+    } else {
+      Log.warn(
+        `${MASTER_KEY_VAR} was generated in the file. Back it up now; it is not recoverable.`
+      );
+    }
 
     const nextSteps: string[] = [];
     if (deployment === 'docker') {
