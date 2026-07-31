@@ -389,3 +389,24 @@ type unavailableUserRepo struct {
 func (r *unavailableUserRepo) GetUserByID(context.Context, string) (store.User, error) {
 	return store.User{}, errors.New("connection refused")
 }
+
+// Changing ADMIN_PASSWORD is the only revocation lever a stateless deployment
+// has: nothing names the session in a ledger, and the signing key is not
+// derived from the password.
+func TestStatelessSessionDiesWhenAdminPasswordChanges(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "admin")
+	authService := NewDashboardAuthService(nil, nil)
+	ctx := context.Background()
+
+	session, err := authService.LoginWithEmailPassword(ctx, "admin@example.com", "admin")
+	require.NoError(t, err)
+
+	t.Setenv("ADMIN_PASSWORD", "rotated")
+
+	_, err = authService.RefreshSession(ctx, session.RefreshToken)
+	assert.ErrorIs(t, err, ErrSessionRevoked, "a stolen refresh token must not outlive the password it was minted under")
+	_, err = authService.AuthenticateSession(ctx, session.Token)
+	assert.ErrorIs(t, err, ErrSessionRevoked, "nor must the access token handed out with it")
+}

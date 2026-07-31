@@ -5,7 +5,7 @@
 
 import { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { Lock, Mail, Sparkles } from 'lucide-react';
+import { ArrowUpRight, Lock, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -16,7 +16,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-export const ENTERPRISE_CONTACT_EMAIL = 'contact@xprem.dev';
+// Links to the enterprise page with the dashboard URL and the locked feature
+// as query params, so we know where the click came from.
+const enterpriseUrl = (feature?: string) => {
+  const url = new URL('https://xprem.dev/enterprise');
+  url.searchParams.set('referrer', window.location.href);
+  if (feature) url.searchParams.set('feature', feature);
+  return url.toString();
+};
 
 // The upsell dialog shown when someone reaches for an enterprise feature
 // without a valid license. Used by EnterpriseFeatureGate for masked blocks,
@@ -55,13 +62,15 @@ export const EnterpriseExplainerDialog = ({
           </div>
         )}
         <p>
-          Want to know more or get a license? Write to us at{' '}
+          Want to know more or get a license? Everything is on{' '}
           <a
-            href={`mailto:${ENTERPRISE_CONTACT_EMAIL}`}
+            href={enterpriseUrl(feature?.name)}
+            target="_blank"
+            rel="noreferrer"
             className="font-medium text-link hover:underline">
-            {ENTERPRISE_CONTACT_EMAIL}
-          </a>{' '}
-          and we will get back to you quickly.
+            xprem.dev/enterprise
+          </a>
+          .
         </p>
         <p>
           Already have a key? Activate it on the{' '}
@@ -79,9 +88,9 @@ export const EnterpriseExplainerDialog = ({
           Close
         </Button>
         <Button asChild>
-          <a href={`mailto:${ENTERPRISE_CONTACT_EMAIL}?subject=Expo%20Open%20OTA%20Enterprise`}>
-            <Mail className="h-4 w-4" />
-            Contact us
+          <a href={enterpriseUrl(feature?.name)} target="_blank" rel="noreferrer">
+            <ArrowUpRight className="h-4 w-4" />
+            Discover Enterprise
           </a>
         </Button>
       </DialogFooter>

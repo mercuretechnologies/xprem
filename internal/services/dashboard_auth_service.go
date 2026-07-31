@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -110,9 +112,29 @@ func (a *DashboardAuthService) SetSSOEnforced(enforced func(context.Context) boo
 	a.ssoEnforced = enforced
 }
 
+// statelessPasswordVersion fingerprints ADMIN_PASSWORD. Stateless mode has no
+// ledger to revoke a session through and the JWT secret is not derived from the
+// password, so this claim is what makes changing ADMIN_PASSWORD retire the
+// sessions minted under the old one.
+func statelessPasswordVersion() string {
+	sum := sha256.Sum256([]byte(config.GetEnv("ADMIN_PASSWORD")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// statelessClaimsAreCurrent reports whether a stateless token was minted under
+// the password in force now. Always true outside stateless mode, where the
+// account row carries the session version instead.
+func (a *DashboardAuthService) statelessClaimsAreCurrent(claims jwt.MapClaims) bool {
+	if a.userRepo != nil {
+		return true
+	}
+	version, _ := claims["pv"].(string)
+	return version == statelessPasswordVersion()
+}
+
 // generateSessionToken mints the access half of a dashboard session.
 func (a *DashboardAuthService) generateSessionToken(principal DashboardPrincipal) (*string, error) {
-	token, err := crypto.GenerateJWTToken(a.Secret, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"sub":     dashboardSubject,
 		"exp":     time.Now().Add(sessionTokenTTL).Unix(),
 		"iat":     time.Now().Unix(),
@@ -121,7 +143,11 @@ func (a *DashboardAuthService) generateSessionToken(principal DashboardPrincipal
 		"email":   principal.Email,
 		"isAdmin": principal.IsAdmin,
 		"sv":      principal.SessionVersion,
-	})
+	}
+	if a.userRepo == nil {
+		claims["pv"] = statelessPasswordVersion()
+	}
+	token, err := crypto.GenerateJWTToken(a.Secret, claims)
 	if err != nil {
 		return nil, fmt.Errorf("error while generating the jwt token: %w", err)
 	}
@@ -131,7 +157,7 @@ func (a *DashboardAuthService) generateSessionToken(principal DashboardPrincipal
 // generateRefreshToken mints the refresh half. tokenId names the ledger row
 // that makes it single-use, and is empty in stateless mode.
 func (a *DashboardAuthService) generateRefreshToken(principal DashboardPrincipal, tokenId string, expiresAt time.Time) (*string, error) {
-	refreshToken, err := crypto.GenerateJWTToken(a.Secret, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"sub":    dashboardSubject,
 		"exp":    expiresAt.Unix(),
 		"iat":    time.Now().Unix(),
@@ -140,7 +166,11 @@ func (a *DashboardAuthService) generateRefreshToken(principal DashboardPrincipal
 		"email":  principal.Email,
 		"sv":     principal.SessionVersion,
 		"jti":    tokenId,
-	})
+	}
+	if a.userRepo == nil {
+		claims["pv"] = statelessPasswordVersion()
+	}
+	refreshToken, err := crypto.GenerateJWTToken(a.Secret, claims)
 	if err != nil {
 		return nil, fmt.Errorf("error while generating the jwt token: %w", err)
 	}
@@ -364,6 +394,9 @@ func (a *DashboardAuthService) ValidateSession(tokenString string) (*DashboardPr
 	if claims["sub"] != dashboardSubject {
 		return nil, errors.New("invalid token subject")
 	}
+	if !a.statelessClaimsAreCurrent(claims) {
+		return nil, ErrSessionRevoked
+	}
 	principal := DashboardPrincipal{}
 	if userId, ok := claims["userId"].(string); ok {
 		principal.UserId = userId
@@ -433,6 +466,9 @@ func (a *DashboardAuthService) RefreshSession(ctx context.Context, tokenString s
 	}
 
 	if a.userRepo == nil {
+		if !a.statelessClaimsAreCurrent(claims) {
+			return nil, ErrSessionRevoked
+		}
 		email, _ := claims["email"].(string)
 		principal, err := resolveStatelessPrincipal(email, nil)
 		if err != nil {

@@ -311,17 +311,38 @@ func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId
 	return filePath, appId, branch, nil
 }
 
-// uploadPathIsInBranch reports whether filePath sits under appId/branch. The
-// layout is rootPath/appId/branch/runtimeVersion/updateId/file, written by
-// RequestUploadUrlForFileUpdate, so the two segments appear in that order and
-// looking for them as a pair is enough: a bucket root that happens to repeat
-// the app id cannot fake the pair, since it would have to repeat the branch
-// right after it.
+// localBucketRoot mirrors (*LocalBucket).rootPath() for the package-level token
+// validation below, which has no bucket instance to read it from.
+func localBucketRoot() string {
+	base := config.GetEnv("LOCAL_BUCKET_BASE_PATH")
+	if base == "" {
+		return ""
+	}
+	if prefix := resolveKeyPrefix(); prefix != "" {
+		return filepath.Join(base, prefix)
+	}
+	return base
+}
+
+// uploadPathIsInBranch reports whether filePath sits inside the branch
+// directory of the local bucket. Containment is checked against the bucket root
+// as well as the branch: a path claim is only ever minted by
+// RequestUploadUrlForFileUpdate, so one pointing outside the bucket is forged,
+// and matching the appId/branch pair as a substring would accept it anywhere on
+// the filesystem.
 func uploadPathIsInBranch(filePath, appId, branch string) bool {
-	return strings.Contains(
-		filepath.ToSlash(filePath),
-		"/"+appId+"/"+branch+"/",
-	)
+	root := localBucketRoot()
+	if root == "" || filePath == "" || appId == "" || branch == "" {
+		return false
+	}
+	expectedBase := filepath.Join(root, appId, branch)
+	// filepath.Rel over Clean'd paths, as GetFile does: it collapses traversal
+	// and does not treat a sibling sharing a string prefix as nested.
+	rel, err := filepath.Rel(expectedBase, filepath.Clean(filePath))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
 }
 
 // ResolveUploadTokenBranch returns the branch an upload token was minted for.

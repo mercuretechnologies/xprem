@@ -162,3 +162,45 @@ func TestGetFile_NormalSubdirectoryAllowed(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, file) // file doesn't exist, but no path traversal error
 }
+
+// The path claim of an upload token is only ever minted by
+// RequestUploadUrlForFileUpdate, so one pointing anywhere else is forged. The
+// branch pair alone is not containment: it matches at any depth, anywhere on
+// the filesystem.
+func TestUploadPathIsInBranch(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
+	t.Setenv("BUCKET_KEY_PREFIX", "")
+	t.Setenv("S3_KEY_PREFIX", "")
+
+	cases := []struct {
+		name     string
+		filePath string
+		want     bool
+	}{
+		{"the path the minter builds", filepath.Join(root, "app1", "main", "1.0.0", "17", "bundle.js"), true},
+		{"traversal out of the bucket", filepath.Join(root, "app1", "main") + "/../../../../etc/cron.d/pwn", false},
+		{"absolute path repeating the pair", "/etc/app1/main/evil.so", false},
+		{"the branch directory itself", filepath.Join(root, "app1", "main"), false},
+		{"another branch", filepath.Join(root, "app1", "other", "1.0.0", "17", "bundle.js"), false},
+		{"a branch sharing a prefix", filepath.Join(root, "app1", "mainline", "1.0.0", "17", "bundle.js"), false},
+		{"another app", filepath.Join(root, "app2", "main", "1.0.0", "17", "bundle.js"), false},
+		{"no branch claim", filepath.Join(root, "app1", "main", "1.0.0", "17", "bundle.js"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := "main"
+			if tc.name == "no branch claim" {
+				branch = ""
+			}
+			assert.Equal(t, tc.want, uploadPathIsInBranch(tc.filePath, "app1", branch))
+		})
+	}
+}
+
+// Without a local bucket configured there is no root to confine against, so an
+// upload token for one cannot be honoured.
+func TestUploadPathIsInBranchRefusesWithoutABucketRoot(t *testing.T) {
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", "")
+	assert.False(t, uploadPathIsInBranch("/updates/app1/main/1.0.0/17/bundle.js", "app1", "main"))
+}

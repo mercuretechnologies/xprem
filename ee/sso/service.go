@@ -333,6 +333,17 @@ func (s *SSOService) SaveConfig(ctx context.Context, input SaveConfigInput) (*Ad
 		if existing == nil {
 			return nil, &ConfigValidationError{Reason: errors.New("a client secret is required")}
 		}
+		// The stored secret belongs to the issuer it was entered for. Carrying
+		// it to another one would send it to whatever token endpoint that
+		// issuer advertises, and the dashboard never reads the secret back, so
+		// the admin making the change need not know it. Rotating the client id
+		// against the same issuer stays allowed: the secret goes back to the
+		// IdP that already holds it.
+		if existing.Issuer != cfg.Issuer {
+			return nil, &ConfigValidationError{
+				Reason: errors.New("re-enter the client secret when changing the issuer"),
+			}
+		}
 		cfg.ClientSecret = existing.ClientSecret
 	}
 	// Discovery only guards configurations that are meant to be used: saving
