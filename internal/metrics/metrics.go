@@ -3,11 +3,73 @@ package metrics
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"xprem/internal/cache"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// A manifest request carries its runtime version and current update id in
+// headers, so those two label values are whatever the client sent. Prometheus
+// never drops a series once created, so an unbounded set of them is a remotely
+// driven memory leak: maxSeriesPerMetric caps how many combinations a metric
+// keeps, and maxLabelValueLen caps one value, since a header can be far larger
+// than any real version or id.
+const (
+	maxSeriesPerMetric = 10000
+	maxLabelValueLen   = 128
+	overflowLabel      = "other"
+)
+
+// seriesLimiter remembers the label combinations a metric already carries, so a
+// new one can be refused once that metric is at capacity.
+type seriesLimiter struct {
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
+
+func (l *seriesLimiter) admit(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.seen[key]; ok {
+		return true
+	}
+	if len(l.seen) >= maxSeriesPerMetric {
+		return false
+	}
+	if l.seen == nil {
+		l.seen = make(map[string]struct{})
+	}
+	l.seen[key] = struct{}{}
+	return true
+}
+
+func (l *seriesLimiter) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seen = nil
+}
+
+var (
+	activeUsersLimiter      = &seriesLimiter{}
+	updateErrorUsersLimiter = &seriesLimiter{}
+)
+
+// boundClientLabels folds the two client-supplied label values into
+// overflowLabel when either is oversized or the metric is already at capacity.
+// Callers must use the returned values for the cache key as well, so folded
+// traffic shares one key instead of inventing one per request.
+func boundClientLabels(limiter *seriesLimiter, appId, platform, runtime, branch, update string) (string, string) {
+	if len(runtime) > maxLabelValueLen || len(update) > maxLabelValueLen {
+		return overflowLabel, overflowLabel
+	}
+	if !limiter.admit(strings.Join([]string{appId, platform, runtime, branch, update}, "\x00")) {
+		return overflowLabel, overflowLabel
+	}
+	return runtime, update
+}
 
 // All metrics are scoped by appId. In multi-app deployments (v2), two
 // different apps can publish identically named branches / runtime versions,
@@ -110,6 +172,7 @@ func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update st
 	if appId == "" || clientId == "" || platform == "" || runtime == "" || branch == "" {
 		return
 	}
+	runtime, computedUpdate = boundClientLabels(updateErrorUsersLimiter, appId, platform, runtime, branch, computedUpdate)
 	resolvedCache := cache.GetCache()
 	key := fmt.Sprintf("update_error_users:%s:%s:%s:%s:%s", appId, branch, platform, runtime, computedUpdate)
 	ttl := 600
@@ -127,6 +190,7 @@ func TrackActiveUser(appId, clientId, platform, runtime, branch, update string) 
 	if appId == "" || clientId == "" || platform == "" || branch == "" || update == "" || runtime == "" {
 		return
 	}
+	runtime, update = boundClientLabels(activeUsersLimiter, appId, platform, runtime, branch, update)
 
 	resolvedCache := cache.GetCache()
 	activeUserKey := fmt.Sprintf("seen_users:%s:%s:%s:%s:%s", appId, branch, platform, runtime, update)
@@ -161,6 +225,8 @@ func PrometheusHandler() http.Handler {
 }
 
 func ResetMetricsForTest() {
+	activeUsersLimiter.reset()
+	updateErrorUsersLimiter.reset()
 	activeUsersVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "active_users_total",

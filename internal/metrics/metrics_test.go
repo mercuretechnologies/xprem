@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"regexp"
@@ -241,5 +242,64 @@ func TestPrometheusHandler(t *testing.T) {
 	// against a future refactor that drops the label without updating tests.
 	if !strings.Contains(body, `appId="app-1"`) {
 		t.Errorf("Expected appId=\"app-1\" label in metrics output, got %s", body)
+	}
+}
+
+func countSeries(metricName string) int {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		return 0
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == metricName {
+			return len(mf.Metric)
+		}
+	}
+	return 0
+}
+
+// The runtime version and the current update id reach this package straight
+// from client headers, so both are bounded before they become label values.
+func TestTrackActiveUserFoldsOversizedLabels(t *testing.T) {
+	defer setupMetrics(t)()
+
+	longRuntime := strings.Repeat("v", 129)
+	metrics.TrackActiveUser("fold-app", "client-1", "ios", longRuntime, "main", "update-1")
+
+	if got := getActiveUsers("fold-app", "ios", longRuntime, "main", "update-1"); got != 0 {
+		t.Errorf("an oversized runtime must not become a label, got %v", got)
+	}
+	if got := getActiveUsers("fold-app", "ios", "other", "main", "other"); got != 1 {
+		t.Errorf("expected the folded series to carry the count, got %v", got)
+	}
+}
+
+func TestTrackActiveUserCapsSeriesCount(t *testing.T) {
+	defer setupMetrics(t)()
+
+	// Past the cap the client-supplied halves collapse into one shared series,
+	// so the metric grows by at most one beyond it.
+	for i := 0; i < 10100; i++ {
+		metrics.TrackActiveUser("cap-app", "client-1", "ios", "1.0.0", "main", fmt.Sprintf("update-%d", i))
+	}
+
+	if got := countSeries("active_users_total"); got > 10001 {
+		t.Errorf("series count must stay bounded, got %d", got)
+	}
+	if got := getActiveUsers("cap-app", "ios", "other", "main", "other"); got == 0 {
+		t.Error("expected the overflow series to exist once the cap is reached")
+	}
+}
+
+func TestTrackUpdateErrorUsersFoldsOversizedLabels(t *testing.T) {
+	defer setupMetrics(t)()
+
+	longUpdate := strings.Repeat("u", 129)
+	metrics.TrackUpdateErrorUsers("err-app", "client-1", "ios", "1.0.0", "main", longUpdate)
+
+	if got := getMetricValue("update_error_users_total", map[string]string{
+		"appId": "err-app", "update": "^other$", "runtime": "^other$",
+	}); got != 1 {
+		t.Errorf("expected the folded error series to carry the count, got %v", got)
 	}
 }
