@@ -24,7 +24,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 145,
+  "id": null,
   "links": [],
   "panels": [
     {
@@ -95,13 +95,13 @@
             "uid": "$DS_PROM"
           },
           "editorMode": "code",
-          "expr": "max(\n  sum by (instance) (global_active_users_total{appId=~\"$appId\"})\n)",
-          "legendFormat": "Total Unique Active Users",
+          "expr": "max(\n  sum by (instance) (global_active_users_total{appId=~\"$appId\", platform=~\"$platform\"})\n)",
+          "legendFormat": "Unique active users",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "🟢 Total Unique Active Users (4h)",
+      "title": "Unique active users (4h)",
       "type": "stat"
     },
     {
@@ -191,13 +191,13 @@
             "uid": "$DS_PROM"
           },
           "editorMode": "code",
-          "expr": "max by (runtime, update) (\n  sum by (appId, platform, runtime, branch, update, instance) (\n    active_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}\n  )\n)",
-          "legendFormat": "{{platform}}",
+          "expr": "sum by (runtime, update) (\n  max by (appId, platform, runtime, branch, update) (\n    active_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}\n  )\n)",
+          "legendFormat": "{{runtime}} / {{update}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "📊 Unique Active Users by Runtime And Update",
+      "title": "Active users by runtime and update",
       "type": "timeseries"
     },
     {
@@ -293,7 +293,7 @@
           "refId": "A"
         }
       ],
-      "title": "📊 Unique Active Users by Platform",
+      "title": "Active users by platform",
       "type": "timeseries"
     },
     {
@@ -396,13 +396,13 @@
             "uid": "$DS_PROM"
           },
           "editorMode": "code",
-          "expr": "sum(update_error_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"})\n  by (update)",
-          "legendFormat": "{{platform}}",
+          "expr": "sum by (update) (\n  max by (appId, platform, runtime, branch, update) (\n    update_error_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}\n  )\n)",
+          "legendFormat": "{{update}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "🚨 Fatal error per update",
+      "title": "Error users by update",
       "type": "timeseries"
     },
     {
@@ -492,13 +492,13 @@
             "uid": "$DS_PROM"
           },
           "editorMode": "code",
-          "expr": "sum(update_error_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"})",
-          "legendFormat": "{{platform}}",
+          "expr": "sum(\n  max by (appId, platform, runtime, branch, update) (\n    update_error_users_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}\n  )\n)",
+          "legendFormat": "Error users",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "🚨 Update error users total",
+      "title": "Error users total",
       "type": "timeseries"
     },
     {
@@ -605,7 +605,7 @@
           "refId": "A"
         }
       ],
-      "title": "⬇️ Total Update Downloads by Update",
+      "title": "Downloads by update",
       "type": "timeseries"
     },
     {
@@ -696,12 +696,12 @@
           },
           "editorMode": "code",
           "expr": "sum(update_downloads_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}) by (runtime)",
-          "legendFormat": "{{update}}",
+          "legendFormat": "{{runtime}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "⬇️ Total Update Downloads by Runtime",
+      "title": "Downloads by runtime",
       "type": "timeseries"
     },
     {
@@ -791,13 +791,279 @@
             "uid": "$DS_PROM"
           },
           "editorMode": "code",
-          "expr": "sum by (update, runtime) (update_downloads_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\", updateType=~\"$updateType|.*\"})",
-          "legendFormat": "{{updateType}}",
+          "expr": "sum by (runtime, update) (\n  rate(update_downloads_total{appId=~\"$appId\", platform=~\"$platform\", runtime=~\"$runtime\", branch=~\"$branch\", update=~\"$update\"}[$__rate_interval])\n)",
+          "legendFormat": "{{runtime}} / {{update}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "⚡ Update Downloads Rate Over Time by Runtime & Update",
+      "title": "Download rate by runtime and update",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "id": 12,
+      "panels": [],
+      "title": "Authentication",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "uid": "$DS_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "last"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.5.1",
+      "targets": [
+        {
+          "datasource": {
+            "uid": "$DS_PROM"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(auth_throttled_attempts_total[$__range]))",
+          "legendFormat": "Throttled attempts",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "Throttled attempts (selected range)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "uid": "$DS_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.5.1",
+      "targets": [
+        {
+          "datasource": {
+            "uid": "$DS_PROM"
+          },
+          "editorMode": "code",
+          "expr": "sum by (scope) (rate(auth_failed_attempts_total[$__rate_interval]))",
+          "legendFormat": "{{scope}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Failed attempts by scope",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "$DS_PROM"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.5.1",
+      "targets": [
+        {
+          "datasource": {
+            "uid": "$DS_PROM"
+          },
+          "editorMode": "code",
+          "expr": "sum by (scope) (rate(auth_throttled_attempts_total[$__rate_interval]))",
+          "legendFormat": "{{scope}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Throttled attempts by scope",
       "type": "timeseries"
     }
   ],
@@ -805,18 +1071,14 @@
   "refresh": "5s",
   "schemaVersion": 40,
   "tags": [
-    "oss",
-    "metrics",
-    "ota-server"
+    "xprem",
+    "ota",
+    "metrics"
   ],
   "templating": {
     "list": [
       {
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        },
-        "includeAll": true,
+        "current": {},
         "label": "Data Source",
         "name": "DS_PROM",
         "options": [],
@@ -832,7 +1094,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "CcrOqjRnk"
+          "uid": "$DS_PROM"
         },
         "includeAll": true,
         "label": "App",
@@ -840,7 +1102,8 @@
         "options": [],
         "query": "label_values(active_users_total, appId)",
         "refresh": 1,
-        "type": "query"
+        "type": "query",
+        "multi": true
       },
       {
         "allValue": ".*",
@@ -850,7 +1113,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "CcrOqjRnk"
+          "uid": "$DS_PROM"
         },
         "includeAll": true,
         "label": "Platform",
@@ -858,17 +1121,18 @@
         "options": [],
         "query": "label_values(active_users_total, platform)",
         "refresh": 1,
-        "type": "query"
+        "type": "query",
+        "multi": true
       },
       {
         "allValue": ".*",
         "current": {
-          "text": "2.0.0",
-          "value": "2.0.0"
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "CcrOqjRnk"
+          "uid": "$DS_PROM"
         },
         "includeAll": true,
         "label": "Runtime",
@@ -876,7 +1140,8 @@
         "options": [],
         "query": "label_values(active_users_total, runtime)",
         "refresh": 1,
-        "type": "query"
+        "type": "query",
+        "multi": true
       },
       {
         "allValue": ".*",
@@ -886,7 +1151,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "CcrOqjRnk"
+          "uid": "$DS_PROM"
         },
         "includeAll": true,
         "label": "Branch",
@@ -894,7 +1159,8 @@
         "options": [],
         "query": "label_values(active_users_total, branch)",
         "refresh": 1,
-        "type": "query"
+        "type": "query",
+        "multi": true
       },
       {
         "allValue": ".*",
@@ -904,7 +1170,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "CcrOqjRnk"
+          "uid": "$DS_PROM"
         },
         "includeAll": true,
         "label": "Update",
@@ -912,7 +1178,8 @@
         "options": [],
         "query": "label_values(active_users_total, update)",
         "refresh": 1,
-        "type": "query"
+        "type": "query",
+        "multi": true
       }
     ]
   },
@@ -922,7 +1189,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "🚀 OTA Server Ultimate Metrics Dashboard",
+  "title": "xprem server metrics",
   "uid": "ota-metrics-dashboard",
   "version": 13,
   "weekStart": ""
