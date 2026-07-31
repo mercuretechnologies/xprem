@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -29,33 +30,25 @@ import (
 const (
 	maxmindEdition = "GeoLite2-City"
 	maxmindBaseURL = "https://download.maxmind.com"
-	// GeoLite2 is rebuilt twice a week.
-	maxmindRefreshInterval = 72 * time.Hour
-	// A failed attempt retries much sooner while no database is loaded yet.
-	maxmindRetryInterval = 15 * time.Minute
 	// The City database is ~60MB; anything past this is not a database.
 	maxmindMaxArchiveSize = 512 << 20
 )
 
-// maxMindResolver keeps a GeoLite2 City database downloaded and fresh using
+// maxMindResolver downloads a GeoLite2 City database once at startup using
 // MaxMind account credentials, so deployments do not have to mount an .mmdb
-// file. Resolve answers nil until the first database is available; a failed
+// file. Resolve answers nil until the database is available; a failed
 // download never blocks the server.
 type maxMindResolver struct {
-	accountID       string
-	licenseKey      string
-	dbPath          string
-	baseURL         string
-	client          *http.Client
-	refreshInterval time.Duration
-	retryInterval   time.Duration
+	accountID  string
+	licenseKey string
+	dbPath     string
+	baseURL    string
+	client     *http.Client
+	cancel     context.CancelFunc
+	done       chan struct{}
 
 	mu       sync.RWMutex
 	resolver *mmdbReader
-
-	stop     chan struct{}
-	stopOnce sync.Once
-	done     chan struct{}
 }
 
 // newMaxMindResolverFromEnv builds the resolver from MAXMIND_ACCOUNT_ID,
@@ -67,26 +60,22 @@ func newMaxMindResolverFromEnv() *maxMindResolver {
 		return nil
 	}
 	if accountID == "" || licenseKey == "" {
-		log.Fatalf("🚨 [IDENTITY] MAXMIND_ACCOUNT_ID and MAXMIND_LICENSE_KEY must be set together")
+		log.Fatalf("🚨 [GEOIP] MAXMIND_ACCOUNT_ID and MAXMIND_LICENSE_KEY must be set together")
 	}
 	r := newMaxMindResolver(accountID, licenseKey, config.GetEnv("GEOIP_CACHE_DIR"))
-	go r.run()
+	r.start()
 	return r
 }
 
-// newMaxMindResolver builds the resolver without starting the refresh loop,
+// newMaxMindResolver builds the resolver without starting the boot download,
 // for tests that drive refresh directly.
 func newMaxMindResolver(accountID, licenseKey, cacheDir string) *maxMindResolver {
 	return &maxMindResolver{
-		accountID:       accountID,
-		licenseKey:      licenseKey,
-		dbPath:          filepath.Join(resolveGeoipCacheDir(cacheDir), maxmindEdition+".mmdb"),
-		baseURL:         maxmindBaseURL,
-		client:          &http.Client{Timeout: 5 * time.Minute},
-		refreshInterval: maxmindRefreshInterval,
-		retryInterval:   maxmindRetryInterval,
-		stop:            make(chan struct{}),
-		done:            make(chan struct{}),
+		accountID:  accountID,
+		licenseKey: licenseKey,
+		dbPath:     filepath.Join(resolveGeoipCacheDir(cacheDir), maxmindEdition+".mmdb"),
+		baseURL:    maxmindBaseURL,
+		client:     &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
@@ -100,33 +89,35 @@ func resolveGeoipCacheDir(configured string) string {
 	return filepath.Join(os.TempDir(), "expo-open-ota-geoip")
 }
 
+func (r *maxMindResolver) start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	r.done = make(chan struct{})
+	go r.download(ctx)
+}
+
+// download runs once at startup: a database cached by a previous run serves
+// immediately, then the current MaxMind build replaces it if newer. There is
+// no periodic sync; a restart picks up newer builds.
+func (r *maxMindResolver) download(ctx context.Context) {
+	defer close(r.done)
+	r.loadFromDisk()
+	if err := r.refresh(ctx); err != nil && ctx.Err() == nil {
+		if r.loaded() {
+			log.Printf("⚠️ [GEOIP] GeoLite2 download failed, serving the cached database: %v", err)
+		} else {
+			log.Printf("⚠️ [GEOIP] GeoLite2 download failed and no cached database exists; devices stay unlocated until the server restarts: %v", err)
+		}
+	}
+}
+
 func (r *maxMindResolver) loadFromDisk() {
 	resolver, err := openMMDBReader(r.dbPath)
 	if err != nil {
 		return
 	}
+	log.Printf("🌍 [GEOIP] GeoLite2 database loaded from %s", r.dbPath)
 	r.swap(resolver)
-}
-
-func (r *maxMindResolver) run() {
-	defer close(r.done)
-	// A database cached by a previous run serves immediately, before any
-	// network call.
-	r.loadFromDisk()
-	for {
-		delay := r.refreshInterval
-		if err := r.refresh(); err != nil {
-			log.Printf("⚠️ [IDENTITY] GeoLite2 refresh failed: %v", err)
-			if !r.loaded() {
-				delay = r.retryInterval
-			}
-		}
-		select {
-		case <-r.stop:
-			return
-		case <-time.After(delay):
-		}
-	}
 }
 
 func (r *maxMindResolver) loaded() bool {
@@ -147,8 +138,8 @@ func (r *maxMindResolver) swap(next *mmdbReader) {
 
 // refresh downloads the database when MaxMind has a newer build than the
 // cached file, verifies its checksum, and swaps it in.
-func (r *maxMindResolver) refresh() error {
-	req, err := r.downloadRequest("tar.gz")
+func (r *maxMindResolver) refresh(ctx context.Context) error {
+	req, err := r.downloadRequest(ctx, "tar.gz")
 	if err != nil {
 		return err
 	}
@@ -165,6 +156,9 @@ func (r *maxMindResolver) refresh() error {
 		if !r.loaded() {
 			r.loadFromDisk()
 		}
+		if !r.loaded() {
+			return fmt.Errorf("MaxMind reports the cached database %s as current, but it cannot be loaded; delete it to force a fresh download", r.dbPath)
+		}
 		return nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("MaxMind refused the credentials (%s); check MAXMIND_ACCOUNT_ID and MAXMIND_LICENSE_KEY", resp.Status)
@@ -179,27 +173,59 @@ func (r *maxMindResolver) refresh() error {
 	if len(archive) > maxmindMaxArchiveSize {
 		return errors.New("MaxMind archive exceeds the size guard")
 	}
-	if err := r.verifyChecksum(archive); err != nil {
+	if err := r.verifyChecksum(ctx, archive); err != nil {
 		return err
 	}
 	mmdb, err := extractMmdb(archive)
 	if err != nil {
 		return err
 	}
-	if err := r.writeAtomically(mmdb, resp.Header.Get("Last-Modified")); err != nil {
+	return r.install(mmdb, resp.Header.Get("Last-Modified"))
+}
+
+// install validates the downloaded database before it replaces the cached
+// file, so a bad build never destroys a good cache.
+func (r *maxMindResolver) install(mmdb []byte, lastModified string) error {
+	dir := filepath.Dir(r.dbPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	resolver, err := openMMDBReader(r.dbPath)
+	tmp, err := os.CreateTemp(dir, maxmindEdition+".*.tmp")
 	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(mmdb); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	reader, err := openMMDBReader(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("downloaded GeoLite2 database is not usable: %w", err)
 	}
-	r.swap(resolver)
+	if err := os.Rename(tmpPath, r.dbPath); err != nil {
+		reader.close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	// The file mtime feeds the next If-Modified-Since check.
+	if t, err := http.ParseTime(lastModified); err == nil {
+		_ = os.Chtimes(r.dbPath, t, t)
+	}
+	log.Printf("🌍 [GEOIP] GeoLite2 database downloaded to %s", r.dbPath)
+	r.swap(reader)
 	return nil
 }
 
-func (r *maxMindResolver) downloadRequest(suffix string) (*http.Request, error) {
+func (r *maxMindResolver) downloadRequest(ctx context.Context, suffix string) (*http.Request, error) {
 	url := fmt.Sprintf("%s/geoip/databases/%s/download?suffix=%s", r.baseURL, maxmindEdition, suffix)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -207,8 +233,8 @@ func (r *maxMindResolver) downloadRequest(suffix string) (*http.Request, error) 
 	return req, nil
 }
 
-func (r *maxMindResolver) verifyChecksum(archive []byte) error {
-	req, err := r.downloadRequest("tar.gz.sha256")
+func (r *maxMindResolver) verifyChecksum(ctx context.Context, archive []byte) error {
+	req, err := r.downloadRequest(ctx, "tar.gz.sha256")
 	if err != nil {
 		return err
 	}
@@ -260,35 +286,6 @@ func extractMmdb(archive []byte) ([]byte, error) {
 	return nil, errors.New("no .mmdb entry in the MaxMind archive")
 }
 
-func (r *maxMindResolver) writeAtomically(mmdb []byte, lastModified string) error {
-	dir := filepath.Dir(r.dbPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, maxmindEdition+".*.tmp")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(mmdb); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Rename(tmp.Name(), r.dbPath); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	// The file mtime feeds the next If-Modified-Since check.
-	if t, err := http.ParseTime(lastModified); err == nil {
-		_ = os.Chtimes(r.dbPath, t, t)
-	}
-	return nil
-}
-
 func (r *maxMindResolver) Resolve(req *http.Request) *Location {
 	if r == nil {
 		return nil
@@ -301,13 +298,15 @@ func (r *maxMindResolver) Resolve(req *http.Request) *Location {
 	return r.resolver.resolveLocationFromIP(clientIPString(req))
 }
 
-// Close stops the refresh loop and releases the loaded database.
+// Close aborts any in-flight download and releases the loaded database.
 func (r *maxMindResolver) Close() {
 	if r == nil {
 		return
 	}
-	r.stopOnce.Do(func() { close(r.stop) })
-	<-r.done
+	if r.cancel != nil {
+		r.cancel()
+		<-r.done
+	}
 	r.mu.Lock()
 	r.resolver.close()
 	r.resolver = nil
@@ -330,7 +329,6 @@ func openMMDBReader(path string) (*mmdbReader, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("GeoLite2 database %q has type %q; a City or Country database is required", path, dbType)
 	}
-	log.Printf("🌍 [GEOIP] GeoLite2 database loaded from %s", path)
 	return &mmdbReader{db: db}, nil
 }
 

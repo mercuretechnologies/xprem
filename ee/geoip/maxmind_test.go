@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -95,26 +96,32 @@ func checksumOf(archive []byte) string {
 }
 
 // The full pipeline runs: auth is sent, the checksum is verified, the .mmdb
-// entry lands on disk. The payload is not a real database, so the final load
-// must refuse it and the resolver must stay unloaded instead of crashing.
-func TestMaxMindRefreshDownloadsVerifiesAndWrites(t *testing.T) {
+// entry is validated. The payload is not a real database, so it must be
+// rejected WITHOUT replacing the cached file, and the resolver stays unloaded.
+func TestMaxMindRefreshRejectsUnusableDatabaseWithoutInstalling(t *testing.T) {
 	archive := buildArchive(t, maxmindEdition+"_20260101/"+maxmindEdition+".mmdb", []byte("not-a-real-mmdb"))
 	fixture := &maxmindFixture{archive: archive, checksum: checksumOf(archive)}
 	resolver := testResolver(t, newMaxMindServer(t, fixture))
+	if err := os.MkdirAll(filepath.Dir(resolver.dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolver.dbPath, []byte("good-cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	err := resolver.refresh()
+	err := resolver.refresh(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not usable") {
 		t.Fatalf("expected the fake database to be rejected at load, got %v", err)
 	}
 	if fixture.gotAuth == "" || !strings.HasPrefix(fixture.gotAuth, "Basic ") {
 		t.Fatalf("expected basic auth to be sent, got %q", fixture.gotAuth)
 	}
-	written, err := os.ReadFile(resolver.dbPath)
-	if err != nil {
-		t.Fatalf("expected the mmdb to be written: %v", err)
+	cached, readErr := os.ReadFile(resolver.dbPath)
+	if readErr != nil || string(cached) != "good-cache" {
+		t.Fatalf("a rejected database must not replace the cached file, got %q (%v)", cached, readErr)
 	}
-	if string(written) != "not-a-real-mmdb" {
-		t.Fatalf("unexpected mmdb content %q", written)
+	if entries, _ := filepath.Glob(filepath.Join(filepath.Dir(resolver.dbPath), "*.tmp")); len(entries) != 0 {
+		t.Fatalf("a rejected database must not leave temp files behind: %v", entries)
 	}
 	if resolver.loaded() {
 		t.Fatal("a rejected database must leave the resolver unloaded")
@@ -131,7 +138,7 @@ func TestMaxMindRefreshRejectsChecksumMismatch(t *testing.T) {
 	fixture := &maxmindFixture{archive: archive, checksum: strings.Repeat("0", 64)}
 	resolver := testResolver(t, newMaxMindServer(t, fixture))
 
-	err := resolver.refresh()
+	err := resolver.refresh(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("expected a checksum error, got %v", err)
 	}
@@ -145,7 +152,7 @@ func TestMaxMindRefreshRejectsArchiveWithoutDatabase(t *testing.T) {
 	fixture := &maxmindFixture{archive: archive, checksum: checksumOf(archive)}
 	resolver := testResolver(t, newMaxMindServer(t, fixture))
 
-	err := resolver.refresh()
+	err := resolver.refresh(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "no .mmdb entry") {
 		t.Fatalf("expected a missing-database error, got %v", err)
 	}
@@ -160,9 +167,10 @@ func TestMaxMindRefreshHonorsNotModified(t *testing.T) {
 	if err := os.WriteFile(resolver.dbPath, []byte("cached"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	resolver.resolver = &mmdbReader{}
 
-	if err := resolver.refresh(); err != nil {
-		t.Fatalf("a 304 answer is not an error: %v", err)
+	if err := resolver.refresh(context.Background()); err != nil {
+		t.Fatalf("a 304 answer with a loaded database is not an error: %v", err)
 	}
 	if fixture.gotIfModified == "" {
 		t.Fatal("expected If-Modified-Since to be sent for an existing cache file")
@@ -173,13 +181,55 @@ func TestMaxMindRefreshHonorsNotModified(t *testing.T) {
 	}
 }
 
+// A 304 answer while nothing is loaded means the cached file itself is
+// unusable; that must surface as an error, not as success.
+func TestMaxMindRefreshReportsUnusableCacheOnNotModified(t *testing.T) {
+	fixture := &maxmindFixture{status: http.StatusNotModified}
+	resolver := testResolver(t, newMaxMindServer(t, fixture))
+	if err := os.MkdirAll(filepath.Dir(resolver.dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolver.dbPath, []byte("truncated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := resolver.refresh(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "cannot be loaded") {
+		t.Fatalf("expected an unusable-cache error, got %v", err)
+	}
+}
+
 func TestMaxMindRefreshReportsBadCredentials(t *testing.T) {
 	fixture := &maxmindFixture{status: http.StatusUnauthorized}
 	resolver := testResolver(t, newMaxMindServer(t, fixture))
 
-	err := resolver.refresh()
+	err := resolver.refresh(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "MAXMIND_ACCOUNT_ID") {
 		t.Fatalf("expected a credentials error naming the variables, got %v", err)
+	}
+}
+
+// Close must abort an in-flight download instead of waiting out the HTTP
+// timeout.
+func TestMaxMindCloseAbortsInFlightDownload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	resolver := newMaxMindResolver("12345", "license", t.TempDir())
+	resolver.baseURL = server.URL
+	resolver.client = server.Client()
+	resolver.start()
+
+	closed := make(chan struct{})
+	go func() {
+		resolver.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not abort the in-flight download")
 	}
 }
 

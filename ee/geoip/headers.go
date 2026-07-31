@@ -5,10 +5,12 @@
 package geoip
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"expo-open-ota/config"
 )
@@ -157,7 +159,11 @@ func normalizeCity(raw string) string {
 		return ""
 	}
 	if decoded, err := url.QueryUnescape(city); err == nil {
-		city = decoded
+		city = strings.TrimSpace(decoded)
+	}
+	// QueryUnescape can emit invalid UTF-8, which Postgres rejects mid-transaction.
+	if len(city) > 128 || !utf8.ValidString(city) {
+		return ""
 	}
 	return city
 }
@@ -166,6 +172,10 @@ func parseLatLng(rawLat, rawLng string) (float64, float64, bool) {
 	lat, latErr := strconv.ParseFloat(strings.TrimSpace(rawLat), 64)
 	lng, lngErr := strconv.ParseFloat(strings.TrimSpace(rawLng), 64)
 	if latErr != nil || lngErr != nil {
+		return 0, 0, false
+	}
+	// ParseFloat accepts NaN, which passes every range check and breaks JSON encoding downstream.
+	if math.IsNaN(lat) || math.IsNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180 {
 		return 0, 0, false
 	}
 	// 0,0 (Null Island) means the provider has no location; treat it as absent.

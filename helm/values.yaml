@@ -502,8 +502,8 @@ environment:
     enabled: true
     required: false
   # MaxMind account credentials (free GeoLite2 account). When both are set the
-  # server downloads the GeoLite2 City database itself and keeps it fresh, so
-  # devices get located on the Identity dashboard without mounting any file.
+  # server downloads the GeoLite2 City database itself at startup, so devices
+  # get located on the Identity dashboard without mounting any file.
   # TRUST_GEOIP_HEADERS wins when both approaches are configured.
   - name: "MAXMIND_ACCOUNT_ID"
     value: ""

@@ -37,15 +37,12 @@ func clientIPString(r *http.Request) string {
 
 type contextKey struct{}
 
-// NewContext stamps the request's resolved Location on the context. The value
-// survives context.WithoutCancel, which is how it reaches the detached
-// check-in writes.
+// NewContext stamps a resolved Location on the context.
 func NewContext(ctx context.Context, location *Location) context.Context {
 	return context.WithValue(ctx, contextKey{}, location)
 }
 
-// FromContext reads back the Location stamped by the middleware, nil when the
-// request had none.
+// FromContext reads back a stamped Location, nil when there is none.
 func FromContext(ctx context.Context) *Location {
 	location, _ := ctx.Value(contextKey{}).(*Location)
 	return location

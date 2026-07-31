@@ -7,6 +7,7 @@ package geoip
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,25 @@ func TestHeaderResolverFiltersUnknownMarkersAndNullIsland(t *testing.T) {
 	}
 	if location := resolver.Resolve(requestWithHeaders(map[string]string{"X-Geo-Latitude": "48.8"})); location != nil {
 		t.Fatalf("a latitude without a longitude is not a location, got %#v", location)
+	}
+}
+
+// Forged or corrupt header values must never resolve: NaN/Inf coordinates
+// break JSON encoding and invalid UTF-8 cities break the Postgres writes.
+func TestHeaderResolverRejectsGarbageValues(t *testing.T) {
+	resolver := &headerResolver{}
+	cases := []map[string]string{
+		{"X-Geo-Latitude": "NaN", "X-Geo-Longitude": "2.35"},
+		{"X-Geo-Latitude": "48.8", "X-Geo-Longitude": "Inf"},
+		{"X-Geo-Latitude": "91", "X-Geo-Longitude": "2.35"},
+		{"X-Geo-Latitude": "48.8", "X-Geo-Longitude": "-181"},
+		{"X-Geo-City": "%FF"},
+		{"X-Geo-City": strings.Repeat("a", 300)},
+	}
+	for _, headers := range cases {
+		if location := resolver.Resolve(requestWithHeaders(headers)); location != nil {
+			t.Fatalf("headers %v must not resolve, got %#v", headers, location)
+		}
 	}
 }
 

@@ -161,7 +161,6 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
 			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine))
-			addCleanup(geoip.CloseResolver)
 			checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
 			var observeClickHouse *clickhouse.Engine
 
@@ -194,6 +193,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
 	}
+
+	// The router starts the geo resolver in every mode, so its cleanup does
+	// not belong to the DB branch.
+	addCleanup(geoip.CloseResolver)
 
 	logLegacyAppIdFallback()
 

@@ -31,8 +31,8 @@ func getResolver() resolver {
 	return resolverInstance
 }
 
-// GetMiddleware stamps each request's resolved Geo on its context, where
-// every identity write reads it back; nil when no resolver is configured.
+// GetMiddleware stamps each request's resolved Location on its context; nil
+// when no resolver is configured.
 func GetMiddleware() func(http.Handler) http.Handler {
 	resolver := getResolver()
 	if resolver == nil {
