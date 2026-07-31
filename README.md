@@ -5,6 +5,10 @@
 <h3 align="center">Self-hosted OTA updates and control plane for Expo apps</h3>
 
 <p align="center">
+  <sub>Formerly known as <b>Expo Open OTA</b> (expo-open-ota): same project, same maintainers, renamed to respect Expo's trademark.<br/>xprem is not affiliated with, sponsored or endorsed by Expo.</sub>
+</p>
+
+<p align="center">
   xprem serves over-the-air (OTA) updates to Expo and React Native apps running <a href="https://docs.expo.dev/versions/latest/sdk/updates/">expo-updates</a>,<br/>
   through the official <a href="https://docs.expo.dev/technical-specs/expo-updates-1/">Expo Updates protocol</a>, as an open-source alternative to EAS Update.<br/>
   Around the updates it runs a full control plane: branches, channels, progressive rollouts,<br/>
