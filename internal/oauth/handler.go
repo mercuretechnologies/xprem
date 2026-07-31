@@ -22,6 +22,9 @@ const consentPath = "/dashboard/oauth/consent"
 // server exposes tools worth splitting over.
 const ScopeMCP = "mcp"
 
+// maxTokenRequestBody bounds the grant form.
+const maxTokenRequestBody = 32 * 1024
+
 type OAuthHandler struct {
 	service *OAuthService
 	limiter *ratelimit.Limiter
@@ -226,6 +229,7 @@ func (h *OAuthHandler) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		handlers.RenderThrottled(w, decision.RetryAfter)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTokenRequestBody)
 	if err := r.ParseForm(); err != nil {
 		renderTokenError(w, "invalid_request", "request body is not a valid form")
 		return

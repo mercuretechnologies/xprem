@@ -10,6 +10,10 @@ import (
 	"xprem/internal/services"
 )
 
+// maxCredentialsBody bounds the form these two routes read before the rate
+// limiter gets a say.
+const maxCredentialsBody = 32 * 1024
+
 type AuthHandler struct {
 	dashboardAuthService *services.DashboardAuthService
 	limiter              *ratelimit.Limiter
@@ -28,6 +32,7 @@ func (ah *AuthHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		handlers.RenderError(w, http.StatusNotFound, "Dashboard is disabled")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxCredentialsBody)
 	email := r.FormValue("email")
 	if email == "" {
 		handlers.RenderError(w, http.StatusBadRequest, "Email is empty")
@@ -91,6 +96,7 @@ func (ah *AuthHandler) RefreshTokenHandler(w http.ResponseWriter, r *http.Reques
 		handlers.RenderError(w, http.StatusNotFound, "Dashboard is disabled")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxCredentialsBody)
 	refreshToken := r.FormValue("refreshToken")
 	if refreshToken == "" {
 		handlers.RenderError(w, http.StatusBadRequest, "Refresh token is empty")

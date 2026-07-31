@@ -172,6 +172,10 @@ func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update st
 	if appId == "" || clientId == "" || platform == "" || runtime == "" || branch == "" {
 		return
 	}
+	// clientId is an unvalidated header, and it lands in a cache set, not a label.
+	if len(clientId) > maxLabelValueLen {
+		return
+	}
 	runtime, computedUpdate = boundClientLabels(updateErrorUsersLimiter, appId, platform, runtime, branch, computedUpdate)
 	resolvedCache := cache.GetCache()
 	key := fmt.Sprintf("update_error_users:%s:%s:%s:%s:%s", appId, branch, platform, runtime, computedUpdate)
@@ -188,6 +192,9 @@ func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update st
 
 func TrackActiveUser(appId, clientId, platform, runtime, branch, update string) {
 	if appId == "" || clientId == "" || platform == "" || branch == "" || update == "" || runtime == "" {
+		return
+	}
+	if len(clientId) > maxLabelValueLen {
 		return
 	}
 	runtime, update = boundClientLabels(activeUsersLimiter, appId, platform, runtime, branch, update)
