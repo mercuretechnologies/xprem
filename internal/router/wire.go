@@ -159,13 +159,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
-			// Without a configured GeoLite2 database, devices stay unlocated.
+			// Without MaxMind credentials, devices stay unlocated.
 			var geoResolver identity.GeoResolver
-			if mmdbPath := config.GetEnv("GEOIP_MMDB_PATH"); mmdbPath != "" {
-				resolver, err := identity.NewGeoLite2Resolver(mmdbPath)
-				if err != nil {
-					log.Fatalf("🚨 [IDENTITY] %v", err)
-				}
+			if resolver := identity.NewMaxMindResolverFromEnv(); resolver != nil {
 				geoResolver = resolver
 				addCleanup(resolver.Close)
 			}
