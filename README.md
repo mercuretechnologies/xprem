@@ -1,13 +1,14 @@
 <p align="center">
-  <img src=".github/img/cover.svg" alt="xprem" />
+  <img src=".github/img/cover.png" alt="xprem" />
 </p>
 
-<h3 align="center">The complete control plane for Expo apps. Self-hosted.</h3>
+<h3 align="center">Self-hosted OTA updates and control plane for Expo apps</h3>
 
 <p align="center">
-  Publish, roll out, roll back, and watch every update you ship.<br/>
-  Health, adoption, events and logs come back from every device that received it,<br/>
-  into your servers, your storage and your ClickHouse, over the official <a href="https://docs.expo.dev/technical-specs/expo-updates-1/">Expo Updates protocol</a>.
+  xprem serves over-the-air (OTA) updates to Expo and React Native apps running <a href="https://docs.expo.dev/versions/latest/sdk/updates/">expo-updates</a>,<br/>
+  through the official <a href="https://docs.expo.dev/technical-specs/expo-updates-1/">Expo Updates protocol</a>, as an open-source alternative to EAS Update.<br/>
+  Around the updates it runs a full control plane: branches, channels, progressive rollouts,<br/>
+  and per-update health, metrics, events and logs coming back from every device through expo-observe.
 </p>
 
 <p align="center">
@@ -18,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@xprem.dev">Contact</a>
+  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://xprem.dev">Website</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@xprem.dev">Contact</a>
 </p>
 
 <p align="center">
@@ -26,59 +27,70 @@
   <a href="https://insiders.vscode.dev/redirect/mcp/install?name=xprem-docs&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fmercure-technologies.gitbook.io%2Fxprem%2F~gitbook%2Fmcp%22%7D"><img src="https://img.shields.io/badge/VS_Code-Install_docs_MCP-0098FF?logo=githubcopilot&logoColor=white" alt="Install the docs MCP server in VS Code" height="28" /></a>
 </p>
 <p align="center">
-  <sub>The documentation is exposed as an <a href="#ask-the-docs-from-your-ai-assistant">MCP server</a>: plug it into Cursor, VS Code, Claude Code or any MCP client. And your xprem deployment is <a href="#talk-to-your-control-plane">one too</a>.</sub>
+  <sub>The documentation is exposed as an <a href="#ask-the-docs-from-your-ai-assistant">MCP server</a>: plug it into Cursor, VS Code, Claude Code or any MCP client. And your xprem deployment is <a href="#mcp-server">one too</a>.</sub>
 </p>
 
 
 <p align="center">
-  <img src=".github/img/dashboard-rollout.jpg" alt="The xprem dashboard showing a production branch with a progressive rollout in progress at 25%" />
+  <img src=".github/img/branches-rollout.png" alt="The xprem dashboard showing a production branch with a progressive rollout in progress at 25% and per-update health" />
 </p>
 
-> **Battle-tested in production.** xprem has been serving over-the-air updates in production since early 2025, to apps totaling more than a million monthly active users. Coming from EAS Update? `npx eoas init` migrates your app in about 30 seconds.
+> xprem has served OTA updates in production since early 2025, to apps totaling more than a million monthly active users.
 
-## Manage your OTA updates
+## Features
 
-xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime. Publish, roll back and roll out progressively, with every bundle in your own bucket and every download URL pointing at infrastructure you own.
+- **Publish, roll back, republish** OTA updates from the [eoas](https://www.npmjs.com/package/eoas) CLI, in CI or from the dashboard
+- **Channels**: each build ships with a channel baked in; point the channel at a branch to decide what those builds receive, and remap it to roll out or roll back without a rebuild or store review
+- **Progressive rollouts**: serve an update to a percentage of a branch and raise it as health data comes in; the split is deterministic and needs no per-device state
+- **A/B testing**: one channel can serve two branches at once, with devices split deterministically between them
+- **Multi-app**: one server hosts all your Expo apps, each with its own branches, channels, API tokens and update history; no Expo account required
+- **Observability**: native and JS crashes, adoption, bundle load and render times, plus your own events and logs, all tied to the exact update that produced them, stored in your ClickHouse
+- **Storage backends**: AWS S3, Google Cloud Storage, Azure Blob Storage, Cloudflare R2, MinIO, DigitalOcean Spaces, Supabase Storage, any S3-compatible service, or the local file system
+- **Delivery**: CloudFront, custom CDN domain, S3 presigned URLs, GCS signed URLs, Azure SAS URLs, or direct serving
+- **Code signing**: standard expo-updates code signing, with keys in AWS Secrets Manager, environment variables, local files or sealed in the database
+- **MCP server**: agents operate branches, channels and rollouts and query telemetry over OAuth, with per-user permissions
+- **Deployment**: Docker image, Helm chart, or a single static Go binary; a stateless mode runs without any database
+- **Open source**: the update pipeline is MIT; RBAC, SSO, branch protection and custom device attributes are commercial and live in [`ee/`](./ee)
 
-```bash
-npx eoas publish --branch production --rollout-percentage 10
-```
+## OTA updates, channels and rollouts
 
-**Manage updates from CLI and CI.** Publish, roll back and republish are [eoas](https://www.npmjs.com/package/eoas) commands. Run them by hand or script them in your pipeline.
+xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime with no fork and no custom client. Every bundle lives in your own bucket and every download URL points at infrastructure you own.
 
-**Channels decide who gets what.** Each build ships with a channel baked in. Point the channel at a branch, and that's what those builds receive. Remap to roll out, remap back to roll back. No rebuild, no store review.
+Publish, roll back and republish are [eoas](https://www.npmjs.com/package/eoas) commands. Run them by hand or script them in your pipeline.
 
 <p align="center">
-  <img src=".github/img/dashboard-channels.jpg" alt="Channels page mapping release channels to branches, with a progressive branch rollout in progress" />
+  <img src=".github/img/eoas-publish.png" alt="Terminal running npx eoas publish: bundle exported, assets uploaded to S3, update live on the production branch" />
 </p>
 
-**Progressive rollouts.** Ship to a slice of the branch, watch the health chart, raise it. Deterministic, no per-device state.
+Each build ships with a release channel baked in. Point the channel at a branch, and that is what those builds receive. Remap it to roll out, remap it back to roll back, with no rebuild and no store review.
+
+A rollout serves an update to a slice of the branch. You watch the health chart and raise the percentage, or revert. A channel can also serve two branches at once with a deterministic device split, which gives you A/B testing in production without any extra tooling.
+
+## Observability
+
+Every crash, metric, event and log carries the exact update that produced it, so a regression shows up while the rollout is still on a slice of the branch, and a republish reverts it.
 
 <p align="center">
-  <img src=".github/img/dashboard-manage-rollout.jpg" alt="Manage rollout dialog with traffic split presets and promote or revert actions" />
+  <img src=".github/img/observe-overview.png" alt="Observe overview: devices online now, sessions, events, OTA updates running, and live device activity by city on a globe" />
 </p>
 
-**A/B testing.** A channel can serve two branches at once, with devices split deterministically between them. Test two variants in production, promote the winner.
+**Native and JS crashes.** Both land tied to the update that shipped them, with the device count for each.
 
-**Multi-app.** One server hosts all your Expo apps. Each app gets its own branches, channels, API tokens and update history, and your whole team manages everything from a single dashboard. No Expo account required.
+**Breakdowns.** Every metric splits by device model, OS, region, app version and screen, straight from react-navigation.
 
-## Catch the regression while it's small
+**Your own events and logs.** Ship structured events and logs from the app, and read them next to the delivery data, filtered by the same update, branch and channel.
 
-Every crash, metric, event and log carries the exact update that produced it. A regression shows up while the rollout is still on a slice of the branch, and a republish reverts it.
+**Your ClickHouse, your tools.** The data lives in a database you own. Point Grafana, PostHog or Datadog at it, or query it directly. Hermes source maps are supported for Sentry or PostHog.
 
-**Native and JS crashes.** Both land tied to the update that shipped them, with the device count for each, so you see within minutes when a release breaks something.
+<p align="center">
+  <img src=".github/img/observe-metrics.png" alt="Metrics page with health over time, bundle load, time to first render, time to interactive and cold launch percentiles, split by device, OS, region or screen" />
+</p>
 
-**Split health by device, OS, region and screen.** Every metric breaks down by device model, OS, region, app version and screen, straight from react-navigation.
+## Storage and delivery
 
-**Send your own events and logs.** Ship structured events and logs from the app, and read them next to the delivery data, filtered by the same update, branch and channel.
+When a device checks for an update, xprem answers with a manifest: the list of assets to download, each with a URL. xprem decides what those URLs are. Point them at your CDN, or sign them into a private bucket that never has to be made public.
 
-**Your ClickHouse, your tools.** The data lives in a database you own. Put Grafana, PostHog or Datadog on it, or query it raw.
-
-## Assets download from your own infrastructure
-
-When a device checks for an update, xprem answers with a manifest: the list of every asset the device has to download, each with a URL. xprem decides what those URLs are. Point them at your CDN, or sign them into a private bucket that never has to be made public.
-
-The download traffic never touches the update server, which only has to answer a small JSON check. Millions of devices checking in never turn into millions of downloads hitting it.
+Download traffic never touches the update server, which only answers a small JSON check. Millions of devices checking in never turn into millions of downloads hitting it.
 
 | | |
 |---|---|
@@ -87,11 +99,9 @@ The download traffic never touches the update server, which only has to answer a
 | **Cache** | <img src=".github/img/logos/redis.svg" height="14" alt="" /> Redis &nbsp;·&nbsp; in-memory |
 | **Key store** | <img src=".github/img/logos/aws-secrets-manager.svg" height="16" alt="" /> AWS Secrets Manager &nbsp;·&nbsp; environment variables &nbsp;·&nbsp; local key files &nbsp;·&nbsp; sealed in the database |
 
-Plus expo-updates code signing, and Hermes source maps for Sentry or PostHog.
+## MCP server
 
-## Talk to your control plane
-
-xprem ships an MCP server, so agents reach the same control plane you do: branches, channels, updates, rollouts and the whole Observe dataset. Agents sign in with OAuth as dashboard users, and every call runs with that user's per-app permissions. Nothing more.
+xprem ships an MCP server, so agents reach the same control plane you do: branches, channels, updates, rollouts and the whole observability dataset. Agents sign in with OAuth as dashboard users, and every call runs with that user's per-app permissions, nothing more. No API keys.
 
 > "Which screens had the worst time to interactive since 3.4.2 rolled out?"
 >
@@ -99,17 +109,14 @@ xprem ships an MCP server, so agents reach the same control plane you do: branch
 >
 > "Something looks wrong since the last release. Roll production back to the previous update."
 
-**Your permissions, app by app.** Agents sign in over OAuth as a dashboard user, and inherit exactly what that user can do on each app. No API keys.
 
-**Operate releases from chat.** List branches, channels and updates, check a rollout, then roll back or republish, the same operations the dashboard exposes.
+The tools cover the same operations as the dashboard: list branches, channels and updates, check a rollout, roll back, republish, and ask plain-language questions over metrics, events and logs.
 
-**Ask your data anything.** Plain-language questions over metrics, events and logs. The agent answers straight from Observe.
-
-## Deploy everywhere
+## Deployment
 
 xprem is one Go process. It holds no session state, so you run as many replicas as you need behind your load balancer and they stay consistent on their own. Update checks are read-heavy and cheap; assets never pass through the process, so a replica only ever handles small JSON.
 
-Run it with Docker, the Helm chart, or a single static binary under systemd. And you choose the shape at deploy time: if the only thing you want is to ship updates from your own bucket, stateless mode needs no database at all; plug in PostgreSQL when you want the multi-app dashboard, rollouts and the control plane.
+Run it with Docker, the Helm chart, or a single static binary under systemd. You choose the shape at deploy time: if the only thing you want is to ship updates from your own bucket, stateless mode needs no database at all; plug in PostgreSQL when you want the multi-app dashboard, rollouts and the control plane. Prometheus metrics are built in.
 
 ## Quick start
 
@@ -137,7 +144,7 @@ claude mcp add --transport http xprem-docs https://mercure-technologies.gitbook.
 
 Any other MCP-compatible client (ChatGPT connectors included) can be pointed at the same URL.
 
-## Why teams run their own
+## Why self-host
 
 EAS Update is the fastest way to get OTA updates running on a small app. These are the reasons teams move to self-hosted infrastructure instead.
 
@@ -151,9 +158,9 @@ EAS Update is the fastest way to get OTA updates running on a small app. These a
 
 **No intermediary in the path.** Device to your server to your edge, over private links and internal DNS, inside the regions you already operate in.
 
-**If we disappear, it keeps running.** MIT core, readable and forkable. Your release path never depends on a vendor staying alive.
+**No vendor dependency.** The core is MIT, readable and forkable. Your release path does not depend on a vendor staying alive.
 
-## Fully open source
+## License model
 
 Publishing, branches, channels, rollbacks, progressive rollouts, every storage backend, every CDN integration, the dashboard and the Prometheus metrics are MIT. Everything you need to run OTA updates in production, free. A feature released under MIT never moves behind the commercial licence.
 
