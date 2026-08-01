@@ -60,7 +60,7 @@ func renderRolloutError(w http.ResponseWriter, err error, fallbackDetail string)
 // invalidateChannelRolloutCaches drops the dashboard listings that embed
 // channel rollout state. The delivery path's own mapping cache is not touched:
 // rollout changes reach devices within its TTL.
-func invalidateChannelRolloutCaches(appId string, channelName string, promoted bool) {
+func invalidateChannelRolloutCaches(appId string) {
 	cache := cache2.GetCache()
 	cache.Delete(dashboard.ComputeGetChannelsCacheKey(appId))
 	cache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
@@ -119,7 +119,7 @@ func (h *RolloutHandler) StartChannelRolloutHandler(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusCreated)
 	w.Write(marshaledResponse)
 
-	invalidateChannelRolloutCaches(appId, channelName, false)
+	invalidateChannelRolloutCaches(appId)
 }
 
 func (h *RolloutHandler) UpdateChannelRolloutHandler(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +143,7 @@ func (h *RolloutHandler) UpdateChannelRolloutHandler(w http.ResponseWriter, r *h
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
 
-	invalidateChannelRolloutCaches(appId, channelName, false)
+	invalidateChannelRolloutCaches(appId)
 }
 
 func (h *RolloutHandler) EndChannelRolloutHandler(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +163,7 @@ func (h *RolloutHandler) EndChannelRolloutHandler(w http.ResponseWriter, r *http
 	}
 	w.WriteHeader(http.StatusNoContent)
 
-	invalidateChannelRolloutCaches(appId, channelName, requestBody.Outcome == services.ChannelRolloutOutcomePromote)
+	invalidateChannelRolloutCaches(appId)
 }
 
 func (h *RolloutHandler) GetUpdateRolloutHandler(w http.ResponseWriter, r *http.Request) {

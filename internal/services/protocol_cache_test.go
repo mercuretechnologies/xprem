@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/providers/expo"
 	"xprem/internal/types"
@@ -95,5 +96,28 @@ func TestChannelBranchMappingNilNeverCached(t *testing.T) {
 		if repo.calls != i {
 			t.Fatalf("a nil mapping must never be cached: read %d made %d repository calls", i, repo.calls)
 		}
+	}
+}
+
+// An app config holding a plaintext secret must be served but never stored:
+// a shared cache is not a place for an access token or an unencrypted key.
+func TestAppConfigCarryingAPlaintextSecretIsNeverCached(t *testing.T) {
+	for name, appConfig := range map[string]config.AppConfig{
+		"access token":     {Id: "app", AccessToken: "expo-token"},
+		"env private key":  {Id: "app", Keys: config.KeysConfig{Mode: config.KeysModeEnvironment, PrivateB64: "cHJpdmF0ZQ=="}},
+		"sealed key is ok": {Id: "app", Keys: config.KeysConfig{Mode: config.KeysModeDatabase, SealedPrivateKey: "sealed"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			secret := carriesPlaintextSecret(appConfig)
+			if name == "sealed key is ok" {
+				if secret {
+					t.Fatal("a sealed key is encrypted with the master key and may be cached")
+				}
+				return
+			}
+			if !secret {
+				t.Fatalf("%s must keep the config out of the cache", name)
+			}
+		})
 	}
 }

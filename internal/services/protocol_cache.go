@@ -14,13 +14,13 @@ import (
 // The read-through caches of the update-delivery hot path: in steady state a
 // manifest or asset poll is answered without a single repository read.
 //
-// The 10s TTLs are the freshness bound for operator changes: nothing
+// The short TTLs below are the freshness bound for operator changes: nothing
 // invalidates these keys. Signatures can live longer: their key embeds the
 // signing key fingerprint and the content hash, so a stale entry can never be
 // served.
 const (
-	signatureCacheTTLSeconds      = 3600
-	appConfigCacheTTLSeconds      = 10
+	signatureCacheTTLSeconds = 3600
+	appConfigCacheTTLSeconds = 10
 	// 5s keeps a channel remap or rollout promote near-instant for devices.
 	channelMappingCacheTTLSeconds = 5
 	updateTypeCacheTTLSeconds     = 10
@@ -42,6 +42,18 @@ func signatureCacheKey(appId string, keyFingerprint string, contentHash string) 
 	return fmt.Sprintf("manifest-signature:%s:%s:%s:%s", version.Version, appId, keyFingerprint, contentHash)
 }
 
+// carriesPlaintextSecret reports whether an app config holds material that
+// must never reach a shared cache: the Expo access token, or a signing key
+// passed in the clear through the environment. Sealed keys are encrypted with
+// the master key and secret ids and paths are references, not secrets.
+func carriesPlaintextSecret(appConfig config.AppConfig) bool {
+	return appConfig.AccessToken != "" || appConfig.Keys.PrivateB64 != ""
+}
+
+// cachedAppConfig is the hot-path read of an app: manifest and asset requests
+// go through it on every poll. A config carrying a plaintext secret is served
+// but never stored, which costs nothing: those configs come from the flat env,
+// where the underlying read is already an in-memory map lookup.
 func (s *ExpoProtocolService) cachedAppConfig(ctx context.Context, appId string) (config.AppConfig, error) {
 	appCache := cache2.GetCache()
 	if appConfig, ok := cache2.GetJSON[config.AppConfig](appCache, appConfigCacheKey(appId)); ok {
@@ -50,6 +62,9 @@ func (s *ExpoProtocolService) cachedAppConfig(ctx context.Context, appId string)
 	appConfig, err := s.appRepo.GetAppByID(ctx, appId)
 	if err != nil {
 		return config.AppConfig{}, err
+	}
+	if carriesPlaintextSecret(appConfig) {
+		return appConfig, nil
 	}
 	ttl := appConfigCacheTTLSeconds
 	cache2.SetJSON(appCache, appConfigCacheKey(appId), appConfig, &ttl)
@@ -76,7 +91,8 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 // channelBranchMapping owns the delivery path's mapping cache: no cross-layer
 // invalidation, the TTL is the freshness bound for channel and rollout edits.
 // In stateless mode it stacks on the expo provider's own cache, so an edit
-// made outside the dashboard can take providerTTL+10s to reach devices.
+// made outside the dashboard can take the provider's TTL plus this one to
+// reach devices.
 // An unknown or unmapped channel (nil) is never cached.
 func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
 	mappingCache := cache2.GetCache()
