@@ -107,32 +107,31 @@
       "checks_success_rate_percent": 100.0,
       "data_received_mb": 1753.7,
       "vus_active_peak": 14,
-      "vus_allocated": 300
+      "vus_allocated": 300,
+      "max_ms_observed_cold_start": 98.21
     },
     "per_phase": {
       "fleet": {
         "peak_rps": 230,
-        "p95_ms": 1.3,
-        "p99_ms": 2.3,
-        "mean_ms": 2.75,
+        "p95_ms": 1.58,
+        "p99_ms": 2.35,
+        "mean_ms": 1.46,
         "dropped": 0,
-        "note": "p95 is the steady-state value; the first seconds of the run peak at 98ms on cold caches"
+        "note": "The first 60 seconds of this phase peak at 98 ms p95 on cold caches and are excluded, see measurement_window."
       },
       "probe": {
         "peak_rps": 650,
         "p95_ms": 1.39,
         "p99_ms": 2.28,
         "mean_ms": 1.02,
-        "max_ms": 22.5,
         "dropped": 0,
-        "note": "the saturation knee was not reached at the highest rate tested"
+        "note": "The saturation knee was not reached at the highest rate tested."
       },
       "push_storm": {
         "peak_rps": 938,
         "p95_ms": 20.52,
         "p99_ms": 55.2,
-        "mean_ms": 3.22,
-        "max_ms": 121.3,
+        "mean_ms": 3.15,
         "dropped": 0
       }
     },
@@ -181,7 +180,8 @@
       "devices_touched_during_run": 96143,
       "telemetry_writes_dropped": 0,
       "telemetry_write_failures": 0
-    }
+    },
+    "measurement_window": "All three statistics are measured over the same window: the phase excluding the first 60 seconds of the run, which are the cold start (empty caches, empty connection pool, first signature computed). Percentiles are the peak reached in that window, the mean is its average."
   },
   "capacity": {
     "measured_sustained_rps": 650,

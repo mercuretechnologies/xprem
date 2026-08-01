@@ -37,11 +37,17 @@ saturation point, and a rollout pushed to the entire fleet.
 
 **Results.** 294,372 requests, zero errors, zero dropped iterations.
 
-| Phase | Rate | p95 | p99 | mean |
+| Phase | Rate | mean | p95 | p99 |
 |---|---|---|---|---|
-| fleet | 230 req/s | 1.3 ms | 2.3 ms | 2.75 ms |
-| probe | 650 req/s | 1.39 ms | 2.28 ms | 1.02 ms |
-| push_storm | 938 req/s | 20.5 ms | 55.2 ms | 3.22 ms |
+| fleet | 230 req/s | 1.46 ms | 1.58 ms | 2.35 ms |
+| probe | 650 req/s | 1.02 ms | 1.39 ms | 2.28 ms |
+| push_storm | 938 req/s | 3.15 ms | 20.5 ms | 55.2 ms |
+
+All three statistics share one window: the phase minus the first 60 seconds of
+the run, which are the cold start (empty caches, empty connection pool, first
+signature computed). Percentiles are the peak reached in that window, the mean
+is its average. The cold start itself peaks at 98 ms and is reported separately
+in the summary.
 
 The saturation knee was not reached at the highest rate tested. The server
 peaked at 87.8% CPU during the storm; the database peaked at 27% CPU and

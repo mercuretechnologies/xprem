@@ -119,9 +119,16 @@ func checkInCacheKey(appID, easClientID string) string {
 	return "observe:checkin:" + appID + ":" + easClientID
 }
 
-// checkInClaimTTLSeconds bounds a claim, longer than touchTimeout so a slow
-// write is never preempted but a killed process frees the device quickly.
-const checkInClaimTTLSeconds = 10
+// checkInClaimTTLSeconds bounds a claim. It covers the queue wait as well as
+// the write, so it is sized on the debounce window rather than on
+// touchTimeout: a device writes at most once per window anyway, and holding
+// its claim for that long costs nothing.
+//
+// The claim is best-effort deduplication, not a lock. Under a backlog deep
+// enough to outlast this TTL a second poll can enqueue the same device again,
+// which is safe: the store rejects an observation older than the one on file,
+// so a duplicate write cannot reorder anything.
+const checkInClaimTTLSeconds = checkInTTLSeconds
 
 // checkInClaimKey marks that a device is currently being written.
 func checkInClaimKey(appID, easClientID string) string {

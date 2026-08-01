@@ -135,11 +135,11 @@ One instance, 1 vCPU, serving real expo-updates polls from a pool of 100,000 dev
 
 | Phase | Rate | Mean | p95 | p99 | Errors |
 |---|---|---|---|---|---|
-| Real fleet traffic | 230 req/s | 2.75 ms | 1.30 ms | 2.30 ms | 0 |
+| Real fleet traffic | 230 req/s | 1.46 ms | 1.58 ms | 2.35 ms | 0 |
 | Capacity probe | 650 req/s | 1.02 ms | 1.39 ms | 2.28 ms | 0 |
-| Full-fleet rollout | 938 req/s | 3.22 ms | 20.5 ms | 55.2 ms | 0 |
+| Full-fleet rollout | 938 req/s | 3.15 ms | 20.5 ms | 55.2 ms | 0 |
 
-294,372 requests, no error and no request the generator failed to inject. The probe was built to find the point where latency leaves its baseline and did not find one, so 650 req/s is a floor on what this configuration serves rather than a ceiling. The server peaked at 87.8% of its single core during the rollout phase; the database peaked at 27% and read almost nothing from disk, since its working set fits in memory.
+294,372 requests, no error and no request the generator failed to inject. Every statistic above is measured over the same window: the phase minus the first 60 seconds of the run, which are the cold start. The probe was built to find the point where latency leaves its baseline and did not find one, so 650 req/s is a floor on what this configuration serves rather than a ceiling. The server peaked at 87.8% of its single core during the rollout phase; the database peaked at 27% and read almost nothing from disk, since its working set fits in memory.
 
 Applied to a fleet, one update check per app launch: a typical app produces around 20 req/s per million monthly active users, one that gets opened all day around 115.
 

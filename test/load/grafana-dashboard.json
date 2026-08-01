@@ -59,6 +59,25 @@
           "value": "$__all",
           "selected": true
         }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "label": "Server",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(node_load1, instance)",
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        }
       }
     ]
   },
@@ -1078,7 +1097,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])))",
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\", instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "cpu"
         }
       ],
@@ -1141,7 +1160,7 @@
       },
       "targets": [
         {
-          "expr": "node_memory_MemTotal_bytes - node_memory_MemFree_bytes - node_memory_Buffers_bytes - node_memory_Cached_bytes",
+          "expr": "node_memory_MemTotal_bytes{instance=~\"$instance\"} - node_memory_MemFree_bytes{instance=~\"$instance\"} - node_memory_Buffers_bytes{instance=~\"$instance\"} - node_memory_Cached_bytes{instance=~\"$instance\"}",
           "legendFormat": "used"
         }
       ],
@@ -1203,11 +1222,11 @@
       },
       "targets": [
         {
-          "expr": "8 * sum(rate(node_network_receive_bytes_total{device!~\"lo\"}[$__rate_interval]))",
+          "expr": "8 * sum(rate(node_network_receive_bytes_total{device!~\"lo\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "in"
         },
         {
-          "expr": "8 * sum(rate(node_network_transmit_bytes_total{device!~\"lo\"}[$__rate_interval]))",
+          "expr": "8 * sum(rate(node_network_transmit_bytes_total{device!~\"lo\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "out"
         }
       ],
@@ -1288,7 +1307,7 @@
       },
       "targets": [
         {
-          "expr": "instance:node_load1_per_cpu:ratio",
+          "expr": "instance:node_load1_per_cpu:ratio{instance=~\"$instance\"}",
           "legendFormat": "load1/cpu"
         }
       ],

@@ -34,16 +34,23 @@ func TestCheckInQueueOverflowDropsAndReleasesClaim(t *testing.T) {
 	recorder := NewCheckInRecorder(identity.NewService(store), localCache)
 	ctx := context.Background()
 
-	// Fill the workers and the whole queue with blocked writes.
-	total := checkInWorkerCount + checkInQueueCapacity
-	for range total {
+	// Saturate the workers first and wait until every one of them is blocked
+	// in a write. Filling the queue before that races them: a worker that has
+	// not picked its job up yet leaves the channel able to accept more, and a
+	// worker that picks one up mid-fill frees a slot, so the send that is
+	// meant to overflow would land instead.
+	for range checkInWorkerCount {
 		recorder.Record(ctx, deviceCheckIn(uuid.NewString()))
 	}
-	// The workers pick their jobs up asynchronously; wait until they hold
-	// exactly checkInWorkerCount writes so the queue is provably full.
 	require.Eventually(t, func() bool {
 		return int(store.calls.Load()) == checkInWorkerCount
 	}, 2*time.Second, 10*time.Millisecond)
+
+	// Every worker is now parked, so nothing drains the channel while it fills.
+	total := checkInWorkerCount + checkInQueueCapacity
+	for range checkInQueueCapacity {
+		recorder.Record(ctx, deviceCheckIn(uuid.NewString()))
+	}
 
 	overflowing := uuid.NewString()
 	recorder.Record(ctx, deviceCheckIn(overflowing))
