@@ -33,8 +33,8 @@ func registerMCPRoutes(r *mux.Router, container *AppContainer) {
 	mcpRouter := r.PathPrefix("/mcp").Subrouter()
 	mcpRouter.Use(mcpCORS)
 	mcpRouter.Use(middleware.NewOAuthMiddleware(container.OAuthService))
-	// POST carries the JSON-RPC messages, GET the SSE notification stream,
-	// DELETE the session teardown; all three are the same streamable endpoint.
+	// POST carries the JSON-RPC messages; the handler is stateless, so GET
+	// and DELETE get a spec-compliant 405 from the SDK.
 	mcpRouter.HandleFunc("", container.MCPHandler.GlobalHandler).
 		Methods(http.MethodPost, http.MethodGet, http.MethodDelete, http.MethodOptions)
 }

@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"net/http"
-	"time"
 	"xprem/internal/services"
 	"xprem/internal/version"
 
@@ -22,9 +21,9 @@ func NewMCPService(configurators ...ConfigureServer) *MCPService {
 	// The tool schemas are inferred by reflection and never change, so every
 	// session server shares one cache.
 	schemas := &mcpprot.SchemaCache{}
-	// One server per session, built at initialize: the tool list is per
-	// account, so what a session's tools/list shows is already filtered to
-	// what its principal may use.
+	// One server per request: the tool list is per account, so what a
+	// request's tools/list shows is already filtered to what its principal
+	// may use.
 	newSessionServer := func(req *http.Request) *mcpprot.Server {
 		server := mcpprot.NewServer(&mcpprot.Implementation{
 			Name:    "xprem",
@@ -46,10 +45,10 @@ func NewMCPService(configurators ...ConfigureServer) *MCPService {
 			// forwarding to 127.0.0.1. It exists for unauthenticated local
 			// servers; /mcp requires a Bearer before this handler runs.
 			DisableLocalhostProtection: true,
-			// MCP clients rarely DELETE their session; without a timeout,
-			// sessions of vanished clients accumulate for the process
-			// lifetime. An idle client past this simply re-initializes.
-			SessionTimeout: 30 * time.Minute,
+			// Sessions live in process memory; behind a load balancer with
+			// several replicas, a session created on one replica 404s on the
+			// others. Stateless makes every POST self-contained.
+			Stateless: true,
 		},
 	)
 	return &MCPService{streamable: streamable}
