@@ -107,8 +107,10 @@ export const options = {
     // The storm must be absorbed: deep queueing is expected, failures are not.
     'http_req_failed{scenario:push_storm}': ['rate<0.001'],
     http_req_failed: ['rate<0.001'],
-    // If the generator drops iterations, the run is invalid - publish this metric.
-    dropped_iterations: ['count<1'],
+    // Fleet phases are realistic traffic: a dropped iteration there means the
+    // generator failed and the run is invalid. Probe and storm intentionally
+    // offer more than the ceiling, where drops are the measurement itself.
+    'dropped_iterations{scenario:fleet}': ['count<1'],
   },
 };
 

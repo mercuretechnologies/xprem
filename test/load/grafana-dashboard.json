@@ -376,7 +376,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "reqps"
         },
@@ -488,7 +488,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "s"
         },
@@ -642,7 +642,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "s"
         },
@@ -754,7 +754,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true,
+            "spanNulls": false,
             "stacking": {
               "mode": "normal"
             }
@@ -891,7 +891,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           }
         },
         "overrides": [
@@ -1000,7 +1000,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "bps"
         },
@@ -1091,7 +1091,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "percent",
           "max": 100
@@ -1154,7 +1154,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "bytes"
         },
@@ -1220,7 +1220,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "bps"
         },
@@ -1301,7 +1301,7 @@
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "showPoints": "never",
-            "spanNulls": true
+            "spanNulls": false
           },
           "unit": "percentunit"
         },
