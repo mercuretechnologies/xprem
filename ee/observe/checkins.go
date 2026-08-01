@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"xprem/ee/identity"
 	"xprem/internal/cache"
@@ -25,10 +27,82 @@ import (
 type CheckInRecorder struct {
 	identity *identity.Service
 	cache    cache.Cache
+
+	jobs         chan checkInJob
+	startWorkers sync.Once
+	dropped      atomic.Int64
 }
 
 func NewCheckInRecorder(identityService *identity.Service, c cache.Cache) *CheckInRecorder {
-	return &CheckInRecorder{identity: identityService, cache: c}
+	return &CheckInRecorder{
+		identity: identityService,
+		cache:    c,
+		jobs:     make(chan checkInJob, checkInQueueCapacity),
+	}
+}
+
+// Check-in writes drain through a fixed worker pool: a burst of unseen
+// devices costs a bounded backlog, never one goroutine and one registry
+// write in flight per poll. When the queue is full the check-in is dropped,
+// its claim released, and a later poll of the same device retries.
+const (
+	checkInWorkerCount   = 8
+	checkInQueueCapacity = 10000
+)
+
+// checkInJob is everything a queued check-in write needs, captured at
+// Record time. ctx carries the request's values but never its cancellation.
+type checkInJob struct {
+	ctx            context.Context
+	checkIn        handlers.DeviceCheckIn
+	state          checkInState
+	key            string
+	claim          string
+	cachedCurrent  string
+	cachedFailedFP string
+	cachedDeviceFP string
+	stateDeviceFP  string
+}
+
+func (r *CheckInRecorder) drainCheckIns() {
+	for job := range r.jobs {
+		r.flush(job)
+	}
+}
+
+// flush performs one queued write; a panic is recovered so it can never kill
+// the worker, and the deferred claim release still runs during unwinding.
+func (r *CheckInRecorder) flush(job checkInJob) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("observe: device check-in write panicked: %v", rec)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(job.ctx, touchTimeout)
+	defer cancel()
+	if job.claim != "" {
+		defer r.cache.Delete(job.claim)
+	}
+	ttl := checkInTTLSeconds
+	if err := r.record(ctx, job.checkIn, job.state); err != nil {
+		log.Printf("observe: device check-in registration failed: %v", err)
+		_ = r.cache.Set(job.key, checkInErrorCacheValue, &ttl)
+		return
+	}
+	// A component this check-in did not know keeps its previously recorded value.
+	newCurrent := job.state.currentUpdateID
+	if newCurrent == "" {
+		newCurrent = job.cachedCurrent
+	}
+	newFailedFP := job.cachedFailedFP
+	if len(job.state.failedUpdateIDs) > 0 || newFailedFP == "" {
+		newFailedFP = failedFingerprint(job.state.failedUpdateIDs)
+	}
+	newDeviceFP := job.stateDeviceFP
+	if newDeviceFP == "" {
+		newDeviceFP = job.cachedDeviceFP
+	}
+	_ = r.cache.Set(job.key, cachedCheckInValue(newCurrent, newFailedFP, newDeviceFP), &ttl)
 }
 
 // checkInTTLSeconds bounds the steady-state last_seen bump rate per device.
@@ -210,34 +284,32 @@ func (r *CheckInRecorder) Record(ctx context.Context, checkIn handlers.DeviceChe
 		claim = key
 	}
 
-	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), touchTimeout)
-	go func() {
-		defer cancel()
-		// Released only after the debounce write below, and only if this poll took a claim.
+	r.startWorkers.Do(func() {
+		for range checkInWorkerCount {
+			go r.drainCheckIns()
+		}
+	})
+	job := checkInJob{
+		ctx:            context.WithoutCancel(ctx),
+		checkIn:        checkIn,
+		state:          state,
+		key:            key,
+		claim:          claim,
+		cachedCurrent:  cachedCurrent,
+		cachedFailedFP: cachedFailedFP,
+		cachedDeviceFP: cachedDeviceFP,
+		stateDeviceFP:  stateDeviceFP,
+	}
+	select {
+	case r.jobs <- job:
+	default:
 		if claim != "" {
-			defer r.cache.Delete(claim)
+			r.cache.Delete(claim)
 		}
-		ttl := checkInTTLSeconds
-		if err := r.record(bgCtx, checkIn, state); err != nil {
-			log.Printf("observe: device check-in registration failed: %v", err)
-			_ = r.cache.Set(key, checkInErrorCacheValue, &ttl)
-			return
+		if n := r.dropped.Add(1); n == 1 || n%1000 == 0 {
+			log.Printf("observe: check-in queue full, %d check-ins dropped so far", n)
 		}
-		// A component this check-in did not know keeps its previously recorded value.
-		newCurrent := state.currentUpdateID
-		if newCurrent == "" {
-			newCurrent = cachedCurrent
-		}
-		newFailedFP := cachedFailedFP
-		if len(state.failedUpdateIDs) > 0 || newFailedFP == "" {
-			newFailedFP = failedFingerprint(state.failedUpdateIDs)
-		}
-		newDeviceFP := stateDeviceFP
-		if newDeviceFP == "" {
-			newDeviceFP = cachedDeviceFP
-		}
-		_ = r.cache.Set(key, cachedCheckInValue(newCurrent, newFailedFP, newDeviceFP), &ttl)
-	}()
+	}
 }
 
 // record persists one check-in. Failures are written first since the fatal
