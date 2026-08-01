@@ -122,6 +122,29 @@ xprem is one Go process. It holds no session state, so you run as many replicas 
 
 Run it with Docker, the Helm chart, or a single static binary under systemd. You choose the shape at deploy time: if the only thing you want is to ship updates from your own bucket, stateless mode needs no database at all; plug in PostgreSQL when you want the multi-app dashboard, rollouts and the control plane. Prometheus metrics are built in.
 
+## Benchmark
+
+One instance, 1 vCPU, serving real expo-updates polls from a pool of 100,000 devices. Every response RSA-signed, device telemetry writing every device to the registry, nothing switched off. The load is applied in an open model, so the target rate is imposed whether or not the server keeps up and queueing shows up as latency instead of being hidden by a slower client.
+
+| | |
+|---|---|
+| **Server** | EC2 `c6g.medium` · 1 vCPU (Graviton2) · 2 GiB RAM |
+| **Database** | RDS PostgreSQL `db.t4g.small` · 2 vCPU · 2 GiB RAM |
+| **Storage** | Google Cloud Storage |
+| **Enabled** | Code signing · device telemetry |
+
+| Phase | Rate | Mean | p95 | p99 | Errors |
+|---|---|---|---|---|---|
+| Real fleet traffic | 230 req/s | 2.75 ms | 1.30 ms | 2.30 ms | 0 |
+| Capacity probe | 650 req/s | 1.02 ms | 1.39 ms | 2.28 ms | 0 |
+| Full-fleet rollout | 938 req/s | 3.22 ms | 20.5 ms | 55.2 ms | 0 |
+
+294,372 requests, no error and no request the generator failed to inject. The probe was built to find the point where latency leaves its baseline and did not find one, so 650 req/s is a floor on what this configuration serves rather than a ceiling. The server peaked at 87.8% of its single core during the rollout phase; the database peaked at 27% and read almost nothing from disk, since its working set fits in memory.
+
+Applied to a fleet, one update check per app launch: a typical app produces around 20 req/s per million monthly active users, one that gets opened all day around 115.
+
+[**test/load/results**](test/load/results/) has the full method, the per-phase summary, the raw time series and what this run does not establish, next to the k6 script that produced it.
+
 ## Quick start
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/xprem?referralCode=OEHlEK&utm_medium=integration&utm_source=template&utm_campaign=generic)
