@@ -14,14 +14,15 @@ import (
 // The read-through caches of the update-delivery hot path: in steady state a
 // manifest or asset poll is answered without a single repository read.
 //
-// The 10s TTLs are the freshness bound for operator changes, there is no
-// invalidation beyond the dashboard's channel-mapping deletes. Signatures can
-// live longer: their key embeds the signing key fingerprint and the content
-// hash, so a stale entry can never be served.
+// The 10s TTLs are the freshness bound for operator changes: nothing
+// invalidates these keys. Signatures can live longer: their key embeds the
+// signing key fingerprint and the content hash, so a stale entry can never be
+// served.
 const (
 	signatureCacheTTLSeconds      = 3600
 	appConfigCacheTTLSeconds      = 10
-	channelMappingCacheTTLSeconds = 10
+	// 5s keeps a channel remap or rollout promote near-instant for devices.
+	channelMappingCacheTTLSeconds = 5
 	updateTypeCacheTTLSeconds     = 10
 )
 
@@ -31,6 +32,10 @@ func appConfigCacheKey(appId string) string {
 
 func updateTypeCacheKey(update types.Update) string {
 	return fmt.Sprintf("update-type:%s:%s:%s:%s:%s", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+}
+
+func channelMappingCacheKey(appId string, channelName string) string {
+	return fmt.Sprintf("channel-mapping:%s:%s:%s", version.Version, appId, channelName)
 }
 
 func signatureCacheKey(appId string, keyFingerprint string, contentHash string) string {
@@ -68,12 +73,14 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 	return updateType, nil
 }
 
-// channelBranchMapping reads the mapping through the same cache key the
-// dashboard invalidates on channel and rollout writes. An unknown or unmapped
-// channel (nil) is never cached.
+// channelBranchMapping owns the delivery path's mapping cache: no cross-layer
+// invalidation, the TTL is the freshness bound for channel and rollout edits.
+// In stateless mode it stacks on the expo provider's own cache, so an edit
+// made outside the dashboard can take providerTTL+10s to reach devices.
+// An unknown or unmapped channel (nil) is never cached.
 func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
 	mappingCache := cache2.GetCache()
-	cacheKey := expo.ComputeChannelMappingCacheKey(appId, channelName)
+	cacheKey := channelMappingCacheKey(appId, channelName)
 	if mapping, ok := cache2.GetJSON[expo.ChannelMapping](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}

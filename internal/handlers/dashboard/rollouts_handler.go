@@ -8,7 +8,6 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
-	"xprem/internal/providers/expo"
 	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/types"
@@ -58,17 +57,13 @@ func renderRolloutError(w http.ResponseWriter, err error, fallbackDetail string)
 	handlers.RenderError(w, http.StatusInternalServerError, fallbackDetail)
 }
 
-// invalidateChannelRolloutCaches drops the dashboard listings that embed channel
-// rollout state. Promotion also repoints the channel's branch mapping, so it
-// additionally drops the (stateless-mode) channel mapping cache, in parity with
-// UpdateChannelBranchMappingHandler.
+// invalidateChannelRolloutCaches drops the dashboard listings that embed
+// channel rollout state. The delivery path's own mapping cache is not touched:
+// rollout changes reach devices within its TTL.
 func invalidateChannelRolloutCaches(appId string, channelName string, promoted bool) {
 	cache := cache2.GetCache()
 	cache.Delete(dashboard.ComputeGetChannelsCacheKey(appId))
 	cache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
-	if promoted {
-		cache.Delete(expo.ComputeChannelMappingCacheKey(appId, channelName))
-	}
 }
 
 // invalidateUpdateRolloutCaches drops everything a per-update rollout mutation can

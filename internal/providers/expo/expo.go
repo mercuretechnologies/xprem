@@ -3,17 +3,14 @@ package expo
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/types"
-	"xprem/internal/version"
 )
 
 // The "operationName" header values below are a contract with the test mocks
@@ -233,21 +230,16 @@ func FetchBranches(appId string) ([]string, error) {
 }
 
 func FetchUserAccountInformations(expoAuth types.Auth) (*UserAccount, error) {
-	cache := cache2.GetCache()
+	accountCache := cache2.GetCache()
 	var cacheKey string
 	if expoAuth.Token != nil {
-		h := sha256.Sum256([]byte(*expoAuth.Token))
-		cacheKey = fmt.Sprintf("expoUserAccount:token:%x", h)
+		cacheKey = userAccountTokenCacheKey(*expoAuth.Token)
 	} else if expoAuth.SessionSecret != nil {
-		h := sha256.Sum256([]byte(*expoAuth.SessionSecret))
-		cacheKey = fmt.Sprintf("expoUserAccount:session:%x", h)
+		cacheKey = userAccountSessionCacheKey(*expoAuth.SessionSecret)
 	}
 	if cacheKey != "" {
-		if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-			var account UserAccount
-			if err := json.Unmarshal([]byte(cachedValue), &account); err == nil {
-				return &account, nil
-			}
+		if account, ok := cache2.GetJSON[UserAccount](accountCache, cacheKey); ok {
+			return &account, nil
 		}
 	}
 
@@ -278,20 +270,18 @@ func FetchUserAccountInformations(expoAuth types.Auth) (*UserAccount, error) {
 	}
 
 	if cacheKey != "" {
-		if cacheValue, err := json.Marshal(resp.Data.Me); err == nil {
-			ttl := 300
-			_ = cache.Set(cacheKey, string(cacheValue), &ttl)
-		}
+		ttl := userAccountCacheTTLSeconds
+		cache2.SetJSON(accountCache, cacheKey, resp.Data.Me, &ttl)
 	}
 
 	return &resp.Data.Me, nil
 }
 
 func FetchSelfUsername(appId string) string {
-	cache := cache2.GetCache()
+	usernameCache := cache2.GetCache()
 	token := GetAccessToken(appId)
-	cacheKey := fmt.Sprintf("selfExpoUsername:%s:%x", version.Version, sha256.Sum256([]byte(token)))
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+	cacheKey := selfUsernameCacheKey(token)
+	if cachedValue := usernameCache.Get(cacheKey); cachedValue != "" {
 		return cachedValue
 	}
 	expoAccount, err := FetchUserAccountInformations(types.Auth{
@@ -300,8 +290,8 @@ func FetchSelfUsername(appId string) string {
 	if err != nil {
 		return ""
 	}
-	ttl := 86400
-	_ = cache.Set(cacheKey, expoAccount.Username, &ttl)
+	ttl := selfUsernameCacheTTLSeconds
+	_ = usernameCache.Set(cacheKey, expoAccount.Username, &ttl)
 	return expoAccount.Username
 }
 
@@ -314,10 +304,10 @@ const unknownAppName = "\x00unknown"
 // as a dashboard display fallback in stateless mode, where the flat env
 // carries no name, so best-effort by design: callers fall back to the id.
 func FetchAppName(ctx context.Context, appId string) string {
-	cache := cache2.GetCache()
+	nameCache := cache2.GetCache()
 	token := GetAccessToken(appId)
-	cacheKey := fmt.Sprintf("expoAppName:%s:%s:%x", version.Version, appId, sha256.Sum256([]byte(token)))
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+	cacheKey := appNameCacheKey(appId, token)
+	if cachedValue := nameCache.Get(cacheKey); cachedValue != "" {
 		if cachedValue == unknownAppName {
 			return ""
 		}
@@ -351,28 +341,24 @@ func FetchAppName(ctx context.Context, appId string) string {
 		Token: &token,
 	}, &resp, headers); err != nil {
 		log.Printf("[Expo] could not resolve app name for %s, falling back to the app id: %v", appId, err)
-		ttl := 300
-		_ = cache.Set(cacheKey, unknownAppName, &ttl)
+		ttl := unknownAppNameCacheTTLSeconds
+		_ = nameCache.Set(cacheKey, unknownAppName, &ttl)
 		return ""
 	}
 	name := resp.Data.App.ById.Name
 	if name != "" {
-		ttl := 86400
-		_ = cache.Set(cacheKey, name, &ttl)
+		ttl := appNameCacheTTLSeconds
+		_ = nameCache.Set(cacheKey, name, &ttl)
 	} else {
-		ttl := 300
-		_ = cache.Set(cacheKey, unknownAppName, &ttl)
+		ttl := unknownAppNameCacheTTLSeconds
+		_ = nameCache.Set(cacheKey, unknownAppName, &ttl)
 	}
 	return name
 }
 
-func ComputeChannelMappingCacheKey(appId, channelName string) string {
-	return fmt.Sprintf("channelMapping:%s:%s:%s", version.Version, appId, channelName)
-}
-
 func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
 	mappingCache := cache2.GetCache()
-	cacheKey := ComputeChannelMappingCacheKey(appId, channelName)
+	cacheKey := channelMappingCacheKey(appId, channelName)
 	if mapping, ok := cache2.GetJSON[ChannelMapping](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}
@@ -460,7 +446,7 @@ func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,
 	}
-	ttl := 60
+	ttl := channelMappingCacheTTLSeconds
 	cache2.SetJSON(mappingCache, cacheKey, result, &ttl)
 	return result, nil
 }

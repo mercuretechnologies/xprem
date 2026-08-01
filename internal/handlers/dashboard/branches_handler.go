@@ -215,11 +215,9 @@ func (h *BranchHandler) UpdateChannelBranchMappingHandler(w http.ResponseWriter,
 
 	channelsCacheKey := dashboard.ComputeGetChannelsCacheKey(appId)
 	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(appId)
-	// Keyed by name: this is the cache FetchExpoChannelMapping writes, and
-	// remapping the channel is exactly what makes its entry stale.
-	channelMappingCacheKey := expo.ComputeChannelMappingCacheKey(appId, releaseChannelName)
 	cache := cache2.GetCache()
 	cache.Delete(channelsCacheKey)
 	cache.Delete(branchesCacheKey)
-	cache.Delete(channelMappingCacheKey)
+	// Remapping the channel is exactly what makes the provider's entry stale.
+	expo.InvalidateChannelMapping(appId, releaseChannelName)
 }

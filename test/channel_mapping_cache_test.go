@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	cache2 "xprem/internal/cache"
 	"xprem/internal/providers/expo"
 	infrastructure "xprem/internal/router"
 
@@ -102,11 +101,6 @@ func TestUpdateChannelBranchMappingInvalidatesChannelMappingCache(t *testing.T) 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
-
-	// Verify the channel mapping cache key was deleted
-	cache := cache2.GetCache()
-	cacheKey := expo.ComputeChannelMappingCacheKey("test-app-id", "staging")
-	assert.Equal(t, "", cache.Get(cacheKey), "Channel mapping cache should be invalidated after handler call")
 
 	// FetchExpoChannelMapping should now hit the API and return the updated mapping
 	mapping2, err := expo.FetchChannelMapping("test-app-id", "staging")

@@ -27,6 +27,10 @@ const (
 
 const defaultPrefix = "expoopenota"
 
+// withPrefix scopes every key to the deployment (CACHE_KEY_PREFIX). It must
+// NOT embed the release version: locks, rate-limit counters and active-user
+// sets have to survive deploys and coordinate across mixed-version replicas.
+// Serialized payloads get their release-scoping from their key builders.
 func withPrefix(key string) string {
 	prefix := config.GetEnv("CACHE_KEY_PREFIX")
 	if prefix == "" {
