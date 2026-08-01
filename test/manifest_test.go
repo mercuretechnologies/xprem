@@ -19,6 +19,7 @@ import (
 	"xprem/internal/services"
 	"xprem/internal/types"
 	"xprem/internal/update"
+	"xprem/internal/version"
 )
 
 func TestNotValidChannelForManifest(t *testing.T) {
@@ -1025,7 +1026,7 @@ func TestManifestSignatureCache(t *testing.T) {
 	assert.NoError(t, err)
 	contentHash, err := crypto2.CreateHash([]byte(firstParts[0].Body), "sha256", "hex")
 	assert.NoError(t, err)
-	cachedSignature := cache2.GetCache().Get("manifest-signature:test-app-id:" + keyFingerprint + ":" + contentHash)
+	cachedSignature := cache2.GetCache().Get("manifest-signature:" + version.Version + ":test-app-id:" + keyFingerprint + ":" + contentHash)
 	assert.NotEqual(t, "", cachedSignature, "the first signed response must store its signature in the cache")
 	assert.True(t, strings.Contains(firstSignature, cachedSignature), "the served signature and the cached one must match")
 
@@ -1045,7 +1046,7 @@ func TestManifestSignatureCache(t *testing.T) {
 		t.Fatalf("LoadAppsFromFlatEnv: %v", err)
 	}
 	defer SetValidConfiguration()
-	cache2.GetCache().Delete("manifest-signing-app:test-app-id")
+	cache2.GetCache().Delete("app-config:" + version.Version + ":test-app-id")
 	third := signedManifestRequest()
 	assert.Equal(t, 500, third.Code)
 	assert.Equal(t, "Error signing content\n", third.Body.String())

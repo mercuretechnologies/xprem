@@ -116,38 +116,13 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 	return writer, &buf, nil
 }
 
-// signatureCacheTTLSeconds bounds how long the signature of an unchanged
-// payload is reused before being recomputed.
-const signatureCacheTTLSeconds = 3600
-
-// signingAppConfigCacheTTLSeconds bounds how stale the app config used for
-// signing can be after a change in the database.
-const signingAppConfigCacheTTLSeconds = 10
-
-func signingAppConfigCacheKey(appId string) string {
-	return "manifest-signing-app:" + appId
-}
-
 func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId string, content interface{}, expectSignatureHeader string) (string, error) {
 	if expectSignatureHeader == "" {
 		return "", nil
 	}
-	signingCache := cache2.GetCache()
-	var appConfig config.AppConfig
-	appConfigCached := false
-	if cached := signingCache.Get(signingAppConfigCacheKey(appId)); cached != "" {
-		appConfigCached = json.Unmarshal([]byte(cached), &appConfig) == nil
-	}
-	if !appConfigCached {
-		var err error
-		appConfig, err = s.appRepo.GetAppByID(ctx, appId)
-		if err != nil {
-			return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
-		}
-		if payload, marshalErr := json.Marshal(appConfig); marshalErr == nil {
-			ttl := signingAppConfigCacheTTLSeconds
-			_ = signingCache.Set(signingAppConfigCacheKey(appId), string(payload), &ttl)
-		}
+	appConfig, err := s.cachedAppConfig(ctx, appId)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
 	}
 	privateKey := keyStore.GetPrivateExpoKey(appConfig)
 	contentJSON, err := json.Marshal(content)
@@ -164,8 +139,9 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 	if err != nil {
 		return "", fmt.Errorf("error hashing signed content: %w", err)
 	}
-	signatureCacheKey := fmt.Sprintf("manifest-signature:%s:%s:%s", appId, keyFingerprint, contentHash)
-	if signedHash := signingCache.Get(signatureCacheKey); signedHash != "" {
+	cacheKey := signatureCacheKey(appId, keyFingerprint, contentHash)
+	signatureCache := cache2.GetCache()
+	if signedHash := signatureCache.Get(cacheKey); signedHash != "" {
 		return signedHash, nil
 	}
 	signedHash, err := crypto.SignRSASHA256(string(contentJSON), privateKey)
@@ -173,7 +149,7 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 		return "", fmt.Errorf("error signing content hash: %w", err)
 	}
 	ttl := signatureCacheTTLSeconds
-	_ = signingCache.Set(signatureCacheKey, signedHash, &ttl)
+	_ = signatureCache.Set(cacheKey, signedHash, &ttl)
 	return signedHash, nil
 }
 
@@ -285,12 +261,12 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	// returns an empty token for the unknown id and we end up POSTing to
 	// api.expo.dev with `Bearer ` (no token), surfacing the upstream 401
 	// as an opaque 500 to the client.
-	if _, err := s.appRepo.GetAppByID(ctx, params.AppID); err != nil {
+	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
 	}
 
-	branchMap, err := s.channelRepo.GetChannelBranchMapping(ctx, params.AppID, params.ChannelName)
+	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", params.RequestID, err)
 		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}
@@ -323,7 +299,7 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 			BranchName: servedBranch,
 		}, nil
 	}
-	updateType, err := s.updateRepo.GetUpdateType(ctx, *lastUpdate)
+	updateType, err := s.cachedUpdateType(ctx, *lastUpdate)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error determining update type: %v", params.RequestID, err)
 		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error determining update type"}
@@ -370,12 +346,12 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
 	// rather than letting them flow into FetchExpoChannelMapping and
 	// surfacing the upstream 401 as a 500.
-	if _, err := s.appRepo.GetAppByID(ctx, params.AppID); err != nil {
+	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return &ExpoAssetResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
 	}
 
-	branchMap, err := s.channelRepo.GetChannelBranchMapping(ctx, params.AppID, params.ChannelName)
+	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", params.RequestID, err)
 		return &ExpoAssetResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}

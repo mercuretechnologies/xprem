@@ -371,15 +371,10 @@ func ComputeChannelMappingCacheKey(appId, channelName string) string {
 }
 
 func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
-	cache := cache2.GetCache()
+	mappingCache := cache2.GetCache()
 	cacheKey := ComputeChannelMappingCacheKey(appId, channelName)
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-		var mapping ChannelMapping
-		if err := json.Unmarshal([]byte(cachedValue), &mapping); err != nil {
-			log.Printf("[ChannelMapping] cache unmarshal error for key=%s: %v", cacheKey, err)
-		} else {
-			return &mapping, nil
-		}
+	if mapping, ok := cache2.GetJSON[ChannelMapping](mappingCache, cacheKey); ok {
+		return &mapping, nil
 	}
 
 	query := `
@@ -465,10 +460,8 @@ func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,
 	}
-	if cacheValue, err := json.Marshal(result); err == nil {
-		ttl := 60
-		_ = cache.Set(cacheKey, string(cacheValue), &ttl)
-	}
+	ttl := 60
+	cache2.SetJSON(mappingCache, cacheKey, result, &ttl)
 	return result, nil
 }
 

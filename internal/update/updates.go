@@ -124,13 +124,8 @@ func GetExpoConfig(update types.Update) (json.RawMessage, error) {
 
 func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	metadataCacheKey := ComputeMetadataCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
-	cache := cache2.GetCache()
-	if cachedValue := cache.Get(metadataCacheKey); cachedValue != "" {
-		var metadata types.UpdateMetadata
-		err := json.Unmarshal([]byte(cachedValue), &metadata)
-		if err != nil {
-			return types.UpdateMetadata{}, err
-		}
+	metadataCache := cache2.GetCache()
+	if metadata, ok := cache2.GetJSON[types.UpdateMetadata](metadataCache, metadataCacheKey); ok {
 		return metadata, nil
 	}
 	resolvedBucket := bucket.GetBucket()
@@ -170,11 +165,7 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	}
 	metadata.ID = id
 	metadata.Fingerprint = fingerprint
-	cacheValue, err := json.Marshal(metadata)
-	if err != nil {
-		return metadata, nil
-	}
-	err = cache.Set(metadataCacheKey, string(cacheValue), nil)
+	cache2.SetJSON(metadataCache, metadataCacheKey, metadata, nil)
 	return metadata, nil
 }
 
@@ -202,13 +193,8 @@ func GetAssetEndpoint() string {
 
 func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform string) (types.ManifestAsset, error) {
 	cacheKey := ComputeManifestAssetCacheKey(update.AppId, update, asset.Path)
-	cache := cache2.GetCache()
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-		var manifestAsset types.ManifestAsset
-		err := json.Unmarshal([]byte(cachedValue), &manifestAsset)
-		if err != nil {
-			return types.ManifestAsset{}, err
-		}
+	assetCache := cache2.GetCache()
+	if manifestAsset, ok := cache2.GetJSON[types.ManifestAsset](assetCache, cacheKey); ok {
 		return manifestAsset, nil
 	}
 	resolvedBucket := bucket.GetBucket()
@@ -256,11 +242,7 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 		ContentType:   contentType,
 		Url:           finalUrl,
 	}
-	cacheValue, err := json.Marshal(manifestAsset)
-	if err != nil {
-		return manifestAsset, nil
-	}
-	_ = cache.Set(cacheKey, string(cacheValue), nil)
+	cache2.SetJSON(assetCache, cacheKey, manifestAsset, nil)
 	return manifestAsset, nil
 }
 
@@ -281,14 +263,9 @@ func ComposeUpdateManifest(
 	update types.Update,
 	platform string,
 ) (types.UpdateManifest, error) {
-	cache := cache2.GetCache()
+	manifestCache := cache2.GetCache()
 	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-		var manifest types.UpdateManifest
-		err := json.Unmarshal([]byte(cachedValue), &manifest)
-		if err != nil {
-			return types.UpdateManifest{}, err
-		}
+	if manifest, ok := cache2.GetJSON[types.UpdateManifest](manifestCache, cacheKey); ok {
 		return manifest, nil
 	}
 	expoConfig, errConfig := GetExpoConfig(update)
@@ -360,11 +337,7 @@ func ComposeUpdateManifest(
 		Assets:      assets,
 		LaunchAsset: launchAsset,
 	}
-	cacheValue, err := json.Marshal(manifest)
-	if err != nil {
-		return manifest, nil
-	}
-	_ = cache.Set(cacheKey, string(cacheValue), nil)
+	cache2.SetJSON(manifestCache, cacheKey, manifest, nil)
 
 	return manifest, nil
 }

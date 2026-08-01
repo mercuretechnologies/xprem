@@ -2,9 +2,7 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/database/postgres/pgdb"
@@ -63,14 +61,10 @@ func NewUpdateService(updateRepo UpdateRepository, bucket bucket.Bucket) *Update
 // rollout state + embedded control) stored under the lastUpdate cache key. A nil
 // envelope (no checked update yet) is deliberately never cached.
 func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
-	cache := cache.GetCache()
+	envelopeCache := cache.GetCache()
 	cacheKey := update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, platform)
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-		var cachedEnvelope types.UpdateWithRollout
-		if err := json.Unmarshal([]byte(cachedValue), &cachedEnvelope); err == nil {
-			return &cachedEnvelope, nil
-		}
-		log.Printf("Warning: failed to unmarshal cached update for key %s", cacheKey)
+	if cachedEnvelope, ok := cache.GetJSON[types.UpdateWithRollout](envelopeCache, cacheKey); ok {
+		return &cachedEnvelope, nil
 	}
 	latestEnvelope, err := s.updateRepo.GetLatestUpdateWithRollout(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil {
@@ -79,15 +73,8 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 	if latestEnvelope == nil {
 		return nil, nil
 	}
-	cacheValue, err := json.Marshal(latestEnvelope)
-	if err == nil {
-		ttl := 1800
-		if setErr := cache.Set(cacheKey, string(cacheValue), &ttl); setErr != nil {
-			log.Printf("Warning: failed to write update to cache: %v", setErr)
-		}
-	} else {
-		log.Printf("Warning: failed to marshal update for caching: %v", err)
-	}
+	ttl := 1800
+	cache.SetJSON(envelopeCache, cacheKey, latestEnvelope, &ttl)
 	return latestEnvelope, nil
 }
 
