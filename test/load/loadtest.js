@@ -1,5 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
+import { SharedArray } from 'k6/data';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 // xprem capacity test.
@@ -34,8 +35,11 @@ const UPDATE_IDS = { ios: __ENV.IOS_UPDATE_ID, android: __ENV.ANDROID_UPDATE_ID 
 
 // A finite fleet with stable device IDs, like real installs. An infinite
 // stream of fresh IDs would simulate a fleet no app has, and artificially
-// inflate device registrations server-side.
-const DEVICE_POOL = Array.from({ length: 100000 }, () => uuidv4());
+// inflate device registrations server-side. SharedArray keeps a single copy
+// for all VUs instead of one pool per VU.
+const DEVICE_POOL = new SharedArray('devices', function () {
+  return Array.from({ length: 100000 }, () => uuidv4());
+});
 
 export const options = {
   cloud: {
@@ -65,7 +69,7 @@ export const options = {
       exec: 'updateCheck',
       startTime: '6m',
       startRate: 200, timeUnit: '1s',
-      preAllocatedVUs: 50, maxVUs: 200,
+      preAllocatedVUs: 100, maxVUs: 400,
       stages: [
         { target: 650, duration: '2m' },
         { target: 650, duration: '90s' },
@@ -78,13 +82,14 @@ export const options = {
     // Rates below are APP OPENS per second; every open is an outdated device:
     // full manifest + its asset requests. "Handling it" means zero errors,
     // bounded queueing, and full drain once the wave decays.
-    // NOTE: needs k6 OSS or a paid plan (maxVUs > 100).
+    // NOTE: needs k6 OSS or a paid plan (maxVUs > 100). Storm iterations
+    // span several requests, so in-flight VUs = opens/s x iteration duration.
     push_storm: {
       executor: 'ramping-arrival-rate',
       exec: 'rolloutOpen',
       startTime: '10m30s',
       startRate: 20, timeUnit: '1s',
-      preAllocatedVUs: 200, maxVUs: 1000,
+      preAllocatedVUs: 300, maxVUs: 2500,
       stages: [
         { target: 1000, duration: '30s' },  // the push lands
         { target: 400,  duration: '2m' },   // long tail of opens
