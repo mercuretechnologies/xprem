@@ -24,6 +24,10 @@ const (
 	// 5s keeps a channel remap or rollout promote near-instant for devices.
 	channelMappingCacheTTLSeconds = 5
 	updateTypeCacheTTLSeconds     = 10
+	// Unlike its neighbours this key IS invalidated on write, but only where
+	// the cache is shared: with a local cache and several replicas, the write
+	// clears one process and the TTL bounds the rest.
+	channelBranchSurfingCacheTTLSeconds = 30
 )
 
 func appConfigCacheKey(appId string) string {
@@ -36,6 +40,10 @@ func updateTypeCacheKey(update types.Update) string {
 
 func channelMappingCacheKey(appId string, channelName string) string {
 	return fmt.Sprintf("channel-mapping:%s:%s:%s", version.Version, appId, channelName)
+}
+
+func channelBranchSurfingCacheKey(appId string, channelName string) string {
+	return fmt.Sprintf("channel-branch-surfing:%s:%s:%s", version.Version, appId, channelName)
 }
 
 func signatureCacheKey(appId string, keyFingerprint string, contentHash string) string {
@@ -107,4 +115,38 @@ func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId st
 	ttl := channelMappingCacheTTLSeconds
 	cache2.SetJSON(mappingCache, cacheKey, mapping, &ttl)
 	return mapping, nil
+}
+
+// branchSurfingEnabled answers whether the channel lets devices ask for another
+// branch. It is on the manifest hot path, so it never fails the poll: any error,
+// and stateless mode where the setting does not exist, answer false.
+func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId string, channelName string) bool {
+	if !config.IsDBMode() || channelName == "" {
+		return false
+	}
+	surfingCache := cache2.GetCache()
+	cacheKey := channelBranchSurfingCacheKey(appId, channelName)
+	if cached := surfingCache.Get(cacheKey); cached != "" {
+		return cached == "1"
+	}
+	surfing, err := s.channelRepo.GetBranchSurfing(ctx, appId, channelName)
+	if err != nil || surfing == nil {
+		return false
+	}
+	ttl := channelBranchSurfingCacheTTLSeconds
+	_ = surfingCache.Set(cacheKey, boolCacheValue(surfing.Enabled), &ttl)
+	return surfing.Enabled
+}
+
+// invalidateBranchSurfingCache drops the delivery-path entry a setting write
+// stales. Best effort: see channelBranchSurfingCacheTTLSeconds.
+func invalidateBranchSurfingCache(appId string, channelName string) {
+	cache2.GetCache().Delete(channelBranchSurfingCacheKey(appId, channelName))
+}
+
+func boolCacheValue(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
 }

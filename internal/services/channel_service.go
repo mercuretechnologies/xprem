@@ -148,6 +148,7 @@ func (s *ChannelService) SetBranchSurfing(ctx context.Context, appId string, cha
 		},
 	})
 	invalidateChannelCaches(appId)
+	invalidateBranchSurfingCache(appId, channelName)
 	return nil
 }
 

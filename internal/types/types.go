@@ -140,6 +140,14 @@ type ManifestAsset struct {
 type ExtraManifestData struct {
 	ExpoClient json.RawMessage `json:"expoClient"`
 	Branch     string          `json:"branch"`
+	// BranchSurfing tells the app whether the channel it polls lets it ask for
+	// another branch, so it can show the picker without a second call. It is a
+	// property of the CHANNEL, while the manifest is cached per branch, so it is
+	// stamped on the served copy rather than composed into the cached one.
+	//
+	// omitempty on purpose: a deployment with the feature off serves the exact
+	// bytes it served before, which keeps the signed payload unchanged.
+	BranchSurfing bool `json:"branchSurfing,omitempty"`
 }
 
 type UpdateManifest struct {

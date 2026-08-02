@@ -187,6 +187,10 @@ func (s *ExpoProtocolService) PutUpdateInResponse(w http.ResponseWriter, r *http
 		http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 		return
 	}
+	// Stamped on the copy about to be served, never on the cached manifest: the
+	// manifest cache is keyed by branch, and two channels mapped to one branch
+	// can differ on this. Signing happens downstream, so it covers the stamp.
+	manifest.Extra.BranchSurfing = s.branchSurfingEnabled(r.Context(), appId, r.Header.Get("expo-channel-name"))
 	if currentUpdateId != "" {
 		metrics.TrackUpdateDownload(appId, platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
 	}
