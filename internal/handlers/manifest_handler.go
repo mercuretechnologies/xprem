@@ -160,6 +160,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		Platform:              platform,
 		RuntimeVersion:        runtimeVersion,
 		ProtocolVersion:       protocolVersion,
+		XpremBranch:           r.Header.Get("xprem-branch"),
 		ClientID:              r.Header.Get("EAS-Client-ID"),
 		CurrentUpdateID:       r.Header.Get("expo-current-update-id"),
 		ExpoFatalError:        r.Header.Get("expo-fatal-error"),

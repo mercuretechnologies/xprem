@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/providers/expo"
@@ -120,22 +121,26 @@ func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId st
 // branchSurfingEnabled answers whether the channel lets devices ask for another
 // branch. It is on the manifest hot path, so it never fails the poll: any error,
 // and stateless mode where the setting does not exist, answer false.
-func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId string, channelName string) bool {
+func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId string, channelName string) (bool, string) {
 	if !config.IsDBMode() || channelName == "" {
-		return false
+		return false, ""
 	}
 	surfingCache := cache2.GetCache()
 	cacheKey := channelBranchSurfingCacheKey(appId, channelName)
+	// "<0|1>:<pattern>". A value without the separator predates this format, so
+	// it falls through to the read below, which rewrites it.
 	if cached := surfingCache.Get(cacheKey); cached != "" {
-		return cached == "1"
+		if enabled, pattern, ok := strings.Cut(cached, ":"); ok {
+			return enabled == "1", pattern
+		}
 	}
 	surfing, err := s.channelRepo.GetBranchSurfing(ctx, appId, channelName)
 	if err != nil || surfing == nil {
-		return false
+		return false, ""
 	}
 	ttl := channelBranchSurfingCacheTTLSeconds
-	_ = surfingCache.Set(cacheKey, boolCacheValue(surfing.Enabled), &ttl)
-	return surfing.Enabled
+	_ = surfingCache.Set(cacheKey, boolCacheValue(surfing.Enabled)+":"+surfing.Pattern, &ttl)
+	return surfing.Enabled, surfing.Pattern
 }
 
 // invalidateBranchSurfingCache drops the delivery-path entry a setting write

@@ -12,6 +12,7 @@ import (
 	"time"
 	"xprem/config"
 	"xprem/internal/assets"
+	"xprem/internal/branch"
 	cache2 "xprem/internal/cache"
 	cdn2 "xprem/internal/cdn"
 	"xprem/internal/crypto"
@@ -41,6 +42,7 @@ type ManifestRequestParams struct {
 	CurrentUpdateID       string
 	ExpoFatalError        string
 	RecentFailedUpdateIDs string
+	XpremBranch           string
 }
 
 type ManifestResult struct {
@@ -190,7 +192,7 @@ func (s *ExpoProtocolService) PutUpdateInResponse(w http.ResponseWriter, r *http
 	// Stamped on the copy about to be served, never on the cached manifest: the
 	// manifest cache is keyed by branch, and two channels mapped to one branch
 	// can differ on this. Signing happens downstream, so it covers the stamp.
-	manifest.Extra.BranchSurfing = s.branchSurfingEnabled(r.Context(), appId, r.Header.Get("expo-channel-name"))
+	manifest.Extra.BranchSurfing, _ = s.branchSurfingEnabled(r.Context(), appId, r.Header.Get("expo-channel-name"))
 	if currentUpdateId != "" {
 		metrics.TrackUpdateDownload(appId, platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
 	}
@@ -280,7 +282,7 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
 	}
 
-	servedBranch, lastUpdate, err := s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, branchMap)
+	servedBranch, lastUpdate, err := s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, params.XpremBranch, branchMap)
 	if err != nil {
 		return ManifestResult{}, err
 	}
@@ -318,14 +320,19 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 // nil (out-of-bucket with no control => noUpdateAvailable, deliberately no fallback to
 // the next candidate). Shared by manifest and asset resolution so the two paths take
 // the same rollout decision for a device.
-func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, appId string, channelName string, clientID string, platform string, runtimeVersion string, branchMap *expo.ChannelMapping) (string, *types.Update, error) {
+func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, appId string, channelName string, clientID string, platform string, runtimeVersion string, requestedBranch string, branchMap *expo.ChannelMapping) (string, *types.Update, error) {
 	req := &BranchResolutionRequest{
-		AppID:          appId,
-		ChannelName:    channelName,
-		ClientID:       clientID,
-		Platform:       platform,
-		RuntimeVersion: runtimeVersion,
-		Mapping:        branchMap,
+		AppID:           appId,
+		ChannelName:     channelName,
+		ClientID:        clientID,
+		Platform:        platform,
+		RuntimeVersion:  runtimeVersion,
+		Mapping:         branchMap,
+		RequestedBranch: requestedBranch,
+	}
+	if requestedBranch != "" {
+		enabled, pattern := s.branchSurfingEnabled(ctx, appId, channelName)
+		req.Surfing = types.BranchSurfing{Enabled: enabled, Pattern: pattern}
 	}
 	candidates, err := ResolveBranchCandidates(ctx, s.branchRules, req)
 	if err != nil {
@@ -435,7 +442,7 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 // latest-update behavior.
 func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params AssetResolutionParams, branchMap *expo.ChannelMapping) (string, *types.Update, error) {
 	if config.IsDBMode() {
-		if params.UpdateID != "" && params.Branch != "" && s.isAssetBranchAllowed(params.Branch, branchMap) {
+		if params.UpdateID != "" && params.Branch != "" && s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, params.Branch, branchMap) {
 			pinnedUpdate, err := s.updateRepo.GetUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
 			if err != nil {
 				log.Printf("[RequestID: %s] Ignoring invalid updateId param %q: %v", params.RequestID, params.UpdateID, err)
@@ -455,23 +462,28 @@ func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params Ass
 			if err != nil {
 				log.Printf("[RequestID: %s] Ignoring invalid Expo-Requested-Update-ID %q: %v", params.RequestID, params.RequestedUpdateID, err)
 			} else if requestedUpdate != nil {
-				if s.isAssetBranchAllowed(requestedUpdate.Branch, branchMap) {
+				if s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, requestedUpdate.Branch, branchMap) {
 					return requestedUpdate.Branch, requestedUpdate, nil
 				}
 				log.Printf("[RequestID: %s] Ignoring Expo-Requested-Update-ID %q: branch %q is not served by channel %q", params.RequestID, params.RequestedUpdateID, requestedUpdate.Branch, params.ChannelName)
 			}
 		}
 	}
-	return s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, branchMap)
+	return s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, params.Branch, branchMap)
 }
 
-// isAssetBranchAllowed restricts the branch query param to the branches the channel
-// can legitimately serve: its mapped branch and, during a channel rollout, the rollout
-// branch. Anything else falls through to the later tiers instead of letting a crafted
-// URL read another branch's files.
-func (s *ExpoProtocolService) isAssetBranchAllowed(branch string, branchMap *expo.ChannelMapping) bool {
-	if branch == branchMap.BranchName {
+// isAssetBranchAllowed answers the mirror of the manifest question: could manifest
+// resolution for this channel have served this branch? It must stay exactly as
+// permissive as that resolution. Wider and the branch query param becomes a
+// cross-branch read primitive; narrower and the assets of a legitimately surfed
+// branch 404.
+func (s *ExpoProtocolService) isAssetBranchAllowed(ctx context.Context, appId string, channelName string, branchName string, branchMap *expo.ChannelMapping) bool {
+	if branchName == branchMap.BranchName {
 		return true
 	}
-	return branchMap.Rollout != nil && branch == branchMap.Rollout.BranchName
+	if branchMap.Rollout != nil && branchName == branchMap.Rollout.BranchName {
+		return true
+	}
+	enabled, pattern := s.branchSurfingEnabled(ctx, appId, channelName)
+	return enabled && branch.MatchPattern(pattern, branchName)
 }

@@ -33,9 +33,12 @@ func TestBranchSurfingEnabledCachesTheRead(t *testing.T) {
 		"qa": {Enabled: true, Pattern: "pr-*"},
 	}, nil)
 
-	assert.True(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
-	assert.True(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
-
+	enabledQA, pattern := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	assert.True(t, enabledQA)
+	assert.Equal(t, "pr-*", pattern)
+	enabledQA, pattern = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	assert.True(t, enabledQA)
+	assert.Equal(t, "pr-*", pattern)
 	assert.Equal(t, 1, repo.surfingReads, "the second poll must be served from the cache")
 }
 
@@ -46,8 +49,11 @@ func TestBranchSurfingDisabledIsCachedAsWell(t *testing.T) {
 		"qa": {Enabled: false, Pattern: "*"},
 	}, nil)
 
-	assert.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
-	assert.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
+	enabledQA, pattern := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	assert.False(t, enabledQA)
+	assert.Equal(t, "*", pattern)
+
+	enabledQA, pattern = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
 
 	assert.Equal(t, 1, repo.surfingReads)
 }
@@ -55,12 +61,16 @@ func TestBranchSurfingDisabledIsCachedAsWell(t *testing.T) {
 func TestBranchSurfingCacheIsInvalidatedOnWrite(t *testing.T) {
 	surfing := map[string]*types.BranchSurfing{"qa": {Enabled: false, Pattern: "*"}}
 	service, repo := surfingCacheService(t, surfing, nil)
-	require.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
+	enabledQA, _ := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	require.False(t, enabledQA)
+	assert.Equal(t, 1, repo.surfingReads)
 
 	surfing["qa"] = &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}
 	invalidateBranchSurfingCache(surfingCacheAppID, "qa")
 
-	assert.True(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
+	enabledQA, _ = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+
+	assert.True(t, enabledQA)
 	assert.Equal(t, 2, repo.surfingReads)
 }
 
@@ -69,13 +79,16 @@ func TestBranchSurfingCacheIsInvalidatedOnWrite(t *testing.T) {
 func TestBranchSurfingErrorAnswersFalse(t *testing.T) {
 	service, _ := surfingCacheService(t, nil, errors.New("database is down"))
 
-	assert.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
+	enabledQA, _ := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	assert.False(t, enabledQA)
 }
 
 func TestBranchSurfingUnknownChannelAnswersFalse(t *testing.T) {
 	service, _ := surfingCacheService(t, nil, nil)
 
-	assert.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "nope"))
+	enabledNope, _ := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "nope")
+
+	assert.False(t, enabledNope)
 }
 
 // Stateless mode has no channel settings at all, so the lookup is skipped
@@ -85,7 +98,8 @@ func TestBranchSurfingIsSkippedInStatelessMode(t *testing.T) {
 		"qa": {Enabled: true, Pattern: "*"},
 	}, nil)
 	t.Setenv("DB_URL", "")
+	enabledQA, _ := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
 
-	assert.False(t, service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa"))
+	assert.False(t, enabledQA)
 	assert.Equal(t, 0, repo.surfingReads)
 }
