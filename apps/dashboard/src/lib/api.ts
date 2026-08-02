@@ -148,6 +148,15 @@ export type ChannelRecord = {
   rollout?: ChannelRolloutRecord | null;
   branchCurrentUpdate?: BranchUpdateState | null;
   rolloutBranchCurrentUpdate?: BranchUpdateState | null;
+  // Absent in stateless mode, where the setting does not exist.
+  branchSurfing?: BranchSurfingRecord | null;
+};
+
+// Which branches a device polling this channel may ask to be served instead of
+// the mapped one. Pattern is a glob: "*" stands for any run of characters.
+export type BranchSurfingRecord = {
+  enabled: boolean;
+  pattern: string;
 };
 
 export type RuntimeVersionRecord = {
@@ -1298,6 +1307,19 @@ export class ApiClient {
     return this.request<void>(`${this.appScope()}/channels/${encodeURIComponent(channelName)}`, {
       method: 'DELETE',
     });
+  }
+
+  // A full replacement: the pattern is always sent, never inferred, so turning
+  // the switch on cannot silently widen a channel that named a narrower one.
+  public async setChannelBranchSurfing(channelName: string, payload: BranchSurfingRecord) {
+    return this.request<void>(
+      `${this.appScope()}/channels/${encodeURIComponent(channelName)}/branch-surfing`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
   }
 
   public async getBranches() {

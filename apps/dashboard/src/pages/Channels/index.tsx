@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Copy, GitBranch, Plus, Search, Split, Trash2 } from 'lucide-react';
+import { ArrowLeft, Compass, Copy, GitBranch, Plus, Search, Split, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, ChannelRecord, describeApiError } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
@@ -16,6 +16,7 @@ import { ChannelBranchMapping } from '@/components/ChannelBranchMapping';
 import { SelectBranch } from '@/pages/Channels/components/SelectBranch';
 import { StartRolloutDialog } from '@/pages/Channels/components/StartRolloutDialog';
 import { ManageRolloutDialog } from '@/pages/Channels/components/ManageRolloutDialog';
+import { BranchSurfingCard } from '@/pages/Channels/components/BranchSurfingCard';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -129,6 +130,7 @@ export const Channels = () => {
   const canDeleteChannel = useAppPermission('channel:delete', 'admin-only');
   const canEditChannelBranch = useAppPermission('channel:edit-branch', 'admin-only');
   const canManageRollout = useAppPermission('channel-rollout:manage', 'admin-only');
+  const canManageBranchSurfing = useAppPermission('channel:branch-surfing', 'admin-only');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [editingMapping, setEditingMapping] = useState(false);
@@ -215,9 +217,30 @@ export const Channels = () => {
       {
         header: 'Channel',
         accessorKey: 'releaseChannelName',
-        cell: ({ row }: { row: { original: ChannelRecord } }) => (
-          <span className="font-medium">{row.original.releaseChannelName}</span>
-        ),
+        cell: ({ row }: { row: { original: ChannelRecord } }) => {
+          const surfing = row.original.branchSurfing;
+          return (
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{row.original.releaseChannelName}</span>
+              {surfing?.enabled && (
+                <Badge
+                  variant="outline"
+                  // Amber on "*" echoes the detail page: the channel exposes
+                  // every branch, which is the setting worth noticing at a
+                  // glance.
+                  className={
+                    surfing.pattern === '*'
+                      ? 'border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-300'
+                      : 'border-sky-400/25 bg-sky-400/10 text-sky-700 dark:text-sky-300'
+                  }
+                  title={`Devices on this channel can surf to branches matching ${surfing.pattern}`}>
+                  <Compass className="h-3 w-3" />
+                  <span className="font-mono">{surfing.pattern}</span>
+                </Badge>
+              )}
+            </div>
+          );
+        },
       },
       {
         header: 'Status',
@@ -228,7 +251,7 @@ export const Channels = () => {
             className={
               row.original.branchName
                 ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-300'
-                : 'text-muted-foreground'
+                : 'border-red-400/25 bg-red-400/10 text-red-700 dark:text-red-300'
             }>
             {row.original.branchName ? 'Active' : 'Unmapped'}
           </Badge>
@@ -426,6 +449,15 @@ export const Channels = () => {
                   )}
                 </div>
               </section>
+            )}
+            {CONTROL_PLANE_ENABLED && (
+              <BranchSurfingCard
+                channel={selectedChannel}
+                canManage={canManageBranchSurfing}
+                onUpdated={async () => {
+                  await queryClient.invalidateQueries({ queryKey: ['channels', selectedAppId] });
+                }}
+              />
             )}
           </div>
         )}

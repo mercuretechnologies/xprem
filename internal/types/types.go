@@ -224,6 +224,9 @@ type ChannelMapping struct {
 	RolloutBranchCurrentUpdate *BranchUpdateState `json:"rolloutBranchCurrentUpdate,omitempty"`
 	// Active channel rollout, if any (control-plane mode only); nil otherwise.
 	Rollout *ChannelRollout `json:"rollout,omitempty"`
+	// Branch-surfing setting of the channel; nil in stateless mode, where the
+	// setting does not exist.
+	BranchSurfing *BranchSurfing `json:"branchSurfing,omitempty"`
 }
 
 // BranchSurfing is a channel's branch-surfing setting: whether a device polling
