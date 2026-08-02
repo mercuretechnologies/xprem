@@ -33,11 +33,23 @@ func TestPayloadCacheKeysEmbedReleaseVersion(t *testing.T) {
 type countingChannelRepo struct {
 	*fakeChannelRepo
 	calls int
+	// surfingReads counts branch-surfing lookups, which is what tells a cache
+	// hit from a miss; surfingErr makes the repository fail.
+	surfingReads int
+	surfingErr   error
 }
 
 func (r *countingChannelRepo) GetChannelBranchMapping(ctx context.Context, appId, channelName string) (*expo.ChannelMapping, error) {
 	r.calls++
 	return r.fakeChannelRepo.GetChannelBranchMapping(ctx, appId, channelName)
+}
+
+func (r *countingChannelRepo) GetBranchSurfing(ctx context.Context, appId, channelName string) (*types.BranchSurfing, error) {
+	r.surfingReads++
+	if r.surfingErr != nil {
+		return nil, r.surfingErr
+	}
+	return r.fakeChannelRepo.GetBranchSurfing(ctx, appId, channelName)
 }
 
 func TestChannelBranchMappingCache(t *testing.T) {
