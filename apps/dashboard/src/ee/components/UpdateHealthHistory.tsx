@@ -69,6 +69,23 @@ const metricOptions: MetricOption[] = [
 // the truth, so resampling both smooths the line and removes the false zeros.
 const RESAMPLE_TARGET_POINTS = 140;
 
+// The history route refuses a window wider than 90 days, and callers pass the
+// update's publication date as 'from': an update older than that asked for a
+// window the API rejects outright, so the chart 404'd rather than showing the
+// last 90 days of it. Rounded up to a day boundary so the value is stable
+// across renders (it is part of the query key) and stays inside the ceiling
+// whatever the server stamps as 'to'.
+const MAX_HISTORY_WINDOW_MS = 90 * 24 * 60 * 60 * 1_000;
+
+const boundedFrom = (from?: string) => {
+  if (!from) return from;
+  const requested = new Date(from).getTime();
+  if (Number.isNaN(requested)) return from;
+  const day = 24 * 60 * 60 * 1_000;
+  const earliest = Math.ceil((Date.now() - MAX_HISTORY_WINDOW_MS) / day) * day;
+  return requested >= earliest ? from : new Date(earliest).toISOString();
+};
+
 const resampleInterval = (points: AggregatedPoint[]): number => {
   if (points.length < 2) return 0;
   const first = new Date(points[0].timestamp).getTime();
@@ -230,9 +247,10 @@ export const UpdateHealthHistory = ({
     () => Array.from(new Set(series.flatMap(item => item.updateUUIDs))),
     [series]
   );
+  const windowFrom = boundedFrom(from);
   const query = useQuery({
-    queryKey: ['update-health-history', selectedAppId, updateUUIDs.join(','), from],
-    queryFn: () => api.getUpdateHealthHistory(updateUUIDs, from),
+    queryKey: ['update-health-history', selectedAppId, updateUUIDs.join(','), windowFrom],
+    queryFn: () => api.getUpdateHealthHistory(updateUUIDs, windowFrom),
     enabled: !!selectedAppId && updateUUIDs.length > 0,
     refetchInterval: live ? 5_000 : false,
   });

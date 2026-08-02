@@ -113,13 +113,24 @@ const formatCompactNumber = (value: number) =>
     maximumFractionDigits: Math.abs(value) >= 1_000 ? 1 : 0,
   }).format(value);
 
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+// Tiered, because the tick labels sit on one line: "Apr 9, 02:00 PM" is over
+// ninety pixels wide and five of them collide on any chart narrower than a full
+// page. Each tier drops the smallest unit that no longer separates two
+// neighbouring ticks at that span.
 const timeFormatter = (start: number, end: number) => {
-  const spansMultipleDays = end - start >= 24 * 60 * 60 * 1_000;
-  return new Intl.DateTimeFormat(undefined, {
-    ...(spansMultipleDays ? { month: 'short', day: 'numeric' } : {}),
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const span = end - start;
+  if (span < DAY_MS) {
+    return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  if (span < 7 * DAY_MS) {
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit' });
+  }
+  if (span < 365 * DAY_MS) {
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+  }
+  return new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
 };
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
@@ -326,6 +337,13 @@ export const TimeSeriesChart = ({
     bottom: 28,
     left: Math.max(42, Math.ceil(yLabelWidth) + 12),
   };
+  // A tick label is centred on its instant, so one wider than the gap to the
+  // next tick overlaps it. Same 6px monospace character as the y labels, and
+  // the span decides the format, so both have to be read to know how many fit.
+  const xLabelWidth =
+    Math.max(formatTime.format(xDomain[0]).length, formatTime.format(xDomain[1]).length) * 6;
+  const xTickCount = (plotWidth: number) =>
+    Math.max(2, Math.min(5, Math.floor(plotWidth / (xLabelWidth + 20))));
   // Where a timestamp lands in the plot. The x scale is linear over an explicit
   // domain, so the markers can be placed without reaching into visx internals.
   // Two readings of the same point, on purpose: the badge is positioned in
@@ -389,7 +407,7 @@ export const TimeSeriesChart = ({
                 <Grid columns={false} numTicks={3} />
                 <Axis
                   orientation="bottom"
-                  numTicks={width < 420 ? 3 : 5}
+                  numTicks={xTickCount(Math.max(0, width - margin.left - margin.right))}
                   tickFormat={value => formatTime.format(value as Date)}
                   hideTicks
                 />
