@@ -2,11 +2,7 @@ import { Env } from '@expo/eas-build-job';
 import { Command, Flags } from '@oclif/core';
 
 import { getAuthHeaders, retrieveCredentials, validateCredentials } from '../lib/auth';
-import {
-  getExpoConfigUpdateUrl,
-  getPrivateExpoConfigAsync,
-  requireExpoAppId,
-} from '../lib/expoConfig';
+import { getPrivateExpoConfigAsync, requireExpoAppId, resolveServerUrl } from '../lib/expoConfig';
 import { fetchWithRetries } from '../lib/fetch';
 import Log from '../lib/log';
 import { ora } from '../lib/ora';
@@ -36,14 +32,21 @@ export default class Publish extends Command {
       default: 'all',
       required: true,
     }),
+    serverUrl: Flags.string({
+      description:
+        'URL of the self-hosted update server to republish on. Defaults to the origin of updates.url from your Expo config',
+      required: false,
+    }),
   };
   private sanitizeFlags(flags: any): {
     branch: string;
     platform: string;
+    customServerUrl?: string;
   } {
     return {
       branch: flags.branch,
       platform: flags.platform,
+      customServerUrl: flags.serverUrl,
     };
   }
   public async run(): Promise<void> {
@@ -55,7 +58,7 @@ export default class Publish extends Command {
       process.exit(1);
     }
     const { flags } = await this.parse(Publish);
-    const { branch, platform } = this.sanitizeFlags(flags);
+    const { branch, platform, customServerUrl } = this.sanitizeFlags(flags);
     if (!branch) {
       Log.error('Branch name is required');
       process.exit(1);
@@ -75,22 +78,11 @@ export default class Publish extends Command {
     const privateConfig = await getPrivateExpoConfigAsync(projectDir, {
       env: process.env as Env,
     });
-    const updateUrl = getExpoConfigUpdateUrl(privateConfig);
-    if (!updateUrl) {
-      Log.error(
-        "Update url is not setup in your config. Please run 'eoas init' to setup the update url"
-      );
+    const baseUrl = await resolveServerUrl(privateConfig, customServerUrl).catch(e => {
+      Log.error(e.message);
       process.exit(1);
-    }
+    });
     const appId = requireExpoAppId(privateConfig);
-    let baseUrl: string;
-    try {
-      const parsedUrl = new URL(updateUrl);
-      baseUrl = parsedUrl.origin;
-    } catch (e) {
-      Log.error('Invalid URL', e);
-      process.exit(1);
-    }
     let runtimeVersions;
     try {
       runtimeVersions = await fetchRuntimeVersions({ baseUrl, appId, branch, credentials });

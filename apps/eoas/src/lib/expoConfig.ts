@@ -372,17 +372,22 @@ function stringifyWithEnv(obj: Record<string, any>): string {
   return json.replace(/"__RAW_EXPR_(\d+)__"/g, (_match, index) => rawExpressions[Number(index)]);
 }
 
-export async function resolveServerUrl(config: ExpoConfig): Promise<string> {
-  const updateUrl = config.updates?.url;
+// customServerUrl wins over the Expo config, so a project serving updates and
+// receiving publishes on two different origins can point the CLI at the second
+// one without touching its config.
+export async function resolveServerUrl(
+  config: ExpoConfig,
+  customServerUrl?: string
+): Promise<string> {
+  const updateUrl = customServerUrl ?? getExpoConfigUpdateUrl(config);
   if (!updateUrl) {
-    throw new Error('No update URL found in the Expo config.');
+    throw new Error(
+      "Update url is not setup in your config. Please run 'eoas init' to setup the update url, or pass --serverUrl"
+    );
   }
-  let baseUrl: string;
   try {
-    const parsedUrl = new URL(updateUrl);
-    baseUrl = parsedUrl.origin;
+    return new URL(updateUrl).origin;
   } catch {
-    throw new Error('Invalid update URL.');
+    throw new Error(customServerUrl ? 'Invalid --serverUrl value.' : 'Invalid update URL.');
   }
-  return baseUrl;
 }

@@ -61,6 +61,11 @@ export default class Publish extends Command {
       description: 'Name of the branch to point to',
       required: true,
     }),
+    serverUrl: Flags.string({
+      description:
+        'URL of the self-hosted update server to publish to. Defaults to the origin of updates.url from your Expo config',
+      required: false,
+    }),
     nonInteractive: Flags.boolean({
       description: 'Run command in non-interactive mode',
       default: false,
@@ -96,6 +101,7 @@ export default class Publish extends Command {
   private sanitizeFlags(flags: any): {
     platform: RequestedPlatform;
     branch: string;
+    customServerUrl?: string;
     nonInteractive: boolean;
     disableRepositoryCheck: boolean;
     outputDir: string;
@@ -109,6 +115,7 @@ export default class Publish extends Command {
       disableRepositoryCheck: flags.disableRepositoryCheck,
       platform: flags.platform,
       branch: flags.branch,
+      customServerUrl: flags.serverUrl,
       nonInteractive: flags.nonInteractive,
       outputDir: flags.outputDir,
       packageRunner: resolvePackageRunner(flags.packageRunner, process.cwd()),
@@ -132,6 +139,7 @@ export default class Publish extends Command {
       platform,
       nonInteractive,
       branch,
+      customServerUrl,
       outputDir,
       packageRunner,
       providedDeprecatedChannel,
@@ -161,12 +169,14 @@ export default class Publish extends Command {
       },
       packageRunner,
     });
-    const serverUrl = await resolveServerUrl(config).catch(e => {
+    const serverUrl = await resolveServerUrl(config, customServerUrl).catch(e => {
       Log.error(e.message);
       process.exit(1);
     });
     const appId = requireExpoAppId(config);
-    if (!nonInteractive) {
+    // A URL passed on the command line needs no confirmation, and `eoas init`
+    // would not fix it anyway.
+    if (!nonInteractive && !customServerUrl) {
       const confirmed = await confirmAsync({
         message: `Is this the correct URL of your self-hosted update server? ${serverUrl}`,
         name: 'export',

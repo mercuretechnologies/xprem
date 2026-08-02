@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { createOrModifyExpoConfigAsync } from '../expoConfig';
+import { createOrModifyExpoConfigAsync, resolveServerUrl } from '../expoConfig';
 
 const guardedUpdates = {
   url: 'https://ota.example.com/manifest',
@@ -266,5 +266,33 @@ module.exports = makeConfig();
     await expect(
       createOrModifyExpoConfigAsync(projectDir, { updates: guardedUpdates })
     ).rejects.toThrow('Could not find the exported config object');
+  });
+});
+
+describe('resolveServerUrl', () => {
+  const config = { updates: { url: 'https://ota.example.com/manifest' } } as any;
+
+  it('falls back to the origin of the Expo config update url', async () => {
+    await expect(resolveServerUrl(config)).resolves.toBe('https://ota.example.com');
+  });
+
+  it('prefers the custom server url and keeps only its origin', async () => {
+    await expect(resolveServerUrl(config, 'https://publish.example.com/some/path')).resolves.toBe(
+      'https://publish.example.com'
+    );
+  });
+
+  it('resolves without any update url in the config when a custom one is passed', async () => {
+    await expect(resolveServerUrl({} as any, 'https://publish.example.com')).resolves.toBe(
+      'https://publish.example.com'
+    );
+  });
+
+  it('rejects when neither the config nor the flag provides a url', async () => {
+    await expect(resolveServerUrl({} as any)).rejects.toThrow('Update url is not setup');
+  });
+
+  it('rejects an unparseable custom server url', async () => {
+    await expect(resolveServerUrl(config, 'not-a-url')).rejects.toThrow('Invalid --serverUrl');
   });
 });

@@ -4,9 +4,9 @@ import { Command, Flags } from '@oclif/core';
 import { getAuthHeaders, retrieveCredentials, validateCredentials } from '../lib/auth';
 import {
   RequestedPlatform,
-  getExpoConfigUpdateUrl,
   getPrivateExpoConfigAsync,
   requireExpoAppId,
+  resolveServerUrl,
 } from '../lib/expoConfig';
 import { fetchWithRetries } from '../lib/fetch';
 import Log from '../lib/log';
@@ -32,6 +32,11 @@ export default class Publish extends Command {
       description: 'Name of the branch to point to',
       required: true,
     }),
+    serverUrl: Flags.string({
+      description:
+        'URL of the self-hosted update server to roll back on. Defaults to the origin of updates.url from your Expo config',
+      required: false,
+    }),
     nonInteractive: Flags.boolean({
       description: 'Run command in non-interactive mode',
       default: false,
@@ -40,11 +45,13 @@ export default class Publish extends Command {
   private sanitizeFlags(flags: any): {
     platform: RequestedPlatform;
     branch: string;
+    customServerUrl?: string;
     nonInteractive: boolean;
   } {
     return {
       platform: flags.platform,
       branch: flags.branch,
+      customServerUrl: flags.serverUrl,
       nonInteractive: flags.nonInteractive,
     };
   }
@@ -57,7 +64,7 @@ export default class Publish extends Command {
       process.exit(1);
     }
     const { flags } = await this.parse(Publish);
-    const { platform, branch, nonInteractive } = this.sanitizeFlags(flags);
+    const { platform, branch, customServerUrl, nonInteractive } = this.sanitizeFlags(flags);
     if (!branch) {
       Log.error('Branch name is required');
       process.exit(1);
@@ -92,22 +99,11 @@ export default class Publish extends Command {
       );
       process.exit(1);
     }
-    const updateUrl = getExpoConfigUpdateUrl(privateConfig);
-    if (!updateUrl) {
-      Log.error(
-        "Update url is not setup in your config. Please run 'eoas init' to setup the update url"
-      );
+    const baseUrl = await resolveServerUrl(privateConfig, customServerUrl).catch(e => {
+      Log.error(e.message);
       process.exit(1);
-    }
+    });
     const appId = requireExpoAppId(privateConfig);
-    let baseUrl: string;
-    try {
-      const parsedUrl = new URL(updateUrl);
-      baseUrl = parsedUrl.origin;
-    } catch (e) {
-      Log.error('Invalid URL', e);
-      process.exit(1);
-    }
     const runtimeSpinner = ora('🔄 Resolving runtime version...').start();
     const runtimeVersions = [
       ...(!platform || platform === RequestedPlatform.All || platform === RequestedPlatform.Ios

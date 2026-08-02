@@ -29,7 +29,8 @@ vi.mock('../../lib/package', () => ({
 }));
 vi.mock('../../lib/expoConfig', () => ({
   getPrivateExpoConfigAsync: async () => ({}),
-  getExpoConfigUpdateUrl: () => 'https://ota.example.com/manifest',
+  resolveServerUrl: async (_config: unknown, customServerUrl?: string) =>
+    new URL(customServerUrl ?? 'https://ota.example.com/manifest').origin,
   requireExpoAppId: () => 'app-1',
 }));
 vi.mock('../../lib/serverUpdates', async importOriginal => {
@@ -177,5 +178,28 @@ describe('republish command flow', () => {
 
     expect(promptedNames()).toEqual(['runtimeVersion', 'update']);
     expect(lastPostUrl().searchParams.get('updateId')).toBe('100');
+  });
+
+  it('targets the origin passed as --serverUrl instead of the config one', async () => {
+    vi.mocked(fetchUpdates).mockResolvedValue([
+      serverUpdate({ updateId: '100', platform: 'ios', publishGroup: undefined }),
+    ]);
+    answerPrompts({
+      runtimeVersion: '1.0.0',
+      update: (question: any) => question.choices[0].value,
+    });
+
+    await Republish.run(
+      ['--branch', 'main', '--serverUrl', 'https://publish.example.com/some/path'],
+      eoasRoot
+    );
+
+    expect(lastPostUrl().origin).toBe('https://publish.example.com');
+    expect(vi.mocked(fetchRuntimeVersions).mock.calls[0][0]).toMatchObject({
+      baseUrl: 'https://publish.example.com',
+    });
+    expect(vi.mocked(fetchUpdates).mock.calls[0][0]).toMatchObject({
+      baseUrl: 'https://publish.example.com',
+    });
   });
 });
