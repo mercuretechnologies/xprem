@@ -59,8 +59,18 @@ func (f *fakeMgmtChannelRepo) GetChannels(_ context.Context, _ string) ([]types.
 func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*expo.ChannelMapping, error) {
 	return nil, nil
 }
+func (f *fakeMgmtChannelRepo) GetBranchSurfing(_ context.Context, _ string, _ string) (*types.BranchSurfing, error) {
+	return &types.BranchSurfing{}, nil
+}
+func (f *fakeMgmtChannelRepo) SetBranchSurfing(_ context.Context, _ string, _ string, _ types.BranchSurfing) error {
+	return nil
+}
 
 type fakeMgmtBranchRepo struct{}
+
+func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ string) ([]types.SurfableBranch, error) {
+	return nil, nil
+}
 
 func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
 	return 7, nil

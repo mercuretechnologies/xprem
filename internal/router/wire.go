@@ -42,6 +42,7 @@ type AppContainer struct {
 	AppHandler                  *dashhandlers.AppHandler
 	AppRepo                     services.AppRepository
 	BranchHandler               *dashhandlers.BranchHandler
+	BranchListHandler           *handlers.BranchListHandler
 	ChannelHandler              *dashhandlers.ChannelHandler
 	ExpoProtocolHandler         *handlers.ExpoProtocolHandler
 	LicenseHandler              *licensing.LicenseHandler
@@ -296,6 +297,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		AppHandler:                  dashhandlers.NewAppHandler(appService, visibleApps),
 		AppRepo:                     appRepo,
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
+		BranchListHandler:           handlers.NewBranchListHandler(channelService),
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
 		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
 		LicenseHandler:              licensing.NewLicenseHandler(licenseService),

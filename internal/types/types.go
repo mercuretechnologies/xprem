@@ -226,6 +226,21 @@ type ChannelMapping struct {
 	Rollout *ChannelRollout `json:"rollout,omitempty"`
 }
 
+// BranchSurfing is a channel's branch-surfing setting: whether a device polling
+// the channel may ask to be served a branch other than the mapped one, and
+// which branches it may reach. Pattern uses the "*" wildcard language of
+// branch.MatchPattern.
+type BranchSurfing struct {
+	Enabled bool   `json:"enabled"`
+	Pattern string `json:"pattern"`
+}
+
+// SurfableBranch is one entry of the branch list a device may surf to.
+type SurfableBranch struct {
+	Name         string `json:"name"`
+	LastUpdateAt string `json:"lastUpdateAt"`
+}
+
 type BranchMapping struct {
 	BranchName     string  `json:"branchName"`
 	BranchId       *string `json:"branchId"`

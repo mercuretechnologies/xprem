@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"xprem/internal/auditlog"
+	"xprem/internal/branch"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/providers/expo"
@@ -34,6 +36,9 @@ type ChannelRepository interface {
 	GetChannelNameByBranchName(ctx context.Context, appId string, branchName string) ([]string, error)
 	GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error)
 	GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error)
+	// GetBranchSurfing returns nil, nil when the channel does not exist.
+	GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error)
+	SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error
 }
 
 // SetOnAuditEvent plugs the audit emission seam (see SetSSOEnforced for the
@@ -109,4 +114,66 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelName string, 
 
 func (s *ChannelService) GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error) {
 	return s.channelRepo.GetChannels(ctx, appId)
+}
+
+func (s *ChannelService) GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error) {
+	if err := validation.Name("channelName", channelName); err != nil {
+		return nil, err
+	}
+	return s.channelRepo.GetBranchSurfing(ctx, appId, channelName)
+}
+
+func (s *ChannelService) SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error {
+	if err := validation.Name("channelName", channelName); err != nil {
+		return err
+	}
+	if err := validation.NamePattern("branchSurfingPattern", surfing.Pattern); err != nil {
+		return err
+	}
+	// Collapsed on write, as API key access rules are, so patterns naming the
+	// same set of branches are stored identically.
+	surfing.Pattern = branch.CollapseWildcards(surfing.Pattern)
+	if err := s.channelRepo.SetBranchSurfing(ctx, appId, channelName, surfing); err != nil {
+		return err
+	}
+	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
+		Action:        auditlog.ActionBranchSurfingUpdated,
+		TargetType:    "channel",
+		TargetID:      channelName,
+		TargetDisplay: channelName,
+		AppID:         appId,
+		Metadata: map[string]any{
+			"enabled": surfing.Enabled,
+			"pattern": surfing.Pattern,
+		},
+	})
+	invalidateChannelCaches(appId)
+	return nil
+}
+
+// ListSurfableBranches returns the branches a device polling channelName may
+// ask to be served: those matching the channel's pattern that have a published
+// update for the device's runtime version. It refuses a channel that does not
+// exist or has branch surfing off.
+func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string) ([]types.SurfableBranch, error) {
+	surfing, err := s.GetBranchSurfing(ctx, appId, channelName)
+	if err != nil {
+		return nil, err
+	}
+	// An unknown channel and a channel with surfing off answer the same way, so
+	// the endpoint never reveals which channels exist.
+	if surfing == nil || !surfing.Enabled {
+		return nil, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Branch surfing is not enabled for this channel"}
+	}
+	branches, err := s.branchRepo.GetSurfableBranches(ctx, appId, runtimeVersion)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]types.SurfableBranch, 0, len(branches))
+	for _, candidate := range branches {
+		if branch.MatchPattern(surfing.Pattern, candidate.Name) {
+			matched = append(matched, candidate)
+		}
+	}
+	return matched, nil
 }

@@ -421,6 +421,28 @@ func (r *fakeRolloutRepo) ClearUpdateRollout(_ context.Context, appId, branchNam
 
 type fakeChannelRepo struct {
 	mappings map[string]*expo.ChannelMapping
+	// surfing is the branch-surfing setting GetBranchSurfing answers with, per
+	// channel name. A channel absent from the map does not exist.
+	surfing map[string]*types.BranchSurfing
+	// surfingWrites records what SetBranchSurfing was handed.
+	surfingWrites map[string]types.BranchSurfing
+}
+
+func (r *fakeChannelRepo) GetBranchSurfing(_ context.Context, _, channelName string) (*types.BranchSurfing, error) {
+	setting, ok := r.surfing[channelName]
+	if !ok {
+		return nil, nil
+	}
+	settingCopy := *setting
+	return &settingCopy, nil
+}
+
+func (r *fakeChannelRepo) SetBranchSurfing(_ context.Context, _, channelName string, surfing types.BranchSurfing) error {
+	if r.surfingWrites == nil {
+		r.surfingWrites = map[string]types.BranchSurfing{}
+	}
+	r.surfingWrites[channelName] = surfing
+	return nil
 }
 
 func (r *fakeChannelRepo) InsertChannel(_ context.Context, _ string, _ *int64, _ string) (int64, error) {
@@ -466,7 +488,14 @@ func (fakeAppRepo) GetAppByID(_ context.Context, _ string) (config.AppConfig, er
 	return config.AppConfig{}, nil
 }
 
-type fakeBranchRepo struct{}
+type fakeBranchRepo struct {
+	// surfable is what GetSurfableBranches answers with, per runtime version.
+	surfable map[string][]types.SurfableBranch
+}
+
+func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string) ([]types.SurfableBranch, error) {
+	return r.surfable[runtimeVersion], nil
+}
 
 func (fakeBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
 	return 0, nil

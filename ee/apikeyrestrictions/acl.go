@@ -7,6 +7,7 @@ package apikeyrestrictions
 import (
 	"fmt"
 	"strings"
+	"xprem/internal/branch"
 	"xprem/internal/validation"
 )
 
@@ -111,10 +112,7 @@ func NormalizeBranchRules(rules []BranchRule) ([]BranchRule, error) {
 
 // collapseWildcards rewrites any run of "*" as a single one.
 func collapseWildcards(pattern string) string {
-	for strings.Contains(pattern, "**") {
-		pattern = strings.ReplaceAll(pattern, "**", "*")
-	}
-	return pattern
+	return branch.CollapseWildcards(pattern)
 }
 
 func normalizeActions(pattern string, actions []Action) ([]Action, error) {
@@ -140,28 +138,7 @@ func normalizeActions(pattern string, actions []Action) ([]Action, error) {
 // matchBranchPattern matches name against pattern, "*" standing for any run of
 // characters, including empty.
 func matchBranchPattern(pattern, name string) bool {
-	if !strings.Contains(pattern, "*") {
-		return pattern == name
-	}
-	segments := strings.Split(pattern, "*")
-	prefix, suffix := segments[0], segments[len(segments)-1]
-	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
-		return false
-	}
-	// The anchors must not overlap: "ab*ba" does not match "aba".
-	if len(prefix)+len(suffix) > len(name) {
-		return false
-	}
-	rest := name[len(prefix) : len(name)-len(suffix)]
-	// Inner segments must appear in order; leftmost occurrence is enough.
-	for _, segment := range segments[1 : len(segments)-1] {
-		index := strings.Index(rest, segment)
-		if index < 0 {
-			return false
-		}
-		rest = rest[index+len(segment):]
-	}
-	return true
+	return branch.MatchPattern(pattern, name)
 }
 
 // describeBranchRules renders a rule list for the audit trail.

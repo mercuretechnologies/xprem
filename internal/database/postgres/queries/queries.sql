@@ -2293,3 +2293,26 @@ UPDATE oauth_authorization_codes
 SET used_at = CURRENT_TIMESTAMP
 WHERE id = $1 AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
 RETURNING *;
+
+-- name: GetChannelBranchSurfing :one
+SELECT branch_surfing_enabled, branch_surfing_pattern
+FROM channels
+WHERE app_id = $1 AND name = $2;
+
+-- name: UpdateChannelBranchSurfing :execresult
+UPDATE channels
+SET branch_surfing_enabled = $3, branch_surfing_pattern = $4
+WHERE app_id = $1 AND name = $2;
+
+-- name: GetSurfableBranches :many
+-- Branches a device on this app and runtime version could actually be served.
+-- A branch with no published update for that runtime version is unreachable,
+-- so listing it would offer a switch that silently does nothing. rv is scoped
+-- to the app as well: version strings are unique per app, not globally.
+SELECT b.name AS branch_name, MAX(u.created_at)::timestamptz AS last_update_at
+FROM branches b
+JOIN updates u ON u.branch_id = b.id AND u.checked_at IS NOT NULL
+JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
+WHERE b.app_id = $1 AND rv.version = $2
+GROUP BY b.id, b.name
+ORDER BY MAX(u.created_at) DESC, b.name ASC;

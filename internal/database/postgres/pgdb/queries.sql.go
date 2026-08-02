@@ -1177,6 +1177,29 @@ func (q *Queries) GetChannelBranchMapping(ctx context.Context, arg GetChannelBra
 	return i, err
 }
 
+const getChannelBranchSurfing = `-- name: GetChannelBranchSurfing :one
+SELECT branch_surfing_enabled, branch_surfing_pattern
+FROM channels
+WHERE app_id = $1 AND name = $2
+`
+
+type GetChannelBranchSurfingParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+type GetChannelBranchSurfingRow struct {
+	BranchSurfingEnabled bool   `json:"branch_surfing_enabled"`
+	BranchSurfingPattern string `json:"branch_surfing_pattern"`
+}
+
+func (q *Queries) GetChannelBranchSurfing(ctx context.Context, arg GetChannelBranchSurfingParams) (GetChannelBranchSurfingRow, error) {
+	row := q.db.QueryRow(ctx, getChannelBranchSurfing, arg.AppID, arg.Name)
+	var i GetChannelBranchSurfingRow
+	err := row.Scan(&i.BranchSurfingEnabled, &i.BranchSurfingPattern)
+	return i, err
+}
+
 const getChannelNamesByBranchName = `-- name: GetChannelNamesByBranchName :many
 SELECT c.name
 FROM channels c
@@ -1318,7 +1341,7 @@ current_updates AS (
         u.created_at DESC,
         u.id DESC
 )
-SELECT channels.id, channels.app_id, channels.branch_id, channels.name, channels.created_at, branches.name as branch_name,
+SELECT channels.id, channels.app_id, channels.branch_id, channels.name, channels.created_at, channels.branch_surfing_enabled, channels.branch_surfing_pattern, branches.name as branch_name,
     cr.id AS rollout_id,
     rb.name AS rollout_branch_name,
     cr.percentage AS rollout_percentage,
@@ -1348,6 +1371,8 @@ type GetChannelsByAppIDRow struct {
 	BranchID                              *int64             `json:"branch_id"`
 	Name                                  string             `json:"name"`
 	CreatedAt                             pgtype.Timestamptz `json:"created_at"`
+	BranchSurfingEnabled                  bool               `json:"branch_surfing_enabled"`
+	BranchSurfingPattern                  string             `json:"branch_surfing_pattern"`
 	BranchName                            *string            `json:"branch_name"`
 	RolloutID                             pgtype.UUID        `json:"rollout_id"`
 	RolloutBranchName                     *string            `json:"rollout_branch_name"`
@@ -1379,6 +1404,8 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 			&i.BranchID,
 			&i.Name,
 			&i.CreatedAt,
+			&i.BranchSurfingEnabled,
+			&i.BranchSurfingPattern,
 			&i.BranchName,
 			&i.RolloutID,
 			&i.RolloutBranchName,
@@ -1826,6 +1853,50 @@ func (q *Queries) GetSSOConfig(ctx context.Context) (SsoConfig, error) {
 		&i.ManualUserValidation,
 	)
 	return i, err
+}
+
+const getSurfableBranches = `-- name: GetSurfableBranches :many
+SELECT b.name AS branch_name, MAX(u.created_at)::timestamptz AS last_update_at
+FROM branches b
+JOIN updates u ON u.branch_id = b.id AND u.checked_at IS NOT NULL
+JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
+WHERE b.app_id = $1 AND rv.version = $2
+GROUP BY b.id, b.name
+ORDER BY MAX(u.created_at) DESC, b.name ASC
+`
+
+type GetSurfableBranchesParams struct {
+	AppID   pgtype.UUID `json:"app_id"`
+	Version string      `json:"version"`
+}
+
+type GetSurfableBranchesRow struct {
+	BranchName   string             `json:"branch_name"`
+	LastUpdateAt pgtype.Timestamptz `json:"last_update_at"`
+}
+
+// Branches a device on this app and runtime version could actually be served.
+// A branch with no published update for that runtime version is unreachable,
+// so listing it would offer a switch that silently does nothing. rv is scoped
+// to the app as well: version strings are unique per app, not globally.
+func (q *Queries) GetSurfableBranches(ctx context.Context, arg GetSurfableBranchesParams) ([]GetSurfableBranchesRow, error) {
+	rows, err := q.db.Query(ctx, getSurfableBranches, arg.AppID, arg.Version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSurfableBranchesRow
+	for rows.Next() {
+		var i GetSurfableBranchesRow
+		if err := rows.Scan(&i.BranchName, &i.LastUpdateAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
@@ -5286,6 +5357,28 @@ type UpdateChannelBranchMappingParams struct {
 // the channel through RepointChannelToRolloutBranch instead, so it is not blocked here.
 func (q *Queries) UpdateChannelBranchMapping(ctx context.Context, arg UpdateChannelBranchMappingParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, updateChannelBranchMapping, arg.BranchID, arg.AppID, arg.ID)
+}
+
+const updateChannelBranchSurfing = `-- name: UpdateChannelBranchSurfing :execresult
+UPDATE channels
+SET branch_surfing_enabled = $3, branch_surfing_pattern = $4
+WHERE app_id = $1 AND name = $2
+`
+
+type UpdateChannelBranchSurfingParams struct {
+	AppID                pgtype.UUID `json:"app_id"`
+	Name                 string      `json:"name"`
+	BranchSurfingEnabled bool        `json:"branch_surfing_enabled"`
+	BranchSurfingPattern string      `json:"branch_surfing_pattern"`
+}
+
+func (q *Queries) UpdateChannelBranchSurfing(ctx context.Context, arg UpdateChannelBranchSurfingParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateChannelBranchSurfing,
+		arg.AppID,
+		arg.Name,
+		arg.BranchSurfingEnabled,
+		arg.BranchSurfingPattern,
+	)
 }
 
 const updateChannelRolloutPercentage = `-- name: UpdateChannelRolloutPercentage :execrows

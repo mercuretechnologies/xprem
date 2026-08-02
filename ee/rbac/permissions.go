@@ -27,6 +27,11 @@ const (
 	PermChannelCreate     Permission = "channel:create"
 	PermChannelDelete     Permission = "channel:delete"
 	PermChannelEditBranch Permission = "channel:edit-branch"
+	// PermChannelBranchSurfing opens or closes a channel to branch surfing and
+	// sets which branches it exposes. Separate from PermChannelEditBranch:
+	// remapping a channel changes what every device gets, while this decides
+	// whether devices may pick a branch themselves.
+	PermChannelBranchSurfing Permission = "channel:branch-surfing"
 	// PermChannelRolloutManage covers the whole lifecycle of a channel
 	// rollout: start, adjust the percentage, promote, or revert.
 	PermChannelRolloutManage Permission = "channel-rollout:manage"
@@ -66,6 +71,7 @@ var AllPermissions = []Permission{
 	PermChannelCreate,
 	PermChannelDelete,
 	PermChannelEditBranch,
+	PermChannelBranchSurfing,
 	PermChannelRolloutManage,
 	PermUpdateRolloutManage,
 	PermUpdatePublish,

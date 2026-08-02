@@ -50,6 +50,8 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermChannelCreate, rbac.FallbackAdminOnly))
 	app.route(http.MethodDelete, "/channels/{CHANNEL}", container.ChannelHandler.DeleteChannelHandler,
 		NeedsPermission(rbac.PermChannelDelete, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/channels/{CHANNEL}/branch-surfing", container.ChannelHandler.SetBranchSurfingHandler,
+		NeedsPermission(rbac.PermChannelBranchSurfing, rbac.FallbackAdminOnly))
 	app.route(http.MethodPost, "/branch/{BRANCH_ID}/updateChannelBranchMapping", container.BranchHandler.UpdateChannelBranchMappingHandler,
 		NeedsPermission(rbac.PermChannelEditBranch, rbac.FallbackAdminOnly))
 

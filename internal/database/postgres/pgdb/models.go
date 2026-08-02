@@ -75,11 +75,13 @@ type Branch struct {
 }
 
 type Channel struct {
-	ID        int64              `json:"id"`
-	AppID     pgtype.UUID        `json:"app_id"`
-	BranchID  *int64             `json:"branch_id"`
-	Name      string             `json:"name"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID                   int64              `json:"id"`
+	AppID                pgtype.UUID        `json:"app_id"`
+	BranchID             *int64             `json:"branch_id"`
+	Name                 string             `json:"name"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	BranchSurfingEnabled bool               `json:"branch_surfing_enabled"`
+	BranchSurfingPattern string             `json:"branch_surfing_pattern"`
 }
 
 type ChannelRollout struct {

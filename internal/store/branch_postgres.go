@@ -71,6 +71,25 @@ func (s *PostgresBranchStore) DeleteBranchByName(ctx context.Context, appId stri
 	return nil
 }
 
+func (s *PostgresBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string) ([]types.SurfableBranch, error) {
+	pgAppID := ToPgUUID(appId)
+	rows, err := s.engine.Queries.GetSurfableBranches(ctx, pgdb.GetSurfableBranchesParams{
+		AppID:   pgAppID,
+		Version: runtimeVersion,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve surfable branches from database: %w", err)
+	}
+	branches := make([]types.SurfableBranch, len(rows))
+	for i, row := range rows {
+		branches[i] = types.SurfableBranch{
+			Name:         row.BranchName,
+			LastUpdateAt: row.LastUpdateAt.Time.UTC().Format(time.RFC3339),
+		}
+	}
+	return branches, nil
+}
+
 func (s *PostgresBranchStore) GetBranches(ctx context.Context, appId string) ([]types.BranchMapping, error) {
 	pgAppID := ToPgUUID(appId)
 	appBranches, err := s.engine.Queries.GetBranchesByAppID(ctx, pgAppID)

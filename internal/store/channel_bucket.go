@@ -63,3 +63,11 @@ func (s *BucketChannelStore) GetChannels(ctx context.Context, appId string) ([]t
 func (s *BucketChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
 	return expo.FetchChannelMapping(appId, channelName)
 }
+
+func (s *BucketChannelStore) GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error) {
+	return nil, ErrNotSupportedInStatelessMode
+}
+
+func (s *BucketChannelStore) SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error {
+	return ErrNotSupportedInStatelessMode
+}

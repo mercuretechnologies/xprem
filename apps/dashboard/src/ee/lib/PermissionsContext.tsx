@@ -20,6 +20,7 @@ export type Permission =
   | 'channel:create'
   | 'channel:delete'
   | 'channel:edit-branch'
+  | 'channel:branch-surfing'
   | 'channel-rollout:manage'
   | 'update-rollout:manage'
   | 'update:publish'

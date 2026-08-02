@@ -116,6 +116,43 @@ func (s *PostgresChannelStore) GetChannels(ctx context.Context, appId string) ([
 	return channels, nil
 }
 
+func (s *PostgresChannelStore) GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error) {
+	pgAppID := ToPgUUID(appId)
+	row, err := s.engine.Queries.GetChannelBranchSurfing(ctx, pgdb.GetChannelBranchSurfingParams{
+		AppID: pgAppID,
+		Name:  channelName,
+	})
+	if err != nil {
+		// An unknown channel is a 404 for the caller, not a server error; match
+		// GetChannelBranchMapping's (nil, nil).
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve channel branch surfing from database: %w", err)
+	}
+	return &types.BranchSurfing{
+		Enabled: row.BranchSurfingEnabled,
+		Pattern: row.BranchSurfingPattern,
+	}, nil
+}
+
+func (s *PostgresChannelStore) SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error {
+	pgAppID := ToPgUUID(appId)
+	commandTag, err := s.engine.Queries.UpdateChannelBranchSurfing(ctx, pgdb.UpdateChannelBranchSurfingParams{
+		AppID:                pgAppID,
+		Name:                 channelName,
+		BranchSurfingEnabled: surfing.Enabled,
+		BranchSurfingPattern: surfing.Pattern,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update channel branch surfing in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
+	}
+	return nil
+}
+
 func (s *PostgresChannelStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string) ([]pgdb.GetUpdatesByByBranchNameAndRuntimeVersionRow, error) {
 	pgAppID := ToPgUUID(appId)
 	return s.engine.Queries.GetUpdatesByByBranchNameAndRuntimeVersion(ctx, pgdb.GetUpdatesByByBranchNameAndRuntimeVersionParams{

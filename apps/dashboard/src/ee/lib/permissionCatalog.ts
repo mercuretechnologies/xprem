@@ -76,6 +76,12 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
         label: 'Change the channel branch',
         description: 'Point a release channel at a different branch.',
       },
+      {
+        value: 'channel:branch-surfing',
+        label: 'Manage branch surfing',
+        description:
+          'Let devices on a channel pick which branch they are served, and set which branches are exposed.',
+      },
     ],
   },
   {
