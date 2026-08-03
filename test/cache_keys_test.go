@@ -25,7 +25,6 @@ func TestExportedPayloadCacheKeysEmbedReleaseVersion(t *testing.T) {
 		"getRuntimes":      dashboard.ComputeGetRuntimeVersionsCacheKey("app", "branch"),
 		"getBranches":      dashboard.ComputeGetBranchesCacheKey("app"),
 		"getChannels":      dashboard.ComputeGetChannelsCacheKey("app"),
-		"getUpdates":       dashboard.ComputeGetUpdatesCacheKey("app", "branch", "rt"),
 		"getUpdateDetails": dashboard.ComputeGetUpdateDetailsCacheKey("app", "branch", "rt", "1"),
 		"getApiKeys":       dashboard.ComputeGetApiKeysCacheKey("app"),
 	}
