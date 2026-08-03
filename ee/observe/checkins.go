@@ -17,6 +17,7 @@ import (
 	"xprem/ee/identity"
 	"xprem/internal/cache"
 	"xprem/internal/handlers"
+	"xprem/internal/update"
 
 	"github.com/google/uuid"
 )
@@ -345,36 +346,8 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, currentUpdate, state.device)
 }
 
-const maxFailedUpdateIDsPerCheckIn = 5
 
-// ParseFailedUpdateIDs reads the Expo-Recent-Failed-Update-IDs header, a
-// quoted-UUID list (RFC 8941 style). Invalid entries are dropped and the
-// result is deduplicated and capped.
+// ParseFailedUpdateIDs reads the Expo-Recent-Failed-Update-IDs header.
 func ParseFailedUpdateIDs(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	ids := make([]string, 0, maxFailedUpdateIDsPerCheckIn)
-	seen := make(map[string]struct{}, maxFailedUpdateIDsPerCheckIn)
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		part = strings.Trim(part, `"`)
-		parsed, err := uuid.Parse(part)
-		if err != nil {
-			continue
-		}
-		id := parsed.String()
-		if _, duplicate := seen[id]; duplicate {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-		if len(ids) == maxFailedUpdateIDsPerCheckIn {
-			break
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	return ids
+	return update.ParseFailedUpdateIDs(raw)
 }

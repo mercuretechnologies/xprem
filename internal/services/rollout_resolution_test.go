@@ -58,9 +58,27 @@ type fakeStoredUpdate struct {
 }
 
 type fakeUpdateRepo struct {
-	mu     sync.Mutex
-	rows   []*fakeStoredUpdate
-	events *eventLog
+	mu   sync.Mutex
+	rows []*fakeStoredUpdate
+	// uuidReads counts GetUpdateByUUID calls, which is how a test tells a lookup
+	// that ran from one that was skipped.
+	uuidReads int
+	events    *eventLog
+}
+
+// setUUID stamps the persistent UUID of an already seeded row.
+func (r *fakeUpdateRepo) setUUID(appId, branchName, updateId, updateUUID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if row := r.findRowLocked(appId, branchName, updateId); row != nil {
+		row.updateUUID = updateUUID
+	}
+}
+
+func (r *fakeUpdateRepo) uuidLookups() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.uuidReads
 }
 
 func (r *fakeUpdateRepo) findRowLocked(appId, branchName, updateId string) *fakeStoredUpdate {
@@ -185,6 +203,7 @@ func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, br
 func (r *fakeUpdateRepo) GetUpdateByUUID(_ context.Context, appId, updateUUID string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.uuidReads++
 	for _, row := range r.rows {
 		if row.update.AppId == appId && row.updateUUID == updateUUID && row.checked {
 			updateCopy := row.update

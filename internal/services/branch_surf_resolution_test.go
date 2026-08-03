@@ -68,8 +68,10 @@ func TestResolveManifestBundleIgnoresABranchOutsideThePattern(t *testing.T) {
 	assert.Equal(t, "staging", result.BranchName)
 }
 
-// The mapped branch trails the surfed one as a candidate, so a branch with nothing for
-// the device's runtime version leaves it no worse off than before it surfed.
+// The mapped branch trails the surfed one, so a branch with nothing for the device's
+// runtime version falls back to it rather than stranding the device. Deliberately the
+// mapped branch and not whatever the rest of the chain would have picked: a device
+// asking for a branch has no business being drawn into a rollout it did not ask for.
 func TestResolveManifestBundleFallsBackWhenTheSurfedBranchHasNothing(t *testing.T) {
 	h := newSurfHarness(t, &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}, nil)
 	h.seed(seedRow{branch: "pr-482", rtv: "99", platform: "ios", id: 200, checked: true})

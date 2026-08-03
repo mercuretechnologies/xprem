@@ -109,28 +109,23 @@ func (h *ExpoProtocolHandler) reportRejectedCrash(r *http.Request, appId string,
 	})
 }
 
-func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Request) {
-	requestID := uuid.New().String()
-
+// manifestParams reads a manifest poll into its parameters. Kept apart from the
+// handler so the header-to-field mapping is reachable without an HTTP round trip:
+// every field below is a wire contract, and a dropped one fails silently.
+func manifestParams(r *http.Request, requestID string) (services.ManifestRequestParams, error) {
 	appId := resolveAppID(r)
 	if appId == "" {
-		log.Printf("[RequestID: %s] No app id provided", requestID)
-		http.Error(w, "No app id provided", http.StatusBadRequest)
-		return
+		return services.ManifestRequestParams{}, errors.New("No app id provided")
 	}
 
 	channelName := r.Header.Get("expo-channel-name")
 	if channelName == "" {
-		log.Printf("[RequestID: %s] No channel name provided", requestID)
-		http.Error(w, "No channel name provided", http.StatusBadRequest)
-		return
+		return services.ManifestRequestParams{}, errors.New("No channel name provided")
 	}
 
 	protocolVersion, err := strconv.ParseInt(r.Header.Get("expo-protocol-version"), 10, 64)
 	if err != nil {
-		log.Printf("[RequestID: %s] Invalid protocol version: %v", requestID, err)
-		http.Error(w, "Invalid protocol version", http.StatusBadRequest)
-		return
+		return services.ManifestRequestParams{}, errors.New("Invalid protocol version")
 	}
 
 	platform := r.Header.Get("expo-platform")
@@ -138,9 +133,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		platform = r.URL.Query().Get("platform")
 	}
 	if platform != "ios" && platform != "android" {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
-		http.Error(w, "Invalid platform", http.StatusBadRequest)
-		return
+		return services.ManifestRequestParams{}, errors.New("Invalid platform")
 	}
 
 	runtimeVersion := r.Header.Get("expo-runtime-version")
@@ -148,12 +141,10 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		runtimeVersion = r.URL.Query().Get("runtimeVersion")
 	}
 	if runtimeVersion == "" {
-		log.Printf("[RequestID: %s] No runtime version provided", requestID)
-		http.Error(w, "No runtime version provided", http.StatusBadRequest)
-		return
+		return services.ManifestRequestParams{}, errors.New("No runtime version provided")
 	}
 
-	params := services.ManifestRequestParams{
+	return services.ManifestRequestParams{
 		RequestID:             requestID,
 		AppID:                 appId,
 		ChannelName:           channelName,
@@ -161,11 +152,41 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		RuntimeVersion:        runtimeVersion,
 		ProtocolVersion:       protocolVersion,
 		XpremBranch:           r.Header.Get("xprem-branch"),
+		SurfBlockTokens:       r.Header.Get(services.SurfBlockedHeader),
 		ClientID:              r.Header.Get("EAS-Client-ID"),
 		CurrentUpdateID:       r.Header.Get("expo-current-update-id"),
 		ExpoFatalError:        r.Header.Get("expo-fatal-error"),
 		RecentFailedUpdateIDs: r.Header.Get("Expo-Recent-Failed-Update-Ids"),
+	}, nil
+}
+
+func serverDefinedHeaders(params services.ManifestRequestParams, result services.ManifestResult) *services.HeaderDictionary {
+	dictionary := services.NewHeaderDictionary()
+	if result.BlockedSurf != nil {
+		services.SetSurfBlocked(dictionary, params.SurfBlockTokens, result.BlockedSurf.Token)
 	}
+	return dictionary
+}
+
+func writeServerDefinedHeaders(w http.ResponseWriter, dictionary *services.HeaderDictionary) {
+	if encoded := dictionary.Encode(); encoded != "" {
+		w.Header().Set(services.ServerDefinedHeadersHeader, encoded)
+	}
+}
+
+func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Request) {
+	requestID := uuid.New().String()
+
+	params, err := manifestParams(r, requestID)
+	if err != nil {
+		log.Printf("[RequestID: %s] %v", requestID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	appId := params.AppID
+	platform := params.Platform
+	runtimeVersion := params.RuntimeVersion
+	protocolVersion := params.ProtocolVersion
 
 	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
 	if err != nil {
@@ -211,6 +232,14 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		})
 	}
 
+	// Set before any response is written so it also rides a noUpdateAvailable,
+	// which is what a device already holding the mapped branch gets.
+	writeServerDefinedHeaders(w, serverDefinedHeaders(params, result))
+	refusedBranch := ""
+	if result.BlockedSurf != nil {
+		refusedBranch = result.BlockedSurf.BranchName
+	}
+
 	if result.Update == nil {
 		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, runtimeVersion, result.BranchName)
 		h.protocolService.PutNoUpdateAvailableInResponse(w, r, appId, runtimeVersion, protocolVersion, requestID)
@@ -219,7 +248,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 
 	updateType := result.UpdateType
 	if updateType == types.NormalUpdate {
-		h.protocolService.PutUpdateInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID)
+		h.protocolService.PutUpdateInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID, refusedBranch)
 	} else {
 		h.protocolService.PutRollbackInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID)
 	}

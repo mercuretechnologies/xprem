@@ -53,8 +53,13 @@ func TestBranchSurfingDisabledIsCachedAsWell(t *testing.T) {
 	assert.False(t, enabledQA)
 	assert.Equal(t, "*", pattern)
 
+	// Read back from the cache this time. Asserting the value and not just the read
+	// count is what stops the cached branch from answering "enabled" for everyone:
+	// it is the access-control gate of the whole feature.
 	enabledQA, pattern = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
 
+	assert.False(t, enabledQA, "a disabled channel must stay disabled when served from cache")
+	assert.Equal(t, "*", pattern)
 	assert.Equal(t, 1, repo.surfingReads)
 }
 
@@ -76,11 +81,21 @@ func TestBranchSurfingCacheIsInvalidatedOnWrite(t *testing.T) {
 
 // The manifest hot path must never fail on this lookup: a broken read answers
 // "not surfable" rather than turning a poll into a 500.
+// The channel IS enabled, so only the error can produce a false: seeding nothing
+// would make this pass against the unknown-channel branch instead.
 func TestBranchSurfingErrorAnswersFalse(t *testing.T) {
-	service, _ := surfingCacheService(t, nil, errors.New("database is down"))
+	service, repo := surfingCacheService(t, map[string]*types.BranchSurfing{
+		"qa": {Enabled: true, Pattern: "*"},
+	}, errors.New("database is down"))
 
-	enabledQA, _ := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	enabledQA, pattern := service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+
 	assert.False(t, enabledQA)
+	assert.Empty(t, pattern)
+	// Nothing is cached from a failed read, so the next poll retries rather than
+	// holding the deployment closed for the TTL.
+	_, _ = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
+	assert.Equal(t, 2, repo.surfingReads)
 }
 
 func TestBranchSurfingUnknownChannelAnswersFalse(t *testing.T) {

@@ -62,14 +62,18 @@ func ResolveBranchCandidates(ctx context.Context, rules []BranchRule, req *Branc
 // the mapped branch is not a surf, so it falls through and keeps the rollout.
 type branchSurfRule struct{}
 
+// HonoursSurf reports whether the chain will serve the branch the device asked for.
+// Anything downstream that needs to know "is this poll actually surfing" must ask
+// here rather than re-test the header, or it treats declined requests as surfs.
+func HonoursSurf(req *BranchResolutionRequest) bool {
+	return req.RequestedBranch != "" &&
+		req.Surfing.Enabled &&
+		req.RequestedBranch != req.Mapping.BranchName &&
+		branch.MatchPattern(req.Surfing.Pattern, req.RequestedBranch)
+}
+
 func (r *branchSurfRule) Evaluate(ctx context.Context, req *BranchResolutionRequest) ([]string, bool, error) {
-	if req.RequestedBranch == "" || !req.Surfing.Enabled {
-		return nil, false, nil
-	}
-	if req.RequestedBranch == req.Mapping.BranchName {
-		return nil, false, nil
-	}
-	if !branch.MatchPattern(req.Surfing.Pattern, req.RequestedBranch) {
+	if !HonoursSurf(req) {
 		return nil, false, nil
 	}
 	// The mapped branch stays a candidate: a surfed branch with no update for the

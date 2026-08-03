@@ -148,6 +148,11 @@ type ExtraManifestData struct {
 	// omitempty on purpose: a deployment with the feature off serves the exact
 	// bytes it served before, which keeps the signed payload unchanged.
 	BranchSurfing bool `json:"branchSurfing,omitempty"`
+	// BranchSurfingRefused names the branch the device asked for and did not get,
+	// because the update it would have received failed to launch on it. The only
+	// channel the app can read: expo-server-defined-headers is stored natively
+	// and never surfaced to JS.
+	BranchSurfingRefused string `json:"branchSurfingRefused,omitempty"`
 }
 
 type UpdateManifest struct {
