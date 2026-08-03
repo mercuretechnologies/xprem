@@ -316,6 +316,9 @@ describe('republish command flow', () => {
     expect(vi.mocked(fetchRuntimeVersions).mock.calls[0][0]).toMatchObject({
       baseUrl: 'https://publish.example.com',
     });
+    expect(vi.mocked(fetchPublishGroups).mock.calls[0][0]).toMatchObject({
+      baseUrl: 'https://publish.example.com',
+    });
     expect(vi.mocked(fetchUpdates).mock.calls[0][0]).toMatchObject({
       baseUrl: 'https://publish.example.com',
     });
