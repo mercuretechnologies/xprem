@@ -20,18 +20,21 @@ export const BranchSurfingCard = ({
 }) => {
   const { toast } = useToast();
   const surfing = channel.branchSurfing;
-  const [pattern, setPattern] = useState(surfing?.pattern ?? ALL_BRANCHES);
+  const [pattern, setPattern] = useState(surfing?.pattern ?? '');
   const [saving, setSaving] = useState(false);
 
   // Reseed when the channel is refetched or the route moves to another channel,
   // so the field never shows a stale channel's pattern.
   useEffect(() => {
-    setPattern(surfing?.pattern ?? ALL_BRANCHES);
+    setPattern(surfing?.pattern ?? '');
   }, [surfing?.pattern, channel.releaseChannelName]);
 
   if (!surfing) return null;
 
   const patternChanged = pattern.trim() !== surfing.pattern;
+  // Nothing can be turned on until the pattern says what it opens: defaulting it
+  // would expose every branch of the app on the first click.
+  const canEnable = pattern.trim().length > 0;
 
   // The endpoint replaces the whole setting, so both fields go on every call:
   // sending only the switch would reset the pattern to its default.
@@ -84,46 +87,48 @@ export const BranchSurfingCard = ({
         {canManage && (
           <Switch
             checked={surfing.enabled}
-            disabled={saving}
+            disabled={saving || (!surfing.enabled && !canEnable)}
             onCheckedChange={next => void save(next, pattern)}
             aria-label={surfing.enabled ? 'Disable branch surfing' : 'Enable branch surfing'}
           />
         )}
       </div>
 
-      {surfing.enabled && (
-        <div className="mt-5 space-y-1.5 border-t pt-5">
-          <Label htmlFor="branch-surfing-pattern">Branches exposed</Label>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
-              id="branch-surfing-pattern"
-              className="font-mono sm:max-w-xs"
-              value={pattern}
-              disabled={!canManage || saving}
-              onChange={event => setPattern(event.target.value)}
-              placeholder="pr-*"
-            />
-            {canManage && (
-              <Button
-                variant="outline"
-                disabled={saving || !patternChanged}
-                onClick={() => void save(surfing.enabled, pattern)}>
-                {saving ? 'Saving...' : 'Save'}
-              </Button>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            <code className="font-mono">*</code> stands for any run of characters:{' '}
-            <code className="font-mono">pr-*</code> exposes every branch starting with{' '}
-            <code className="font-mono">pr-</code>.{' '}
-            {pattern.trim() === ALL_BRANCHES && (
-              <span className="text-amber-600 dark:text-amber-500">
-                Every branch of this app is currently exposed.
-              </span>
-            )}
-          </p>
+      <div className="mt-5 space-y-1.5 border-t pt-5">
+        <Label htmlFor="branch-surfing-pattern">Branches exposed</Label>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            id="branch-surfing-pattern"
+            className="font-mono sm:max-w-xs"
+            value={pattern}
+            disabled={!canManage || saving}
+            onChange={event => setPattern(event.target.value)}
+            placeholder="pr-*"
+          />
+          {canManage && (
+            <Button
+              variant="outline"
+              disabled={saving || !patternChanged}
+              onClick={() => void save(surfing.enabled, pattern)}>
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          )}
         </div>
-      )}
+        <p className="text-xs text-muted-foreground">
+          <code className="font-mono">*</code> stands for any run of characters:{' '}
+          <code className="font-mono">pr-*</code> exposes every branch starting with{' '}
+          <code className="font-mono">pr-</code>.{' '}
+          {!canEnable && !surfing.enabled && (
+            <span className="text-foreground">Set it to turn branch surfing on.</span>
+          )}
+          {pattern.trim() === ALL_BRANCHES && (
+            <span className="text-amber-600 dark:text-amber-500">
+              Every branch of this app is exposed, including any created later. Devices
+              read these names from an unauthenticated endpoint.
+            </span>
+          )}
+        </p>
+      </div>
     </section>
   );
 };

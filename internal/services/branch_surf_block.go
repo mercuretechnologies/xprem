@@ -24,35 +24,39 @@ func surfBlockToken(branchName string, updateId string) string {
 	return branchName + "@" + updateId
 }
 
-// refusedUpdates is the set of updates a device must not be served on the branch
-// it asked for: the ones it reported as failed to launch, plus the verdict it is
-// already carrying.
-type refusedUpdates map[string]struct{}
+// surfBlockSet holds the surfBlockToken of every update this device must not be
+// served on the branch it asked for.
+type surfBlockSet map[string]struct{}
 
-func (r refusedUpdates) contains(branchName string, updateId string) bool {
-	if len(r) == 0 {
+func (b surfBlockSet) contains(branchName string, updateId string) bool {
+	if len(b) == 0 {
 		return false
 	}
-	_, refused := r[surfBlockToken(branchName, updateId)]
-	return refused
+	_, blocked := b[surfBlockToken(branchName, updateId)]
+	return blocked
 }
 
-// collectRefusedUpdates resolves the device's failed update UUIDs to the updates
-// they name. Only called for a device that is asking for a branch AND reporting
-// something, so the lookups stay off the steady-state path.
-func (s *ExpoProtocolService) collectRefusedUpdates(ctx context.Context, appId string, surfBlockTokens string, failedUpdateIDsRaw string) refusedUpdates {
-	refused := refusedUpdates{}
+// collectSurfBlocks gathers what this device must not be surfed onto, from its
+// two sources. The verdicts it echoes back are already tokens; the crashes it
+// reports are UUIDs, which only the store can resolve to a branch and an update.
+// An id that resolves to nothing tells us nothing, so it is skipped rather than
+// failing the poll.
+//
+// Only called for a device whose surf was honoured AND that reported something,
+// so these lookups stay off the steady-state path.
+func (s *ExpoProtocolService) collectSurfBlocks(ctx context.Context, appId string, surfBlockTokens string, failedUpdateIDsRaw string) surfBlockSet {
+	blocks := surfBlockSet{}
 	for _, token := range parseSurfBlockTokens(surfBlockTokens) {
-		refused[token] = struct{}{}
+		blocks[token] = struct{}{}
 	}
 	for _, failedID := range update2.ParseFailedUpdateIDs(failedUpdateIDsRaw) {
 		failedUpdate, err := s.updateRepo.GetUpdateByUUID(ctx, appId, failedID)
 		if err != nil || failedUpdate == nil {
 			continue
 		}
-		refused[surfBlockToken(failedUpdate.Branch, failedUpdate.UpdateId)] = struct{}{}
+		blocks[surfBlockToken(failedUpdate.Branch, failedUpdate.UpdateId)] = struct{}{}
 	}
-	return refused
+	return blocks
 }
 
 // maxSurfBlockTokens bounds how many verdicts a device carries. The client

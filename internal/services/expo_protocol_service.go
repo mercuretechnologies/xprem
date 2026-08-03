@@ -353,9 +353,9 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 	// the branch its own channel maps to. It also keeps the lookups below off the
 	// steady-state path, and off every deployment where surfing is disabled.
 	surfing := HonoursSurf(req)
-	var refused refusedUpdates
+	var blocks surfBlockSet
 	if surfing && (surfBlockTokens != "" || failedUpdateIDsRaw != "") {
-		refused = s.collectRefusedUpdates(ctx, appId, surfBlockTokens, failedUpdateIDsRaw)
+		blocks = s.collectSurfBlocks(ctx, appId, surfBlockTokens, failedUpdateIDsRaw)
 	}
 
 	servedBranch := branchMap.BranchName
@@ -369,7 +369,7 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 			continue
 		}
 		if surfing && candidate == requestedBranch && resolution.Update != nil &&
-			refused.contains(candidate, resolution.Update.UpdateId) {
+			blocks.contains(candidate, resolution.Update.UpdateId) {
 			log.Printf("[RequestID: %s] Refusing surf to %q: update %s failed to launch on this device", requestID, candidate, resolution.Update.UpdateId)
 			blocked = &BlockedSurf{BranchName: candidate, Token: surfBlockToken(candidate, resolution.Update.UpdateId)}
 			continue

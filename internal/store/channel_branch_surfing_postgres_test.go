@@ -63,11 +63,12 @@ func TestBranchSurfingSettingRoundTrip(t *testing.T) {
 	appId := insertAppWithBranch(t, pool, "staging", false)
 	insertChannel(t, pool, appId, "qa")
 
-	// A channel starts closed, exposing everything only once opened.
+	// A channel starts closed AND with a pattern that names nothing: the default
+	// decides what a first careless click would expose, so it must not be "*".
 	initial, err := channelStore.GetBranchSurfing(ctx, appId, "qa")
 	require.NoError(t, err)
 	require.NotNil(t, initial)
-	assert.Equal(t, types.BranchSurfing{Enabled: false, Pattern: "*"}, *initial)
+	assert.Equal(t, types.BranchSurfing{Enabled: false, Pattern: ""}, *initial)
 
 	require.NoError(t, channelStore.SetBranchSurfing(ctx, appId, "qa",
 		types.BranchSurfing{Enabled: true, Pattern: "pr-*"}))
