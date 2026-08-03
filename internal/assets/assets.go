@@ -3,7 +3,6 @@ package assets
 import (
 	"errors"
 	"log"
-	"mime"
 	"net/http"
 	"xprem/internal/bucket"
 	"xprem/internal/cdn"
@@ -139,10 +138,7 @@ func HandleAssetsWithFile(req AssetsRequest) (AssetsResponse, error) {
 		return AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error converting asset to buffer")}, err
 	}
 
-	contentType := "application/javascript"
-	if !validated.isLaunchAsset {
-		contentType = mime.TypeByExtension("." + string(validated.assetMetadata.Ext))
-	}
+	contentType := update.AssetContentType(string(validated.assetMetadata.Ext), validated.isLaunchAsset)
 
 	headers := expoProtocolHeaders()
 	headers["Content-Type"] = contentType

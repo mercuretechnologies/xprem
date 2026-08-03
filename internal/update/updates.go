@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"mime"
 	"net/url"
 	"strings"
 	"sync"
@@ -227,10 +226,7 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 		keyExtensionSuffix = "bundle"
 	}
 	keyExtensionSuffix = "." + keyExtensionSuffix
-	contentType := "application/javascript"
-	if isLaunchAsset {
-		contentType = mime.TypeByExtension(asset.Ext)
-	}
+	contentType := AssetContentType(asset.Ext, isLaunchAsset)
 	finalUrl, errUrl := BuildFinalManifestAssetUrlURL(GetAssetEndpoint(), assetFilePath, update.RuntimeVersion, platform, update.Branch, update.UpdateId)
 	if errUrl != nil {
 		return types.ManifestAsset{}, errUrl
