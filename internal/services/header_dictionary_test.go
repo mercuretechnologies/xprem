@@ -50,10 +50,19 @@ func TestHeaderDictionarySet(t *testing.T) {
 	})
 
 	// The client replays every member on every poll, so an oversized value is a
-	// cost paid for ever rather than once.
-	t.Run("truncates an oversized value", func(t *testing.T) {
+	// cost paid for ever rather than once. It is dropped rather than shortened: a
+	// structured value cut to length lands mid-token and yields something that
+	// still parses but no longer means what was sent. Callers size their own
+	// value; this is the backstop, and it must not invent a smaller one.
+	t.Run("drops an oversized value rather than cutting it", func(t *testing.T) {
 		d := NewHeaderDictionary()
 		d.Set("k", strings.Repeat("x", maxHeaderDictionaryValue+50))
+		assert.Empty(t, d.Encode())
+	})
+
+	t.Run("keeps a value exactly on the bound", func(t *testing.T) {
+		d := NewHeaderDictionary()
+		d.Set("k", strings.Repeat("x", maxHeaderDictionaryValue))
 		assert.Equal(t, `k="`+strings.Repeat("x", maxHeaderDictionaryValue)+`"`, d.Encode())
 	})
 }
@@ -74,4 +83,31 @@ func TestHeaderDictionaryEscapesWhatBreaksTheDictionary(t *testing.T) {
 			assert.Equal(t, tc.want, d.Encode())
 		})
 	}
+}
+
+// Branch names may legally contain non-ASCII (validation.Name screens control
+// characters and path separators, not the byte range). An RFC 8941 string cannot
+// carry those bytes, and a client that fails to parse the dictionary discards
+// ALL of it — so one stray byte in any member would cost the device the surf
+// verdicts too, and re-serve an update it already crashed on.
+func TestHeaderDictionaryRefusesBytesAStructuredStringCannotCarry(t *testing.T) {
+	for name, value := range map[string]string{
+		"non-ascii":       "pr-é",
+		"tab":             "pr\tx",
+		"newline":         "pr\nx",
+		"del":             "pr\x7fx",
+		"invalid utf-8":   "pr\xffx",
+		"high code point": "pr-🚀",
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := NewHeaderDictionary()
+			d.Set("k", value)
+			assert.Empty(t, d.Encode(), "the member must be dropped, not emitted unparseable")
+		})
+	}
+
+	// The boundary itself stays usable.
+	d := NewHeaderDictionary()
+	d.Set("k", " ~")
+	assert.Equal(t, `k=" ~"`, d.Encode())
 }

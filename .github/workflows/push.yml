@@ -67,6 +67,34 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # The picker ships TypeScript sources straight to consumers, so nothing but the
+  # compiler stands between a broken package and every app that installs it.
+  typecheck-control-center:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/control-center
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Verify the published contents
+        run: npm pack --dry-run
+
   test:
     runs-on: ubuntu-latest
 

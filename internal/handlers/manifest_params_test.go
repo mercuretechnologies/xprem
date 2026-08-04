@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"xprem/internal/services"
 
@@ -151,4 +152,16 @@ func TestServerDefinedHeadersIsSilentWithoutARefusal(t *testing.T) {
 	writeServerDefinedHeaders(w, serverDefinedHeaders(params, services.ManifestResult{}))
 
 	assert.Empty(t, w.Header().Get("expo-server-defined-headers"))
+}
+
+// The surf header is client-supplied and reaches the query layer and the logs.
+// Its two siblings are both bounded before use; this one was not.
+func TestRequestedBranchIsBounded(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/manifest", nil)
+
+	r.Header.Set("xprem-branch", strings.Repeat("b", maxRequestedBranchLen))
+	assert.Len(t, requestedBranch(r), maxRequestedBranchLen, "a name of the maximum length is still a name")
+
+	r.Header.Set("xprem-branch", strings.Repeat("b", maxRequestedBranchLen+1))
+	assert.Empty(t, requestedBranch(r), "one byte over must read as no surf, not as a branch")
 }

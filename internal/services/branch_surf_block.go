@@ -129,7 +129,10 @@ func SetSurfBlocked(dictionary *HeaderDictionary, carriedTokens string, token st
 			continue
 		}
 		if size+1+len(carriedToken) > maxHeaderDictionaryValue {
-			break
+			// Skipped, not stopped: this header is client-supplied, so one
+			// oversized entry would otherwise discard every legitimate verdict
+			// behind it — and those are what keep a crashing update refused.
+			continue
 		}
 		seen[carriedToken] = struct{}{}
 		tokens = append(tokens, carriedToken)

@@ -3,7 +3,8 @@ import * as Updates from 'expo-updates';
 
 /** What the update server needs to answer this device, all of it already on hand. */
 export type SurfConfig = {
-  origin: string;
+  /** Where /branch_lists lives: the update URL with its last segment dropped. */
+  baseUrl: string;
   appId: string;
   channel: string;
   runtimeVersion: string;
@@ -93,12 +94,17 @@ export function readConfig(): SurfConfig | null {
     return null;
   }
 
-  let origin: string;
+  let baseUrl: string;
   try {
-    origin = new URL(updates.url).origin;
+    // Sibling of the manifest route, not root of the host: a self-hosted server
+    // at https://host/ota/manifest serves https://host/ota/branch_lists. Using
+    // the origin alone sent every request to the wrong path, and the 404 that
+    // came back was indistinguishable from "this channel does not allow it".
+    const parsed = new URL(updates.url);
+    baseUrl = parsed.origin + parsed.pathname.replace(/\/[^/]*$/, '');
   } catch {
     return null;
   }
 
-  return { origin, appId, channel, runtimeVersion, requestHeaders };
+  return { baseUrl, appId, channel, runtimeVersion, requestHeaders };
 }

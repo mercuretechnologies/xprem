@@ -2,7 +2,7 @@ package services
 
 import (
 	"context"
-	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"xprem/internal/providers/expo"
@@ -172,9 +172,12 @@ func TestHostileBranchNamesProduceSafeTokens(t *testing.T) {
 			"a token the server minted must survive being echoed back")
 	}
 
-	// The distinctness that matters: two branches whose tokens could collide once
-	// concatenated must not, or one crash would block the other's update.
-	assert.NotEqual(t, surfBlockToken("pr", "1@2"), surfBlockToken("pr@1", "2"))
+	// The distinctness that matters: two (branch, update) pairs that concatenate
+	// to the same bytes must still yield different tokens, or one branch's crash
+	// would block another branch's update. This pair collides under the realistic
+	// regression — dropping the separator — where "pr"+"1@2" and "pr@1"+"2" do
+	// not, which is why the earlier version of this assertion proved nothing.
+	assert.NotEqual(t, surfBlockToken("pr", "12"), surfBlockToken("pr1", "2"))
 }
 
 // The verdict is one member among others: a dictionary already carrying something
@@ -296,12 +299,19 @@ func TestParseSurfBlockTokensIsBounded(t *testing.T) {
 // so, so a device already up to date would never learn it was turned on. The
 // client asks /branch_lists.
 func TestTheManifestNeverCarriesTheChannelSetting(t *testing.T) {
-	extra := types.ExtraManifestData{}
-	encoded, err := json.Marshal(extra)
-
-	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "branchSurfing\"",
-		"a channel-lifetime setting has no place in an update-lifetime document")
+	// Over the field tags, not over an encoding of the zero value: the shape
+	// anyone would actually add is a pointer with omitempty, and that emits
+	// nothing when unset — so marshalling an empty struct and grepping the bytes
+	// passes no matter what the struct declares.
+	extra := reflect.TypeOf(types.ExtraManifestData{})
+	for i := 0; i < extra.NumField(); i++ {
+		field := extra.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		assert.NotEqual(t, "branchSurfing", name,
+			"a channel-lifetime setting has no place in an update-lifetime document: %s", field.Name)
+		assert.NotContains(t, strings.ToLower(field.Name), "surfingenabled",
+			"same, under another name: %s", field.Name)
+	}
 }
 
 // Long branch names make five tokens overflow the member bound. Cutting the

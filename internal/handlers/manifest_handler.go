@@ -112,6 +112,24 @@ func (h *ExpoProtocolHandler) reportRejectedCrash(r *http.Request, appId string,
 // manifestParams reads a manifest poll into its parameters. Kept apart from the
 // handler so the header-to-field mapping is reachable without an HTTP round trip:
 // every field below is a wire contract, and a dropped one fails silently.
+// maxRequestedBranchLen bounds the branch a device may ask for. A name longer
+// than one that could ever exist is not a branch, and this header is the only
+// client-supplied value on the manifest path that reaches the query layer and
+// the logs; its two siblings are both bounded before use.
+const maxRequestedBranchLen = 128
+
+// requestedBranch reads the surf header, dropping a value too long to name a
+// branch. Dropped rather than rejected: an over-long header makes the request a
+// plain poll, where refusing it would take an update away from a device whose
+// only fault is a header nobody asked it to send.
+func requestedBranch(r *http.Request) string {
+	branchName := r.Header.Get("xprem-branch")
+	if len(branchName) > maxRequestedBranchLen {
+		return ""
+	}
+	return branchName
+}
+
 func manifestParams(r *http.Request, requestID string) (services.ManifestRequestParams, error) {
 	appId := resolveAppID(r)
 	if appId == "" {
@@ -151,7 +169,7 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		Platform:              platform,
 		RuntimeVersion:        runtimeVersion,
 		ProtocolVersion:       protocolVersion,
-		XpremBranch:           r.Header.Get("xprem-branch"),
+		XpremBranch:           requestedBranch(r),
 		SurfBlockTokens:       r.Header.Get(services.SurfBlockedHeader),
 		ClientID:              r.Header.Get("EAS-Client-ID"),
 		CurrentUpdateID:       r.Header.Get("expo-current-update-id"),

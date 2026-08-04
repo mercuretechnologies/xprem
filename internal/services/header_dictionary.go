@@ -27,7 +27,24 @@ func (d *HeaderDictionary) Set(key string, value string) {
 	if key == "" || value == "" || len(value) > maxHeaderDictionaryValue {
 		return
 	}
+	// An RFC 8941 string carries 0x20-0x7E and nothing else. Escaping handles the
+	// two characters that end a string early; it cannot rescue a byte the grammar
+	// has no room for. A client that fails to parse the dictionary drops ALL of
+	// it, so one stray byte in any member costs every other member too — today
+	// that would mean re-serving an update this device already crashed on.
+	if !isStructuredStringSafe(value) {
+		return
+	}
 	d.members[key] = value
+}
+
+func isStructuredStringSafe(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // Encode renders the dictionary with keys sorted, so the same state always

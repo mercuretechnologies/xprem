@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	cache2 "xprem/internal/cache"
+	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -25,6 +27,9 @@ func surfingService(t *testing.T, surfing map[string]*types.BranchSurfing, surfa
 	}
 	for _, runtimeVersion := range []string{"3.0.0", "2.0.0"} {
 		ForgetSurfableBranches(surfingAppID, runtimeVersion, "ios")
+	}
+	for _, channelName := range []string{"qa", "production"} {
+		cache2.GetCache().Delete(channelMappingCacheKey(surfingAppID, channelName))
 	}
 	channelRepo := &fakeChannelRepo{surfing: surfing}
 	return NewChannelService(fakeBranchRepo{surfable: surfable}, channelRepo), channelRepo
@@ -95,9 +100,15 @@ func TestListSurfableBranchesRefusesUnknownChannelIdentically(t *testing.T) {
 	_, disabledErr := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", "ios", false)
 	_, unknownErr := service.ListSurfableBranches(context.Background(), surfingAppID, "nope", "3.0.0", "ios", false)
 
-	require.Error(t, disabledErr)
-	require.Error(t, unknownErr)
-	assert.Equal(t, disabledErr.Error(), unknownErr.Error())
+	// Comparing Error() alone compares only the message: ExpoProtocolError.Error()
+	// returns Message and nothing else, so a 403 on one arm and a 404 on the other
+	// would pass while handing back the very oracle this test exists to close.
+	var disabled, unknown *ExpoProtocolError
+	require.ErrorAs(t, disabledErr, &disabled)
+	require.ErrorAs(t, unknownErr, &unknown)
+	assert.Equal(t, disabled.StatusCode, unknown.StatusCode)
+	assert.Equal(t, http.StatusNotFound, unknown.StatusCode)
+	assert.Equal(t, disabled.Message, unknown.Message)
 }
 
 func TestListSurfableBranchesRejectsInvalidChannelName(t *testing.T) {
@@ -247,4 +258,105 @@ func TestDeletingAChannelDropsItsSurfingPermission(t *testing.T) {
 
 	_, err = service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 	assert.Error(t, err, "a deleted channel must not keep answering from cache")
+}
+
+// The channel's own branch is deliberately unselectable: asking for it is treated
+// as asking for nothing, so that a device in a progressive rollout keeps being
+// drawn by the rollout rather than pinned by its own request. Listing it would
+// therefore offer a switch the server will not honour — the tester taps it and
+// nothing happens. Going back is the client's reset, not an entry in this list.
+func TestTheChannelsOwnBranchIsNotOfferedAsASwitch(t *testing.T) {
+	service, channelRepo := surfingService(t,
+		map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "*"}},
+		map[string][]types.SurfableBranch{"3.0.0": {
+			{Name: "pr-1", LastUpdateAt: "2026-08-02T10:00:00Z"},
+			{Name: "staging", LastUpdateAt: "2026-08-01T10:00:00Z"},
+		}})
+	channelRepo.mappings = map[string]*expo.ChannelMapping{
+		"qa": {BranchName: "staging"},
+	}
+
+	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+
+	require.NoError(t, err)
+	assert.Equal(t, []types.SurfableBranch{{Name: "pr-1", LastUpdateAt: "2026-08-02T10:00:00Z"}}, list.Branches)
+	assert.Equal(t, 1, list.Total, "the excluded branch must not be counted either, or the client offers a see-all that finds nothing")
+}
+
+// A channel that does not exist must be cached exactly like one with surfing
+// off. Leaving it uncached made the two observably different: the disabled
+// channel answered from memory, the unknown one hit Postgres. An unauthenticated
+// caller could time the difference to learn which channel names exist, and drive
+// one uncached query per request while doing it.
+func TestAnUnknownChannelIsCachedLikeADisabledOne(t *testing.T) {
+	channelRepo := &countingChannelRepo{
+		fakeChannelRepo: &fakeChannelRepo{surfing: map[string]*types.BranchSurfing{
+			"production": {Enabled: false, Pattern: "*"},
+		}},
+	}
+	t.Setenv("DB_URL", "postgres://stub")
+	ForgetBranchSurfing(surfingAppID, "production")
+	ForgetBranchSurfing(surfingAppID, "nope")
+	service := NewChannelService(fakeBranchRepo{}, channelRepo)
+
+	for i := 0; i < 3; i++ {
+		_, unknownErr := service.ListSurfableBranches(context.Background(), surfingAppID, "nope", "3.0.0", "ios", false)
+		_, disabledErr := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", "ios", false)
+		require.Error(t, unknownErr)
+		require.Error(t, disabledErr)
+	}
+
+	assert.Equal(t, 2, channelRepo.surfingReads,
+		"one read each, then both answered from cache — an unknown channel that kept reading is a timing oracle")
+}
+
+// The flip side of caching the negative: a channel created under a name someone
+// already asked for must not stay invisible for the rest of the TTL.
+func TestCreatingAChannelClearsTheCachedNegative(t *testing.T) {
+	service, channelRepo := surfingService(t,
+		map[string]*types.BranchSurfing{},
+		map[string][]types.SurfableBranch{"3.0.0": {{Name: "pr-1", LastUpdateAt: "2026-08-01T10:00:00Z"}}})
+	_ = channelRepo
+
+	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+	require.Error(t, err, "unknown channel, now cached as such")
+
+	_, err = service.CreateChannel(context.Background(), surfingAppID, nil, "qa")
+	require.NoError(t, err)
+	channelRepo.surfing = map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "pr-*"}}
+
+	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+	require.NoError(t, err, "the cached 'no such channel' must not outlive the channel's creation")
+	assert.Len(t, list.Branches, 1)
+}
+
+// The mapped-branch exclusion depends on a read that can fail. Swallowing that
+// error leaves mappedBranch empty, which turns the filter into a no-op and puts
+// the unselectable branch back in the picker — silently undoing the fix, on a
+// path nobody would think to check.
+func TestAMappingReadFailureIsNotSwallowed(t *testing.T) {
+	channelRepo := &mappingErrorChannelRepo{
+		fakeChannelRepo: &fakeChannelRepo{surfing: map[string]*types.BranchSurfing{
+			"qa": {Enabled: true, Pattern: "*"},
+		}},
+	}
+	t.Setenv("DB_URL", "postgres://stub")
+	ForgetBranchSurfing(surfingAppID, "qa")
+	ForgetSurfableBranches(surfingAppID, "3.0.0", "ios")
+	cache2.GetCache().Delete(channelMappingCacheKey(surfingAppID, "qa"))
+	service := NewChannelService(
+		fakeBranchRepo{surfable: map[string][]types.SurfableBranch{
+			"3.0.0": {{Name: "staging", LastUpdateAt: "2026-08-01T10:00:00Z"}},
+		}},
+		channelRepo)
+
+	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+
+	assert.Error(t, err, "a list that cannot be filtered must fail rather than come back wrong")
+}
+
+type mappingErrorChannelRepo struct{ *fakeChannelRepo }
+
+func (mappingErrorChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelMapping, error) {
+	return nil, assert.AnError
 }

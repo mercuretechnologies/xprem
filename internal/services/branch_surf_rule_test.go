@@ -85,3 +85,25 @@ func TestBranchSurfRuleIsInertWithoutARequestedBranch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"canary", "staging"}, candidates)
 }
+
+// Deliberate, and pinned here so it reads as a decision rather than an oversight.
+//
+// A channel mid-rollout has two branches: the one it maps to, and the rollout
+// target. Asking for the MAPPED branch is not a surf — it falls through and the
+// device stays subject to the percentage draw. Asking for the ROLLOUT TARGET is
+// a surf, and it is honoured: the device pins onto that branch without being
+// drawn. That is the point of the feature — the rollout target is a branch under
+// test, and a tester must be able to reach it on demand.
+//
+// The cost, accepted: such a device counts in that update's health without
+// having been selected into the rollout. Reverse this and the rule below must
+// exclude Rollout.BranchName, and ListSurfableBranches must stop listing it.
+func TestSurfingOntoTheRolloutTargetIsHonoured(t *testing.T) {
+	rollout := &expo.ChannelRolloutInfo{BranchName: "canary", Percentage: 5}
+	on := types.BranchSurfing{Enabled: true, Pattern: "*"}
+
+	assert.True(t, HonoursSurf(surfRequest("canary", on, rollout)),
+		"the rollout target is reachable on demand")
+	assert.False(t, HonoursSurf(surfRequest("staging", on, rollout)),
+		"the mapped branch is not a surf, so the percentage draw still decides")
+}

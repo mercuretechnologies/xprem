@@ -24,6 +24,12 @@ func NewBranchListHandler(channelService *services.ChannelService) *BranchListHa
 	return &BranchListHandler{channelService: channelService}
 }
 
+const maxRuntimeVersionLen = 128
+
+// SurfingDisabledHeader marks a 404 that came from this endpoint deciding the
+// channel may not surf, rather than from anything else on the way.
+const SurfingDisabledHeader = "xprem-branch-surfing"
+
 func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 
@@ -45,7 +51,11 @@ func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Requ
 	if runtimeVersion == "" {
 		runtimeVersion = r.URL.Query().Get("runtimeVersion")
 	}
-	if runtimeVersion == "" {
+	// Bounded because the answer is cached under it, empty answers included: an
+	// unauthenticated caller varying this header would otherwise mint one cache
+	// entry per request, and the local cache has no size ceiling. A version
+	// string longer than this cannot match anything that was ever published.
+	if runtimeVersion == "" || len(runtimeVersion) > maxRuntimeVersionLen {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
 		http.Error(w, "No runtime version provided", http.StatusBadRequest)
 		return
@@ -72,6 +82,9 @@ func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		status, message := branchListErrorResponse(err)
 		log.Printf("[RequestID: %s] Branch list refused for channel %s: %v", requestID, channelName, err)
+		if status == http.StatusNotFound {
+			w.Header().Set(SurfingDisabledHeader, "off")
+		}
 		http.Error(w, message, status)
 		return
 	}

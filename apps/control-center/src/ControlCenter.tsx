@@ -115,9 +115,12 @@ function ControlCenterPanel() {
           setAllowed(true);
           setPage(result);
         })
-        // Silent: at launch there is no panel to show it in, and the next launch
-        // retries. Opening the panel by other means surfaces the error properly.
-        .catch(() => {});
+        .catch((cause: Error) => {
+          // Not silent: the panel is unreachable for the rest of this session
+          // unless the host app calls openControlCenter, and nothing else would
+          // ever say why.
+          console.warn(`[xprem] Could not reach the branch list: ${cause.message}`);
+        });
     });
     return () => {
       cancelled = true;
@@ -126,12 +129,20 @@ function ControlCenterPanel() {
   }, [config]);
 
   useEffect(() => {
-    if (!active) return;
+    // Registered whether or not the probe has answered. Gating it on `active`
+    // made the host app's own trigger a silent no-op for the whole of every
+    // launch, and permanently so whenever the probe failed — which is exactly
+    // when someone reaches for it. Opening early shows the panel's own loading
+    // and error states, which is the point.
     openPanel = open;
     return () => {
-      openPanel = null;
+      // Only if it is still ours: a second instance may have taken over, and
+      // clearing unconditionally would deregister a panel that is still mounted.
+      if (openPanel === open) {
+        openPanel = null;
+      }
     };
-  }, [active, open]);
+  }, [open]);
 
   useEffect(() => {
     if (!visible || !config) return;
@@ -196,8 +207,9 @@ function ControlCenterPanel() {
         if (outcome === 'nothing-to-load') {
           setNote(
             branch
-              ? `${branch} has nothing newer for this build.`
-              : 'This build is already up to date.'
+              ? `Switched to ${branch}. It has nothing newer than what is already ` +
+                `running, so the screen did not change — you will get its next publish.`
+              : 'Back on this build\u2019s own branch. Nothing newer to load.'
           );
         }
       } catch (cause) {

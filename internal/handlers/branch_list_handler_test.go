@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/providers/expo"
@@ -295,4 +296,59 @@ func TestBranchListRejectsAMissingOrUnknownPlatform(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 		})
 	}
+}
+
+// The answer is cached under the runtime version, empty answers included, and
+// the local cache has no size ceiling — so an unbounded header is one cache
+// entry per request for anyone who can reach this route, which is everyone.
+func TestBranchListRejectsAnOversizedRuntimeVersion(t *testing.T) {
+	w := httptest.NewRecorder()
+	surfingHandler(t).HandleBranchList(w, branchListRequest("/branch_lists", map[string]string{
+		"expo-app-id":          surfingTestAppID,
+		"expo-channel-name":    "qa",
+		"expo-runtime-version": strings.Repeat("9", maxRuntimeVersionLen+1),
+		"expo-platform":        "ios",
+	}))
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// A device already pinned to a branch only learns that surfing was switched off
+// from this header: the panel hides itself on the 404, and after that there is
+// no interface left to unpin from. It must be on BOTH refusals — a header only
+// the disabled channel carried would tell an unauthenticated caller which
+// channel names exist, which the identical bodies exist to prevent.
+func TestTheRefusalTellsAPinnedDeviceToUnpin(t *testing.T) {
+	for name, channelName := range map[string]string{
+		"surfing disabled": "production",
+		"unknown channel":  "ghost",
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			surfingHandler(t).HandleBranchList(w, branchListRequest("/branch_lists", map[string]string{
+				"expo-app-id":          surfingTestAppID,
+				"expo-channel-name":    channelName,
+				"expo-runtime-version": "3.0.0",
+				"expo-platform":        "ios",
+			}))
+
+			require.Equal(t, http.StatusNotFound, w.Code)
+			assert.Equal(t, "off", w.Header().Get(SurfingDisabledHeader))
+		})
+	}
+}
+
+// The signal must not ride on refusals the client cannot act on: clearing a
+// tester's branch because a header was malformed would be a silent surprise.
+func TestABadRequestCarriesNoUnpinSignal(t *testing.T) {
+	w := httptest.NewRecorder()
+	surfingHandler(t).HandleBranchList(w, branchListRequest("/branch_lists", map[string]string{
+		"expo-app-id":          surfingTestAppID,
+		"expo-channel-name":    "qa",
+		"expo-runtime-version": "3.0.0",
+		"expo-platform":        "blackberry",
+	}))
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Empty(t, w.Header().Get(SurfingDisabledHeader))
 }

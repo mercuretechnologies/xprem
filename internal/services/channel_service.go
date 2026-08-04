@@ -90,6 +90,10 @@ func (s *ChannelService) CreateChannel(ctx context.Context, appId string, branch
 		Metadata:      metadata,
 	})
 	invalidateChannelCaches(appId)
+	// A channel that did not exist is now cached as "no surfing" for the TTL, so
+	// creating one under a name that was ever asked for would answer 404 until
+	// that entry aged out.
+	invalidateBranchSurfingCache(appId, channelName)
 	return channelId, nil
 }
 
@@ -189,6 +193,27 @@ func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string,
 	if err != nil {
 		return types.SurfableBranchList{}, err
 	}
+	// The channel's own branch is left out because asking for it is deliberately
+	// treated as asking for nothing, so picking it here would do nothing and look
+	// broken. Going back is the client's reset, which drops the override.
+	//
+	// Only that branch. A channel mid-rollout also has Mapping.Rollout.BranchName,
+	// and that one IS offered and IS honoured: a tester asking for the rollout
+	// target pins onto it, skipping the percentage draw. That is the point of the
+	// feature — it is the branch under test. The cost is that such a device counts
+	// in the rollout's health without having been drawn into it.
+	// Failing rather than degrading: swallowing the error leaves mappedBranch
+	// empty, which turns the filter below into a no-op and silently puts the
+	// unselectable branch back in the picker. A panel that reports an error is
+	// recoverable; a list that is quietly wrong is not noticed.
+	mapping, err := cachedChannelMapping(ctx, s.channelRepo, appId, channelName)
+	if err != nil {
+		return types.SurfableBranchList{}, err
+	}
+	var mappedBranch string
+	if mapping != nil {
+		mappedBranch = mapping.BranchName
+	}
 	limit := maxSurfableBranches
 	if all {
 		limit = maxAllSurfableBranches
@@ -198,7 +223,7 @@ func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string,
 	matched := make([]types.SurfableBranch, 0, limit)
 	total := 0
 	for _, candidate := range branches {
-		if !branch.MatchPattern(pattern, candidate.Name) {
+		if candidate.Name == mappedBranch || !branch.MatchPattern(pattern, candidate.Name) {
 			continue
 		}
 		total++

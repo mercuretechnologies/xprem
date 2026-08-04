@@ -20,10 +20,14 @@ WHERE NOT branch_surfing_enabled AND branch_surfing_pattern = '*';
 -- +goose Down
 -- +goose StatementBegin
 
+-- Restores the old default and nothing else. Rewriting '' back to '*' would
+-- hand the widest possible pattern to every channel that simply never opened
+-- branch surfing — including channels created after this migration, which never
+-- held '*' at all — and the dashboard enables the switch as soon as a pattern is
+-- present, so one click would then expose every branch in the app. A rollback
+-- must not be able to widen access. Nothing needs the rewrite: '' matches no
+-- branch under the old code too, so a channel left at '' simply stays unable to
+-- surf, which is where it already was.
 ALTER TABLE channels ALTER COLUMN branch_surfing_pattern SET DEFAULT '*';
-
-UPDATE channels
-SET branch_surfing_pattern = '*'
-WHERE branch_surfing_pattern = '';
 
 -- +goose StatementEnd

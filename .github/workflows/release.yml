@@ -112,6 +112,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    strategy:
+      # One package must not stop the other from being published, and a partial
+      # release is easier to finish than to unpick.
+      fail-fast: false
+      matrix:
+        include:
+          - package: apps/eoas
+            build: true
+          - package: apps/control-center
+            build: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -131,11 +141,23 @@ jobs:
       - name: Publish NPM package
         env:
           REF_NAME: ${{ github.ref_name }}
+          PACKAGE_DIR: ${{ matrix.package }}
+          NEEDS_BUILD: ${{ matrix.build }}
         run: |
-          cd apps/eoas
+          cd "$PACKAGE_DIR"
           VERSION="${REF_NAME#v}"
-          npm ci
-          npm run build
+          # ci only where a lockfile makes it reproducible; the picker package
+          # has none, and ci refuses to run without one.
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          if [ "$NEEDS_BUILD" = "true" ]; then
+            npm run build
+          fi
+          # Ships TypeScript sources, so the compiler is the only thing standing
+          # between a broken package and everyone who installs it.
+          npm run typecheck --if-present
+          # Fails here rather than on the registry if the files list is wrong,
+          # and prints exactly what a consumer would receive.
+          npm pack --dry-run
           npm version "$VERSION" --no-git-tag-version
 
           if echo "$VERSION" | grep -qE '\-(alpha|beta|rc)'; then

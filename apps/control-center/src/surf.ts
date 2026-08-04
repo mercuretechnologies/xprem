@@ -8,6 +8,9 @@ export type SurfableBranch = {
 };
 
 /** A page of branches, plus how many matched in all, so the panel can offer the rest. */
+/** Set by the server on a 404 it decided, so a proxy's 404 is not mistaken for one. */
+const SURFING_DISABLED_HEADER = 'xprem-branch-surfing';
+
 export type BranchPage = {
   branches: SurfableBranch[];
   total: number;
@@ -27,7 +30,7 @@ export async function listBranches(
   signal?: AbortSignal,
   all = false
 ): Promise<BranchPage | null> {
-  const response = await fetch(`${config.origin}/branch_lists${all ? '?all=1' : ''}`, {
+  const response = await fetch(`${config.baseUrl}/branch_lists${all ? '?all=1' : ''}`, {
     method: 'GET',
     headers: {
       'expo-app-id': config.appId,
@@ -40,7 +43,18 @@ export async function listBranches(
     signal,
   });
   if (response.status === 404) {
-    Updates.setUpdateRequestHeadersOverride(null);
+    // Turning surfing off for a channel has to reach the devices already pinned
+    // to a branch, and this is the only place it can: the panel hides itself on
+    // this answer, so after it does there is no interface left to unpin from.
+    // Left pinned, a device would silently resume surfing the moment surfing was
+    // switched back on, onto a branch nobody chose in that session.
+    //
+    // Gated on the server saying so, not on the status alone: any 404 used to
+    // trigger this, so an old server, a proxy, or a path-based deployment wiped
+    // the tester's branch at every launch with nothing said anywhere.
+    if (response.headers.get(SURFING_DISABLED_HEADER) !== null) {
+      pin(config, null);
+    }
     return null;
   }
   if (!response.ok) {
@@ -66,6 +80,26 @@ export async function listBranches(
  * strips the channel out of every future poll — observed live as /manifest
  * answering 400 "No channel name provided" until the override is cleared.
  */
+/**
+ * What this session last pinned, so a surf that fails partway can put it back.
+ * undefined means "not set by us": the override may still hold something from an
+ * earlier session, which nothing on the client can read back — expo-updates
+ * exposes no getter — so the only honest restore in that case is to clear it.
+ */
+let pinnedBranch: string | null | undefined;
+
+function pin(config: SurfConfig, branch: string | null) {
+  if (branch === null) {
+    // Not "override with an empty value" — no override at all. The native side
+    // reverts to the headers baked at build time, the one state that cannot be
+    // wrong.
+    Updates.setUpdateRequestHeadersOverride(null);
+  } else {
+    applyBranchHeader(config, branch);
+  }
+  pinnedBranch = branch;
+}
+
 function applyBranchHeader(config: SurfConfig, branch: string) {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(config.requestHeaders)) {
@@ -87,14 +121,22 @@ export type SurfOutcome = 'reloading' | 'nothing-to-load';
  * tester looking at an unchanged screen.
  */
 export async function surfTo(config: SurfConfig, branch: string | null): Promise<SurfOutcome> {
-  if (branch) {
-    applyBranchHeader(config, branch);
-  } else {
-    // Returning to the build's own branch is not "override with an empty value",
-    // it is no override at all: null removes it and the native side reverts to
-    // the headers baked at build time — the one state that can never be wrong.
-    Updates.setUpdateRequestHeadersOverride(null);
+  // The override has to be in place before checkForUpdateAsync, since that is
+  // the request it governs — so a failure after this line leaves the device
+  // pinned to a branch it never loaded, persistently and across relaunches,
+  // while the panel still shows the old one. Whatever happens below, the device
+  // must not be left pointing somewhere the tester was not told about.
+  const previous = pinnedBranch;
+  pin(config, branch);
+  try {
+    return await runSurf(config);
+  } catch (cause) {
+    pin(config, previous ?? null);
+    throw cause;
   }
+}
+
+async function runSurf(_config: SurfConfig): Promise<SurfOutcome> {
   const { isAvailable } = await Updates.checkForUpdateAsync();
   if (!isAvailable) {
     return 'nothing-to-load';
