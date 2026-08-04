@@ -1,4 +1,5 @@
 import * as Updates from 'expo-updates';
+import { Platform } from 'react-native';
 import { BRANCH_HEADER, SurfConfig } from './config';
 
 export type SurfableBranch = {
@@ -32,6 +33,9 @@ export async function listBranches(
       'expo-app-id': config.appId,
       'expo-channel-name': config.channel,
       'expo-runtime-version': config.runtimeVersion,
+      // The list is per platform, like the manifest: a branch whose only update
+      // is for the other one cannot be served here, so it must not be offered.
+      'expo-platform': Platform.OS,
     },
     signal,
   });
@@ -42,7 +46,13 @@ export async function listBranches(
   if (!response.ok) {
     throw new Error(`Could not reach the update server (${response.status}).`);
   }
-  return (await response.json()) as BranchPage;
+  const page = (await response.json()) as BranchPage;
+  // The build carrying this code outlives the server it was written against, so
+  // a body of another shape hides the panel rather than crashing the host app.
+  if (!page || !Array.isArray(page.branches) || typeof page.total !== 'number') {
+    return null;
+  }
+  return page;
 }
 
 /**

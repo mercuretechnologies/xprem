@@ -116,7 +116,7 @@ func TestGetSurfableBranchesScopesToRuntimeVersionAndOrdersByRecency(t *testing.
 	// Another runtime version, invisible to a 3.0.0 device.
 	seedUpdate(t, pool, appId, "legacy", "2.0.0", 4, base.Add(6*time.Hour))
 
-	branches, err := branchStore.GetSurfableBranches(ctx, appId, "3.0.0")
+	branches, err := branchStore.GetSurfableBranches(ctx, appId, "3.0.0", "ios")
 
 	require.NoError(t, err)
 	assert.Equal(t, []types.SurfableBranch{
@@ -135,7 +135,7 @@ func TestGetSurfableBranchesSkipsUncheckedUpdates(t *testing.T) {
 	_, err := pool.Exec(ctx, "UPDATE updates SET checked_at = NULL")
 	require.NoError(t, err)
 
-	branches, err := branchStore.GetSurfableBranches(ctx, appId, "3.0.0")
+	branches, err := branchStore.GetSurfableBranches(ctx, appId, "3.0.0", "ios")
 
 	require.NoError(t, err)
 	assert.Empty(t, branches)
@@ -155,7 +155,7 @@ func TestGetSurfableBranchesIsScopedToTheApp(t *testing.T) {
 	seedUpdate(t, pool, mine, "pr-1", "3.0.0", 1, base)
 	seedUpdate(t, pool, theirs, "pr-2", "3.0.0", 2, base)
 
-	branches, err := branchStore.GetSurfableBranches(ctx, mine, "3.0.0")
+	branches, err := branchStore.GetSurfableBranches(ctx, mine, "3.0.0", "ios")
 
 	require.NoError(t, err)
 	require.Len(t, branches, 1)

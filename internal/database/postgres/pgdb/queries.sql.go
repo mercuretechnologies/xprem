@@ -1860,14 +1860,15 @@ SELECT b.name AS branch_name, MAX(u.created_at)::timestamptz AS last_update_at
 FROM branches b
 JOIN updates u ON u.branch_id = b.id AND u.checked_at IS NOT NULL
 JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
-WHERE b.app_id = $1 AND rv.version = $2
+WHERE b.app_id = $1 AND rv.version = $2 AND u.platform = $3::text
 GROUP BY b.id, b.name
 ORDER BY MAX(u.created_at) DESC, b.name ASC
 `
 
 type GetSurfableBranchesParams struct {
-	AppID   pgtype.UUID `json:"app_id"`
-	Version string      `json:"version"`
+	AppID    pgtype.UUID `json:"app_id"`
+	Version  string      `json:"version"`
+	Platform string      `json:"platform"`
 }
 
 type GetSurfableBranchesRow struct {
@@ -1875,12 +1876,14 @@ type GetSurfableBranchesRow struct {
 	LastUpdateAt pgtype.Timestamptz `json:"last_update_at"`
 }
 
-// Branches a device on this app and runtime version could actually be served.
-// A branch with no published update for that runtime version is unreachable,
-// so listing it would offer a switch that silently does nothing. rv is scoped
-// to the app as well: version strings are unique per app, not globally.
+// Branches a device on this app, runtime version and platform could actually be
+// served. A branch with no published update matching all three is unreachable,
+// so listing it would offer a switch that silently does nothing: the manifest
+// route filters on platform too, and would quietly fall back to the channel's
+// branch. rv is scoped to the app as well: version strings are unique per app,
+// not globally.
 func (q *Queries) GetSurfableBranches(ctx context.Context, arg GetSurfableBranchesParams) ([]GetSurfableBranchesRow, error) {
-	rows, err := q.db.Query(ctx, getSurfableBranches, arg.AppID, arg.Version)
+	rows, err := q.db.Query(ctx, getSurfableBranches, arg.AppID, arg.Version, arg.Platform)
 	if err != nil {
 		return nil, err
 	}

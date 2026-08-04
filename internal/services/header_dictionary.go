@@ -19,12 +19,13 @@ func NewHeaderDictionary() *HeaderDictionary {
 	return &HeaderDictionary{members: map[string]string{}}
 }
 
+// Set stores a member, dropping one whose value is over the bound rather than
+// cutting it. A structured value is not a string that can be shortened: cutting
+// lands mid-token or mid-escape and produces something that parses but means
+// something else. Callers assemble a value that fits; this is the backstop.
 func (d *HeaderDictionary) Set(key string, value string) {
-	if key == "" || value == "" {
+	if key == "" || value == "" || len(value) > maxHeaderDictionaryValue {
 		return
-	}
-	if len(value) > maxHeaderDictionaryValue {
-		value = value[:maxHeaderDictionaryValue]
 	}
 	d.members[key] = value
 }

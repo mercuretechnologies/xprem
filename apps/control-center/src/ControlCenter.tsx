@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Component, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   InteractionManager,
@@ -44,7 +44,13 @@ function sinceLabel(iso: string): string {
 let sessionProbe: Promise<BranchPage | null> | null = null;
 
 function probeOnce(config: SurfConfig): Promise<BranchPage | null> {
-  sessionProbe ??= listBranches(config).catch(() => null);
+  // Only an ANSWER is remembered — a list, or the 404 that means surfing is off.
+  // A timeout is not an answer: caching one would disable the picker until the
+  // app is killed, and the tester has no way to know a retry would work.
+  sessionProbe ??= listBranches(config).catch(error => {
+    sessionProbe = null;
+    throw error;
+  });
   return sessionProbe;
 }
 
@@ -55,7 +61,33 @@ export function openControlCenter() {
   openPanel?.();
 }
 
+// A QA tool has no business taking the host app down: whatever throws inside the
+// panel unmounts the panel, never the app around it.
+class ControlCenterBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.warn(`[xprem] The control center crashed and was unmounted: ${error.message}`);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 export function ControlCenter() {
+  return (
+    <ControlCenterBoundary>
+      <ControlCenterPanel />
+    </ControlCenterBoundary>
+  );
+}
+
+function ControlCenterPanel() {
   const config = useMemo(readConfig, []);
   const loaded = useMemo(readLoadedState, []);
   const [visible, setVisible] = useState(false);
@@ -77,11 +109,15 @@ export function ControlCenter() {
     if (!config) return;
     let cancelled = false;
     const task = InteractionManager.runAfterInteractions(() => {
-      void probeOnce(config).then(result => {
-        if (cancelled || result === null) return;
-        setAllowed(true);
-        setPage(result);
-      });
+      probeOnce(config)
+        .then(result => {
+          if (cancelled || result === null) return;
+          setAllowed(true);
+          setPage(result);
+        })
+        // Silent: at launch there is no panel to show it in, and the next launch
+        // retries. Opening the panel by other means surfaces the error properly.
+        .catch(() => {});
     });
     return () => {
       cancelled = true;
@@ -127,10 +163,11 @@ export function ControlCenter() {
     setExpanding(true);
     try {
       const result = await listBranches(config, undefined, true);
-      if (result) {
-        setPage(result);
-        setExpanded(true);
-      }
+      if (result) setPage(result);
+      // Set even when the wide answer is itself capped: this only means "already
+      // asked", so a keystroke cannot start the same fetch again. Whether the
+      // list is COMPLETE is a separate question, read off total below.
+      setExpanded(true);
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -303,7 +340,7 @@ export function ControlCenter() {
             </Pressable>
           ))}
 
-          {withheld > 0 && (
+          {withheld > 0 && !expanded && (
             <Pressable
               style={({ pressed }) => [styles.card, styles.seeAll, pressed && styles.rowPressed]}
               disabled={expanding}
@@ -316,6 +353,17 @@ export function ControlCenter() {
                 </Text>
               )}
             </Pressable>
+          )}
+
+          {withheld > 0 && expanded && (
+            // The server will not send more than this. Saying so is the whole
+            // point: a search over a list this size must not read as exhaustive.
+            <View style={[styles.card, styles.seeAll]}>
+              <Text style={type.meta}>
+                Showing the {page?.branches.length} newest of {page?.total}. Older
+                branches are not listed.
+              </Text>
+            </View>
           )}
 
           {note && <Text style={[type.meta, styles.footnote]}>{note}</Text>}

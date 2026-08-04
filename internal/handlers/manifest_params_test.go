@@ -131,14 +131,15 @@ func TestManifestParamsRejects(t *testing.T) {
 // The device-facing half of the refusal: without this header the device keeps
 // asking for the branch that crashed on it, on every poll, forever.
 func TestServerDefinedHeadersCarriesTheVerdict(t *testing.T) {
-	params := services.ManifestRequestParams{SurfBlockTokens: "pr-1@100"}
-	result := services.ManifestResult{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "pr-2@200"}}
+	// Tokens are opaque on the wire; the encoding is pinned in the services package.
+	params := services.ManifestRequestParams{SurfBlockTokens: "cHItMQAxMDA"}
+	result := services.ManifestResult{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "cHItMgAyMDA"}}
 
 	w := httptest.NewRecorder()
 	writeServerDefinedHeaders(w, serverDefinedHeaders(params, result))
 
 	// The verdict the device already held survives the new one.
-	assert.Equal(t, `xprem-surf-blocked="pr-2@200,pr-1@100"`, w.Header().Get("expo-server-defined-headers"))
+	assert.Equal(t, `xprem-surf-blocked="cHItMgAyMDA,cHItMQAxMDA"`, w.Header().Get("expo-server-defined-headers"))
 }
 
 // No refusal means no header at all: an empty dictionary would replace whatever

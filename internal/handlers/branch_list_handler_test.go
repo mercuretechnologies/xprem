@@ -59,7 +59,7 @@ func (r *stubBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) erro
 func (r *stubBranchRepo) GetBranches(_ context.Context, _ string) ([]types.BranchMapping, error) {
 	return nil, nil
 }
-func (r *stubBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string) ([]types.SurfableBranch, error) {
+func (r *stubBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
 	return r.surfable[runtimeVersion], nil
 }
 func (r *stubBranchRepo) GetRuntimeVersionsWithUpdateStats(_ context.Context, _, _ string) ([]types.RuntimeVersionWithStats, error) {
@@ -83,9 +83,9 @@ func surfingHandler(t *testing.T) *BranchListHandler {
 	t.Setenv("DB_URL", "postgres://stub")
 	services.ForgetBranchSurfing(surfingTestAppID, "qa")
 	services.ForgetBranchSurfing(surfingTestAppID, "production")
-	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0")
-	services.ForgetSurfableBranches(surfingTestAppID, "9.9.9")
-	services.ForgetSurfableBranches(surfingTestAppID, "2.0.0")
+	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0", "ios")
+	services.ForgetSurfableBranches(surfingTestAppID, "9.9.9", "ios")
+	services.ForgetSurfableBranches(surfingTestAppID, "2.0.0", "ios")
 	return newSurfingHandler()
 }
 
@@ -94,7 +94,7 @@ func surfingHandlerWithBranches(t *testing.T, branches []types.SurfableBranch) *
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	services.ForgetBranchSurfing(surfingTestAppID, "qa")
-	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0")
+	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0", "ios")
 	channelRepo := &stubChannelRepo{surfing: map[string]*types.BranchSurfing{
 		"qa": {Enabled: true, Pattern: "pr-*"},
 	}}
@@ -148,6 +148,7 @@ func TestBranchListServesBranchesMatchingThePattern(t *testing.T) {
 		"expo-app-id":          surfingTestAppID,
 		"expo-channel-name":    "qa",
 		"expo-runtime-version": "3.0.0",
+		"expo-platform":        "ios",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -164,6 +165,7 @@ func TestBranchListRefusesChannelWithSurfingOff(t *testing.T) {
 		"expo-app-id":          surfingTestAppID,
 		"expo-channel-name":    "production",
 		"expo-runtime-version": "3.0.0",
+		"expo-platform":        "ios",
 	}))
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -176,6 +178,7 @@ func TestBranchListAcceptsRuntimeVersionFromQuery(t *testing.T) {
 	surfingHandler(t).HandleBranchList(w, branchListRequest("/branch_lists?runtimeVersion=3.0.0", map[string]string{
 		"expo-app-id":       surfingTestAppID,
 		"expo-channel-name": "qa",
+		"expo-platform":     "ios",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -192,6 +195,7 @@ func TestBranchListIsEmptyForUnknownRuntimeVersion(t *testing.T) {
 		"expo-app-id":          surfingTestAppID,
 		"expo-channel-name":    "qa",
 		"expo-runtime-version": "9.9.9",
+		"expo-platform":        "ios",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -219,6 +223,7 @@ func TestBranchListPageWidensOnlyWithTheAllFlag(t *testing.T) {
 			"expo-app-id":          surfingTestAppID,
 			"expo-channel-name":    "qa",
 			"expo-runtime-version": "3.0.0",
+			"expo-platform":        "ios",
 		}))
 		require.Equal(t, http.StatusOK, w.Code)
 		var list types.SurfableBranchList
@@ -233,4 +238,61 @@ func TestBranchListPageWidensOnlyWithTheAllFlag(t *testing.T) {
 	everything := read("/branch_lists?all=1")
 	assert.Len(t, everything.Branches, 30)
 	assert.Equal(t, 30, everything.Total)
+}
+
+// A branch whose only update is for the other platform cannot be served here:
+// the manifest route filters on platform too, so offering it would hand the
+// tester a switch that silently drops them back on the channel's branch.
+func TestBranchListIsScopedToThePlatform(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://stub")
+	services.ForgetBranchSurfing(surfingTestAppID, "qa")
+	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0", "ios")
+	services.ForgetSurfableBranches(surfingTestAppID, "3.0.0", "android")
+	channelRepo := &stubChannelRepo{surfing: map[string]*types.BranchSurfing{
+		"qa": {Enabled: true, Pattern: "pr-*"},
+	}}
+	branchRepo := &platformBranchRepo{}
+	handler := NewBranchListHandler(services.NewChannelService(branchRepo, channelRepo))
+
+	for _, platform := range []string{"ios", "android"} {
+		w := httptest.NewRecorder()
+		handler.HandleBranchList(w, branchListRequest("/branch_lists", map[string]string{
+			"expo-app-id":          surfingTestAppID,
+			"expo-channel-name":    "qa",
+			"expo-runtime-version": "3.0.0",
+			"expo-platform":        platform,
+		}))
+		require.Equal(t, http.StatusOK, w.Code)
+		var list types.SurfableBranchList
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&list))
+		require.Len(t, list.Branches, 1)
+		assert.Equal(t, "pr-"+platform, list.Branches[0].Name,
+			"%s must not be offered the other platform's branch", platform)
+	}
+}
+
+// Answers a different branch per platform, so a list built without it returns
+// the wrong one rather than merely a longer one.
+type platformBranchRepo struct{ services.BranchRepository }
+
+func (platformBranchRepo) GetSurfableBranches(_ context.Context, _, _ string, platform string) ([]types.SurfableBranch, error) {
+	return []types.SurfableBranch{{Name: "pr-" + platform, LastUpdateAt: "2026-08-01T10:00:00Z"}}, nil
+}
+
+func TestBranchListRejectsAMissingOrUnknownPlatform(t *testing.T) {
+	for name, platform := range map[string]string{"absent": "", "unknown": "blackberry"} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			headers := map[string]string{
+				"expo-app-id":          surfingTestAppID,
+				"expo-channel-name":    "qa",
+				"expo-runtime-version": "3.0.0",
+			}
+			if platform != "" {
+				headers["expo-platform"] = platform
+			}
+			surfingHandler(t).HandleBranchList(w, branchListRequest("/branch_lists", headers))
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
 }

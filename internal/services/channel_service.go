@@ -109,6 +109,11 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelName string, 
 		AppID:         appId,
 	})
 	invalidateChannelCaches(appId)
+	// The surfing setting is cached per channel name, not per channel row, so a
+	// deleted channel would keep answering /branch_lists for the rest of the TTL
+	// — and a channel recreated under the same name would inherit the permission
+	// it was never given.
+	invalidateBranchSurfingCache(appId, channelName)
 	return nil
 }
 
@@ -166,11 +171,11 @@ const (
 
 // ListSurfableBranches returns the branches a device polling channelName may ask
 // to be served: those matching the channel's pattern that have a published
-// update for the device's runtime version, newest first. Only the first page is
+// update for the device's runtime version AND platform, newest first. Only the first page is
 // returned unless all is set, but Total always counts every match, so a client
 // can tell it is looking at part of the list. It refuses a channel that does not
 // exist or has branch surfing off.
-func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, all bool) (types.SurfableBranchList, error) {
+func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, platform string, all bool) (types.SurfableBranchList, error) {
 	if err := validation.Name("channelName", channelName); err != nil {
 		return types.SurfableBranchList{}, err
 	}
@@ -180,7 +185,7 @@ func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string,
 	if !enabled {
 		return types.SurfableBranchList{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Branch surfing is not enabled for this channel"}
 	}
-	branches, err := cachedSurfableBranches(ctx, s.branchRepo, appId, runtimeVersion)
+	branches, err := cachedSurfableBranches(ctx, s.branchRepo, appId, runtimeVersion, platform)
 	if err != nil {
 		return types.SurfableBranchList{}, err
 	}

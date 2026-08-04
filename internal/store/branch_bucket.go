@@ -36,7 +36,7 @@ func (s *BucketBranchStore) DeleteBranchByName(ctx context.Context, appId string
 	return fmt.Errorf("branch deletion is only supported in db mode")
 }
 
-func (s *BucketBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string) ([]types.SurfableBranch, error) {
+func (s *BucketBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
 	return nil, ErrNotSupportedInStatelessMode
 }
 

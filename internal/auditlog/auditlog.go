@@ -68,15 +68,15 @@ const (
 	ActionSSOConfigDeleted Action = "sso_config.deleted"
 
 	// App management.
-	ActionAppCreated          Action = "app.created"
-	ActionAppRenamed          Action = "app.renamed"
-	ActionAppDeleted          Action = "app.deleted"
+	ActionAppCreated           Action = "app.created"
+	ActionAppRenamed           Action = "app.renamed"
+	ActionAppDeleted           Action = "app.deleted"
 	ActionChannelCreated       Action = "channel.created"
 	ActionChannelDeleted       Action = "channel.deleted"
 	ActionChannelBranchMapped  Action = "channel_branch.mapped"
 	ActionBranchSurfingUpdated Action = "channel_branch_surfing.updated"
-	ActionBranchCreated       Action = "branch.created"
-	ActionBranchDeleted       Action = "branch.deleted"
+	ActionBranchCreated        Action = "branch.created"
+	ActionBranchDeleted        Action = "branch.deleted"
 
 	// Delivery.
 	ActionUpdatePublished       Action = "update.published"

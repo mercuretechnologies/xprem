@@ -51,19 +51,21 @@ func channelBranchSurfingCacheKey(appId string, channelName string) string {
 	return fmt.Sprintf("channel-branch-surfing:%s:%s:%s", version.Version, appId, channelName)
 }
 
-// Keyed without the channel: the list is per app and runtime version, and the
-// channel's pattern filters it afterwards, so channels share one entry.
-func surfableBranchesCacheKey(appId string, runtimeVersion string) string {
-	return fmt.Sprintf("surfable-branches:%s:%s:%s", version.Version, appId, runtimeVersion)
+// Keyed without the channel: the list is per app, runtime version and platform,
+// and the channel's pattern filters it afterwards, so channels share one entry.
+// The platform belongs in the key, not just the query — an iOS answer served to
+// an Android device would offer branches it cannot be given.
+func surfableBranchesCacheKey(appId string, runtimeVersion string, platform string) string {
+	return fmt.Sprintf("surfable-branches:%s:%s:%s:%s", version.Version, appId, runtimeVersion, platform)
 }
 
-func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string) ([]types.SurfableBranch, error) {
+func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
 	branchCache := cache2.GetCache()
-	cacheKey := surfableBranchesCacheKey(appId, runtimeVersion)
+	cacheKey := surfableBranchesCacheKey(appId, runtimeVersion, platform)
 	if branches, ok := cache2.GetJSON[[]types.SurfableBranch](branchCache, cacheKey); ok {
 		return branches, nil
 	}
-	branches, err := branchRepo.GetSurfableBranches(ctx, appId, runtimeVersion)
+	branches, err := branchRepo.GetSurfableBranches(ctx, appId, runtimeVersion, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +186,8 @@ func ForgetBranchSurfing(appId string, channelName string) {
 	invalidateBranchSurfingCache(appId, channelName)
 }
 
-func ForgetSurfableBranches(appId string, runtimeVersion string) {
-	cache2.GetCache().Delete(surfableBranchesCacheKey(appId, runtimeVersion))
+func ForgetSurfableBranches(appId string, runtimeVersion string, platform string) {
+	cache2.GetCache().Delete(surfableBranchesCacheKey(appId, runtimeVersion, platform))
 }
 
 func boolCacheValue(value bool) string {

@@ -24,7 +24,7 @@ func surfingService(t *testing.T, surfing map[string]*types.BranchSurfing, surfa
 		ForgetBranchSurfing(surfingAppID, channelName)
 	}
 	for _, runtimeVersion := range []string{"3.0.0", "2.0.0"} {
-		ForgetSurfableBranches(surfingAppID, runtimeVersion)
+		ForgetSurfableBranches(surfingAppID, runtimeVersion, "ios")
 	}
 	channelRepo := &fakeChannelRepo{surfing: surfing}
 	return NewChannelService(fakeBranchRepo{surfable: surfable}, channelRepo), channelRepo
@@ -41,7 +41,7 @@ func TestListSurfableBranchesFiltersOnPattern(t *testing.T) {
 		}},
 	)
 
-	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", false)
+	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 
 	require.NoError(t, err)
 	assert.Equal(t, []types.SurfableBranch{
@@ -63,7 +63,7 @@ func TestListSurfableBranchesScopesToRuntimeVersion(t *testing.T) {
 		},
 	)
 
-	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "2.0.0", false)
+	list, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "2.0.0", "ios", false)
 
 	require.NoError(t, err)
 	assert.Equal(t, []types.SurfableBranch{{Name: "legacy", LastUpdateAt: "2026-01-01T10:00:00Z"}}, list.Branches)
@@ -76,7 +76,7 @@ func TestListSurfableBranchesRefusesDisabledChannel(t *testing.T) {
 		map[string][]types.SurfableBranch{"3.0.0": {{Name: "pr-482", LastUpdateAt: "2026-08-01T10:00:00Z"}}},
 	)
 
-	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", false)
+	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", "ios", false)
 
 	var protocolErr *ExpoProtocolError
 	require.ErrorAs(t, err, &protocolErr)
@@ -92,8 +92,8 @@ func TestListSurfableBranchesRefusesUnknownChannelIdentically(t *testing.T) {
 		nil,
 	)
 
-	_, disabledErr := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", false)
-	_, unknownErr := service.ListSurfableBranches(context.Background(), surfingAppID, "nope", "3.0.0", false)
+	_, disabledErr := service.ListSurfableBranches(context.Background(), surfingAppID, "production", "3.0.0", "ios", false)
+	_, unknownErr := service.ListSurfableBranches(context.Background(), surfingAppID, "nope", "3.0.0", "ios", false)
 
 	require.Error(t, disabledErr)
 	require.Error(t, unknownErr)
@@ -103,7 +103,7 @@ func TestListSurfableBranchesRefusesUnknownChannelIdentically(t *testing.T) {
 func TestListSurfableBranchesRejectsInvalidChannelName(t *testing.T) {
 	service, _ := surfingService(t, nil, nil)
 
-	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa/../prod", "3.0.0", false)
+	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa/../prod", "3.0.0", "ios", false)
 
 	require.Error(t, err)
 	assert.True(t, validation.IsValidationError(err), "a malformed name is a validation error, not a 404")
@@ -147,11 +147,11 @@ func TestListSurfableBranchesIsAnsweredFromCache(t *testing.T) {
 	}}
 	t.Setenv("DB_URL", "postgres://stub")
 	ForgetBranchSurfing(surfingAppID, "qa")
-	ForgetSurfableBranches(surfingAppID, "3.0.0")
+	ForgetSurfableBranches(surfingAppID, "3.0.0", "ios")
 	service := NewChannelService(branchRepo, channelRepo)
 
 	for i := 0; i < 5; i++ {
-		_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", false)
+		_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 		require.NoError(t, err)
 	}
 
@@ -165,7 +165,7 @@ type countingBranchRepo struct {
 	reads    int
 }
 
-func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string) ([]types.SurfableBranch, error) {
+func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
 	r.reads++
 	return r.surfable[runtimeVersion], nil
 }
@@ -187,7 +187,7 @@ func TestListSurfableBranchesCapsAfterTheFilter(t *testing.T) {
 	wide, _ := surfingService(t,
 		map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "*"}},
 		map[string][]types.SurfableBranch{"3.0.0": all})
-	list, err := wide.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", false)
+	list, err := wide.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 	require.NoError(t, err)
 	assert.Len(t, list.Branches, maxSurfableBranches)
 	assert.Equal(t, "pr-0", list.Branches[0].Name, "newest first survives the cap")
@@ -196,7 +196,7 @@ func TestListSurfableBranchesCapsAfterTheFilter(t *testing.T) {
 	narrow, _ := surfingService(t,
 		map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "team-*"}},
 		map[string][]types.SurfableBranch{"3.0.0": all})
-	teamList, err := narrow.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", false)
+	teamList, err := narrow.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 	require.NoError(t, err)
 	// Cap-before-filter would return nothing at all here: the ten newest branches
 	// are all pr-*, so a page taken before the pattern ran would hold no match.
@@ -220,13 +220,31 @@ func TestSeeAllWidensThePageWithoutUnboundingIt(t *testing.T) {
 		map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "pr-*"}},
 		map[string][]types.SurfableBranch{"3.0.0": all})
 
-	page, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", false)
+	page, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
 	require.NoError(t, err)
 	assert.Len(t, page.Branches, maxSurfableBranches)
 	assert.Equal(t, 600, page.Total, "the count is of every match, so a client can say what it is missing")
 
-	everything, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", true)
+	everything, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", true)
 	require.NoError(t, err)
 	assert.Len(t, everything.Branches, maxAllSurfableBranches, "see all is wider, not unbounded")
 	assert.Equal(t, 600, everything.Total)
+}
+
+// The setting is cached under the channel NAME. Deleting the channel must drop
+// it, or the channel keeps answering after it is gone — and a channel recreated
+// under the same name starts out holding a permission nobody granted it.
+func TestDeletingAChannelDropsItsSurfingPermission(t *testing.T) {
+	service, channelRepo := surfingService(t,
+		map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "pr-*"}},
+		map[string][]types.SurfableBranch{"3.0.0": {{Name: "pr-1", LastUpdateAt: "2026-08-01T10:00:00Z"}}})
+
+	_, err := service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+	require.NoError(t, err, "the setting is now cached")
+
+	require.NoError(t, service.DeleteChannel(context.Background(), "qa", surfingAppID))
+	channelRepo.surfing = map[string]*types.BranchSurfing{}
+
+	_, err = service.ListSurfableBranches(context.Background(), surfingAppID, "qa", "3.0.0", "ios", false)
+	assert.Error(t, err, "a deleted channel must not keep answering from cache")
 }

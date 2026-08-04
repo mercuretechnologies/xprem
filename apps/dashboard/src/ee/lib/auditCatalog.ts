@@ -46,6 +46,7 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'channel.created',
       'channel.deleted',
       'channel_branch.mapped',
+      'channel_branch_surfing.updated',
       'branch.created',
       'branch.deleted',
     ],

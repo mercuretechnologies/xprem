@@ -54,7 +54,7 @@ func TestSurfIsRefusedWhenTheServedUpdateCrashed(t *testing.T) {
 	assert.Equal(t, "100", result.Update.UpdateId)
 	require.NotNil(t, result.BlockedSurf)
 	assert.Equal(t, "pr-482", result.BlockedSurf.BranchName)
-	assert.Equal(t, "pr-482@200", result.BlockedSurf.Token)
+	assert.Equal(t, "cHItNDgyADIwMA", result.BlockedSurf.Token)
 }
 
 // A refusal can never empty the candidate list. HonoursSurf requires the asked-for
@@ -70,7 +70,7 @@ func TestTheMappedBranchIsNeverRefused(t *testing.T) {
 	// Both branches reported as crashed, and both named in the carried verdicts.
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `","` + stagingUUID + `"`
-	params.SurfBlockTokens = "pr-482@200,staging@100"
+	params.SurfBlockTokens = "cHItNDgyADIwMA,c3RhZ2luZwAxMDA"
 	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
 
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestSurfIsAllowedAgainOnceTheBranchIsFixed(t *testing.T) {
 
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
-	params.SurfBlockTokens = "pr-482@200"
+	params.SurfBlockTokens = "cHItNDgyADIwMA"
 	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
 
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestSurfStaysRefusedFromTheEchoedVerdictAlone(t *testing.T) {
 	h.seed(seedRow{branch: "pr-482", rtv: "1", platform: "ios", id: 200, checked: true, uuid: crashedUUID})
 
 	params := blockParams(h)
-	params.SurfBlockTokens = "pr-482@200"
+	params.SurfBlockTokens = "cHItNDgyADIwMA"
 	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
 
 	require.NoError(t, err)
@@ -136,34 +136,45 @@ func surfBlockedOnly(carriedTokens string, token string) string {
 }
 
 func TestSetSurfBlockedRendersAStructuredDictionary(t *testing.T) {
-	assert.Equal(t, `xprem-surf-blocked="pr-482@200"`, surfBlockedOnly("", "pr-482@200"))
+	assert.Equal(t, `xprem-surf-blocked="cHItNDgyADIwMA"`, surfBlockedOnly("", "cHItNDgyADIwMA"))
 }
 
 // The response replaces the client's whole stored dictionary, so a second verdict
 // has to carry the first or it unblocks the branch it names.
 func TestSetSurfBlockedKeepsTheVerdictsAlreadyCarried(t *testing.T) {
 	assert.Equal(t,
-		`xprem-surf-blocked="pr-2@200,pr-1@100"`,
-		surfBlockedOnly("pr-1@100", "pr-2@200"))
+		`xprem-surf-blocked="cHItMgAyMDA,cHItMQAxMDA"`,
+		surfBlockedOnly("cHItMQAxMDA", "cHItMgAyMDA"))
 }
 
 func TestSetSurfBlockedDropsDuplicatesAndCaps(t *testing.T) {
 	assert.Equal(t,
-		`xprem-surf-blocked="pr-1@100"`,
-		surfBlockedOnly("pr-1@100", "pr-1@100"))
+		`xprem-surf-blocked="cHItMQAxMDA"`,
+		surfBlockedOnly("cHItMQAxMDA", "cHItMQAxMDA"))
 
-	carried := "a@1,b@2,c@3,d@4,e@5,f@6"
+	carried := "YQAx,YgAy,YwAz,ZAA0,ZQA1,ZgA2"
 	assert.Equal(t,
-		`xprem-surf-blocked="new@9,a@1,b@2,c@3,d@4"`,
-		surfBlockedOnly(carried, "new@9"))
+		`xprem-surf-blocked="bmV3ADk,YQAx,YgAy,YwAz,ZAA0"`,
+		surfBlockedOnly(carried, "bmV3ADk"))
 }
 
-// A branch name may contain a quote; unescaped it would break the dictionary the
-// client parses, silently losing every verdict.
-func TestSetSurfBlockedEscapesQuotes(t *testing.T) {
-	assert.Equal(t,
-		`xprem-surf-blocked="pr-\"x@200"`,
-		surfBlockedOnly("", `pr-"x@200`))
+// The characters a branch name may legally contain are exactly the ones that
+// would wreck the header carrying it: a comma splits one verdict into two, a
+// quote ends the string early, and a non-ASCII byte cannot be in an RFC 8941
+// string at all. The token is encoded, so none of them ever reach the wire.
+func TestHostileBranchNamesProduceSafeTokens(t *testing.T) {
+	for _, branchName := range []string{"pr,ios", `pr-"x`, "pr-é", " pr-1 ", "pr\x00x"} {
+		token := surfBlockToken(branchName, "200")
+		assert.True(t, isBase64URL(token), "token for %q must be safe to put on the wire", branchName)
+		assert.Equal(t,
+			[]string{token},
+			parseSurfBlockTokens(token),
+			"a token the server minted must survive being echoed back")
+	}
+
+	// The distinctness that matters: two branches whose tokens could collide once
+	// concatenated must not, or one crash would block the other's update.
+	assert.NotEqual(t, surfBlockToken("pr", "1@2"), surfBlockToken("pr@1", "2"))
 }
 
 // The verdict is one member among others: a dictionary already carrying something
@@ -172,9 +183,9 @@ func TestSetSurfBlockedSharesTheDictionary(t *testing.T) {
 	dictionary := NewHeaderDictionary()
 	dictionary.Set("xprem-other", "value")
 
-	SetSurfBlocked(dictionary, "", "pr-482@200")
+	SetSurfBlocked(dictionary, "", "cHItNDgyADIwMA")
 
-	assert.Equal(t, `xprem-other="value", xprem-surf-blocked="pr-482@200"`, dictionary.Encode())
+	assert.Equal(t, `xprem-other="value", xprem-surf-blocked="cHItNDgyADIwMA"`, dictionary.Encode())
 }
 
 // A poll the surf rule declined is a plain poll. Refusing one would take a device
@@ -187,7 +198,7 @@ func TestRefusalNeverAppliesToADeclinedSurf(t *testing.T) {
 
 		params := blockParams(h)
 		params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
-		params.SurfBlockTokens = "pr-482@200"
+		params.SurfBlockTokens = "cHItNDgyADIwMA"
 		result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
 
 		require.NoError(t, err)
@@ -238,7 +249,7 @@ func TestDeclinedSurfCostsNoLookup(t *testing.T) {
 
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + uuid.NewString() + `","` + uuid.NewString() + `"`
-	params.SurfBlockTokens = "a@1,b@2,c@3"
+	params.SurfBlockTokens = "YQAx,YgAy,YwAz"
 	_, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
 
 	require.NoError(t, err)
@@ -248,31 +259,35 @@ func TestDeclinedSurfCostsNoLookup(t *testing.T) {
 // The header is entirely client-supplied and Go accepts up to 1 MiB of it, so
 // both the input and the count are bounded before anything is retained.
 func TestParseSurfBlockTokensIsBounded(t *testing.T) {
+	// The filler is a VALID token: filler the filter would drop makes this pass
+	// without the cap ever being reached.
 	t.Run("caps the number of tokens", func(t *testing.T) {
-		raw := strings.Repeat("pr-1@1,", 40000)
+		raw := strings.Repeat(surfBlockToken("pr-1", "1")+",", 40000)
 		assert.Len(t, parseSurfBlockTokens(raw), maxSurfBlockTokens)
 	})
 
-	// The count cap alone never trips on filler, so only the input cap can stop
-	// this: a token placed past the boundary must not be reached.
+	// The count cap alone never trips on separators, so only the input cap can
+	// stop this: a valid token placed past the boundary must not be reached.
 	t.Run("caps the input before splitting it", func(t *testing.T) {
-		raw := strings.Repeat(",", maxSurfBlockTokensRaw) + "pr-late@1"
+		raw := strings.Repeat(",", maxSurfBlockTokensRaw) + surfBlockToken("pr-late", "1")
 		assert.Empty(t, parseSurfBlockTokens(raw))
 	})
 
 	t.Run("keeps a legitimate value whole", func(t *testing.T) {
+		first, second := surfBlockToken("pr-1", "100"), surfBlockToken("pr-2", "200")
 		assert.Equal(t,
-			[]string{"pr-1@100", "pr-2@200"},
-			parseSurfBlockTokens(" pr-1@100 , pr-2@200 "))
+			[]string{first, second},
+			parseSurfBlockTokens(" "+first+" , "+second+" "))
 	})
 
 	// Retained tokens are echoed back inside an RFC 8941 string, which can only
 	// carry printable ASCII; one stray byte would cost the device the whole
 	// dictionary. This also covers the input cap cutting a multi-byte rune.
-	t.Run("drops tokens an RFC 8941 string cannot carry", func(t *testing.T) {
+	t.Run("drops anything the server did not mint", func(t *testing.T) {
+		valid := surfBlockToken("pr-1", "100")
 		assert.Equal(t,
-			[]string{"pr-1@100"},
-			parseSurfBlockTokens("pr-1@100,pr\x002@2,pr-é@3"))
+			[]string{valid},
+			parseSurfBlockTokens(valid+",pr-482@200,pr-é,\"quoted\""))
 	})
 }
 
@@ -287,4 +302,30 @@ func TestTheManifestNeverCarriesTheChannelSetting(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "branchSurfing\"",
 		"a channel-lifetime setting has no place in an update-lifetime document")
+}
+
+// Long branch names make five tokens overflow the member bound. Cutting the
+// joined value would keep a half token that can never match, and would take the
+// newest verdict with it — the one the response exists to deliver.
+func TestVerdictsAreDroppedWholeWhenTheyDoNotFit(t *testing.T) {
+	longBranch := strings.Repeat("b", 128)
+	fresh := surfBlockToken(longBranch+"-new", "900")
+	carried := make([]string, 0, maxSurfBlockTokens)
+	for i := 0; i < maxSurfBlockTokens; i++ {
+		carried = append(carried, surfBlockToken(longBranch+string(rune('a'+i)), "100"))
+	}
+
+	dictionary := NewHeaderDictionary()
+	SetSurfBlocked(dictionary, strings.Join(carried, ","), fresh)
+	encoded := dictionary.Encode()
+
+	require.NotEmpty(t, encoded, "the newest verdict must survive; losing it re-serves the crash")
+	value := strings.TrimSuffix(strings.TrimPrefix(encoded, SurfBlockedHeader+`="`), `"`)
+	assert.LessOrEqual(t, len(value), maxHeaderDictionaryValue)
+	kept := strings.Split(value, ",")
+	assert.Equal(t, fresh, kept[0], "the fresh verdict is kept first")
+	for _, token := range kept {
+		assert.True(t, isBase64URL(token), "no token may be left half-written")
+		assert.Contains(t, append(carried, fresh), token, "a kept token must be whole")
+	}
 }

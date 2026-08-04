@@ -51,11 +51,24 @@ func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Same rule as the manifest route, which resolves per platform: a list built
+	// without it would offer branches whose only update is for the other one, and
+	// picking those would quietly land the device back on its channel's branch.
+	platform := r.Header.Get("expo-platform")
+	if platform == "" {
+		platform = r.URL.Query().Get("platform")
+	}
+	if platform != "ios" && platform != "android" {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
+		http.Error(w, "Invalid platform. Expected \"ios\" or \"android\".", http.StatusBadRequest)
+		return
+	}
+
 	// Devices fetch the first page at every launch; "see all" is a deliberate tap
 	// by one tester, so the wider answer is never on the launch path.
 	all := r.URL.Query().Get("all") == "1"
 
-	branches, err := h.channelService.ListSurfableBranches(r.Context(), appId, channelName, runtimeVersion, all)
+	branches, err := h.channelService.ListSurfableBranches(r.Context(), appId, channelName, runtimeVersion, platform, all)
 	if err != nil {
 		status, message := branchListErrorResponse(err)
 		log.Printf("[RequestID: %s] Branch list refused for channel %s: %v", requestID, channelName, err)

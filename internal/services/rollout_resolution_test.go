@@ -512,7 +512,7 @@ type fakeBranchRepo struct {
 	surfable map[string][]types.SurfableBranch
 }
 
-func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string) ([]types.SurfableBranch, error) {
+func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
 	return r.surfable[runtimeVersion], nil
 }
 

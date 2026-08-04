@@ -2305,14 +2305,16 @@ SET branch_surfing_enabled = $3, branch_surfing_pattern = $4
 WHERE app_id = $1 AND name = $2;
 
 -- name: GetSurfableBranches :many
--- Branches a device on this app and runtime version could actually be served.
--- A branch with no published update for that runtime version is unreachable,
--- so listing it would offer a switch that silently does nothing. rv is scoped
--- to the app as well: version strings are unique per app, not globally.
+-- Branches a device on this app, runtime version and platform could actually be
+-- served. A branch with no published update matching all three is unreachable,
+-- so listing it would offer a switch that silently does nothing: the manifest
+-- route filters on platform too, and would quietly fall back to the channel's
+-- branch. rv is scoped to the app as well: version strings are unique per app,
+-- not globally.
 SELECT b.name AS branch_name, MAX(u.created_at)::timestamptz AS last_update_at
 FROM branches b
 JOIN updates u ON u.branch_id = b.id AND u.checked_at IS NOT NULL
 JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
-WHERE b.app_id = $1 AND rv.version = $2
+WHERE b.app_id = $1 AND rv.version = $2 AND u.platform = @platform::text
 GROUP BY b.id, b.name
 ORDER BY MAX(u.created_at) DESC, b.name ASC;
