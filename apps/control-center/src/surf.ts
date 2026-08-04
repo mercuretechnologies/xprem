@@ -103,6 +103,11 @@ function pin(config: SurfConfig, branch: string | null) {
 function applyBranchHeader(config: SurfConfig, branch: string) {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(config.requestHeaders)) {
+    // Empty values are dropped, and that is load-bearing rather than tidy.
+    // expo-updates applies this header set LAST, after the server-defined
+    // headers it has stored, and each entry REPLACES rather than adds — so an
+    // empty xprem-surf-blocked declared in app config would wipe the refusal
+    // verdicts on every poll and let a crashing update be served again.
     if (typeof value === 'string' && value !== '') {
       headers[key] = value;
     }

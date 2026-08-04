@@ -329,7 +329,39 @@ function updateObjectExpression(
   });
 }
 
+// A value wrapped like this is emitted with a // comment above it. Only the
+// jscodeshift path can honour it; app.json has nowhere to put a comment, so
+// unwrapValue drops it there rather than writing the marker into JSON.
+export type CommentedValue = { __comment: string; value: any };
+
+function isCommented(value: any): value is CommentedValue {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as CommentedValue).__comment === 'string' &&
+    '__value' in value === false &&
+    'value' in value
+  );
+}
+
+/** Strips the comment wrappers, for the JSON path and for reading values back. */
+export function unwrapValue(value: any): any {
+  if (isCommented(value)) {
+    return unwrapValue(value.value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(unwrapValue);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, unwrapValue(val)]));
+  }
+  return value;
+}
+
 function createValueNode(j: typeof jscodeshift, value: any): any {
+  if (isCommented(value)) {
+    return createValueNode(j, value.value);
+  }
   if (typeof value === 'string' && value.startsWith('process.env.')) {
     if (/^process\.env\.\w+$/.test(value)) {
       return j.memberExpression(
@@ -342,9 +374,14 @@ function createValueNode(j: typeof jscodeshift, value: any): any {
 
   if (typeof value === 'object' && value !== null) {
     return j.objectExpression(
-      Object.entries(value).map(
-        ([key, val]) => j.objectProperty(j.stringLiteral(key), createValueNode(j, val)) // Force stringLiteral pour garder les guillemets
-      )
+      Object.entries(value).map(([key, val]) => {
+        // Force stringLiteral pour garder les guillemets
+        const property = j.objectProperty(j.stringLiteral(key), createValueNode(j, val));
+        if (isCommented(val)) {
+          property.comments = [j.commentLine(` ${val.__comment}`, true, false)];
+        }
+        return property;
+      })
     );
   }
 
@@ -362,7 +399,7 @@ function parseExpressionNode(j: typeof jscodeshift, code: string): any {
 function stringifyWithEnv(obj: Record<string, any>): string {
   const rawExpressions: string[] = [];
   const json = JSON.stringify(
-    obj,
+    unwrapValue(obj),
     (_key, value) =>
       typeof value === 'string' && value.startsWith('process.env.')
         ? `__RAW_EXPR_${rawExpressions.push(value) - 1}__`

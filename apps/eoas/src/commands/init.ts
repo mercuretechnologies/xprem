@@ -111,9 +111,22 @@ export default class Init extends Command {
         .replace(/\\/g, '\\\\')
         .replace(/'/g, "\\'")}'`,
       enabled: true,
+      // Branch surfing: a build on a channel that allows it can be pointed at
+      // another branch at runtime, and expo-updates only accepts an override for
+      // header keys that already existed at build time — so these have to be
+      // declared here even when the value is empty. Dropping one of them does not
+      // disable the feature, it strips that header from every poll for the rest of
+      // the install; the picker refuses to appear rather than let that happen.
       requestHeaders: {
-        'expo-channel-name': 'process.env.RELEASE_CHANNEL',
+        'expo-channel-name': {
+          __comment: 'Declare as a literal if you surf branches: see xprem-branch below.',
+          value: 'process.env.RELEASE_CHANNEL',
+        },
         'expo-app-id': appId,
+        'xprem-branch': {
+          __comment: 'Branch surfing — the branch to serve; empty means the channel decides.',
+          value: '',
+        },
       },
     };
     const updateConfigSpinner = ora('Updating Expo config').start();

@@ -174,10 +174,22 @@ func cachedBranchSurfing(ctx context.Context, channelRepo ChannelRepository, app
 		}
 	}
 	surfing, err := channelRepo.GetBranchSurfing(ctx, appId, channelName)
-	if err != nil || surfing == nil {
+	if err != nil {
+		// Deliberately not cached: an error is not an answer, and caching one
+		// would keep a channel dark for the whole TTL after the database
+		// recovers. Costs a read per poll only while the database is down.
 		return false, ""
 	}
 	ttl := channelBranchSurfingCacheTTLSeconds
+	if surfing == nil {
+		// A channel that does not exist is cached exactly like one with surfing
+		// off. Leaving it uncached made the two observably different: the
+		// disabled channel answered from memory and the unknown one hit
+		// Postgres, so response time told an unauthenticated caller which
+		// channel names exist — and let it drive an unbounded read per request.
+		_ = surfingCache.Set(cacheKey, boolCacheValue(false)+":", &ttl)
+		return false, ""
+	}
 	_ = surfingCache.Set(cacheKey, boolCacheValue(surfing.Enabled)+":"+surfing.Pattern, &ttl)
 	return surfing.Enabled, surfing.Pattern
 }
