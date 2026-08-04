@@ -51,7 +51,11 @@ func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	branches, err := h.channelService.ListSurfableBranches(r.Context(), appId, channelName, runtimeVersion)
+	// Devices fetch the first page at every launch; "see all" is a deliberate tap
+	// by one tester, so the wider answer is never on the launch path.
+	all := r.URL.Query().Get("all") == "1"
+
+	branches, err := h.channelService.ListSurfableBranches(r.Context(), appId, channelName, runtimeVersion, all)
 	if err != nil {
 		status, message := branchListErrorResponse(err)
 		log.Printf("[RequestID: %s] Branch list refused for channel %s: %v", requestID, channelName, err)

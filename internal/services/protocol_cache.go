@@ -29,6 +29,10 @@ const (
 	// the cache is shared: with a local cache and several replicas, the write
 	// clears one process and the TTL bounds the rest.
 	channelBranchSurfingCacheTTLSeconds = 30
+	// Every launch of every build carrying the picker reads the branch list, so
+	// this one absorbs a fleet-wide boot rather than operator edits. Short enough
+	// that a publish shows up the next time a tester opens the panel.
+	surfableBranchesCacheTTLSeconds = 15
 )
 
 func appConfigCacheKey(appId string) string {
@@ -45,6 +49,29 @@ func channelMappingCacheKey(appId string, channelName string) string {
 
 func channelBranchSurfingCacheKey(appId string, channelName string) string {
 	return fmt.Sprintf("channel-branch-surfing:%s:%s:%s", version.Version, appId, channelName)
+}
+
+// Keyed without the channel: the list is per app and runtime version, and the
+// channel's pattern filters it afterwards, so channels share one entry.
+func surfableBranchesCacheKey(appId string, runtimeVersion string) string {
+	return fmt.Sprintf("surfable-branches:%s:%s:%s", version.Version, appId, runtimeVersion)
+}
+
+func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string) ([]types.SurfableBranch, error) {
+	branchCache := cache2.GetCache()
+	cacheKey := surfableBranchesCacheKey(appId, runtimeVersion)
+	if branches, ok := cache2.GetJSON[[]types.SurfableBranch](branchCache, cacheKey); ok {
+		return branches, nil
+	}
+	branches, err := branchRepo.GetSurfableBranches(ctx, appId, runtimeVersion)
+	if err != nil {
+		return nil, err
+	}
+	ttl := surfableBranchesCacheTTLSeconds
+	// An empty answer is cached too: a runtime version with nothing built for it
+	// is exactly the request an attacker repeats.
+	cache2.SetJSON(branchCache, cacheKey, branches, &ttl)
+	return branches, nil
 }
 
 func signatureCacheKey(appId string, keyFingerprint string, contentHash string) string {
@@ -122,6 +149,10 @@ func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId st
 // branch. It is on the manifest hot path, so it never fails the poll: any error,
 // and stateless mode where the setting does not exist, answer false.
 func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId string, channelName string) (bool, string) {
+	return cachedBranchSurfing(ctx, s.channelRepo, appId, channelName)
+}
+
+func cachedBranchSurfing(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (bool, string) {
 	if !config.IsDBMode() || channelName == "" {
 		return false, ""
 	}
@@ -134,7 +165,7 @@ func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId st
 			return enabled == "1", pattern
 		}
 	}
-	surfing, err := s.channelRepo.GetBranchSurfing(ctx, appId, channelName)
+	surfing, err := channelRepo.GetBranchSurfing(ctx, appId, channelName)
 	if err != nil || surfing == nil {
 		return false, ""
 	}
@@ -147,6 +178,14 @@ func (s *ExpoProtocolService) branchSurfingEnabled(ctx context.Context, appId st
 // stales. Best effort: see channelBranchSurfingCacheTTLSeconds.
 func invalidateBranchSurfingCache(appId string, channelName string) {
 	cache2.GetCache().Delete(channelBranchSurfingCacheKey(appId, channelName))
+}
+
+func ForgetBranchSurfing(appId string, channelName string) {
+	invalidateBranchSurfingCache(appId, channelName)
+}
+
+func ForgetSurfableBranches(appId string, runtimeVersion string) {
+	cache2.GetCache().Delete(surfableBranchesCacheKey(appId, runtimeVersion))
 }
 
 func boolCacheValue(value bool) string {

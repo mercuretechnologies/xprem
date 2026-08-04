@@ -152,29 +152,54 @@ func (s *ChannelService) SetBranchSurfing(ctx context.Context, appId string, cha
 	return nil
 }
 
-// ListSurfableBranches returns the branches a device polling channelName may
-// ask to be served: those matching the channel's pattern that have a published
-// update for the device's runtime version. It refuses a channel that does not
+// The page every device gets at launch, and the ceiling when one asks for the
+// whole list. In acceptance testing the branch being looked for was published
+// recently, so the first page is the product behaviour and not merely a bound.
+// Ten rather than something roomier so that a team with a few dozen open
+// branches actually meets the "see all" path instead of it lying dormant until
+// some rare scale. The second bound exists so "see all" cannot be turned into an
+// unbounded download.
+const (
+	maxSurfableBranches    = 10
+	maxAllSurfableBranches = 500
+)
+
+// ListSurfableBranches returns the branches a device polling channelName may ask
+// to be served: those matching the channel's pattern that have a published
+// update for the device's runtime version, newest first. Only the first page is
+// returned unless all is set, but Total always counts every match, so a client
+// can tell it is looking at part of the list. It refuses a channel that does not
 // exist or has branch surfing off.
-func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string) ([]types.SurfableBranch, error) {
-	surfing, err := s.GetBranchSurfing(ctx, appId, channelName)
-	if err != nil {
-		return nil, err
+func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, all bool) (types.SurfableBranchList, error) {
+	if err := validation.Name("channelName", channelName); err != nil {
+		return types.SurfableBranchList{}, err
 	}
+	enabled, pattern := cachedBranchSurfing(ctx, s.channelRepo, appId, channelName)
 	// An unknown channel and a channel with surfing off answer the same way, so
 	// the endpoint never reveals which channels exist.
-	if surfing == nil || !surfing.Enabled {
-		return nil, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Branch surfing is not enabled for this channel"}
+	if !enabled {
+		return types.SurfableBranchList{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Branch surfing is not enabled for this channel"}
 	}
-	branches, err := s.branchRepo.GetSurfableBranches(ctx, appId, runtimeVersion)
+	branches, err := cachedSurfableBranches(ctx, s.branchRepo, appId, runtimeVersion)
 	if err != nil {
-		return nil, err
+		return types.SurfableBranchList{}, err
 	}
-	matched := make([]types.SurfableBranch, 0, len(branches))
+	limit := maxSurfableBranches
+	if all {
+		limit = maxAllSurfableBranches
+	}
+	// The cap lands after the pattern filter: a narrow pattern whose matches are
+	// all older than the cut must still find them.
+	matched := make([]types.SurfableBranch, 0, limit)
+	total := 0
 	for _, candidate := range branches {
-		if branch.MatchPattern(surfing.Pattern, candidate.Name) {
+		if !branch.MatchPattern(pattern, candidate.Name) {
+			continue
+		}
+		total++
+		if len(matched) < limit {
 			matched = append(matched, candidate)
 		}
 	}
-	return matched, nil
+	return types.SurfableBranchList{Branches: matched, Total: total}, nil
 }

@@ -138,21 +138,9 @@ type ManifestAsset struct {
 }
 
 type ExtraManifestData struct {
-	ExpoClient json.RawMessage `json:"expoClient"`
-	Branch     string          `json:"branch"`
-	// BranchSurfing tells the app whether the channel it polls lets it ask for
-	// another branch, so it can show the picker without a second call. It is a
-	// property of the CHANNEL, while the manifest is cached per branch, so it is
-	// stamped on the served copy rather than composed into the cached one.
-	//
-	// omitempty on purpose: a deployment with the feature off serves the exact
-	// bytes it served before, which keeps the signed payload unchanged.
-	BranchSurfing bool `json:"branchSurfing,omitempty"`
-	// BranchSurfingRefused names the branch the device asked for and did not get,
-	// because the update it would have received failed to launch on it. The only
-	// channel the app can read: expo-server-defined-headers is stored natively
-	// and never surfaced to JS.
-	BranchSurfingRefused string `json:"branchSurfingRefused,omitempty"`
+	ExpoClient           json.RawMessage `json:"expoClient"`
+	Branch               string          `json:"branch"`
+	BranchSurfingRefused string          `json:"branchSurfingRefused,omitempty"`
 }
 
 type UpdateManifest struct {
@@ -252,6 +240,14 @@ type BranchSurfing struct {
 }
 
 // SurfableBranch is one entry of the branch list a device may surf to.
+// SurfableBranchList is the answer to a device's branch list request. Total
+// counts every branch that matched, so a client showing a truncated page can say
+// so instead of pretending the list is complete.
+type SurfableBranchList struct {
+	Branches []SurfableBranch `json:"branches"`
+	Total    int              `json:"total"`
+}
+
 type SurfableBranch struct {
 	Name         string `json:"name"`
 	LastUpdateAt string `json:"lastUpdateAt"`

@@ -13,7 +13,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
 
       "requestHeaders": {
         "expo-channel-name": process.env.RELEASE_CHANNEL,
-        "expo-app-id": "d3a60200-4574-4781-9734-c174b511fb55",
+        "expo-app-id": "01434155-7d26-4f77-94b5-01013a80cdfa",
+        "xprem-branch": "",
+        "xprem-surf-blocked": ""
       },
     },
   };

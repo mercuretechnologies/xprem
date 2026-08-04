@@ -5,6 +5,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@xprem/control-center": [
+        "../control-center/src/index.ts"
       ]
     }
   },

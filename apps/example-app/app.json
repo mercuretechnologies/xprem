@@ -47,9 +47,9 @@
         "origin": false
       },
       "eas": {
-        "projectId": "d3a60200-4574-4781-9734-c174b511fb55",
+        "projectId": "01434155-7d26-4f77-94b5-01013a80cdfa",
         "observe": {
-          "endpointUrl": "https://otatest.ngrok.io/observe/d3a60200-4574-4781-9734-c174b511fb55"
+          "endpointUrl": "https://otatest.ngrok.io/observe/01434155-7d26-4f77-94b5-01013a80cdfa"
         }
       }
     },

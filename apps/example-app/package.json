@@ -19,7 +19,8 @@
     "create_production_rollback": "RELEASE_CHANNEL=production ../eoas/bin/dev.js rollback --branch production",
     "create_staging_rollback": "RELEASE_CHANNEL=staging ../eoas/bin/dev.js rollback --branch staging",
     "prebuild_production": "RELEASE_CHANNEL=production expo prebuild",
-    "prebuild_staging": "RELEASE_CHANNEL=staging expo prebuild"
+    "prebuild_staging": "RELEASE_CHANNEL=staging expo prebuild",
+    "postinstall": "mkdir -p node_modules/@xprem && ln -sfn ../../../control-center node_modules/@xprem/control-center"
   },
   "jest": {
     "preset": "jest-expo"

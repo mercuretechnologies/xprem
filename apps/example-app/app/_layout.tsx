@@ -1,3 +1,4 @@
+import { ControlCenter } from '@xprem/control-center';
 import { Observe, ObserveRoot } from 'expo-observe';
 import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { useFonts } from 'expo-font';
@@ -50,6 +51,9 @@ function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />
+        {/* Renders nothing unless the channel this build polls allows branch
+            surfing, so it is safe to leave mounted in every build. */}
+        <ControlCenter />
       </ThemeProvider>
     </ErrorBoundary>
   );

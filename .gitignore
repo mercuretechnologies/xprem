@@ -35,7 +35,7 @@ vendor/
 .DS_Store
 
 # Node.js specific files (if the project includes frontend code)
-node_modules/
+node_modules
 
 # Build directories
 bin/

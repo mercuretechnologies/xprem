@@ -1,0 +1,31 @@
+{
+  "name": "@xprem/control-center",
+  "version": "0.1.0",
+  "description": "A branch picker that appears on builds whose channel allows surfing. JS-only, for xprem branch surfing.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "/src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "xprem",
+    "expo",
+    "expo-updates",
+    "branch-surfing",
+    "qa"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "expo-constants": "*",
+    "expo-updates": ">=0.29.0",
+    "react": ">=18",
+    "react-native": ">=0.72"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.14",
+    "typescript": "~6.0.3"
+  }
+}

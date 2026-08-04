@@ -1,0 +1,6 @@
+node_modules
+dist
+web/dist
+
+# The root .gitignore drops every bin/ directory; this package ships one.
+!bin/

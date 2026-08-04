@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"xprem/internal/providers/expo"
@@ -264,4 +265,17 @@ func TestParseSurfBlockTokensIsBounded(t *testing.T) {
 			[]string{"pr-1@100", "pr-2@200"},
 			parseSurfBlockTokens(" pr-1@100 , pr-2@200 "))
 	})
+}
+
+// Whether a channel allows surfing must never ride the manifest again. A manifest
+// is frozen when its update is served; the setting changes whenever an admin says
+// so, so a device already up to date would never learn it was turned on. The
+// client asks /branch_lists.
+func TestTheManifestNeverCarriesTheChannelSetting(t *testing.T) {
+	extra := types.ExtraManifestData{}
+	encoded, err := json.Marshal(extra)
+
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "branchSurfing\"",
+		"a channel-lifetime setting has no place in an update-lifetime document")
 }
