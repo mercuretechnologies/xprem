@@ -334,14 +334,14 @@ function updateObjectExpression(
 // unwrapValue drops it there rather than writing the marker into JSON.
 export type CommentedValue = { __comment: string; value: any };
 
+// The key is deliberately underscored: it is a sentinel this module reads and
+// strips, and it must not be mistakable for a real Expo config field.
 function isCommented(value: any): value is CommentedValue {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as CommentedValue).__comment === 'string' &&
-    '__value' in value === false &&
-    'value' in value
-  );
+  if (typeof value !== 'object' || value === null || !('value' in value)) {
+    return false;
+  }
+  // eslint-disable-next-line no-underscore-dangle
+  return typeof (value as CommentedValue).__comment === 'string';
 }
 
 /** Strips the comment wrappers, for the JSON path and for reading values back. */
@@ -378,6 +378,7 @@ function createValueNode(j: typeof jscodeshift, value: any): any {
         // Force stringLiteral pour garder les guillemets
         const property = j.objectProperty(j.stringLiteral(key), createValueNode(j, val));
         if (isCommented(val)) {
+          // eslint-disable-next-line no-underscore-dangle -- see isCommented
           property.comments = [j.commentLine(` ${val.__comment}`, true, false)];
         }
         return property;
