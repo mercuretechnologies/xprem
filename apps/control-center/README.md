@@ -65,20 +65,31 @@ what unblocks it — publishing a fix to that same branch.
 ## Requirements
 
 - Expo SDK 54 or newer (`setUpdateRequestHeadersOverride`)
-- `xprem-branch` declared in `updates.requestHeaders` at build time
-
-The second one is not optional: expo-updates only accepts a runtime override for
-keys that existed when the app was built. `eoas init` writes it for you.
+- `expo-app-id`, `expo-channel-name` and `xprem-branch` declared in
+  `updates.requestHeaders` at build time
 
 ```ts
 updates: {
   requestHeaders: {
-    'expo-channel-name': process.env.RELEASE_CHANNEL,
+    'expo-channel-name': 'staging',
     'expo-app-id': '...',
-    'xprem-branch': 'default',
+    'xprem-branch': '',
   },
 }
 ```
+
+Those three are not optional, and the panel refuses to appear without them —
+switching branches replaces the whole header set, and expo-updates only accepts an
+override for keys that existed when the app was built. A build missing one of them
+would drop it from every poll from then on, which the server answers with a 400,
+which means no update can reach the device to undo it. Reinstalling is the only way
+out, so the package checks first and logs which header is missing. `eoas init`
+writes them for you.
+
+Declare `expo-channel-name` as a literal, not `process.env.SOMETHING`. The config is
+evaluated when the JS bundle is exported, so an unset variable silently removes the
+key — and an export run with the wrong value would bake in the wrong channel. Only
+the key matters here: the value sent at runtime is always the build's real channel.
 
 ## If a build gets stuck
 
