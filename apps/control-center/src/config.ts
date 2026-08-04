@@ -101,7 +101,10 @@ export function readConfig(): SurfConfig | null {
     // the origin alone sent every request to the wrong path, and the 404 that
     // came back was indistinguishable from "this channel does not allow it".
     const parsed = new URL(updates.url);
-    baseUrl = parsed.origin + parsed.pathname.replace(/\/[^/]*$/, '');
+    // Trailing slashes go first: on ".../manifest/" the segment removal would
+    // otherwise eat the empty part after the slash and leave "manifest" in the
+    // path, sending every request one level too deep.
+    baseUrl = parsed.origin + parsed.pathname.replace(/\/+$/, '').replace(/\/[^/]*$/, '');
   } catch {
     return null;
   }

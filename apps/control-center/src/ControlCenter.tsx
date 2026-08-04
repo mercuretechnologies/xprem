@@ -174,7 +174,15 @@ function ControlCenterPanel() {
     setExpanding(true);
     try {
       const result = await listBranches(config, undefined, true);
-      if (result) setPage(result);
+      if (result === null) {
+        // Surfing was switched off between opening the panel and asking for the
+        // rest. Same stand-down as every other read, or the tester is left
+        // holding switches the server will no longer honour.
+        setAllowed(false);
+        setVisible(false);
+        return;
+      }
+      setPage(result);
       // Set even when the wide answer is itself capped: this only means "already
       // asked", so a keystroke cannot start the same fetch again. Whether the
       // list is COMPLETE is a separate question, read off total below.

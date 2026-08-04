@@ -13,3 +13,10 @@ func TestEmptyPatternMatchesNothing(t *testing.T) {
 		assert.False(t, MatchPattern("", name), name)
 	}
 }
+
+// The empty name too: without the early return, the literal comparison below
+// makes the empty pattern match it, which is the one case where the
+// deny-by-default default would let something through.
+func TestEmptyPatternMatchesTheEmptyNameEither(t *testing.T) {
+	assert.False(t, MatchPattern("", ""))
+}
