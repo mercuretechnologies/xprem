@@ -36,8 +36,7 @@ export async function listBranches(
     signal,
   });
   if (response.status === 404) {
-    // Surfing off, or the channel does not exist. The server answers the same
-    // either way on purpose, so nothing here can enumerate channels.
+    Updates.setUpdateRequestHeadersOverride(null);
     return null;
   }
   if (!response.ok) {

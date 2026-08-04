@@ -25,6 +25,8 @@ class ErrorBoundary extends Component<Props, State> {
     Observe.logEvent('xprem_js_crash', {
       attributes: {
         message: error.message,
+        stack: error.stack || "",
+        name: error.name
       },
     });
     Observe.dispatchEvents();
