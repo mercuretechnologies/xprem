@@ -80,12 +80,27 @@ func parseSurfBlockTokens(raw string) []string {
 		if token = strings.TrimSpace(token); token == "" {
 			continue
 		}
+		if !isPrintableASCII(token) {
+			continue
+		}
 		tokens = append(tokens, token)
 		if len(tokens) == maxSurfBlockTokens {
 			break
 		}
 	}
 	return tokens
+}
+
+// isPrintableASCII reports whether every byte is in 0x20-0x7E, the only bytes
+// an RFC 8941 string can carry; a retained token outside that range would be
+// echoed back and break the whole dictionary on the device.
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // SetSurfBlocked contributes the verdict to the dictionary the response carries,

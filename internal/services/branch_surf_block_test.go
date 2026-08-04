@@ -265,6 +265,15 @@ func TestParseSurfBlockTokensIsBounded(t *testing.T) {
 			[]string{"pr-1@100", "pr-2@200"},
 			parseSurfBlockTokens(" pr-1@100 , pr-2@200 "))
 	})
+
+	// Retained tokens are echoed back inside an RFC 8941 string, which can only
+	// carry printable ASCII; one stray byte would cost the device the whole
+	// dictionary. This also covers the input cap cutting a multi-byte rune.
+	t.Run("drops tokens an RFC 8941 string cannot carry", func(t *testing.T) {
+		assert.Equal(t,
+			[]string{"pr-1@100"},
+			parseSurfBlockTokens("pr-1@100,pr\x002@2,pr-é@3"))
+	})
 }
 
 // Whether a channel allows surfing must never ride the manifest again. A manifest

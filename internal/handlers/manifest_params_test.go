@@ -103,7 +103,10 @@ func TestManifestParamsFallsBackToTheQueryString(t *testing.T) {
 }
 
 func TestManifestParamsRejects(t *testing.T) {
+	// The legacy fallback would resolve an app id without the header.
+	t.Setenv("SKIP_LEGACY_APP_ID_FALLBACK", "true")
 	cases := map[string]func(*http.Request){
+		"no app id":           func(r *http.Request) { r.Header.Del("expo-app-id") },
 		"no channel":          func(r *http.Request) { r.Header.Del("expo-channel-name") },
 		"no protocol version": func(r *http.Request) { r.Header.Del("expo-protocol-version") },
 		"bad protocol version": func(r *http.Request) {

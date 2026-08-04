@@ -3,10 +3,13 @@ package branch
 import "strings"
 
 // MatchPattern reports whether name matches pattern, "*" standing for any run
-// of characters, empty included. Branch names cannot contain "*", so a pattern
-// without one is never ambiguous with a literal name. Callers normalize with
-// CollapseWildcards first.
+// of characters, empty included. The empty pattern matches no name. Branch
+// names cannot contain "*", so a pattern without one is never ambiguous with a
+// literal name. Callers normalize with CollapseWildcards first.
 func MatchPattern(pattern, name string) bool {
+	if pattern == "" {
+		return false
+	}
 	if !strings.Contains(pattern, "*") {
 		return pattern == name
 	}
