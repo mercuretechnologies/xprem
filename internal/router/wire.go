@@ -44,6 +44,7 @@ type AppContainer struct {
 	BranchHandler               *dashhandlers.BranchHandler
 	BranchListHandler           *handlers.BranchListHandler
 	ChannelHandler              *dashhandlers.ChannelHandler
+	CredentialsHandler          *dashhandlers.CredentialsHandler
 	ExpoProtocolHandler         *handlers.ExpoProtocolHandler
 	LicenseHandler              *licensing.LicenseHandler
 	RBACHandler                 *rbac.RBACHandler
@@ -92,6 +93,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
+	// nil in stateless mode: signing credentials only exist on the control plane.
+	var credentialsRepo services.CredentialsRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
 	var apiKeyAccessRepo apikeyrestrictions.ApiKeyAccessRepository
@@ -155,6 +158,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		pgUpdateStore := store.NewPostgresUpdateStore(dbEngine)
 		updateRepo = pgUpdateStore
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
+		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
 
 		if config.IsDeviceTelemetryDisabled() {
 			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
@@ -243,6 +247,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
+	credentialsService := services.NewCredentialsService(credentialsRepo)
+	credentialsService.SetOnAuditEvent(auditService.Record)
 
 	// Shared across handlers; with Redis configured, also across replicas.
 	rateLimiter := ratelimit.New(cache.GetCache())
@@ -299,6 +305,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
 		BranchListHandler:           handlers.NewBranchListHandler(channelService),
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
+		CredentialsHandler:          dashhandlers.NewCredentialsHandler(credentialsService),
 		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
 		LicenseHandler:              licensing.NewLicenseHandler(licenseService),
 		AuditHandler:                audit.NewAuditHandler(auditService),

@@ -465,6 +465,14 @@ func (q *Queries) CountUpdateFailures(ctx context.Context, arg CountUpdateFailur
 	return count, err
 }
 
+const deleteAndroidCredentialsByAppID = `-- name: DeleteAndroidCredentialsByAppID :execresult
+DELETE FROM android_credentials WHERE app_id = $1
+`
+
+func (q *Queries) DeleteAndroidCredentialsByAppID(ctx context.Context, appID pgtype.UUID) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteAndroidCredentialsByAppID, appID)
+}
+
 const deleteApiKeyBranchRules = `-- name: DeleteApiKeyBranchRules :exec
 DELETE FROM api_key_branch_rules WHERE api_key_id = $1
 `
@@ -815,6 +823,32 @@ func (q *Queries) GetActiveRolloutUpdates(ctx context.Context, arg GetActiveRoll
 		return nil, err
 	}
 	return items, nil
+}
+
+const getAndroidCredentialsByAppID = `-- name: GetAndroidCredentialsByAppID :one
+SELECT id, app_id, android_package, key_alias,
+       sealed_keystore, sealed_keystore_password, sealed_key_password,
+       sealed_google_service_account_key, created_at, updated_at
+FROM android_credentials
+WHERE app_id = $1
+`
+
+func (q *Queries) GetAndroidCredentialsByAppID(ctx context.Context, appID pgtype.UUID) (AndroidCredential, error) {
+	row := q.db.QueryRow(ctx, getAndroidCredentialsByAppID, appID)
+	var i AndroidCredential
+	err := row.Scan(
+		&i.ID,
+		&i.AppID,
+		&i.AndroidPackage,
+		&i.KeyAlias,
+		&i.SealedKeystore,
+		&i.SealedKeystorePassword,
+		&i.SealedKeyPassword,
+		&i.SealedGoogleServiceAccountKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getApiKeyAccess = `-- name: GetApiKeyAccess :many
@@ -5639,6 +5673,50 @@ type UpdateUserPasswordByIDParams struct {
 // the only thing that ends those sessions.
 func (q *Queries) UpdateUserPasswordByID(ctx context.Context, arg UpdateUserPasswordByIDParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, updateUserPasswordByID, arg.ID, arg.PasswordHash)
+}
+
+const upsertAndroidCredentials = `-- name: UpsertAndroidCredentials :one
+INSERT INTO android_credentials (
+    id, app_id, android_package, key_alias,
+    sealed_keystore, sealed_keystore_password, sealed_key_password,
+    sealed_google_service_account_key
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (app_id) DO UPDATE SET
+    android_package = EXCLUDED.android_package,
+    key_alias = EXCLUDED.key_alias,
+    sealed_keystore = EXCLUDED.sealed_keystore,
+    sealed_keystore_password = EXCLUDED.sealed_keystore_password,
+    sealed_key_password = EXCLUDED.sealed_key_password,
+    sealed_google_service_account_key = EXCLUDED.sealed_google_service_account_key,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id
+`
+
+type UpsertAndroidCredentialsParams struct {
+	ID                            pgtype.UUID `json:"id"`
+	AppID                         pgtype.UUID `json:"app_id"`
+	AndroidPackage                string      `json:"android_package"`
+	KeyAlias                      string      `json:"key_alias"`
+	SealedKeystore                string      `json:"sealed_keystore"`
+	SealedKeystorePassword        string      `json:"sealed_keystore_password"`
+	SealedKeyPassword             string      `json:"sealed_key_password"`
+	SealedGoogleServiceAccountKey *string     `json:"sealed_google_service_account_key"`
+}
+
+func (q *Queries) UpsertAndroidCredentials(ctx context.Context, arg UpsertAndroidCredentialsParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertAndroidCredentials,
+		arg.ID,
+		arg.AppID,
+		arg.AndroidPackage,
+		arg.KeyAlias,
+		arg.SealedKeystore,
+		arg.SealedKeystorePassword,
+		arg.SealedKeyPassword,
+		arg.SealedGoogleServiceAccountKey,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertDeviceUpdateFailure = `-- name: UpsertDeviceUpdateFailure :exec
