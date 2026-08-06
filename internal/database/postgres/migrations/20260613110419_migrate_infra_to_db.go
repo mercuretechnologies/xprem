@@ -237,10 +237,23 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 						insertedRuntimeVersions[rv.RuntimeVersion] = true
 					}
 
-					updatesForRV, err := updateStore.GetUpdatesByRunTimeVersionAndBranchName(ctx, app.Id, rv.RuntimeVersion, branch.BranchName)
-					if err != nil {
-						log.Printf("Error fetching updates for runtime version '%s' and branch '%s' of app '%s': %v", rv.RuntimeVersion, branch.BranchName, app.Id, err)
-						return err
+					updatesForRV := make([]types.UpdateItem, 0)
+					var cursor *int64
+					for {
+						page, err := updateStore.GetUpdatesByRunTimeVersionAndBranchName(ctx, app.Id, rv.RuntimeVersion, branch.BranchName, cursor, 100)
+						if err != nil {
+							log.Printf("Error fetching updates for runtime version '%s' and branch '%s' of app '%s': %v", rv.RuntimeVersion, branch.BranchName, app.Id, err)
+							return err
+						}
+						updatesForRV = append(updatesForRV, page.Items...)
+						if page.NextCursor == nil {
+							break
+						}
+						nextCursor, err := strconv.ParseInt(*page.NextCursor, 10, 64)
+						if err != nil {
+							return fmt.Errorf("malformed update cursor '%s': %w", *page.NextCursor, err)
+						}
+						cursor = &nextCursor
 					}
 
 					for _, update := range updatesForRV {

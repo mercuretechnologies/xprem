@@ -10,9 +10,11 @@ package store_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
+	"xprem/internal/bucket"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/pgdb"
@@ -111,6 +113,73 @@ func (f *rolloutFixture) createRolloutUpdate(t *testing.T, branch string, update
 	created, err := f.updates.CreateUpdateWithRollout(context.Background(), f.appId, updateId, branch, rolloutTestRuntime, platform, "abc123", "", percentage, nil)
 	require.NoError(t, err)
 	return *created
+}
+
+func TestUpdatesCursorPaginationPostgres(t *testing.T) {
+	fixture := newRolloutFixture(t)
+	ctx := context.Background()
+	for _, updateID := range []int64{100, 200, 300, 400, 500} {
+		fixture.createUpdate(t, rolloutTestDefaultBranch, updateID, "android", true)
+	}
+	fixture.createUpdate(t, rolloutTestDefaultBranch, 600, "android", false)
+
+	first, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, nil, 2)
+	require.NoError(t, err)
+	require.Len(t, first.Items, 2)
+	assert.Equal(t, []string{"500", "400"}, []string{first.Items[0].UpdateId, first.Items[1].UpdateId})
+	require.NotNil(t, first.NextCursor)
+	assert.Equal(t, "400", *first.NextCursor)
+
+	cursor, err := strconv.ParseInt(*first.NextCursor, 10, 64)
+	require.NoError(t, err)
+	second, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, &cursor, 2)
+	require.NoError(t, err)
+	require.Len(t, second.Items, 2)
+	assert.Equal(t, []string{"300", "200"}, []string{second.Items[0].UpdateId, second.Items[1].UpdateId})
+	require.NotNil(t, second.NextCursor)
+	assert.Equal(t, "200", *second.NextCursor)
+
+	cursor, err = strconv.ParseInt(*second.NextCursor, 10, 64)
+	require.NoError(t, err)
+	last, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, &cursor, 2)
+	require.NoError(t, err)
+	require.Len(t, last.Items, 1)
+	assert.Equal(t, "100", last.Items[0].UpdateId)
+	assert.Nil(t, last.NextCursor)
+}
+
+func TestUpdatesCursorPaginationPostgresKeepsCursorWhenRowIsSkipped(t *testing.T) {
+	fixture := newRolloutFixture(t)
+	ctx := context.Background()
+	for _, updateID := range []int64{300, 400, 500} {
+		fixture.createUpdate(t, rolloutTestDefaultBranch, updateID, "android", true)
+	}
+
+	storageRoot := t.TempDir()
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", storageRoot)
+	t.Setenv("BUCKET_KEY_PREFIX", "")
+	t.Setenv("S3_KEY_PREFIX", "")
+	bucket.ResetBucketInstance()
+	t.Cleanup(bucket.ResetBucketInstance)
+	malformedMetadataDir := filepath.Join(storageRoot, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime, "400")
+	require.NoError(t, os.MkdirAll(malformedMetadataDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(malformedMetadataDir, "metadata.json"), []byte("{"), 0o644))
+
+	first, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, nil, 2)
+	require.NoError(t, err)
+	require.Len(t, first.Items, 1)
+	assert.Equal(t, "500", first.Items[0].UpdateId)
+	require.NotNil(t, first.NextCursor)
+	assert.Equal(t, "400", *first.NextCursor)
+
+	cursor, err := strconv.ParseInt(*first.NextCursor, 10, 64)
+	require.NoError(t, err)
+	second, err := fixture.updates.GetUpdatesByRunTimeVersionAndBranchName(ctx, fixture.appId, rolloutTestRuntime, rolloutTestDefaultBranch, &cursor, 2)
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	assert.Equal(t, "300", second.Items[0].UpdateId)
+	assert.Nil(t, second.NextCursor)
 }
 
 func TestChannelRolloutInsertGuardsPostgres(t *testing.T) {

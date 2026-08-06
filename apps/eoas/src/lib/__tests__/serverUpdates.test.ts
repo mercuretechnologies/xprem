@@ -4,6 +4,7 @@ import { fetchWithRetries } from '../fetch';
 import {
   ServerUpdateItem,
   describePublishGroup,
+  fetchPublishGroups,
   fetchRuntimeVersions,
   fetchUpdates,
   groupPublishedUpdates,
@@ -111,25 +112,67 @@ describe('describePublishGroup', () => {
 
 describe('fetchUpdates and fetchRuntimeVersions', () => {
   it('calls the listing endpoints with CLI auth and returns the parsed body', async () => {
-    const payload = [update({ updateId: '10', publishGroup: 'group-a' })];
+    const payload = {
+      items: [update({ updateId: '10', publishGroup: 'group-a' })],
+      nextCursor: '10',
+    };
     vi.mocked(fetchWithRetries).mockResolvedValueOnce({
       ok: true,
       json: async () => payload,
     } as Response);
 
-    const updates = await fetchUpdates({
+    const page = await fetchUpdates({
       baseUrl: 'https://ota.example.com',
       appId: 'app-1',
       branch: 'main',
       runtimeVersion: '1.0.0',
       credentials,
     });
-    expect(updates).toEqual(payload);
+    expect(page).toEqual(payload);
     const [url, options] = vi.mocked(fetchWithRetries).mock.calls[0];
     expect(url).toBe(
-      'https://ota.example.com/api/apps/app-1/branch/main/runtimeVersion/1.0.0/updates'
+      'https://ota.example.com/api/apps/app-1/branch/main/runtimeVersion/1.0.0/updates?limit=20'
     );
     expect((options?.headers as Record<string, string>)['use-cli-auth']).toBe('true');
+  });
+
+  it('fetches publish groups from their group-level cursor endpoint', async () => {
+    const payload = {
+      items: [],
+      nextCursor: null,
+    };
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    } as Response);
+
+    await expect(
+      fetchPublishGroups({
+        baseUrl: 'https://ota.example.com',
+        appId: 'app-1',
+        branch: 'main',
+        runtimeVersion: '1.0.0',
+        credentials,
+        cursor: '200',
+      })
+    ).resolves.toEqual(payload);
+    expect(vi.mocked(fetchWithRetries).mock.calls.at(-1)?.[0]).toBe(
+      'https://ota.example.com/api/apps/app-1/branch/main/runtimeVersion/1.0.0/publish-groups?limit=20&cursor=200'
+    );
+  });
+
+  it('treats a missing publish-group endpoint as unsupported', async () => {
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce({ ok: false, status: 404 } as Response);
+    await expect(
+      fetchPublishGroups({
+        baseUrl: 'https://ota.example.com',
+        appId: 'app-1',
+        branch: 'main',
+        runtimeVersion: '1.0.0',
+        credentials,
+      })
+    ).resolves.toBeNull();
   });
 
   it('throws with the server text on a failed listing', async () => {
