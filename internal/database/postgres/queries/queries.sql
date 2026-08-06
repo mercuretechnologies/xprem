@@ -2318,3 +2318,29 @@ JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
 WHERE b.app_id = $1 AND rv.version = $2 AND u.platform = @platform::text
 GROUP BY b.id, b.name
 ORDER BY MAX(u.created_at) DESC, b.name ASC;
+
+-- name: UpsertAndroidCredentials :one
+INSERT INTO android_credentials (
+    id, app_id, android_package, key_alias,
+    sealed_keystore, sealed_keystore_password, sealed_key_password,
+    sealed_google_service_account_key
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (app_id) DO UPDATE SET
+    android_package = EXCLUDED.android_package,
+    key_alias = EXCLUDED.key_alias,
+    sealed_keystore = EXCLUDED.sealed_keystore,
+    sealed_keystore_password = EXCLUDED.sealed_keystore_password,
+    sealed_key_password = EXCLUDED.sealed_key_password,
+    sealed_google_service_account_key = EXCLUDED.sealed_google_service_account_key,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id;
+
+-- name: GetAndroidCredentialsByAppID :one
+SELECT id, app_id, android_package, key_alias,
+       sealed_keystore, sealed_keystore_password, sealed_key_password,
+       sealed_google_service_account_key, created_at, updated_at
+FROM android_credentials
+WHERE app_id = $1;
+
+-- name: DeleteAndroidCredentialsByAppID :execresult
+DELETE FROM android_credentials WHERE app_id = $1;

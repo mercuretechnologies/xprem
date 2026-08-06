@@ -82,6 +82,13 @@ func registerAppRoutes(
 	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/republish", container.UpdateHandler.RepublishUpdateHandler,
 		NeedsPermission(rbac.PermUpdatePublish, rbac.FallbackAdminOnly))
 
+	app.route(http.MethodGet, "/credentials/android", container.CredentialsHandler.GetAndroidCredentialsHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/credentials/android", container.CredentialsHandler.PutAndroidCredentialsHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+
 	app.route(http.MethodGet, "/apiKeys", container.ApiKeyHandler.GetApiKeysHandler,
 		AnyViewer())
 	app.route(http.MethodPost, "/apiKeys", container.ApiKeyHandler.CreateApiKeyHandler,

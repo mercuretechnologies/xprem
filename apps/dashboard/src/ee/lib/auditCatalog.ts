@@ -72,6 +72,8 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'api_key.restrictions_updated',
       'branch_protection.updated',
       'certificate.downloaded',
+      'android_credentials.saved',
+      'android_credentials.deleted',
     ],
   },
   {

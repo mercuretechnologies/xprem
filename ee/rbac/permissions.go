@@ -58,6 +58,10 @@ const (
 	// the embedded bundle. It is distinct from PermUpdateRolloutManage, which
 	// only reverts a rollout already in progress.
 	PermUpdatePublish Permission = "update:publish"
+	// PermCredentialsManage uploads or deletes the app's store signing
+	// credentials (Android keystore, submit keys). Reading the non-secret
+	// metadata is open to any viewer.
+	PermCredentialsManage Permission = "credentials:manage"
 )
 
 // AllPermissions is the catalog, in the order the dashboard displays it.
@@ -75,6 +79,7 @@ var AllPermissions = []Permission{
 	PermChannelRolloutManage,
 	PermUpdateRolloutManage,
 	PermUpdatePublish,
+	PermCredentialsManage,
 	PermApiKeysManage,
 	PermIdentityManage,
 	PermIdentityRead,

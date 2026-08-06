@@ -10,6 +10,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AndroidCredential struct {
+	ID                            pgtype.UUID        `json:"id"`
+	AppID                         pgtype.UUID        `json:"app_id"`
+	AndroidPackage                string             `json:"android_package"`
+	KeyAlias                      string             `json:"key_alias"`
+	SealedKeystore                string             `json:"sealed_keystore"`
+	SealedKeystorePassword        string             `json:"sealed_keystore_password"`
+	SealedKeyPassword             string             `json:"sealed_key_password"`
+	SealedGoogleServiceAccountKey *string            `json:"sealed_google_service_account_key"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ApiKey struct {
 	ID         int64              `json:"id"`
 	AppID      pgtype.UUID        `json:"app_id"`

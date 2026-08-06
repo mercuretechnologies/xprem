@@ -95,6 +95,8 @@ const (
 	ActionAPIKeyRestrictionsUpdated Action = "api_key.restrictions_updated"
 	ActionBranchProtectionUpdated   Action = "branch_protection.updated"
 	ActionCertificateDownloaded     Action = "certificate.downloaded"
+	ActionAndroidCredentialsSaved   Action = "android_credentials.saved"
+	ActionAndroidCredentialsDeleted Action = "android_credentials.deleted"
 
 	// Access control. permission.denied is the single event for authorization
 	// refusals (the RBAC middleware emits it, with OutcomeDenied); domain
