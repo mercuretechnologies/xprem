@@ -9,6 +9,7 @@ import (
 	"xprem/internal/store"
 	"xprem/internal/validation"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
@@ -22,19 +23,48 @@ func NewCredentialsHandler(credentialsService *services.CredentialsService) *Cre
 	}
 }
 
+// credentialsVars extracts and validates the route vars shared by the three
+// handlers; a "" identifier id means the response was already written.
+func credentialsVars(w http.ResponseWriter, r *http.Request) (string, string) {
+	vars := mux.Vars(r)
+	appId := vars["APP_ID"]
+	identifierId := vars["IDENTIFIER_ID"]
+	if _, err := uuid.Parse(identifierId); err != nil {
+		handlers.RenderError(w, http.StatusBadRequest, "invalid identifier id")
+		return "", ""
+	}
+	return appId, identifierId
+}
+
+func renderCredentialsError(w http.ResponseWriter, err error, fallback string) {
+	var valErr *validation.Error
+	if errors.As(err, &valErr) {
+		handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
+		return
+	}
+	if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
+		return
+	}
+	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		handlers.RenderError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	handlers.RenderError(w, http.StatusInternalServerError, fallback)
+}
+
 func (h *CredentialsHandler) GetAndroidCredentialsHandler(w http.ResponseWriter, r *http.Request) {
-	appId := mux.Vars(r)["APP_ID"]
-	metadata, err := h.credentialsService.GetAndroidCredentialsMetadata(r.Context(), appId)
+	appId, identifierId := credentialsVars(w, r)
+	if identifierId == "" {
+		return
+	}
+	metadata, err := h.credentialsService.GetAndroidCredentialsMetadata(r.Context(), appId, identifierId)
 	if err != nil {
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
-			handlers.RenderError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while fetching android credentials.")
+		renderCredentialsError(w, err, "An internal error occurred while fetching android credentials.")
 		return
 	}
 	if metadata == nil {
-		handlers.RenderError(w, http.StatusNotFound, "no android credentials configured for this app")
+		handlers.RenderError(w, http.StatusNotFound, "no android credentials configured for this identifier")
 		return
 	}
 	marshaledResponse, _ := json.Marshal(metadata)
@@ -44,9 +74,11 @@ func (h *CredentialsHandler) GetAndroidCredentialsHandler(w http.ResponseWriter,
 }
 
 func (h *CredentialsHandler) PutAndroidCredentialsHandler(w http.ResponseWriter, r *http.Request) {
-	appId := mux.Vars(r)["APP_ID"]
+	appId, identifierId := credentialsVars(w, r)
+	if identifierId == "" {
+		return
+	}
 	var requestBody struct {
-		AndroidPackage          string `json:"androidPackage"`
 		KeyAlias                string `json:"keyAlias"`
 		Keystore                string `json:"keystore"`
 		KeystorePassword        string `json:"keystorePassword"`
@@ -57,8 +89,7 @@ func (h *CredentialsHandler) PutAndroidCredentialsHandler(w http.ResponseWriter,
 		handlers.RenderError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	err := h.credentialsService.SaveAndroidCredentials(r.Context(), appId, services.AndroidCredentialsInput{
-		AndroidPackage:              requestBody.AndroidPackage,
+	err := h.credentialsService.SaveAndroidCredentials(r.Context(), appId, identifierId, services.AndroidCredentialsInput{
 		KeyAlias:                    requestBody.KeyAlias,
 		KeystoreBase64:              requestBody.Keystore,
 		KeystorePassword:            requestBody.KeystorePassword,
@@ -66,34 +97,20 @@ func (h *CredentialsHandler) PutAndroidCredentialsHandler(w http.ResponseWriter,
 		GoogleServiceAccountKeyJSON: requestBody.GoogleServiceAccountKey,
 	})
 	if err != nil {
-		var valErr *validation.Error
-		if errors.As(err, &valErr) {
-			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
-			return
-		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
-			handlers.RenderError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while saving android credentials.")
+		renderCredentialsError(w, err, "An internal error occurred while saving android credentials.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *CredentialsHandler) DeleteAndroidCredentialsHandler(w http.ResponseWriter, r *http.Request) {
-	appId := mux.Vars(r)["APP_ID"]
-	err := h.credentialsService.DeleteAndroidCredentials(r.Context(), appId)
+	appId, identifierId := credentialsVars(w, r)
+	if identifierId == "" {
+		return
+	}
+	err := h.credentialsService.DeleteAndroidCredentials(r.Context(), appId, identifierId)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
-			return
-		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
-			handlers.RenderError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while deleting android credentials.")
+		renderCredentialsError(w, err, "An internal error occurred while deleting android credentials.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

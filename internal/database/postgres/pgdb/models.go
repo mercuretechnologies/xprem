@@ -12,8 +12,7 @@ import (
 
 type AndroidCredential struct {
 	ID                            pgtype.UUID        `json:"id"`
-	AppID                         pgtype.UUID        `json:"app_id"`
-	AndroidPackage                string             `json:"android_package"`
+	AppIdentifierID               pgtype.UUID        `json:"app_identifier_id"`
 	KeyAlias                      string             `json:"key_alias"`
 	SealedKeystore                string             `json:"sealed_keystore"`
 	SealedKeystorePassword        string             `json:"sealed_keystore_password"`
@@ -55,6 +54,14 @@ type App struct {
 	AwsSecretIDPrivate *string            `json:"aws_secret_id_private"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AppIdentifier struct {
+	ID         pgtype.UUID        `json:"id"`
+	AppID      pgtype.UUID        `json:"app_id"`
+	Platform   string             `json:"platform"`
+	Identifier string             `json:"identifier"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type AuditExportState struct {
