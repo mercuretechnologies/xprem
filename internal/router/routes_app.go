@@ -88,6 +88,8 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}", container.AppIdentifiersHandler.DeleteAppIdentifierHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/identifiers/{IDENTIFIER_ID}/build-number", container.AppIdentifiersHandler.SetBuildNumberHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 	app.route(http.MethodGet, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.GetAndroidCredentialsHandler,
 		AnyViewer())
 	app.route(http.MethodPut, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.PutAndroidCredentialsHandler,

@@ -15,7 +15,8 @@ import (
 )
 
 type fakeAppIdentifierRepo struct {
-	inserted []string
+	inserted    []string
+	buildNumber int64
 }
 
 func (f *fakeAppIdentifierRepo) InsertAppIdentifier(_ context.Context, _ string, platform string, identifier string) (string, error) {
@@ -32,6 +33,11 @@ func (f *fakeAppIdentifierRepo) GetAppIdentifierByID(_ context.Context, _ string
 }
 
 func (f *fakeAppIdentifierRepo) DeleteAppIdentifier(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (f *fakeAppIdentifierRepo) SetBuildNumber(_ context.Context, _ string, _ string, buildNumber int64) error {
+	f.buildNumber = buildNumber
 	return nil
 }
 
@@ -73,6 +79,28 @@ func TestAppIdentifierAuditEvents(t *testing.T) {
 	assert.Equal(t, PlatformAndroid, recorded[0].Metadata["platform"])
 	assert.Equal(t, auditlog.ActionAppIdentifierDeleted, recorded[1].Action)
 	assert.Equal(t, "com.example.app", recorded[1].TargetDisplay)
+}
+
+func TestSetBuildNumberValidatesBoundsAndAudits(t *testing.T) {
+	repo := &fakeAppIdentifierRepo{}
+	service := NewAppIdentifierService(repo)
+	var recorded []auditlog.Event
+	service.SetOnAuditEvent(func(_ context.Context, event auditlog.Event) {
+		recorded = append(recorded, event)
+	})
+	ctx := context.Background()
+
+	var valErr *validation.Error
+	assert.ErrorAs(t, service.SetBuildNumber(ctx, "app-1", "id-1", -1), &valErr)
+	assert.ErrorAs(t, service.SetBuildNumber(ctx, "app-1", "id-1", 2_100_000_001), &valErr)
+	assert.Empty(t, recorded)
+
+	require.NoError(t, service.SetBuildNumber(ctx, "app-1", "id-1", 87))
+	assert.Equal(t, int64(87), repo.buildNumber)
+	require.Len(t, recorded, 1)
+	assert.Equal(t, auditlog.ActionAppIdentifierBuildNumberSet, recorded[0].Action)
+	assert.Equal(t, "com.example.app", recorded[0].TargetDisplay)
+	assert.Equal(t, int64(87), recorded[0].Metadata["to"])
 }
 
 func TestAppIdentifiersUnsupportedInStatelessMode(t *testing.T) {

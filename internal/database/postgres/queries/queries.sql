@@ -2350,7 +2350,7 @@ VALUES ($1, $2, $3, $4)
 RETURNING id;
 
 -- name: GetAppIdentifiersByAppID :many
-SELECT ai.id, ai.platform, ai.identifier, ai.created_at,
+SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
        (ac.id IS NOT NULL)::bool AS has_android_credentials
 FROM app_identifiers ai
 LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
@@ -2358,8 +2358,13 @@ WHERE ai.app_id = $1
 ORDER BY ai.platform ASC, ai.identifier ASC;
 
 -- name: GetAppIdentifierByID :one
-SELECT id, platform, identifier
+SELECT id, platform, identifier, build_number
 FROM app_identifiers
+WHERE app_id = $1 AND id = $2;
+
+-- name: SetAppIdentifierBuildNumber :execresult
+UPDATE app_identifiers
+SET build_number = $3
 WHERE app_id = $1 AND id = $2;
 
 -- name: DeleteAppIdentifierByID :execresult

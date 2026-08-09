@@ -74,6 +74,29 @@ func TestAppIdentifierDeleteIsGuardedByCredentials(t *testing.T) {
 	require.True(t, errors.As(err, &notFoundErr))
 }
 
+func TestAppIdentifierBuildNumberDefaultsAndSets(t *testing.T) {
+	_, identifierStore, pool := setupCredentialsStores(t)
+	ctx := context.Background()
+	appId := insertBareApp(t, pool)
+	identifierId := insertIdentifier(t, identifierStore, appId, "android", "com.example.app")
+
+	ref, err := identifierStore.GetAppIdentifierByID(ctx, appId, identifierId)
+	require.NoError(t, err)
+	require.NotNil(t, ref)
+	assert.Equal(t, int64(0), ref.BuildNumber)
+
+	require.NoError(t, identifierStore.SetBuildNumber(ctx, appId, identifierId, 87))
+	ref, err = identifierStore.GetAppIdentifierByID(ctx, appId, identifierId)
+	require.NoError(t, err)
+	assert.Equal(t, int64(87), ref.BuildNumber)
+
+	// Scoped: another app cannot touch the counter.
+	otherAppId := insertBareApp(t, pool)
+	err = identifierStore.SetBuildNumber(ctx, otherAppId, identifierId, 999)
+	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	require.True(t, errors.As(err, &notFoundErr))
+}
+
 func TestAppIdentifierScopedToItsApp(t *testing.T) {
 	_, identifierStore, pool := setupCredentialsStores(t)
 	ctx := context.Background()

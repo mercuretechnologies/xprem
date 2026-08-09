@@ -18,15 +18,17 @@ type AppIdentifierRow struct {
 	Id                    string
 	Platform              string
 	Identifier            string
+	BuildNumber           int64
 	HasAndroidCredentials bool
 	CreatedAt             time.Time
 }
 
 // AppIdentifierRef is the resolution of an identifier id within an app.
 type AppIdentifierRef struct {
-	Id         string
-	Platform   string
-	Identifier string
+	Id          string
+	Platform    string
+	Identifier  string
+	BuildNumber int64
 }
 
 type PostgresAppIdentifierStore struct {
@@ -67,6 +69,7 @@ func (s *PostgresAppIdentifierStore) GetAppIdentifiers(ctx context.Context, appI
 			Id:                    row.ID.String(),
 			Platform:              row.Platform,
 			Identifier:            row.Identifier,
+			BuildNumber:           row.BuildNumber,
 			HasAndroidCredentials: row.HasAndroidCredentials,
 			CreatedAt:             row.CreatedAt.Time,
 		}
@@ -86,10 +89,26 @@ func (s *PostgresAppIdentifierStore) GetAppIdentifierByID(ctx context.Context, a
 		return nil, fmt.Errorf("failed to retrieve app identifier from database: %w", err)
 	}
 	return &AppIdentifierRef{
-		Id:         row.ID.String(),
-		Platform:   row.Platform,
-		Identifier: row.Identifier,
+		Id:          row.ID.String(),
+		Platform:    row.Platform,
+		Identifier:  row.Identifier,
+		BuildNumber: row.BuildNumber,
 	}, nil
+}
+
+func (s *PostgresAppIdentifierStore) SetBuildNumber(ctx context.Context, appId string, identifierId string, buildNumber int64) error {
+	commandTag, err := s.engine.Queries.SetAppIdentifierBuildNumber(ctx, pgdb.SetAppIdentifierBuildNumberParams{
+		AppID:       ToPgUUID(appId),
+		ID:          ToPgUUID(identifierId),
+		BuildNumber: buildNumber,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set build number in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
+	}
+	return nil
 }
 
 func (s *PostgresAppIdentifierStore) DeleteAppIdentifier(ctx context.Context, appId string, identifierId string) error {

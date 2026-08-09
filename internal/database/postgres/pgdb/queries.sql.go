@@ -1043,7 +1043,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id pgtype.UUID) (App, error) {
 }
 
 const getAppIdentifierByID = `-- name: GetAppIdentifierByID :one
-SELECT id, platform, identifier
+SELECT id, platform, identifier, build_number
 FROM app_identifiers
 WHERE app_id = $1 AND id = $2
 `
@@ -1054,20 +1054,26 @@ type GetAppIdentifierByIDParams struct {
 }
 
 type GetAppIdentifierByIDRow struct {
-	ID         pgtype.UUID `json:"id"`
-	Platform   string      `json:"platform"`
-	Identifier string      `json:"identifier"`
+	ID          pgtype.UUID `json:"id"`
+	Platform    string      `json:"platform"`
+	Identifier  string      `json:"identifier"`
+	BuildNumber int64       `json:"build_number"`
 }
 
 func (q *Queries) GetAppIdentifierByID(ctx context.Context, arg GetAppIdentifierByIDParams) (GetAppIdentifierByIDRow, error) {
 	row := q.db.QueryRow(ctx, getAppIdentifierByID, arg.AppID, arg.ID)
 	var i GetAppIdentifierByIDRow
-	err := row.Scan(&i.ID, &i.Platform, &i.Identifier)
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.Identifier,
+		&i.BuildNumber,
+	)
 	return i, err
 }
 
 const getAppIdentifiersByAppID = `-- name: GetAppIdentifiersByAppID :many
-SELECT ai.id, ai.platform, ai.identifier, ai.created_at,
+SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
        (ac.id IS NOT NULL)::bool AS has_android_credentials
 FROM app_identifiers ai
 LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
@@ -1079,6 +1085,7 @@ type GetAppIdentifiersByAppIDRow struct {
 	ID                    pgtype.UUID        `json:"id"`
 	Platform              string             `json:"platform"`
 	Identifier            string             `json:"identifier"`
+	BuildNumber           int64              `json:"build_number"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	HasAndroidCredentials bool               `json:"has_android_credentials"`
 }
@@ -1096,6 +1103,7 @@ func (q *Queries) GetAppIdentifiersByAppID(ctx context.Context, appID pgtype.UUI
 			&i.ID,
 			&i.Platform,
 			&i.Identifier,
+			&i.BuildNumber,
 			&i.CreatedAt,
 			&i.HasAndroidCredentials,
 		); err != nil {
@@ -5154,6 +5162,22 @@ func (q *Queries) SearchIdentityValues(ctx context.Context, arg SearchIdentityVa
 		return nil, err
 	}
 	return items, nil
+}
+
+const setAppIdentifierBuildNumber = `-- name: SetAppIdentifierBuildNumber :execresult
+UPDATE app_identifiers
+SET build_number = $3
+WHERE app_id = $1 AND id = $2
+`
+
+type SetAppIdentifierBuildNumberParams struct {
+	AppID       pgtype.UUID `json:"app_id"`
+	ID          pgtype.UUID `json:"id"`
+	BuildNumber int64       `json:"build_number"`
+}
+
+func (q *Queries) SetAppIdentifierBuildNumber(ctx context.Context, arg SetAppIdentifierBuildNumberParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setAppIdentifierBuildNumber, arg.AppID, arg.ID, arg.BuildNumber)
 }
 
 const setBranchProtected = `-- name: SetBranchProtected :execrows

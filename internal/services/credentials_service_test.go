@@ -54,6 +54,10 @@ func (f *fakeIdentifierRepo) DeleteAppIdentifier(_ context.Context, _ string, _ 
 	panic("not used in credentials tests")
 }
 
+func (f *fakeIdentifierRepo) SetBuildNumber(_ context.Context, _ string, _ string, _ int64) error {
+	panic("not used in credentials tests")
+}
+
 type fakeCredentialsRepo struct {
 	byIdentifierId map[string]store.SealedAndroidCredentials
 }

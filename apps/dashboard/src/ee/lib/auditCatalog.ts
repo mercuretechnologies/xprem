@@ -74,6 +74,7 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'certificate.downloaded',
       'app_identifier.created',
       'app_identifier.deleted',
+      'app_identifier.build_number_set',
       'android_credentials.saved',
       'android_credentials.deleted',
     ],

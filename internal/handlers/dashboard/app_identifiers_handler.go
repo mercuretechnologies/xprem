@@ -76,6 +76,42 @@ func (h *AppIdentifiersHandler) CreateAppIdentifierHandler(w http.ResponseWriter
 	w.Write(marshaledResponse)
 }
 
+func (h *AppIdentifiersHandler) SetBuildNumberHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	appId := vars["APP_ID"]
+	identifierId := vars["IDENTIFIER_ID"]
+	if _, err := uuid.Parse(identifierId); err != nil {
+		handlers.RenderError(w, http.StatusBadRequest, "invalid identifier id")
+		return
+	}
+	var requestBody struct {
+		BuildNumber *int64 `json:"buildNumber"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&requestBody); err != nil || requestBody.BuildNumber == nil {
+		handlers.RenderError(w, http.StatusBadRequest, "invalid request body, expected {\"buildNumber\": <integer>}")
+		return
+	}
+	err := h.identifierService.SetBuildNumber(r.Context(), appId, identifierId, *requestBody.BuildNumber)
+	if err != nil {
+		var valErr *validation.Error
+		if errors.As(err, &valErr) {
+			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
+			return
+		}
+		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
+			return
+		}
+		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+			handlers.RenderError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while setting the build number.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AppIdentifiersHandler) DeleteAppIdentifierHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]

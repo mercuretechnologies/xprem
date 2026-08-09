@@ -6,6 +6,7 @@ CREATE TABLE app_identifiers (
     app_id UUID NOT NULL,
     platform VARCHAR(10) NOT NULL,
     identifier VARCHAR(255) NOT NULL,
+    build_number BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_app_identifiers_app FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE,
     CONSTRAINT uq_app_identifier UNIQUE (app_id, platform, identifier)
