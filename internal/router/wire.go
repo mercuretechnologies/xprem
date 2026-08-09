@@ -42,6 +42,7 @@ type AppContainer struct {
 	AppHandler                  *dashhandlers.AppHandler
 	AppRepo                     services.AppRepository
 	BranchHandler               *dashhandlers.BranchHandler
+	AppIdentifiersHandler       *dashhandlers.AppIdentifiersHandler
 	BranchListHandler           *handlers.BranchListHandler
 	ChannelHandler              *dashhandlers.ChannelHandler
 	CredentialsHandler          *dashhandlers.CredentialsHandler
@@ -93,7 +94,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
-	// nil in stateless mode: signing credentials only exist on the control plane.
+	// nil in stateless mode: store identities and signing credentials only
+	// exist on the control plane.
+	var appIdentifierRepo services.AppIdentifierRepository
 	var credentialsRepo services.CredentialsRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
@@ -158,6 +161,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		pgUpdateStore := store.NewPostgresUpdateStore(dbEngine)
 		updateRepo = pgUpdateStore
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
+		appIdentifierRepo = store.NewPostgresAppIdentifierStore(dbEngine)
 		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
 
 		if config.IsDeviceTelemetryDisabled() {
@@ -247,7 +251,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
-	credentialsService := services.NewCredentialsService(credentialsRepo)
+	appIdentifierService := services.NewAppIdentifierService(appIdentifierRepo)
+	appIdentifierService.SetOnAuditEvent(auditService.Record)
+	credentialsService := services.NewCredentialsService(credentialsRepo, appIdentifierRepo)
 	credentialsService.SetOnAuditEvent(auditService.Record)
 
 	// Shared across handlers; with Redis configured, also across replicas.
@@ -305,6 +311,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
 		BranchListHandler:           handlers.NewBranchListHandler(channelService),
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
+		AppIdentifiersHandler:       dashhandlers.NewAppIdentifiersHandler(appIdentifierService),
 		CredentialsHandler:          dashhandlers.NewCredentialsHandler(credentialsService),
 		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
 		LicenseHandler:              licensing.NewLicenseHandler(licenseService),

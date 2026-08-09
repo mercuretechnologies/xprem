@@ -82,11 +82,19 @@ func registerAppRoutes(
 	app.route(http.MethodPost, "/branch/{BRANCH}/runtimeVersion/{RUNTIME_VERSION}/republish", container.UpdateHandler.RepublishUpdateHandler,
 		NeedsPermission(rbac.PermUpdatePublish, rbac.FallbackAdminOnly))
 
-	app.route(http.MethodGet, "/credentials/android", container.CredentialsHandler.GetAndroidCredentialsHandler,
+	app.route(http.MethodGet, "/identifiers", container.AppIdentifiersHandler.GetAppIdentifiersHandler,
 		AnyViewer())
-	app.route(http.MethodPut, "/credentials/android", container.CredentialsHandler.PutAndroidCredentialsHandler,
+	app.route(http.MethodPost, "/identifiers", container.AppIdentifiersHandler.CreateAppIdentifierHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
-	app.route(http.MethodDelete, "/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
+	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}", container.AppIdentifiersHandler.DeleteAppIdentifierHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/identifiers/{IDENTIFIER_ID}/build-number", container.AppIdentifiersHandler.SetBuildNumberHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.GetAndroidCredentialsHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.PutAndroidCredentialsHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 
 	app.route(http.MethodGet, "/apiKeys", container.ApiKeyHandler.GetApiKeysHandler,

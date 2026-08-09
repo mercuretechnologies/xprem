@@ -2321,12 +2321,11 @@ ORDER BY MAX(u.created_at) DESC, b.name ASC;
 
 -- name: UpsertAndroidCredentials :one
 INSERT INTO android_credentials (
-    id, app_id, android_package, key_alias,
+    id, app_identifier_id, key_alias,
     sealed_keystore, sealed_keystore_password, sealed_key_password,
     sealed_google_service_account_key
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (app_id) DO UPDATE SET
-    android_package = EXCLUDED.android_package,
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (app_identifier_id) DO UPDATE SET
     key_alias = EXCLUDED.key_alias,
     sealed_keystore = EXCLUDED.sealed_keystore,
     sealed_keystore_password = EXCLUDED.sealed_keystore_password,
@@ -2335,12 +2334,45 @@ ON CONFLICT (app_id) DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP
 RETURNING id;
 
--- name: GetAndroidCredentialsByAppID :one
-SELECT id, app_id, android_package, key_alias,
+-- name: GetAndroidCredentialsByIdentifierID :one
+SELECT id, app_identifier_id, key_alias,
        sealed_keystore, sealed_keystore_password, sealed_key_password,
        sealed_google_service_account_key, created_at, updated_at
 FROM android_credentials
-WHERE app_id = $1;
+WHERE app_identifier_id = $1;
 
--- name: DeleteAndroidCredentialsByAppID :execresult
-DELETE FROM android_credentials WHERE app_id = $1;
+-- name: DeleteAndroidCredentialsByIdentifierID :execresult
+DELETE FROM android_credentials WHERE app_identifier_id = $1;
+
+-- name: InsertAppIdentifier :one
+INSERT INTO app_identifiers (id, app_id, platform, identifier)
+VALUES ($1, $2, $3, $4)
+RETURNING id;
+
+-- name: GetAppIdentifiersByAppID :many
+SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
+       (ac.id IS NOT NULL)::bool AS has_android_credentials
+FROM app_identifiers ai
+LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
+WHERE ai.app_id = $1
+ORDER BY ai.platform ASC, ai.identifier ASC;
+
+-- name: GetAppIdentifierByID :one
+SELECT id, platform, identifier, build_number
+FROM app_identifiers
+WHERE app_id = $1 AND id = $2;
+
+-- name: SetAppIdentifierBuildNumber :execresult
+UPDATE app_identifiers
+SET build_number = $3
+WHERE app_id = $1 AND id = $2;
+
+-- name: DeleteAppIdentifierByID :execresult
+-- Guarded: an identifier still holding credentials is NOT deleted, its
+-- keystore must be removed explicitly first. The caller disambiguates the
+-- 0-rows result into has-credentials vs not-found.
+DELETE FROM app_identifiers
+WHERE app_identifiers.app_id = $1 AND app_identifiers.id = $2
+  AND NOT EXISTS (
+      SELECT 1 FROM android_credentials ac WHERE ac.app_identifier_id = app_identifiers.id
+  );

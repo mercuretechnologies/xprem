@@ -465,12 +465,12 @@ func (q *Queries) CountUpdateFailures(ctx context.Context, arg CountUpdateFailur
 	return count, err
 }
 
-const deleteAndroidCredentialsByAppID = `-- name: DeleteAndroidCredentialsByAppID :execresult
-DELETE FROM android_credentials WHERE app_id = $1
+const deleteAndroidCredentialsByIdentifierID = `-- name: DeleteAndroidCredentialsByIdentifierID :execresult
+DELETE FROM android_credentials WHERE app_identifier_id = $1
 `
 
-func (q *Queries) DeleteAndroidCredentialsByAppID(ctx context.Context, appID pgtype.UUID) (pgconn.CommandTag, error) {
-	return q.db.Exec(ctx, deleteAndroidCredentialsByAppID, appID)
+func (q *Queries) DeleteAndroidCredentialsByIdentifierID(ctx context.Context, appIdentifierID pgtype.UUID) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteAndroidCredentialsByIdentifierID, appIdentifierID)
 }
 
 const deleteApiKeyBranchRules = `-- name: DeleteApiKeyBranchRules :exec
@@ -492,6 +492,26 @@ WHERE id = $1
 
 func (q *Queries) DeleteAppByID(ctx context.Context, id pgtype.UUID) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, deleteAppByID, id)
+}
+
+const deleteAppIdentifierByID = `-- name: DeleteAppIdentifierByID :execresult
+DELETE FROM app_identifiers
+WHERE app_identifiers.app_id = $1 AND app_identifiers.id = $2
+  AND NOT EXISTS (
+      SELECT 1 FROM android_credentials ac WHERE ac.app_identifier_id = app_identifiers.id
+  )
+`
+
+type DeleteAppIdentifierByIDParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+// Guarded: an identifier still holding credentials is NOT deleted, its
+// keystore must be removed explicitly first. The caller disambiguates the
+// 0-rows result into has-credentials vs not-found.
+func (q *Queries) DeleteAppIdentifierByID(ctx context.Context, arg DeleteAppIdentifierByIDParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteAppIdentifierByID, arg.AppID, arg.ID)
 }
 
 const deleteBranchByName = `-- name: DeleteBranchByName :execresult
@@ -825,21 +845,20 @@ func (q *Queries) GetActiveRolloutUpdates(ctx context.Context, arg GetActiveRoll
 	return items, nil
 }
 
-const getAndroidCredentialsByAppID = `-- name: GetAndroidCredentialsByAppID :one
-SELECT id, app_id, android_package, key_alias,
+const getAndroidCredentialsByIdentifierID = `-- name: GetAndroidCredentialsByIdentifierID :one
+SELECT id, app_identifier_id, key_alias,
        sealed_keystore, sealed_keystore_password, sealed_key_password,
        sealed_google_service_account_key, created_at, updated_at
 FROM android_credentials
-WHERE app_id = $1
+WHERE app_identifier_id = $1
 `
 
-func (q *Queries) GetAndroidCredentialsByAppID(ctx context.Context, appID pgtype.UUID) (AndroidCredential, error) {
-	row := q.db.QueryRow(ctx, getAndroidCredentialsByAppID, appID)
+func (q *Queries) GetAndroidCredentialsByIdentifierID(ctx context.Context, appIdentifierID pgtype.UUID) (AndroidCredential, error) {
+	row := q.db.QueryRow(ctx, getAndroidCredentialsByIdentifierID, appIdentifierID)
 	var i AndroidCredential
 	err := row.Scan(
 		&i.ID,
-		&i.AppID,
-		&i.AndroidPackage,
+		&i.AppIdentifierID,
 		&i.KeyAlias,
 		&i.SealedKeystore,
 		&i.SealedKeystorePassword,
@@ -1021,6 +1040,81 @@ func (q *Queries) GetAppByID(ctx context.Context, id pgtype.UUID) (App, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getAppIdentifierByID = `-- name: GetAppIdentifierByID :one
+SELECT id, platform, identifier, build_number
+FROM app_identifiers
+WHERE app_id = $1 AND id = $2
+`
+
+type GetAppIdentifierByIDParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+type GetAppIdentifierByIDRow struct {
+	ID          pgtype.UUID `json:"id"`
+	Platform    string      `json:"platform"`
+	Identifier  string      `json:"identifier"`
+	BuildNumber int64       `json:"build_number"`
+}
+
+func (q *Queries) GetAppIdentifierByID(ctx context.Context, arg GetAppIdentifierByIDParams) (GetAppIdentifierByIDRow, error) {
+	row := q.db.QueryRow(ctx, getAppIdentifierByID, arg.AppID, arg.ID)
+	var i GetAppIdentifierByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.Identifier,
+		&i.BuildNumber,
+	)
+	return i, err
+}
+
+const getAppIdentifiersByAppID = `-- name: GetAppIdentifiersByAppID :many
+SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
+       (ac.id IS NOT NULL)::bool AS has_android_credentials
+FROM app_identifiers ai
+LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
+WHERE ai.app_id = $1
+ORDER BY ai.platform ASC, ai.identifier ASC
+`
+
+type GetAppIdentifiersByAppIDRow struct {
+	ID                    pgtype.UUID        `json:"id"`
+	Platform              string             `json:"platform"`
+	Identifier            string             `json:"identifier"`
+	BuildNumber           int64              `json:"build_number"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	HasAndroidCredentials bool               `json:"has_android_credentials"`
+}
+
+func (q *Queries) GetAppIdentifiersByAppID(ctx context.Context, appID pgtype.UUID) ([]GetAppIdentifiersByAppIDRow, error) {
+	rows, err := q.db.Query(ctx, getAppIdentifiersByAppID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAppIdentifiersByAppIDRow
+	for rows.Next() {
+		var i GetAppIdentifiersByAppIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Platform,
+			&i.Identifier,
+			&i.BuildNumber,
+			&i.CreatedAt,
+			&i.HasAndroidCredentials,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getApps = `-- name: GetApps :many
@@ -2680,6 +2774,31 @@ func (q *Queries) InsertApp(ctx context.Context, arg InsertAppParams) (pgtype.UU
 		arg.PathPrivateKey,
 		arg.AwsSecretIDPublic,
 		arg.AwsSecretIDPrivate,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const insertAppIdentifier = `-- name: InsertAppIdentifier :one
+INSERT INTO app_identifiers (id, app_id, platform, identifier)
+VALUES ($1, $2, $3, $4)
+RETURNING id
+`
+
+type InsertAppIdentifierParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AppID      pgtype.UUID `json:"app_id"`
+	Platform   string      `json:"platform"`
+	Identifier string      `json:"identifier"`
+}
+
+func (q *Queries) InsertAppIdentifier(ctx context.Context, arg InsertAppIdentifierParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertAppIdentifier,
+		arg.ID,
+		arg.AppID,
+		arg.Platform,
+		arg.Identifier,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -5045,6 +5164,22 @@ func (q *Queries) SearchIdentityValues(ctx context.Context, arg SearchIdentityVa
 	return items, nil
 }
 
+const setAppIdentifierBuildNumber = `-- name: SetAppIdentifierBuildNumber :execresult
+UPDATE app_identifiers
+SET build_number = $3
+WHERE app_id = $1 AND id = $2
+`
+
+type SetAppIdentifierBuildNumberParams struct {
+	AppID       pgtype.UUID `json:"app_id"`
+	ID          pgtype.UUID `json:"id"`
+	BuildNumber int64       `json:"build_number"`
+}
+
+func (q *Queries) SetAppIdentifierBuildNumber(ctx context.Context, arg SetAppIdentifierBuildNumberParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setAppIdentifierBuildNumber, arg.AppID, arg.ID, arg.BuildNumber)
+}
+
 const setBranchProtected = `-- name: SetBranchProtected :execrows
 UPDATE branches
 SET protected = $1
@@ -5677,12 +5812,11 @@ func (q *Queries) UpdateUserPasswordByID(ctx context.Context, arg UpdateUserPass
 
 const upsertAndroidCredentials = `-- name: UpsertAndroidCredentials :one
 INSERT INTO android_credentials (
-    id, app_id, android_package, key_alias,
+    id, app_identifier_id, key_alias,
     sealed_keystore, sealed_keystore_password, sealed_key_password,
     sealed_google_service_account_key
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (app_id) DO UPDATE SET
-    android_package = EXCLUDED.android_package,
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (app_identifier_id) DO UPDATE SET
     key_alias = EXCLUDED.key_alias,
     sealed_keystore = EXCLUDED.sealed_keystore,
     sealed_keystore_password = EXCLUDED.sealed_keystore_password,
@@ -5694,8 +5828,7 @@ RETURNING id
 
 type UpsertAndroidCredentialsParams struct {
 	ID                            pgtype.UUID `json:"id"`
-	AppID                         pgtype.UUID `json:"app_id"`
-	AndroidPackage                string      `json:"android_package"`
+	AppIdentifierID               pgtype.UUID `json:"app_identifier_id"`
 	KeyAlias                      string      `json:"key_alias"`
 	SealedKeystore                string      `json:"sealed_keystore"`
 	SealedKeystorePassword        string      `json:"sealed_keystore_password"`
@@ -5706,8 +5839,7 @@ type UpsertAndroidCredentialsParams struct {
 func (q *Queries) UpsertAndroidCredentials(ctx context.Context, arg UpsertAndroidCredentialsParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, upsertAndroidCredentials,
 		arg.ID,
-		arg.AppID,
-		arg.AndroidPackage,
+		arg.AppIdentifierID,
 		arg.KeyAlias,
 		arg.SealedKeystore,
 		arg.SealedKeystorePassword,

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"time"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
@@ -18,18 +17,15 @@ import (
 // a few kilobytes, anything near the cap is not a keystore.
 const maxKeystoreBytes = 512 * 1024
 
-var androidPackagePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$`)
-
 type CredentialsRepository interface {
-	UpsertAndroidCredentials(ctx context.Context, appId string, credentials store.SealedAndroidCredentials) error
-	GetAndroidCredentials(ctx context.Context, appId string) (*store.SealedAndroidCredentials, error)
-	DeleteAndroidCredentials(ctx context.Context, appId string) error
+	UpsertAndroidCredentials(ctx context.Context, identifierId string, credentials store.SealedAndroidCredentials) error
+	GetAndroidCredentials(ctx context.Context, identifierId string) (*store.SealedAndroidCredentials, error)
+	DeleteAndroidCredentials(ctx context.Context, identifierId string) error
 }
 
-// AndroidCredentialsInput is one full replacement of an app's Android signing
-// credentials, as received from the dashboard or the CLI.
+// AndroidCredentialsInput is one full replacement of an identifier's Android
+// signing credentials, as received from the dashboard or the CLI.
 type AndroidCredentialsInput struct {
-	AndroidPackage              string
 	KeyAlias                    string
 	KeystoreBase64              string
 	KeystorePassword            string
@@ -39,7 +35,7 @@ type AndroidCredentialsInput struct {
 
 // AndroidCredentialsMetadata is the non-secret projection served to viewers.
 type AndroidCredentialsMetadata struct {
-	AndroidPackage             string `json:"androidPackage"`
+	Identifier                 string `json:"identifier"`
 	KeyAlias                   string `json:"keyAlias"`
 	HasGoogleServiceAccountKey bool   `json:"hasGoogleServiceAccountKey"`
 	CreatedAt                  string `json:"createdAt"`
@@ -47,17 +43,19 @@ type AndroidCredentialsMetadata struct {
 }
 
 type CredentialsService struct {
-	repo CredentialsRepository
+	repo        CredentialsRepository
+	identifiers AppIdentifierRepository
 	// onAuditEvent is the audit emission seam; nil (community) means
 	// credential changes leave no events.
 	onAuditEvent auditlog.RecordFunc
 }
 
-// NewCredentialsService builds the service; a nil repo (stateless mode) makes
+// NewCredentialsService builds the service; nil repos (stateless mode) make
 // every method answer ErrNotSupportedInStatelessMode.
-func NewCredentialsService(repo CredentialsRepository) *CredentialsService {
+func NewCredentialsService(repo CredentialsRepository, identifiers AppIdentifierRepository) *CredentialsService {
 	return &CredentialsService{
-		repo: repo,
+		repo:        repo,
+		identifiers: identifiers,
 	}
 }
 
@@ -66,18 +64,35 @@ func (s *CredentialsService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
-// androidCredentialAAD binds each sealed field to the app it belongs to, so a
-// blob copied onto another row fails to unseal (see keyStore.AppKeyAAD).
-func androidCredentialAAD(appId string, field string) []byte {
-	return []byte(appId + "|android_credentials|" + field)
+// androidCredentialAAD binds each sealed field to the identifier owning it,
+// so a blob copied onto another row fails to unseal (see keyStore.AppKeyAAD).
+func androidCredentialAAD(identifierId string, field string) []byte {
+	return []byte(identifierId + "|android_credentials|" + field)
 }
 
-func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId string, input AndroidCredentialsInput) error {
-	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+// resolveAndroidIdentifier maps (app, identifier id) to the identifier row,
+// refusing unknown ids and non-android platforms.
+func (s *CredentialsService) resolveAndroidIdentifier(ctx context.Context, appId string, identifierId string) (*store.AppIdentifierRef, error) {
+	if s.repo == nil || s.identifiers == nil {
+		return nil, store.ErrNotSupportedInStatelessMode
 	}
-	if !androidPackagePattern.MatchString(input.AndroidPackage) || len(input.AndroidPackage) > 255 {
-		return validation.Errorf("androidPackage", "%q is not a valid Android application id", input.AndroidPackage)
+	ref, err := s.identifiers.GetAppIdentifierByID(ctx, appId, identifierId)
+	if err != nil {
+		return nil, err
+	}
+	if ref == nil {
+		return nil, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
+	}
+	if ref.Platform != PlatformAndroid {
+		return nil, validation.Errorf("identifier", "identifier %q is an %s identifier, android credentials require an android one", ref.Identifier, ref.Platform)
+	}
+	return ref, nil
+}
+
+func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId string, identifierId string, input AndroidCredentialsInput) error {
+	ref, err := s.resolveAndroidIdentifier(ctx, appId, identifierId)
+	if err != nil {
+		return err
 	}
 	if input.KeyAlias == "" || len(input.KeyAlias) > 255 {
 		return validation.Errorf("keyAlias", "key alias must be between 1 and 255 characters")
@@ -103,44 +118,43 @@ func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId s
 	}
 
 	masterKey := []byte(keyStore.ReadDBKeysMasterKey())
-	sealedKeystore, err := crypto.SealAESGCM(keystore, masterKey, androidCredentialAAD(appId, "keystore"))
+	sealedKeystore, err := crypto.SealAESGCM(keystore, masterKey, androidCredentialAAD(identifierId, "keystore"))
 	if err != nil {
 		return fmt.Errorf("failed to seal keystore: %w", err)
 	}
-	sealedKeystorePassword, err := crypto.SealAESGCM([]byte(input.KeystorePassword), masterKey, androidCredentialAAD(appId, "keystore_password"))
+	sealedKeystorePassword, err := crypto.SealAESGCM([]byte(input.KeystorePassword), masterKey, androidCredentialAAD(identifierId, "keystore_password"))
 	if err != nil {
 		return fmt.Errorf("failed to seal keystore password: %w", err)
 	}
-	sealedKeyPassword, err := crypto.SealAESGCM([]byte(input.KeyPassword), masterKey, androidCredentialAAD(appId, "key_password"))
+	sealedKeyPassword, err := crypto.SealAESGCM([]byte(input.KeyPassword), masterKey, androidCredentialAAD(identifierId, "key_password"))
 	if err != nil {
 		return fmt.Errorf("failed to seal key password: %w", err)
 	}
 	sealed := store.SealedAndroidCredentials{
-		AndroidPackage:         input.AndroidPackage,
 		KeyAlias:               input.KeyAlias,
 		SealedKeystore:         sealedKeystore,
 		SealedKeystorePassword: sealedKeystorePassword,
 		SealedKeyPassword:      sealedKeyPassword,
 	}
 	if input.GoogleServiceAccountKeyJSON != "" {
-		sealedGSA, err := crypto.SealAESGCM([]byte(input.GoogleServiceAccountKeyJSON), masterKey, androidCredentialAAD(appId, "google_service_account_key"))
+		sealedGSA, err := crypto.SealAESGCM([]byte(input.GoogleServiceAccountKeyJSON), masterKey, androidCredentialAAD(identifierId, "google_service_account_key"))
 		if err != nil {
 			return fmt.Errorf("failed to seal google service account key: %w", err)
 		}
 		sealed.SealedGoogleServiceAccountKey = &sealedGSA
 	}
 
-	if err := s.repo.UpsertAndroidCredentials(ctx, appId, sealed); err != nil {
+	if err := s.repo.UpsertAndroidCredentials(ctx, identifierId, sealed); err != nil {
 		return err
 	}
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionAndroidCredentialsSaved,
 		TargetType:    "android_credentials",
-		TargetID:      appId,
-		TargetDisplay: input.AndroidPackage,
+		TargetID:      identifierId,
+		TargetDisplay: ref.Identifier,
 		AppID:         appId,
 		Metadata: map[string]any{
-			"android_package":                input.AndroidPackage,
+			"identifier":                     ref.Identifier,
 			"key_alias":                      input.KeyAlias,
 			"has_google_service_account_key": input.GoogleServiceAccountKeyJSON != "",
 		},
@@ -148,18 +162,19 @@ func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId s
 	return nil
 }
 
-// GetAndroidCredentialsMetadata returns (nil, nil) when the app has no
-// Android credentials configured.
-func (s *CredentialsService) GetAndroidCredentialsMetadata(ctx context.Context, appId string) (*AndroidCredentialsMetadata, error) {
-	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+// GetAndroidCredentialsMetadata returns (nil, nil) when the identifier has no
+// credentials configured yet.
+func (s *CredentialsService) GetAndroidCredentialsMetadata(ctx context.Context, appId string, identifierId string) (*AndroidCredentialsMetadata, error) {
+	ref, err := s.resolveAndroidIdentifier(ctx, appId, identifierId)
+	if err != nil {
+		return nil, err
 	}
-	credentials, err := s.repo.GetAndroidCredentials(ctx, appId)
+	credentials, err := s.repo.GetAndroidCredentials(ctx, identifierId)
 	if err != nil || credentials == nil {
 		return nil, err
 	}
 	return &AndroidCredentialsMetadata{
-		AndroidPackage:             credentials.AndroidPackage,
+		Identifier:                 ref.Identifier,
 		KeyAlias:                   credentials.KeyAlias,
 		HasGoogleServiceAccountKey: credentials.SealedGoogleServiceAccountKey != nil,
 		CreatedAt:                  credentials.CreatedAt.UTC().Format(time.RFC3339),
@@ -167,24 +182,19 @@ func (s *CredentialsService) GetAndroidCredentialsMetadata(ctx context.Context, 
 	}, nil
 }
 
-func (s *CredentialsService) DeleteAndroidCredentials(ctx context.Context, appId string) error {
-	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+func (s *CredentialsService) DeleteAndroidCredentials(ctx context.Context, appId string, identifierId string) error {
+	ref, err := s.resolveAndroidIdentifier(ctx, appId, identifierId)
+	if err != nil {
+		return err
 	}
-	// Read before the delete: afterwards there is no row left to name in the
-	// audit entry. Best-effort, like the entry itself.
-	displayName := appId
-	if credentials, err := s.repo.GetAndroidCredentials(ctx, appId); err == nil && credentials != nil {
-		displayName = credentials.AndroidPackage
-	}
-	if err := s.repo.DeleteAndroidCredentials(ctx, appId); err != nil {
+	if err := s.repo.DeleteAndroidCredentials(ctx, identifierId); err != nil {
 		return err
 	}
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionAndroidCredentialsDeleted,
 		TargetType:    "android_credentials",
-		TargetID:      appId,
-		TargetDisplay: displayName,
+		TargetID:      identifierId,
+		TargetDisplay: ref.Identifier,
 		AppID:         appId,
 	})
 	return nil

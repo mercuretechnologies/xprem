@@ -12,10 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// SealedAndroidCredentials is the at-rest shape of an app's Android signing
-// credentials: every secret field is an AES-GCM sealed blob, never plaintext.
+// SealedAndroidCredentials is the at-rest shape of an identifier's Android
+// signing credentials: every secret field is an AES-GCM sealed blob, never
+// plaintext.
 type SealedAndroidCredentials struct {
-	AndroidPackage                string
 	KeyAlias                      string
 	SealedKeystore                string
 	SealedKeystorePassword        string
@@ -35,11 +35,10 @@ func NewPostgresCredentialsStore(engine *database.Engine) *PostgresCredentialsSt
 	}
 }
 
-func (s *PostgresCredentialsStore) UpsertAndroidCredentials(ctx context.Context, appId string, credentials SealedAndroidCredentials) error {
+func (s *PostgresCredentialsStore) UpsertAndroidCredentials(ctx context.Context, identifierId string, credentials SealedAndroidCredentials) error {
 	_, err := s.engine.Queries.UpsertAndroidCredentials(ctx, pgdb.UpsertAndroidCredentialsParams{
 		ID:                            ToPgUUID(uuid.NewString()),
-		AppID:                         ToPgUUID(appId),
-		AndroidPackage:                credentials.AndroidPackage,
+		AppIdentifierID:               ToPgUUID(identifierId),
 		KeyAlias:                      credentials.KeyAlias,
 		SealedKeystore:                credentials.SealedKeystore,
 		SealedKeystorePassword:        credentials.SealedKeystorePassword,
@@ -52,8 +51,8 @@ func (s *PostgresCredentialsStore) UpsertAndroidCredentials(ctx context.Context,
 	return nil
 }
 
-func (s *PostgresCredentialsStore) GetAndroidCredentials(ctx context.Context, appId string) (*SealedAndroidCredentials, error) {
-	row, err := s.engine.Queries.GetAndroidCredentialsByAppID(ctx, ToPgUUID(appId))
+func (s *PostgresCredentialsStore) GetAndroidCredentials(ctx context.Context, identifierId string) (*SealedAndroidCredentials, error) {
+	row, err := s.engine.Queries.GetAndroidCredentialsByIdentifierID(ctx, ToPgUUID(identifierId))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -61,7 +60,6 @@ func (s *PostgresCredentialsStore) GetAndroidCredentials(ctx context.Context, ap
 		return nil, fmt.Errorf("failed to retrieve android credentials from database: %w", err)
 	}
 	return &SealedAndroidCredentials{
-		AndroidPackage:                row.AndroidPackage,
 		KeyAlias:                      row.KeyAlias,
 		SealedKeystore:                row.SealedKeystore,
 		SealedKeystorePassword:        row.SealedKeystorePassword,
@@ -72,13 +70,13 @@ func (s *PostgresCredentialsStore) GetAndroidCredentials(ctx context.Context, ap
 	}, nil
 }
 
-func (s *PostgresCredentialsStore) DeleteAndroidCredentials(ctx context.Context, appId string) error {
-	commandTag, err := s.engine.Queries.DeleteAndroidCredentialsByAppID(ctx, ToPgUUID(appId))
+func (s *PostgresCredentialsStore) DeleteAndroidCredentials(ctx context.Context, identifierId string) error {
+	commandTag, err := s.engine.Queries.DeleteAndroidCredentialsByIdentifierID(ctx, ToPgUUID(identifierId))
 	if err != nil {
 		return fmt.Errorf("failed to delete android credentials from database: %w", err)
 	}
 	if commandTag.RowsAffected() == 0 {
-		return &ErrResourceNotFound{Resource: "android credentials", Identifier: fmt.Sprintf("appId: %s", appId)}
+		return &ErrResourceNotFound{Resource: "android credentials", Identifier: fmt.Sprintf("identifierId: %s", identifierId)}
 	}
 	return nil
 }

@@ -55,6 +55,16 @@ func (e *ErrChannelHasActiveRollout) Error() string {
 	return fmt.Sprintf("cannot change the branch mapping of channel %q while it has an active rollout. Promote or revert the rollout first.", e.ChannelName)
 }
 
+// ErrIdentifierHasCredentials refuses deleting an app identifier that still
+// holds signing credentials; the keystore must be removed explicitly first.
+type ErrIdentifierHasCredentials struct {
+	Identifier string
+}
+
+func (e *ErrIdentifierHasCredentials) Error() string {
+	return fmt.Sprintf("cannot delete identifier %q because it still holds signing credentials. Delete its credentials first.", e.Identifier)
+}
+
 type ErrResourceAlreadyExists struct {
 	Resource   string
 	Identifier string

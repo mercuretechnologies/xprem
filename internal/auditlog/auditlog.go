@@ -95,6 +95,9 @@ const (
 	ActionAPIKeyRestrictionsUpdated Action = "api_key.restrictions_updated"
 	ActionBranchProtectionUpdated   Action = "branch_protection.updated"
 	ActionCertificateDownloaded     Action = "certificate.downloaded"
+	ActionAppIdentifierCreated        Action = "app_identifier.created"
+	ActionAppIdentifierDeleted        Action = "app_identifier.deleted"
+	ActionAppIdentifierBuildNumberSet Action = "app_identifier.build_number_set"
 	ActionAndroidCredentialsSaved   Action = "android_credentials.saved"
 	ActionAndroidCredentialsDeleted Action = "android_credentials.deleted"
 
