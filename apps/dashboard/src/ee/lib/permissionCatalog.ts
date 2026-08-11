@@ -121,6 +121,32 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   {
+    label: 'Store credentials',
+    permissions: [
+      {
+        value: 'credentials:manage',
+        label: 'Manage identifiers and signing credentials',
+        description:
+          'Create and delete application identifiers, upload or delete their signing credentials (Android keystore, submit keys), and set store build numbers.',
+      },
+    ],
+  },
+  {
+    label: 'Environment variables',
+    permissions: [
+      {
+        value: 'env:manage',
+        label: 'Manage environment variables',
+        description: 'Create, overwrite and delete the environment variables of a branch.',
+      },
+      {
+        value: 'env:read',
+        label: 'Reveal environment values',
+        description: 'Read the plaintext value of any environment variable. Listing key names is open to every viewer.',
+      },
+    ],
+  },
+  {
     label: 'Identity',
     permissions: [
       {

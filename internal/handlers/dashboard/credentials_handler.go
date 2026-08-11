@@ -36,7 +36,9 @@ func credentialsVars(w http.ResponseWriter, r *http.Request) (string, string) {
 	return appId, identifierId
 }
 
-func renderCredentialsError(w http.ResponseWriter, err error, fallback string) {
+// renderServiceError maps the service-layer error vocabulary shared by the
+// vault handlers (validation, not-found, stateless) to HTTP statuses.
+func renderServiceError(w http.ResponseWriter, err error, fallback string) {
 	var valErr *validation.Error
 	if errors.As(err, &valErr) {
 		handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
@@ -60,7 +62,7 @@ func (h *CredentialsHandler) GetAndroidCredentialsHandler(w http.ResponseWriter,
 	}
 	metadata, err := h.credentialsService.GetAndroidCredentialsMetadata(r.Context(), appId, identifierId)
 	if err != nil {
-		renderCredentialsError(w, err, "An internal error occurred while fetching android credentials.")
+		renderServiceError(w, err, "An internal error occurred while fetching android credentials.")
 		return
 	}
 	if metadata == nil {
@@ -97,7 +99,7 @@ func (h *CredentialsHandler) PutAndroidCredentialsHandler(w http.ResponseWriter,
 		GoogleServiceAccountKeyJSON: requestBody.GoogleServiceAccountKey,
 	})
 	if err != nil {
-		renderCredentialsError(w, err, "An internal error occurred while saving android credentials.")
+		renderServiceError(w, err, "An internal error occurred while saving android credentials.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -110,7 +112,7 @@ func (h *CredentialsHandler) DeleteAndroidCredentialsHandler(w http.ResponseWrit
 	}
 	err := h.credentialsService.DeleteAndroidCredentials(r.Context(), appId, identifierId)
 	if err != nil {
-		renderCredentialsError(w, err, "An internal error occurred while deleting android credentials.")
+		renderServiceError(w, err, "An internal error occurred while deleting android credentials.")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

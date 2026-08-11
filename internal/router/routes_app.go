@@ -97,6 +97,15 @@ func registerAppRoutes(
 	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 
+	app.route(http.MethodGet, "/env", container.EnvVarsHandler.ListEnvVarsHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/env/branch/{BRANCH}/{KEY}", container.EnvVarsHandler.SetEnvVarHandler,
+		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/env/branch/{BRANCH}/{KEY}/value", container.EnvVarsHandler.RevealEnvVarHandler,
+		NeedsPermission(rbac.PermEnvRead, rbac.FallbackAnyMember))
+	app.route(http.MethodDelete, "/env/branch/{BRANCH}/{KEY}", container.EnvVarsHandler.DeleteEnvVarHandler,
+		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
+
 	app.route(http.MethodGet, "/apiKeys", container.ApiKeyHandler.GetApiKeysHandler,
 		AnyViewer())
 	app.route(http.MethodPost, "/apiKeys", container.ApiKeyHandler.CreateApiKeyHandler,

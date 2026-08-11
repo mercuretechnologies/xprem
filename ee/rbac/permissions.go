@@ -62,6 +62,13 @@ const (
 	// identifiers) and their signing credentials (Android keystore, submit
 	// keys). Reading the non-secret metadata is open to any viewer.
 	PermCredentialsManage Permission = "credentials:manage"
+	// PermEnvRead reveals the plaintext values of the app's environment
+	// variables. Listing keys (never values) is open to any viewer.
+	PermEnvRead Permission = "env:read"
+	// PermEnvManage writes and deletes the app's environment variables. It
+	// does not imply PermEnvRead: a config operator can overwrite values
+	// without being able to read them back.
+	PermEnvManage Permission = "env:manage"
 )
 
 // AllPermissions is the catalog, in the order the dashboard displays it.
@@ -80,6 +87,8 @@ var AllPermissions = []Permission{
 	PermUpdateRolloutManage,
 	PermUpdatePublish,
 	PermCredentialsManage,
+	PermEnvRead,
+	PermEnvManage,
 	PermApiKeysManage,
 	PermIdentityManage,
 	PermIdentityRead,
@@ -106,6 +115,7 @@ func IsValidPermission(p string) bool {
 var anyMemberPermissions = map[Permission]bool{
 	PermIdentityRead: true,
 	PermObserveRead:  true,
+	PermEnvRead:      true,
 }
 
 // DefaultFallback is what gates a permission's actions when roles are not

@@ -25,6 +25,9 @@ export type Permission =
   | 'update-rollout:manage'
   | 'update:publish'
   | 'apikeys:manage'
+  | 'credentials:manage'
+  | 'env:read'
+  | 'env:manage'
   | 'identity:manage'
   | 'identity:read'
   | 'observe:read';
