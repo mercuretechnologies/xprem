@@ -26,7 +26,7 @@ export const useBranchCurrentStatus = (branchName?: string | null) => {
     enabled: !!selectedAppId && !!branch && !!latestRuntime,
   });
   return useMemo(() => {
-    const updatesByRecency = [...(updatesQuery.data ?? [])].sort(
+    const updatesByRecency = [...(updatesQuery.data?.items ?? [])].sort(
       (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)
     );
     const currentRollout = updatesByRecency.find(update => update.rolloutPercentage != null);

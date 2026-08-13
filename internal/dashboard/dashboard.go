@@ -33,10 +33,6 @@ func ComputeGetChannelsCacheKey(appId string) string {
 	return fmt.Sprintf("dashboard:%s:%s:request:getChannels", version.Version, appId)
 }
 
-func ComputeGetUpdatesCacheKey(appId, branch, runtimeVersion string) string {
-	return fmt.Sprintf("dashboard:%s:%s:request:getUpdates:%s:%s", version.Version, appId, branch, runtimeVersion)
-}
-
 func ComputeGetUpdateDetailsCacheKey(appId, branch, runtimeVersion, updateID string) string {
 	return fmt.Sprintf("dashboard:%s:%s:request:getUpdateDetails:%s:%s:%s", version.Version, appId, branch, runtimeVersion, updateID)
 }

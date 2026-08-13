@@ -214,7 +214,6 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(update.AppId)
 	channelsCacheKey := dashboard.ComputeGetChannelsCacheKey(update.AppId)
 	runTimeVersionsCacheKey := dashboard.ComputeGetRuntimeVersionsCacheKey(update.AppId, update.Branch)
-	updatesCacheKey := dashboard.ComputeGetUpdatesCacheKey(update.AppId, update.Branch, update.RuntimeVersion)
 	storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, update)
 	if err != nil || storedMetadata == nil {
 		return err
@@ -247,7 +246,6 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 		branchesCacheKey,
 		channelsCacheKey,
 		runTimeVersionsCacheKey,
-		updatesCacheKey,
 	}
 	for _, cacheKey := range cacheKeys {
 		cache.Delete(cacheKey)

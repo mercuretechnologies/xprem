@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -253,18 +254,97 @@ func (s *PostgresUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appI
 	return members, nil
 }
 
-func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string) ([]types.UpdateItem, error) {
-	pgAppID := ToPgUUID(appId)
-	rows, err := s.engine.Queries.GetUpdatesByByBranchNameAndRuntimeVersion(ctx, pgdb.GetUpdatesByByBranchNameAndRuntimeVersionParams{
-		ID:      pgAppID,
-		Version: runtimeVersion,
-		Name:    branchName,
+func (s *PostgresUpdateStore) GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error) {
+	rows, err := s.engine.Queries.GetPublishGroupsPage(ctx, pgdb.GetPublishGroupsPageParams{
+		AppID:          ToPgUUID(appId),
+		BranchName:     branchName,
+		RuntimeVersion: runtimeVersion,
+		BeforeID:       cursor,
+		RowLimit:       int32(limit + 1),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve updates by runtime version and branch name from database: %w", err)
+		return types.PublishGroupsPage{}, fmt.Errorf("failed to retrieve publish groups: %w", err)
 	}
-	var updatesResponse []types.UpdateItem
+
+	type groupWithCursor struct {
+		item     types.PublishGroupItem
+		newestID int64
+	}
+	grouped := make([]groupWithCursor, 0, limit+1)
+	groupIndexes := make(map[string]int, limit+1)
 	for _, row := range rows {
+		groupID := row.PublishGroup.String()
+		index, ok := groupIndexes[groupID]
+		if !ok {
+			message := ""
+			if row.Message != nil {
+				message = *row.Message
+			}
+			index = len(grouped)
+			groupIndexes[groupID] = index
+			grouped = append(grouped, groupWithCursor{
+				newestID: row.NewestID,
+				item: types.PublishGroupItem{
+					PublishGroup: groupID,
+					CreatedAt:    row.CreatedAt.Time.Format(time.RFC3339),
+					CommitHash:   row.CommitHash,
+					Message:      message,
+					Platforms:    make([]string, 0, 2),
+					Updates:      make([]types.PublishGroupUpdateItem, 0, 2),
+				},
+			})
+		}
+		group := &grouped[index].item
+		createdAt := row.CreatedAt.Time.Format(time.RFC3339)
+		if createdAt > group.CreatedAt {
+			group.CreatedAt = createdAt
+		}
+		if !slices.Contains(group.Platforms, row.Platform) {
+			group.Platforms = append(group.Platforms, row.Platform)
+		}
+		group.Updates = append(group.Updates, types.PublishGroupUpdateItem{
+			UpdateId:   strconv.FormatInt(row.ID, 10),
+			CreatedAt:  createdAt,
+			Platform:   row.Platform,
+			CommitHash: row.CommitHash,
+		})
+	}
+
+	hasMore := len(grouped) > limit
+	if hasMore {
+		grouped = grouped[:limit]
+	}
+	items := make([]types.PublishGroupItem, 0, len(grouped))
+	for _, group := range grouped {
+		items = append(items, group.item)
+	}
+	var nextCursor *string
+	if hasMore {
+		cursorValue := strconv.FormatInt(grouped[len(grouped)-1].newestID, 10)
+		nextCursor = &cursorValue
+	}
+	return types.PublishGroupsPage{Items: items, NextCursor: nextCursor}, nil
+}
+
+func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error) {
+	pgAppID := ToPgUUID(appId)
+	rows, err := s.engine.Queries.GetUpdatesPageByBranchNameAndRuntimeVersion(ctx, pgdb.GetUpdatesPageByBranchNameAndRuntimeVersionParams{
+		AppID:          pgAppID,
+		RuntimeVersion: runtimeVersion,
+		BranchName:     branchName,
+		BeforeID:       cursor,
+		RowLimit:       int32(limit + 1),
+	})
+	if err != nil {
+		return types.UpdatesPage{}, fmt.Errorf("failed to retrieve updates by runtime version and branch name from database: %w", err)
+	}
+	hasMore := len(rows) > limit
+	pageRows := rows
+	if hasMore {
+		pageRows = rows[:limit]
+	}
+	updatesResponse := make([]types.UpdateItem, 0, len(pageRows))
+	for _, row := range pageRows {
 		createdAtStr := row.CreatedAt.Time.Format(time.RFC3339)
 		updateUUID := ""
 		switch row.UpdateType {
@@ -289,7 +369,7 @@ func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx contex
 				updateUUID = crypto.ConvertSHA256HashToUUID(metadata.ID)
 			}
 		default:
-			return nil, fmt.Errorf("unknown update type %d for update ID %s", row.UpdateType, strconv.FormatInt(row.ID, 10))
+			return types.UpdatesPage{}, fmt.Errorf("unknown update type %d for update ID %s", row.UpdateType, strconv.FormatInt(row.ID, 10))
 		}
 		messageStr := ""
 		if row.Message != nil {
@@ -317,7 +397,14 @@ func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx contex
 		}
 		updatesResponse = append(updatesResponse, item)
 	}
-	return updatesResponse, nil
+	var nextCursor *string
+	if hasMore {
+		// Cursor progression follows the raw SQL page rather than the successfully
+		// converted items. A corrupt metadata row must not hide later rows.
+		cursorValue := strconv.FormatInt(pageRows[len(pageRows)-1].ID, 10)
+		nextCursor = &cursorValue
+	}
+	return types.UpdatesPage{Items: updatesResponse, NextCursor: nextCursor}, nil
 }
 
 // escapeLikePattern neutralizes the ILIKE escape character in user-supplied

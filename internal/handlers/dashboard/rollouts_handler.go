@@ -68,14 +68,13 @@ func invalidateChannelRolloutCaches(appId string) {
 
 // invalidateUpdateRolloutCaches drops everything a per-update rollout mutation can
 // have staled: the lastUpdate envelopes (which embed the rollout percentage and
-// control) for both platforms, the updates listing, and the details of the affected
-// rows. It then pre-warms both platform manifests so the next client hits warm caches.
+// control), dashboard summaries, and the details of the affected rows. It then
+// pre-warms both platform manifests so the next client hits warm caches.
 func (h *RolloutHandler) invalidateUpdateRolloutCaches(appId string, branchName string, runtimeVersion string, affectedRollouts []types.RolloutUpdate) {
 	cache := cache2.GetCache()
 	cacheKeys := []string{
 		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, "ios"),
 		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, "android"),
-		dashboard.ComputeGetUpdatesCacheKey(appId, branchName, runtimeVersion),
 		dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName),
 		dashboard.ComputeGetBranchesCacheKey(appId),
 		dashboard.ComputeGetChannelsCacheKey(appId),

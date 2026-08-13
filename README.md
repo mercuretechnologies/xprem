@@ -20,10 +20,11 @@
   <a href="https://www.npmjs.com/package/eoas"><img src="https://img.shields.io/npm/v/eoas?label=eoas%20CLI" alt="eoas on npm" /></a>
   <a href="https://github.com/mercuretechnologies/xprem/actions"><img src="https://img.shields.io/github/actions/workflow/status/mercuretechnologies/xprem/push.yml?label=CI" alt="CI status" /></a>
   <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Enterprise-blue" alt="License" /></a>
+  <a href="https://matrix.to/#/#xprem.dev:matrix.org"><img src="https://img.shields.io/matrix/xprem.dev%3Amatrix.org?server_fqdn=matrix.org&logo=matrix&label=chat" alt="Chat on Matrix" /></a>
 </p>
 
 <p align="center">
-  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://xprem.dev">Website</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@xprem.dev">Contact</a>
+  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://xprem.dev">Website</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="https://matrix.to/#/#xprem.dev:matrix.org">Matrix</a> · <a href="mailto:contact@xprem.dev">Contact</a>
 </p>
 
 <p align="center">

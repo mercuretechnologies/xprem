@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"xprem/config"
 	"xprem/internal/cache"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -165,6 +166,9 @@ func CleanupMetrics() {
 }
 
 func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update string) {
+	if !cardinalityMetricsEnabled() {
+		return
+	}
 	computedUpdate := update
 	if computedUpdate == "" {
 		computedUpdate = "unknown"
@@ -190,7 +194,16 @@ func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update st
 	updateErrorUsersVec.WithLabelValues(appId, platform, runtime, branch, computedUpdate).Set(float64(count))
 }
 
+// cardinalityMetricsEnabled reports whether per-client tracking should run;
+// read live because tests toggle PROMETHEUS_ENABLED between cases.
+func cardinalityMetricsEnabled() bool {
+	return config.GetEnv("PROMETHEUS_ENABLED") == "true"
+}
+
 func TrackActiveUser(appId, clientId, platform, runtime, branch, update string) {
+	if !cardinalityMetricsEnabled() {
+		return
+	}
 	if appId == "" || clientId == "" || platform == "" || branch == "" || update == "" || runtime == "" {
 		return
 	}

@@ -19,6 +19,12 @@ import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 
+const formatPlatform = (platform: string) => {
+  if (platform === 'ios') return 'iOS';
+  if (platform === 'android') return 'Android';
+  return platform;
+};
+
 // Renders the active per-update rollout for a (branch, runtime version). The
 // controls (progress forward, finish, or revert) only show when the account
 // holds the update-rollout permission (canManageRollout). `updates` holds one
@@ -151,9 +157,22 @@ export const UpdateRolloutCard = ({
               <Split className="h-3.5 w-3.5" />
               Rollout in progress
             </span>
+            <div className="divide-y rounded-md border border-emerald-400/20 bg-background/50">
+              {updates.map(update => (
+                <div
+                  key={update.updateId}
+                  className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                  <span className="font-medium text-foreground">
+                    {formatPlatform(update.platform)}
+                  </span>
+                  <span className="text-right tabular-nums text-muted-foreground">
+                    Update {update.updateId} · {update.percentage}%
+                  </span>
+                </div>
+              ))}
+            </div>
             <p className="text-xs text-muted-foreground">
-              Update {updateId} · publishing to this branch and runtime version is paused until the
-              rollout ends.
+              Publishing to this branch and runtime version is paused until the rollout ends.
             </p>
             <RolloutBar value={percentage} />
             {(rolloutHealth || controlHealth) && (

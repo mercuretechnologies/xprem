@@ -235,6 +235,20 @@ WHERE a.id = $1
   AND u.checked_at IS NOT NULL
 ORDER BY u.created_at DESC;
 
+-- name: GetUpdatesPageByBranchNameAndRuntimeVersion :many
+SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash, u.platform, u.message, u.checked_at, u.rollout_percentage, u.control_update_id, u.publish_group
+FROM updates u
+JOIN runtime_versions rv ON u.runtime_version_id = rv.id
+JOIN branches b ON u.branch_id = b.id
+JOIN apps a ON b.app_id = a.id
+WHERE a.id = sqlc.arg('app_id')
+  AND rv.version = sqlc.arg('runtime_version')
+  AND b.name = sqlc.arg('branch_name')
+  AND u.checked_at IS NOT NULL
+  AND (sqlc.narg('before_id')::BIGINT IS NULL OR u.id < sqlc.narg('before_id'))
+ORDER BY u.id DESC
+LIMIT sqlc.arg('row_limit');
+
 -- name: GetUpdateFeed :many
 SELECT u.id, u.update_uuid, u.update_type, u.created_at, u.commit_hash,
        u.platform, u.message, u.rollout_percentage, u.control_update_id,
@@ -290,6 +304,51 @@ WHERE b.app_id = $1
   AND u.publish_group = $4
   AND u.checked_at IS NOT NULL
 ORDER BY u.id;
+
+-- name: GetPublishGroupsPage :many
+-- Page the newest checked row from each logical publish. Applying the cursor
+-- before the member join keeps subsequent pages bounded without splitting or
+-- repeating a publish group.
+WITH target AS MATERIALIZED (
+  SELECT b.id AS branch_id, rv.id AS runtime_version_id
+  FROM branches b
+  JOIN runtime_versions rv ON rv.app_id = b.app_id
+  WHERE b.app_id = sqlc.arg('app_id')
+    AND b.name = sqlc.arg('branch_name')
+    AND rv.version = sqlc.arg('runtime_version')
+), page_groups AS (
+  SELECT candidate.*
+  FROM target t
+  CROSS JOIN LATERAL (
+    SELECT u.publish_group, u.branch_id, u.runtime_version_id, u.id AS newest_id
+    FROM updates u
+    WHERE u.branch_id = t.branch_id
+      AND u.runtime_version_id = t.runtime_version_id
+      AND (sqlc.narg('before_id')::BIGINT IS NULL OR u.id < sqlc.narg('before_id'))
+      AND u.publish_group IS NOT NULL
+      AND u.checked_at IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM updates newer
+        WHERE newer.branch_id = u.branch_id
+          AND newer.runtime_version_id = u.runtime_version_id
+          AND newer.publish_group = u.publish_group
+          AND newer.checked_at IS NOT NULL
+          AND newer.id > u.id
+      )
+    ORDER BY u.id DESC
+    LIMIT sqlc.arg('row_limit')
+  ) candidate
+)
+SELECT pg.publish_group, pg.newest_id, u.id, u.created_at, u.platform,
+       u.commit_hash, u.message
+FROM page_groups pg
+JOIN updates u
+  ON u.publish_group = pg.publish_group
+ AND u.branch_id = pg.branch_id
+ AND u.runtime_version_id = pg.runtime_version_id
+WHERE u.checked_at IS NOT NULL
+ORDER BY pg.newest_id DESC, u.id ASC;
 
 -- name: GetUpdateMetadata :one
 SELECT updates.id, update_uuid, platform, commit_hash, message

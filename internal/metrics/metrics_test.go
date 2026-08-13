@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"xprem/internal/cache"
 	"xprem/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -301,5 +302,34 @@ func TestTrackUpdateErrorUsersFoldsOversizedLabels(t *testing.T) {
 		"appId": "err-app", "update": "^other$", "runtime": "^other$",
 	}); got != 1 {
 		t.Errorf("expected the folded error series to carry the count, got %v", got)
+	}
+}
+
+func TestPerClientTrackingSkippedWhenPrometheusDisabled(t *testing.T) {
+	cleanup := setupMetrics(t)
+	defer cleanup()
+	defer os.Setenv("PROMETHEUS_ENABLED", "true")
+
+	c := cache.GetCache()
+	appId := "disabled-metrics-app"
+	key := fmt.Sprintf("seen_users:%s:%s:%s:%s:%s", appId, "main", "ios", "1.0.0", "update-1")
+	errKey := fmt.Sprintf("update_error_users:%s:%s:%s:%s:%s", appId, "main", "ios", "1.0.0", "update-1")
+
+	os.Setenv("PROMETHEUS_ENABLED", "false")
+	metrics.TrackActiveUser(appId, "client-a", "ios", "1.0.0", "main", "update-1")
+	metrics.TrackUpdateErrorUsers(appId, "client-a", "ios", "1.0.0", "main", "update-1")
+
+	if n, _ := c.Scard(key); n != 0 {
+		t.Fatalf("active-user set grew while PROMETHEUS_ENABLED=false: got %d, want 0", n)
+	}
+	if n, _ := c.Scard(errKey); n != 0 {
+		t.Fatalf("error-user set grew while PROMETHEUS_ENABLED=false: got %d, want 0", n)
+	}
+
+	// Re-enabling must restore the behaviour, so this is a gate and not a removal.
+	os.Setenv("PROMETHEUS_ENABLED", "true")
+	metrics.TrackActiveUser(appId, "client-a", "ios", "1.0.0", "main", "update-1")
+	if n, _ := c.Scard(key); n != 1 {
+		t.Fatalf("active-user set did not record with PROMETHEUS_ENABLED=true: got %d, want 1", n)
 	}
 }
