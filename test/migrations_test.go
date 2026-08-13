@@ -42,6 +42,10 @@ func (b *dummyMigrationsBucket) UploadFileIntoUpdate(_ types.Update, _ string, _
 	b.actionsRecorded = append(b.actionsRecorded, "UploadFileIntoUpdate")
 	return nil
 }
+func (b *dummyMigrationsBucket) CopyFileIntoUpdate(_ types.Update, _ types.Update, _ string) error {
+	b.actionsRecorded = append(b.actionsRecorded, "CopyFileIntoUpdate")
+	return nil
+}
 func (b *dummyMigrationsBucket) CreateUpdateFrom(_ *types.Update, _ string) (*types.Update, error) {
 	b.actionsRecorded = append(b.actionsRecorded, "CreateUpdateFrom")
 	return nil, nil

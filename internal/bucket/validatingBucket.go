@@ -84,6 +84,19 @@ func (v *validatingBucket) UploadFileIntoUpdate(update types.Update, fileName st
 	return v.Inner.UploadFileIntoUpdate(update, fileName, file)
 }
 
+func (v *validatingBucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	if err := validateUpdate(&source); err != nil {
+		return err
+	}
+	if err := validateUpdate(&target); err != nil {
+		return err
+	}
+	if err := validateRelativePath("fileName", fileName); err != nil {
+		return err
+	}
+	return v.Inner.CopyFileIntoUpdate(source, target, fileName)
+}
+
 func (v *validatingBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
 	if err := validateSegment("appId", appId); err != nil {
 		return err

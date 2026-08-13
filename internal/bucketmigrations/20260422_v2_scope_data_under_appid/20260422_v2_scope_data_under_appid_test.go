@@ -43,6 +43,10 @@ func (u unreachableBucket) UploadFileIntoUpdate(types.Update, string, io.Reader)
 	u.t.Fatal("migration should have skipped")
 	return nil
 }
+func (u unreachableBucket) CopyFileIntoUpdate(types.Update, types.Update, string) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
 func (u unreachableBucket) DeleteUpdateFolder(string, string, string, string) error {
 	u.t.Fatal("migration should have skipped")
 	return nil

@@ -270,6 +270,23 @@ func (b *GCSBucket) PutObject(ctx context.Context, key string, body []byte) erro
 	return w.Close()
 }
 
+func (b *GCSBucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	if b.BucketName == "" {
+		return errors.New("BucketName not set")
+	}
+	ctx := context.Background()
+	bh, err := b.bucketHandle(ctx)
+	if err != nil {
+		return err
+	}
+	src := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName))
+	dst := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", target.AppId, target.Branch, target.RuntimeVersion, target.UpdateId, fileName))
+	if _, err := bh.Object(dst).CopierFrom(bh.Object(src)).Run(ctx); err != nil {
+		return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
+	}
+	return nil
+}
+
 func (b *GCSBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {
 	if b.BucketName == "" {
 		return nil, errors.New("BucketName not set")

@@ -146,6 +146,7 @@ type Bucket interface {
 	GetFile(update types.Update, assetPath string) (*types.BucketFile, error)
 	RequestUploadUrlForFileUpdate(appId string, branch string, runtimeVersion string, updateId string, fileName string) (string, error)
 	UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error
+	CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error
 	DeleteUpdateFolder(appId string, branch string, runtimeVersion string, updateId string) error
 	CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error)
 	RetrieveMigrationHistory() ([]string, error)

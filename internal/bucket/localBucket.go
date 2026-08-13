@@ -250,6 +250,16 @@ func (b *LocalBucket) UploadFileIntoUpdate(update types.Update, fileName string,
 	return nil
 }
 
+func (b *LocalBucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	sourcePath := filepath.Join(b.rootPath(), source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName)
+	in, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	return b.UploadFileIntoUpdate(target, fileName, in)
+}
+
 // GetSubjectForApp resolves the tamper-proof identity token subject (sub) based
 // on the active runtime environment mode. If no relational database configuration
 // is present, it defaults to the legacy dual-mode behavior by requesting the account
