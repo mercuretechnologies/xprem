@@ -583,6 +583,21 @@ func (q *Queries) DeleteEnterpriseLicense(ctx context.Context) error {
 	return err
 }
 
+const deleteEnvVar = `-- name: DeleteEnvVar :execresult
+DELETE FROM branch_env_vars
+WHERE app_id = $1 AND branch_id = $2 AND key = $3
+`
+
+type DeleteEnvVarParams struct {
+	AppID    pgtype.UUID `json:"app_id"`
+	BranchID int64       `json:"branch_id"`
+	Key      string      `json:"key"`
+}
+
+func (q *Queries) DeleteEnvVar(ctx context.Context, arg DeleteEnvVarParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteEnvVar, arg.AppID, arg.BranchID, arg.Key)
+}
+
 const deleteExpiredOAuthAuthorizationCodes = `-- name: DeleteExpiredOAuthAuthorizationCodes :exec
 DELETE FROM oauth_authorization_codes WHERE expires_at < CURRENT_TIMESTAMP
 `
@@ -2079,6 +2094,25 @@ func (q *Queries) GetSSOConfig(ctx context.Context) (SsoConfig, error) {
 		&i.ManualUserValidation,
 	)
 	return i, err
+}
+
+const getSealedEnvValue = `-- name: GetSealedEnvValue :one
+SELECT sealed_value
+FROM branch_env_vars
+WHERE app_id = $1 AND branch_id = $2 AND key = $3
+`
+
+type GetSealedEnvValueParams struct {
+	AppID    pgtype.UUID `json:"app_id"`
+	BranchID int64       `json:"branch_id"`
+	Key      string      `json:"key"`
+}
+
+func (q *Queries) GetSealedEnvValue(ctx context.Context, arg GetSealedEnvValueParams) (string, error) {
+	row := q.db.QueryRow(ctx, getSealedEnvValue, arg.AppID, arg.BranchID, arg.Key)
+	var sealed_value string
+	err := row.Scan(&sealed_value)
+	return sealed_value, err
 }
 
 const getSurfableBranches = `-- name: GetSurfableBranches :many
@@ -4034,6 +4068,48 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 			&i.AppVersion,
 			&i.CurrentUpdateObservedAt,
 			&i.CurrentUpdateArrivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnvVarsByAppID = `-- name: ListEnvVarsByAppID :many
+SELECT ev.key, ev.is_public, b.name AS branch_name, ev.created_at, ev.updated_at
+FROM branch_env_vars ev
+JOIN branches b ON b.id = ev.branch_id
+WHERE ev.app_id = $1
+ORDER BY b.name ASC, ev.key ASC
+`
+
+type ListEnvVarsByAppIDRow struct {
+	Key        string             `json:"key"`
+	IsPublic   bool               `json:"is_public"`
+	BranchName string             `json:"branch_name"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListEnvVarsByAppID(ctx context.Context, appID pgtype.UUID) ([]ListEnvVarsByAppIDRow, error) {
+	rows, err := q.db.Query(ctx, listEnvVarsByAppID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnvVarsByAppIDRow
+	for rows.Next() {
+		var i ListEnvVarsByAppIDRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.IsPublic,
+			&i.BranchName,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6018,6 +6094,39 @@ func (q *Queries) UpsertAndroidCredentials(ctx context.Context, arg UpsertAndroi
 		arg.SealedKeystorePassword,
 		arg.SealedKeyPassword,
 		arg.SealedGoogleServiceAccountKey,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const upsertBranchEnvVar = `-- name: UpsertBranchEnvVar :one
+INSERT INTO branch_env_vars (id, app_id, branch_id, key, is_public, sealed_value)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (app_id, branch_id, key) DO UPDATE SET
+    is_public = EXCLUDED.is_public,
+    sealed_value = EXCLUDED.sealed_value,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id
+`
+
+type UpsertBranchEnvVarParams struct {
+	ID          pgtype.UUID `json:"id"`
+	AppID       pgtype.UUID `json:"app_id"`
+	BranchID    int64       `json:"branch_id"`
+	Key         string      `json:"key"`
+	IsPublic    bool        `json:"is_public"`
+	SealedValue string      `json:"sealed_value"`
+}
+
+func (q *Queries) UpsertBranchEnvVar(ctx context.Context, arg UpsertBranchEnvVarParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertBranchEnvVar,
+		arg.ID,
+		arg.AppID,
+		arg.BranchID,
+		arg.Key,
+		arg.IsPublic,
+		arg.SealedValue,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
