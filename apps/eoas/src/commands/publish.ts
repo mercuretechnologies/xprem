@@ -28,6 +28,7 @@ import { ora } from '../lib/ora';
 import { isExpoInstalled } from '../lib/package';
 import { resolvePackageRunner, splitPackageRunner } from '../lib/packageRunner';
 import { confirmAsync } from '../lib/prompts';
+import { RateLimiter } from '../lib/rateLimiter';
 import { ensureRepoIsCleanAsync } from '../lib/repo';
 import { resolveRuntimeVersionAsync } from '../lib/runtimeVersion';
 import { resolveVcsClient } from '../lib/vcs';
@@ -97,6 +98,11 @@ export default class Publish extends Command {
       description:
         'Publish this update as a progressive rollout served to N% of devices (1-99). The remaining devices keep receiving the previous update of each branch/runtime version. With --platform all, the rollout applies independently to each platform. Progression (increase, end, revert) is managed from the dashboard.',
     }),
+    'upload-rate': Flags.string({
+      description:
+        'Maximum number of asset uploads started per second. Accepts decimals (e.g. 1.5). Lower this if your storage provider rate-limits uploads.',
+      default: '10',
+    }),
   };
   private sanitizeFlags(flags: any): {
     platform: RequestedPlatform;
@@ -110,7 +116,13 @@ export default class Publish extends Command {
     message?: string;
     dumpSourcemap: boolean;
     rolloutPercentage?: number;
+    uploadRate: number;
   } {
+    const uploadRate = Number(flags['upload-rate']);
+    if (!Number.isFinite(uploadRate) || uploadRate <= 0) {
+      Log.error('--upload-rate must be a positive number');
+      process.exit(1);
+    }
     return {
       disableRepositoryCheck: flags.disableRepositoryCheck,
       platform: flags.platform,
@@ -123,6 +135,7 @@ export default class Publish extends Command {
       message: flags.message,
       dumpSourcemap: flags.dumpSourcemap,
       rolloutPercentage: flags['rollout-percentage'],
+      uploadRate,
     };
   }
   public async run(): Promise<void> {
@@ -147,11 +160,19 @@ export default class Publish extends Command {
       message,
       dumpSourcemap,
       rolloutPercentage,
+      uploadRate,
     } = this.sanitizeFlags(flags);
     if (!branch) {
       Log.error('Branch name is required');
       process.exit(1);
     }
+    // Bucket capacity is ~1s of budget so a low --upload-rate also caps the
+    // initial burst, not just the steady rate.
+    const publishAssetsRateLimiter = new RateLimiter(
+      'publish-eoas-assets',
+      Math.max(1, Math.ceil(uploadRate)),
+      uploadRate
+    );
     const projectDir = process.cwd();
     const hasExpo = isExpoInstalled(projectDir);
     if (!hasExpo) {
@@ -361,6 +382,7 @@ export default class Publish extends Command {
       ).flat();
       await Promise.all(
         resolvedUploads.map(async ({ item: itm, absolutePath, manifestEntry }) => {
+          await publishAssetsRateLimiter.take();
           const isLocalBucketFileUpload = itm.requestUploadUrl.startsWith(
             `${serverUrl}/${appId}/uploadLocalFile`
           );
@@ -415,6 +437,7 @@ export default class Publish extends Command {
           }
         })
       );
+
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
     } catch (e) {
       uploadFilesSpinner.fail('❌ Failed to upload static files');
