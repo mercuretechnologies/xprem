@@ -22,7 +22,7 @@ import {
   requireExpoAppId,
   resolveServerUrl,
 } from '../lib/expoConfig';
-import { fetchWithRetries } from '../lib/fetch';
+import { fetchWithRetries, fetchWithRetriesRebuildingBody } from '../lib/fetch';
 import Log from '../lib/log';
 import { ora } from '../lib/ora';
 import { isExpoInstalled } from '../lib/package';
@@ -387,11 +387,15 @@ export default class Publish extends Command {
             `${serverUrl}/${appId}/uploadLocalFile`
           );
           if (isLocalBucketFileUpload) {
-            const formData = new FormData();
-            const file = fs.createReadStream(absolutePath);
-            formData.append(itm.fileName, file);
-            try {
-              const response = await fetchWithRetries(itm.requestUploadUrl, {
+            // A stream-backed body is consumed by the first attempt, so each
+            // retry rebuilds the multipart body from a buffer.
+            const fileBuffer = await fs.readFile(absolutePath);
+            const response = await fetchWithRetriesRebuildingBody(itm.requestUploadUrl, () => {
+              const formData = new FormData();
+              formData.append(itm.fileName, fileBuffer, {
+                filename: path.basename(absolutePath),
+              });
+              return {
                 method: 'PUT',
                 headers: {
                   ...formData.getHeaders(),
@@ -401,13 +405,11 @@ export default class Publish extends Command {
                 // The URL was validated as a string; following a redirect would
                 // send these bytes to an origin nothing ever checked.
                 redirect: 'error',
-              });
-              if (!response.ok) {
-                Log.error('Failed to upload file', await response.text());
-                throw new Error('Failed to upload file');
-              }
-            } finally {
-              file.close();
+              };
+            });
+            if (!response.ok) {
+              Log.error('Failed to upload file', await response.text());
+              throw new Error('Failed to upload file');
             }
             return;
           }

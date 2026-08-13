@@ -1,7 +1,15 @@
+import FormData from 'form-data';
 import { Response } from 'node-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchWithRetries, isRetryableStatus, retryAfterMs } from '../fetch';
+import {
+  fetchWithRetries,
+  fetchWithRetriesRebuildingBody,
+  isRetryableStatus,
+  redactUrl,
+  retryAfterMs,
+} from '../fetch';
+import Log from '../log';
 
 vi.mock('node-fetch', async importOriginal => {
   const actual = await importOriginal<typeof import('node-fetch')>();
@@ -117,5 +125,75 @@ describe('#fetchWithRetries', () => {
     await vi.advanceTimersByTimeAsync(1_100);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect((await promise).status).toBe(200);
+  });
+
+  it('does not log upload credentials on retry', async () => {
+    const warn = vi.spyOn(Log, 'warn').mockImplementation(() => {});
+    mockFetch.mockResolvedValueOnce(response(503)).mockResolvedValueOnce(response(200));
+    await settled(fetchWithRetries('https://storage.example.com/upload?token=supersecret', {}));
+    const logged = warn.mock.calls.flat().join(' ');
+    expect(logged).toContain('https://storage.example.com/upload');
+    expect(logged).not.toContain('supersecret');
+    warn.mockRestore();
+  });
+});
+
+describe('#redactUrl', () => {
+  it('strips the query string', () => {
+    expect(redactUrl('https://bucket.s3.example.com/key?X-Amz-Signature=secret')).toBe(
+      'https://bucket.s3.example.com/key'
+    );
+  });
+
+  it('never throws on garbage', () => {
+    expect(redactUrl('not a url')).toBe('<unparseable url>');
+  });
+});
+
+describe('#fetchWithRetriesRebuildingBody', () => {
+  it('rebuilds the multipart body for each attempt', async () => {
+    mockFetch.mockResolvedValueOnce(response(503)).mockResolvedValueOnce(response(200));
+    const bodies: FormData[] = [];
+    const res = await settled(
+      fetchWithRetriesRebuildingBody('https://server.example.com/uploadLocalFile', () => {
+        const formData = new FormData();
+        formData.append('asset', Buffer.from('file-bytes'), { filename: 'asset.png' });
+        bodies.push(formData);
+        return { method: 'PUT', body: formData };
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).not.toBe(bodies[1]);
+    // The retried attempt carries the full payload, not a drained stream.
+    const retriedBody = mockFetch.mock.calls[1][1]?.body as FormData;
+    expect(retriedBody.getBuffer().toString()).toContain('file-bytes');
+  });
+
+  it('retries a network error with a fresh body', async () => {
+    mockFetch
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce(response(200));
+    let built = 0;
+    const res = await settled(
+      fetchWithRetriesRebuildingBody('https://server.example.com/upload', () => {
+        built += 1;
+        return { method: 'PUT' };
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(built).toBe(2);
+  });
+
+  it('gives up after the retry budget and returns the last response', async () => {
+    mockFetch.mockResolvedValue(response(503));
+    const res = await settled(
+      fetchWithRetriesRebuildingBody('https://server.example.com/upload', () => ({
+        method: 'PUT',
+      }))
+    );
+    expect(res.status).toBe(503);
+    expect(mockFetch).toHaveBeenCalledTimes(5);
   });
 });
