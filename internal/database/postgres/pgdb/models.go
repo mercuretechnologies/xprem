@@ -95,6 +95,17 @@ type Branch struct {
 	Protected bool               `json:"protected"`
 }
 
+type BranchEnvVar struct {
+	ID          pgtype.UUID        `json:"id"`
+	AppID       pgtype.UUID        `json:"app_id"`
+	BranchID    int64              `json:"branch_id"`
+	Key         string             `json:"key"`
+	IsPublic    bool               `json:"is_public"`
+	SealedValue string             `json:"sealed_value"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Channel struct {
 	ID                   int64              `json:"id"`
 	AppID                pgtype.UUID        `json:"app_id"`

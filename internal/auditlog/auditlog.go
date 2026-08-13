@@ -100,6 +100,9 @@ const (
 	ActionAppIdentifierBuildNumberSet Action = "app_identifier.build_number_set"
 	ActionAndroidCredentialsSaved   Action = "android_credentials.saved"
 	ActionAndroidCredentialsDeleted Action = "android_credentials.deleted"
+	ActionEnvVarUpdated             Action = "env_var.updated"
+	ActionEnvVarDeleted             Action = "env_var.deleted"
+	ActionEnvVarRevealed            Action = "env_var.revealed"
 
 	// Access control. permission.denied is the single event for authorization
 	// refusals (the RBAC middleware emits it, with OutcomeDenied); domain

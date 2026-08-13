@@ -2376,3 +2376,28 @@ WHERE app_identifiers.app_id = $1 AND app_identifiers.id = $2
   AND NOT EXISTS (
       SELECT 1 FROM android_credentials ac WHERE ac.app_identifier_id = app_identifiers.id
   );
+
+-- name: UpsertBranchEnvVar :one
+INSERT INTO branch_env_vars (id, app_id, branch_id, key, is_public, sealed_value)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (app_id, branch_id, key) DO UPDATE SET
+    is_public = EXCLUDED.is_public,
+    sealed_value = EXCLUDED.sealed_value,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id;
+
+-- name: ListEnvVarsByAppID :many
+SELECT ev.key, ev.is_public, b.name AS branch_name, ev.created_at, ev.updated_at
+FROM branch_env_vars ev
+JOIN branches b ON b.id = ev.branch_id
+WHERE ev.app_id = $1
+ORDER BY b.name ASC, ev.key ASC;
+
+-- name: GetSealedEnvValue :one
+SELECT sealed_value
+FROM branch_env_vars
+WHERE app_id = $1 AND branch_id = $2 AND key = $3;
+
+-- name: DeleteEnvVar :execresult
+DELETE FROM branch_env_vars
+WHERE app_id = $1 AND branch_id = $2 AND key = $3;
