@@ -305,12 +305,6 @@ func TestTrackUpdateErrorUsersFoldsOversizedLabels(t *testing.T) {
 	}
 }
 
-// TrackActiveUser and TrackUpdateErrorUsers are the only Track* functions that
-// remember individual clients, by Sadd-ing the client id into a cache set held
-// for the metric's TTL. On the local cache that set lives in the process, so it
-// grows with unique devices in the window. /metrics is only served when
-// PROMETHEUS_ENABLED is true, so with it unset that memory backs a gauge nobody
-// can scrape — these assert the per-client state is not paid for in that case.
 func TestPerClientTrackingSkippedWhenPrometheusDisabled(t *testing.T) {
 	cleanup := setupMetrics(t)
 	defer cleanup()

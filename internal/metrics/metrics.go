@@ -194,23 +194,8 @@ func TrackUpdateErrorUsers(appId, clientId, platform, runtime, branch, update st
 	updateErrorUsersVec.WithLabelValues(appId, platform, runtime, branch, computedUpdate).Set(float64(count))
 }
 
-// cardinalityMetricsEnabled reports whether anything can ever read the metrics
-// that cost per-client state to maintain.
-//
-// TrackActiveUser and TrackUpdateErrorUsers are the only two Track* functions
-// that remember individual clients: each Sadd's the client id into a cache set
-// held for the metric's TTL (4h and 10m). On the local cache that set lives in
-// the process, so its size tracks unique devices in the window — the "one entry
-// per device on a fleet of a million" the LocalCache sweep comment warns about.
-//
-// /metrics is only registered when PROMETHEUS_ENABLED is true (see
-// registerInfraRoutes), so with it unset that memory backs a gauge no one can
-// scrape. This is the same reasoning as maxSeriesPerMetric above — bound what a
-// remote caller can make the process remember — applied to the cache sets
-// rather than to Prometheus series.
-//
-// Read live rather than cached at init: GetEnv reads the environment on each
-// call, and the tests toggle PROMETHEUS_ENABLED between cases.
+// cardinalityMetricsEnabled reports whether per-client tracking should run;
+// read live because tests toggle PROMETHEUS_ENABLED between cases.
 func cardinalityMetricsEnabled() bool {
 	return config.GetEnv("PROMETHEUS_ENABLED") == "true"
 }
