@@ -309,7 +309,7 @@ func (b *AzureBucket) CopyFileIntoUpdate(source types.Update, target types.Updat
 	if err != nil {
 		return fmt.Errorf("sign source %s: %w", srcKey, err)
 	}
-	copyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	copyCtx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
 	defer cancel()
 	if err := copyBlobAndWait(copyCtx, cc, srcURL, dstKey); err != nil {
 		return fmt.Errorf("copy %s -> %s: %w", srcKey, dstKey, err)

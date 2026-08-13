@@ -274,7 +274,10 @@ func (b *GCSBucket) CopyFileIntoUpdate(source types.Update, target types.Update,
 	if b.BucketName == "" {
 		return errors.New("BucketName not set")
 	}
-	ctx := context.Background()
+	// Bounded so a stalled provider call cannot hold up the publish response;
+	// the caller treats a timed-out copy as "upload it instead".
+	ctx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
+	defer cancel()
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return err

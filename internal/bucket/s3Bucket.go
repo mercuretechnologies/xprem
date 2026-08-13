@@ -333,7 +333,11 @@ func (b *S3Bucket) CopyFileIntoUpdate(source types.Update, target types.Update, 
 	}
 	sourceKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName))
 	targetKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", target.AppId, target.Branch, target.RuntimeVersion, target.UpdateId, fileName))
-	_, err = s3Client.CopyObject(context.TODO(), &s3.CopyObjectInput{
+	// Bounded so a stalled provider call cannot hold up the publish response;
+	// the caller treats a timed-out copy as "upload it instead".
+	copyCtx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
+	defer cancel()
+	_, err = s3Client.CopyObject(copyCtx, &s3.CopyObjectInput{
 		Bucket:     awssdk.String(b.BucketName),
 		CopySource: awssdk.String(url.QueryEscape(b.BucketName + "/" + sourceKey)),
 		Key:        awssdk.String(targetKey),

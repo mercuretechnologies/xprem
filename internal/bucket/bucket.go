@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"xprem/config"
 	"xprem/internal/types"
@@ -20,6 +21,10 @@ var s3KeyPrefixDeprecationOnce sync.Once
 // filesystem paths while staying comfortably above realistic names
 // (UUIDs are 36, semver+build metadata under 100).
 const maxSegmentLen = 128
+
+// copyFileTimeout bounds a single CopyFileIntoUpdate provider call, so a
+// stalled copy degrades into a regular upload instead of hanging the publish.
+const copyFileTimeout = 30 * time.Second
 
 // validateSegment ensures a single-segment identifier (branch, runtimeVersion,
 // updateId, migrationId) is safe to embed in a storage path / object key.
