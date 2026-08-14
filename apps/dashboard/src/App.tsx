@@ -25,6 +25,9 @@ import { RequiresApp } from '@/components/RequiresApp';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Branches } from '@/pages/Branches';
 import { useSettings } from '@/lib/SettingsContext';
+import { BuildCredentials } from './pages/BuildCredentials';
+import { AppIdentifierDetail } from './pages/BuildCredentials/AppIdentifierDetail';
+import { EnvironmentVariables } from './pages/EnvironmentVariables';
 
 const Observe = lazy(() =>
   import('@/ee/pages/Observe').then(module => ({ default: module.Observe }))
@@ -139,6 +142,12 @@ export const App = () => {
                         <Route path="/sso" element={withLayout(<Sso />)} />
                         <Route path="/license" element={withLayout(<License />)} />
                         <Route path="/account" element={withLayout(<Account />)} />
+                        <Route path="/build-credentials" element={withLayout(withApp(<BuildCredentials />))} />
+                        <Route
+                          path="/build-credentials/:identifierId"
+                          element={withLayout(withApp(<AppIdentifierDetail />))}
+                        />
+                        <Route path="/environment-variables" element={withLayout(<EnvironmentVariables />)} />
                         <Route path="/logout" element={withLayout(<Logout />)} />
                       </Routes>
                     </SelectedAppProvider>

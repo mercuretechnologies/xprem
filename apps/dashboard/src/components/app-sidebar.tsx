@@ -256,6 +256,7 @@ const ExpandableSection = ({
 const serverPaths = ['/settings', '/license', '/account'];
 const accessSecurityPaths = ['/users', '/roles', '/sso', '/audit-logs'];
 const otaPaths = ['/updates', '/channels', '/branches']
+const buildPaths = ['/build-credentials', "/environment-variables"]
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -430,8 +431,8 @@ export function AppSidebar({
                     <ExpandableSection
                       label="Builds"
                       icon={Wrench}
-                      to={'/credentials'}
-                      paths={otaPaths}
+                      to={'/build-credentials'}
+                      paths={buildPaths}
                       onNavigate={onNavigate}>
                         <SubNavLink to="/build-credentials" icon={Key} onNavigate={onNavigate}>
                           Credentials
