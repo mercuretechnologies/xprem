@@ -575,6 +575,10 @@ func (fakeRolloutBucket) UploadFileIntoUpdate(_ types.Update, _ string, _ io.Rea
 	return nil
 }
 
+func (fakeRolloutBucket) CopyFileIntoUpdate(_ types.Update, _ types.Update, _ string) error {
+	return nil
+}
+
 func (fakeRolloutBucket) DeleteUpdateFolder(_, _, _, _ string) error { return nil }
 
 func (fakeRolloutBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {

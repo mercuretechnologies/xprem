@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -318,6 +319,31 @@ func (b *S3Bucket) PutObject(ctx context.Context, key string, body []byte) error
 	}
 	if _, err := s3Client.PutObject(ctx, input); err != nil {
 		return fmt.Errorf("PutObject error: %w", err)
+	}
+	return nil
+}
+
+func (b *S3Bucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	if b.BucketName == "" {
+		return errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return fmt.Errorf("error getting S3 client: %w", err)
+	}
+	sourceKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName))
+	targetKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", target.AppId, target.Branch, target.RuntimeVersion, target.UpdateId, fileName))
+	// Bounded so a stalled provider call cannot hold up the publish response;
+	// the caller treats a timed-out copy as "upload it instead".
+	copyCtx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
+	defer cancel()
+	_, err = s3Client.CopyObject(copyCtx, &s3.CopyObjectInput{
+		Bucket:     awssdk.String(b.BucketName),
+		CopySource: awssdk.String(url.QueryEscape(b.BucketName + "/" + sourceKey)),
+		Key:        awssdk.String(targetKey),
+	})
+	if err != nil {
+		return fmt.Errorf("error copying object %s -> %s: %w", sourceKey, targetKey, err)
 	}
 	return nil
 }
