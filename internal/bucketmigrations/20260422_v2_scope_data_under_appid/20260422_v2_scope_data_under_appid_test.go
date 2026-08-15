@@ -55,6 +55,14 @@ func (u unreachableBucket) CreateUpdateFrom(*types.Update, string) (*types.Updat
 	u.t.Fatal("migration should have skipped")
 	return nil, nil
 }
+func (u unreachableBucket) GetInstanceID() (string, error) {
+	u.t.Fatal("migration should have skipped")
+	return "", nil
+}
+func (u unreachableBucket) PersistInstanceID(string) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
 func (u unreachableBucket) RetrieveMigrationHistory() ([]string, error) {
 	u.t.Fatal("migration should have skipped")
 	return nil, nil

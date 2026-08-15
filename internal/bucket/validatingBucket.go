@@ -123,6 +123,14 @@ func (v *validatingBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpd
 	return v.Inner.CreateUpdateFrom(previousUpdate, newUpdateId)
 }
 
+func (v *validatingBucket) GetInstanceID() (string, error) {
+	return v.Inner.GetInstanceID()
+}
+
+func (v *validatingBucket) PersistInstanceID(id string) error {
+	return v.Inner.PersistInstanceID(id)
+}
+
 func (v *validatingBucket) RetrieveMigrationHistory() ([]string, error) {
 	return v.Inner.RetrieveMigrationHistory()
 }

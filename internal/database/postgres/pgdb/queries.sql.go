@@ -1953,6 +1953,17 @@ func (q *Queries) GetSSOConfig(ctx context.Context) (SsoConfig, error) {
 	return i, err
 }
 
+const getServerInstanceID = `-- name: GetServerInstanceID :one
+SELECT id FROM server_instance
+`
+
+func (q *Queries) GetServerInstanceID(ctx context.Context) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getServerInstanceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getSurfableBranches = `-- name: GetSurfableBranches :many
 SELECT b.name AS branch_name, MAX(u.created_at)::timestamptz AS last_update_at
 FROM branches b
@@ -3092,6 +3103,22 @@ func (q *Queries) InsertSSOIdentity(ctx context.Context, arg InsertSSOIdentityPa
 		arg.Email,
 	)
 	return err
+}
+
+const insertServerInstance = `-- name: InsertServerInstance :one
+INSERT INTO server_instance (id)
+VALUES ($1)
+ON CONFLICT (singleton) DO NOTHING
+RETURNING id
+`
+
+// ON CONFLICT DO NOTHING returns no row when another replica minted the id
+// first; the caller falls back to reading the winner's row.
+func (q *Queries) InsertServerInstance(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertServerInstance, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const insertUpdate = `-- name: InsertUpdate :one

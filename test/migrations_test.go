@@ -50,6 +50,10 @@ func (b *dummyMigrationsBucket) CreateUpdateFrom(_ *types.Update, _ string) (*ty
 	b.actionsRecorded = append(b.actionsRecorded, "CreateUpdateFrom")
 	return nil, nil
 }
+func (b *dummyMigrationsBucket) GetInstanceID() (string, error) { return "", nil }
+func (b *dummyMigrationsBucket) PersistInstanceID(_ string) error {
+	return nil
+}
 func (b *dummyMigrationsBucket) RetrieveMigrationHistory() ([]string, error) {
 	return b.migrationsHistory, nil
 }

@@ -157,6 +157,8 @@ type Bucket interface {
 	RetrieveMigrationHistory() ([]string, error)
 	ApplyMigration(migrationId string) error
 	RemoveMigrationFromHistory(migrationId string) error
+	GetInstanceID() (string, error)
+	PersistInstanceID(id string) error
 }
 
 type BucketType string

@@ -15,6 +15,7 @@ import (
 	"xprem/ee/observe"
 	"xprem/ee/rbac"
 	"xprem/ee/sso"
+	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/database"
@@ -107,6 +108,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var explorer *observe.Explorer
 	var checkInRecorder *observe.CheckInRecorder
 
+	telemetryEnabled := !config.IsServerTelemetryDisabled() && !config.IsTestMode()
+	var instanceId string
+	var instanceIdErr error
+
 	cleanup := func() {}
 	// Releases in reverse acquisition order.
 	addCleanup := func(release func()) {
@@ -156,6 +161,11 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		updateRepo = pgUpdateStore
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
 
+		if telemetryEnabled {
+			seedInstanceId, _ := resolvedBucket.GetInstanceID()
+			instanceId, instanceIdErr = store.NewPostgresServerInstanceStore(dbEngine).GetOrCreateInstanceID(ctx, seedInstanceId)
+		}
+
 		if config.IsDeviceTelemetryDisabled() {
 			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
@@ -193,6 +203,17 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		branchRepo = store.NewBucketBranchStore(resolvedBucket)
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
+		if telemetryEnabled {
+			instanceId, instanceIdErr = store.NewBucketServerInstanceStore(resolvedBucket, cache.GetCache()).GetOrCreateInstanceID(ctx)
+		}
+	}
+
+	if telemetryEnabled {
+		if instanceIdErr != nil {
+			log.Printf("⚠️  [TELEMETRY] Could not resolve the server instance id, heartbeats stay off for this run: %v", instanceIdErr)
+		} else {
+			telemetry.NewTelemetryService(userRepo, appRepo, instanceId).Start(ctx)
+		}
 	}
 
 	// The router starts the geo resolver in every mode, so its cleanup does

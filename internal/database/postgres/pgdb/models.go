@@ -215,6 +215,12 @@ type RuntimeVersion struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ServerInstance struct {
+	Singleton bool               `json:"singleton"`
+	ID        pgtype.UUID        `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type SsoConfig struct {
 	Singleton            bool               `json:"singleton"`
 	Issuer               string             `json:"issuer"`

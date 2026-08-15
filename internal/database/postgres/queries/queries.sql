@@ -2377,3 +2377,14 @@ JOIN runtime_versions rv ON rv.id = u.runtime_version_id AND rv.app_id = $1
 WHERE b.app_id = $1 AND rv.version = $2 AND u.platform = @platform::text
 GROUP BY b.id, b.name
 ORDER BY MAX(u.created_at) DESC, b.name ASC;
+
+-- name: GetServerInstanceID :one
+SELECT id FROM server_instance;
+
+-- name: InsertServerInstance :one
+-- ON CONFLICT DO NOTHING returns no row when another replica minted the id
+-- first; the caller falls back to reading the winner's row.
+INSERT INTO server_instance (id)
+VALUES ($1)
+ON CONFLICT (singleton) DO NOTHING
+RETURNING id;
