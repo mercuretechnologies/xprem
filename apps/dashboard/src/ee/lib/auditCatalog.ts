@@ -35,7 +35,13 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
   },
   {
     label: 'Enterprise administration',
-    actions: ['license.activated', 'license.removed', 'sso_config.saved', 'sso_config.deleted'],
+    actions: [
+      'license.activated',
+      'license.removed',
+      'license.suspended',
+      'sso_config.saved',
+      'sso_config.deleted',
+    ],
   },
   {
     label: 'App management',

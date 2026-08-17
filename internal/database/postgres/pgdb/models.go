@@ -148,10 +148,20 @@ type DeviceUpdateRuntimeState struct {
 }
 
 type EnterpriseLicense struct {
-	Singleton  bool               `json:"singleton"`
-	LicenseKey string             `json:"license_key"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	Singleton              bool               `json:"singleton"`
+	LicenseKey             string             `json:"license_key"`
+	SealedActivationSecret string             `json:"sealed_activation_secret"`
+	OrgName                string             `json:"org_name"`
+	PlanCode               string             `json:"plan_code"`
+	SubscriptionStartAt    pgtype.Timestamptz `json:"subscription_start_at"`
+	SubscriptionEndAt      pgtype.Timestamptz `json:"subscription_end_at"`
+	SubscriptionRenewalAt  pgtype.Timestamptz `json:"subscription_renewal_at"`
+	ActivatedAt            pgtype.Timestamptz `json:"activated_at"`
+	LastValidatedAt        pgtype.Timestamptz `json:"last_validated_at"`
+	ValidationFailedAt     pgtype.Timestamptz `json:"validation_failed_at"`
+	ValidationErrorCode    *string            `json:"validation_error_code"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 }
 
 type IdentitySchema struct {

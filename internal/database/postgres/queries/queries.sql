@@ -793,10 +793,47 @@ SELECT * FROM enterprise_license
 WHERE singleton;
 
 -- name: UpsertEnterpriseLicense :one
-INSERT INTO enterprise_license (singleton, license_key)
-VALUES (TRUE, $1)
-ON CONFLICT (singleton) DO UPDATE
-SET license_key = EXCLUDED.license_key, updated_at = CURRENT_TIMESTAMP
+INSERT INTO enterprise_license (
+    singleton, license_key, sealed_activation_secret, org_name, plan_code,
+    subscription_start_at, subscription_end_at, subscription_renewal_at,
+    activated_at, last_validated_at
+)
+VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT (singleton) DO UPDATE SET
+    license_key = EXCLUDED.license_key,
+    sealed_activation_secret = EXCLUDED.sealed_activation_secret,
+    org_name = EXCLUDED.org_name,
+    plan_code = EXCLUDED.plan_code,
+    subscription_start_at = EXCLUDED.subscription_start_at,
+    subscription_end_at = EXCLUDED.subscription_end_at,
+    subscription_renewal_at = EXCLUDED.subscription_renewal_at,
+    activated_at = CURRENT_TIMESTAMP,
+    last_validated_at = CURRENT_TIMESTAMP,
+    validation_failed_at = NULL,
+    validation_error_code = NULL,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING *;
+
+-- name: MarkEnterpriseLicenseValidated :one
+UPDATE enterprise_license SET
+    org_name = $1,
+    plan_code = $2,
+    subscription_start_at = $3,
+    subscription_end_at = $4,
+    subscription_renewal_at = $5,
+    last_validated_at = CURRENT_TIMESTAMP,
+    validation_failed_at = NULL,
+    validation_error_code = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE singleton
+RETURNING *;
+
+-- name: MarkEnterpriseLicenseValidationFailed :one
+UPDATE enterprise_license SET
+    validation_failed_at = COALESCE(validation_failed_at, CURRENT_TIMESTAMP),
+    validation_error_code = $1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE singleton
 RETURNING *;
 
 -- name: DeleteEnterpriseLicense :exec

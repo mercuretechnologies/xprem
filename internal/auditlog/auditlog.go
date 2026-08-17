@@ -64,6 +64,7 @@ const (
 	// Enterprise administration.
 	ActionLicenseActivated Action = "license.activated"
 	ActionLicenseRemoved   Action = "license.removed"
+	ActionLicenseSuspended Action = "license.suspended"
 	ActionSSOConfigSaved   Action = "sso_config.saved"
 	ActionSSOConfigDeleted Action = "sso_config.deleted"
 

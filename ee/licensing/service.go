@@ -8,58 +8,97 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 	"xprem/internal/auditlog"
+	"xprem/internal/cache"
 	"xprem/internal/services"
+	"xprem/internal/version"
 )
 
-// StoredLicense is the persisted license key row, plus when it was last
-// written (i.e. when the key was activated on this deployment).
+// GracePeriod is how long a failing license keeps enterprise features on.
+const GracePeriod = 7 * 24 * time.Hour
+
+const (
+	validateInterval = 15 * time.Minute
+	validateLockKey  = "license-validate-lock"
+	// Shorter than the interval so the next tick can always reclaim the lock.
+	validateLockTTLSeconds = 840
+)
+
+// StoredLicense is the persisted activation, without the activation secret
+// (see LicenseRepository.GetActivationSecret).
 type StoredLicense struct {
-	Key       string
-	UpdatedAt time.Time
+	Key                 string
+	License             License
+	ActivatedAt         time.Time
+	LastValidatedAt     *time.Time
+	ValidationFailedAt  *time.Time
+	ValidationErrorCode string
 }
 
 // LicenseRepository is the enterprise_license table, a single row holding the
-// key. It has no bucket implementation on purpose: license activation only
-// exists on the control plane, stateless deployments run community edition.
+// activation.
 type LicenseRepository interface {
-	// GetLicense returns nil (no error) when no key has been stored yet.
+	// GetLicense returns nil (no error) when no license has been attached.
 	GetLicense(ctx context.Context) (*StoredLicense, error)
-	UpsertLicense(ctx context.Context, key string) (StoredLicense, error)
+	GetActivationSecret(ctx context.Context) (string, error)
+	SaveActivation(ctx context.Context, key string, activationSecret string, license License) (StoredLicense, error)
+	MarkValidated(ctx context.Context, license License) (StoredLicense, error)
+	// MarkValidationFailed keeps the first failure timestamp on repeats.
+	MarkValidationFailed(ctx context.Context, errorCode string) (StoredLicense, error)
 	DeleteLicense(ctx context.Context) error
 }
 
 // ErrLicenseRequiresControlPlane is answered by every method when the service
-// was built without a repository (stateless mode), mapped to a 400 by the
-// handler.
+// was built without a repository (stateless mode).
 var ErrLicenseRequiresControlPlane = errors.New("the enterprise license is managed in the database: this deployment runs in stateless mode, which is community edition only")
 
-// LicenseStatus describes the stored key and what it unlocks. License is set
-// whenever the key's signature verifies, including for an expired license, so
-// the dashboard can show *when* it expired. Err carries the reason the key is
-// not usable (malformed, bad signature, expired); a valid active license has
-// License != nil and Err == nil.
+// LicenseStatus describes the stored activation and what it unlocks.
 type LicenseStatus struct {
-	HasKey      bool
-	License     *License
-	ActivatedAt time.Time
-	Err         error
+	HasKey              bool
+	License             *License
+	ActivatedAt         time.Time
+	LastValidatedAt     *time.Time
+	ValidationFailedAt  *time.Time
+	ValidationErrorCode string
 }
 
+// GraceDeadline is when the failing license drops, nil while validation holds.
+func (s LicenseStatus) GraceDeadline() *time.Time {
+	if s.ValidationFailedAt == nil {
+		return nil
+	}
+	deadline := s.ValidationFailedAt.Add(GracePeriod)
+	return &deadline
+}
+
+// Suspended reports whether the grace window is exhausted.
+func (s LicenseStatus) Suspended() bool {
+	deadline := s.GraceDeadline()
+	return deadline != nil && time.Now().After(*deadline)
+}
+
+// Valid reports whether enterprise features are on.
 func (s LicenseStatus) Valid() bool {
-	return s.License != nil && s.Err == nil
+	return s.HasKey && !s.Suspended()
 }
 
-// LicenseService owns the stored enterprise license key: it verifies keys
-// before persisting them and keeps the process-wide activation state
-// (licensing.IsEnterprise) in sync with the database.
+// LicenseService owns the stored activation and keeps the process-wide
+// activation state in sync with the database.
 type LicenseService struct {
-	repo LicenseRepository
-	// onAuditEvent is the audit emission seam; nil means license changes
-	// leave no events. Only the admin-called Activate/Remove emit, the boot
-	// load and the sync poll are state convergence, not actions.
+	repo         LicenseRepository
+	client       *Client
+	instanceId   string
+	baseUrl      string
 	onAuditEvent auditlog.RecordFunc
+}
+
+// NewLicenseService accepts a nil repository (stateless mode); every method
+// then answers ErrLicenseRequiresControlPlane.
+func NewLicenseService(repo LicenseRepository, client *Client, instanceId string, baseUrl string) *LicenseService {
+	// The server matches baseUrl by exact string equality.
+	return &LicenseService{repo: repo, client: client, instanceId: instanceId, baseUrl: strings.TrimSuffix(baseUrl, "/")}
 }
 
 // SetOnAuditEvent plugs the audit emission seam. Nil-safe.
@@ -67,8 +106,6 @@ func (s *LicenseService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
-// recordLicenseEvent reports an admin license action, actor = the admin
-// principal on the request context (both routes are admin-gated).
 func (s *LicenseService) recordLicenseEvent(ctx context.Context, action auditlog.Action, metadata map[string]any) {
 	if s.onAuditEvent == nil {
 		return
@@ -92,30 +129,57 @@ func (s *LicenseService) recordLicenseEvent(ctx context.Context, action auditlog
 	})
 }
 
-// NewLicenseService accepts a nil repository (stateless mode); every method
-// then answers ErrLicenseRequiresControlPlane.
-func NewLicenseService(repo LicenseRepository) *LicenseService {
-	return &LicenseService{repo: repo}
+func (s *LicenseService) recordSuspendedEvent(ctx context.Context, errorCode string) {
+	if s.onAuditEvent == nil {
+		return
+	}
+	s.onAuditEvent(ctx, auditlog.Event{
+		ActorType:    auditlog.ActorSystem,
+		ActorID:      "license-validation",
+		ActorDisplay: "license validation",
+		Action:       auditlog.ActionLicenseSuspended,
+		TargetType:   "license",
+		TargetID:     "license",
+		Outcome:      auditlog.OutcomeSuccess,
+		Metadata:     map[string]any{"error_code": errorCode},
+	})
 }
 
 func (s *LicenseService) statusOf(stored *StoredLicense) LicenseStatus {
 	if stored == nil {
 		return LicenseStatus{}
 	}
-	status := LicenseStatus{HasKey: true, ActivatedAt: stored.UpdatedAt}
-	license, err := Parse(stored.Key)
-	if err != nil {
-		status.Err = err
-		return status
+	license := stored.License
+	return LicenseStatus{
+		HasKey:              true,
+		License:             &license,
+		ActivatedAt:         stored.ActivatedAt,
+		LastValidatedAt:     stored.LastValidatedAt,
+		ValidationFailedAt:  stored.ValidationFailedAt,
+		ValidationErrorCode: stored.ValidationErrorCode,
 	}
-	status.License = license
-	if license.Expired() {
-		status.Err = ErrExpired
-	}
-	return status
 }
 
-// Status reports on the stored key without touching the activation state.
+func applyStatus(status LicenseStatus) {
+	if status.Valid() {
+		Activate(*status.License)
+	} else {
+		Deactivate()
+	}
+}
+
+func (s *LicenseService) keyParams(key string) KeyParams {
+	return KeyParams{
+		InstanceId: s.instanceId,
+		LicenseKey: key,
+		BaseUrl:    s.baseUrl,
+		Version:    version.Version,
+	}
+}
+
+var ErrInstanceIdUnavailable = errors.New("licensing: the server instance id is unavailable, see the boot logs")
+
+// Status reports on the stored activation without touching anything.
 func (s *LicenseService) Status(ctx context.Context) (LicenseStatus, error) {
 	if s.repo == nil {
 		return LicenseStatus{}, ErrLicenseRequiresControlPlane
@@ -127,37 +191,63 @@ func (s *LicenseService) Status(ctx context.Context) (LicenseStatus, error) {
 	return s.statusOf(stored), nil
 }
 
-// Activate verifies a key, persists it as the deployment's license and makes
-// it the active license for this process. An invalid or expired key is
-// rejected without overwriting the stored one.
-func (s *LicenseService) Activate(ctx context.Context, key string) (LicenseStatus, error) {
+func planSupported(l License) bool {
+	return strings.EqualFold(l.PlanCode, PlanEnterprise)
+}
+
+// Check asks the license server whether a key is usable, without consuming it.
+func (s *LicenseService) Check(ctx context.Context, key string) (CheckResult, error) {
+	if s.repo == nil {
+		return CheckResult{}, ErrLicenseRequiresControlPlane
+	}
+	if s.instanceId == "" {
+		return CheckResult{}, ErrInstanceIdUnavailable
+	}
+	result, err := s.client.Check(ctx, s.keyParams(key))
+	if err != nil {
+		return CheckResult{}, err
+	}
+	if result.Valid && !planSupported(*result.License) {
+		return CheckResult{ErrorCode: CodePlanNotSupported}, nil
+	}
+	return result, nil
+}
+
+// Attach checks the key, then consumes it on the license server and persists
+// the activation.
+func (s *LicenseService) Attach(ctx context.Context, key string) (LicenseStatus, error) {
 	if s.repo == nil {
 		return LicenseStatus{}, ErrLicenseRequiresControlPlane
 	}
-	license, err := Parse(key)
+	if s.instanceId == "" {
+		return LicenseStatus{}, ErrInstanceIdUnavailable
+	}
+	check, err := s.Check(ctx, key)
 	if err != nil {
 		return LicenseStatus{}, err
 	}
-	if license.Expired() {
-		return LicenseStatus{}, ErrExpired
+	if !check.Valid {
+		return LicenseStatus{}, &DecisionError{Code: check.ErrorCode}
 	}
-	stored, err := s.repo.UpsertLicense(ctx, key)
+	activation, err := s.client.Attach(ctx, s.keyParams(key))
 	if err != nil {
 		return LicenseStatus{}, err
 	}
-	if _, err := Activate(key); err != nil {
-		// Unreachable in practice: the key just parsed and is not expired.
+	// The attach consumed the single-use key server-side; a cancelled request
+	// must not lose the only copy of the activation secret.
+	stored, err := s.repo.SaveActivation(context.WithoutCancel(ctx), key, activation.ActivationSecret, activation.License)
+	if err != nil {
 		return LicenseStatus{}, err
 	}
-	metadata := map[string]any{"license_id": license.LicenseID}
-	if license.Expiry != nil {
-		metadata["expires_at"] = license.Expiry.Format(time.RFC3339)
-	}
-	s.recordLicenseEvent(ctx, auditlog.ActionLicenseActivated, metadata)
-	return LicenseStatus{HasKey: true, License: license, ActivatedAt: stored.UpdatedAt}, nil
+	Activate(stored.License)
+	s.recordLicenseEvent(ctx, auditlog.ActionLicenseActivated, map[string]any{
+		"org":       stored.License.OrgName,
+		"plan_code": stored.License.PlanCode,
+	})
+	return s.statusOf(&stored), nil
 }
 
-// Remove deletes the stored key and drops back to community edition.
+// Remove deletes the stored activation and drops back to community edition.
 func (s *LicenseService) Remove(ctx context.Context) error {
 	if s.repo == nil {
 		return ErrLicenseRequiresControlPlane
@@ -165,17 +255,15 @@ func (s *LicenseService) Remove(ctx context.Context) error {
 	if err := s.repo.DeleteLicense(ctx); err != nil {
 		return err
 	}
-	// Emitted before Deactivate: dropping to community closes the recorder's
-	// license gate, and the removal must be the last entry it lets through.
+	// Emitted before Deactivate, which closes the recorder's license gate.
 	s.recordLicenseEvent(ctx, auditlog.ActionLicenseRemoved, nil)
 	Deactivate()
 	return nil
 }
 
-// ActivateFromStore loads the stored key at boot and activates it when valid.
-// A missing, invalid or expired key means community edition, never a boot
-// failure, so it only returns infrastructure errors (database unreachable).
-// Steady-state changes are picked up by StartSync afterwards.
+// ActivateFromStore loads the stored activation at boot; it only returns
+// infrastructure errors, a missing or suspended activation means community
+// edition.
 func (s *LicenseService) ActivateFromStore(ctx context.Context) error {
 	if s.repo == nil {
 		return nil
@@ -184,30 +272,134 @@ func (s *LicenseService) ActivateFromStore(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if stored == nil {
-		log.Println("🏘️  [LICENSE] No enterprise license key stored, running community edition")
-		return nil
-	}
-	license, err := Activate(stored.Key)
-	if err != nil {
-		log.Printf("⚠️  [LICENSE] Stored enterprise license key is not usable (%v), running community edition", err)
-		return nil
-	}
-	if license.Expiry != nil {
-		log.Printf("🏢 [LICENSE] Enterprise edition enabled (license %s, expires %s)", license.LicenseID, license.Expiry.UTC().Format(time.RFC3339))
-	} else {
-		log.Printf("🏢 [LICENSE] Enterprise edition enabled (license %s, perpetual)", license.LicenseID)
+	status := s.statusOf(stored)
+	applyStatus(status)
+	switch {
+	case stored == nil:
+		log.Println("🏘️  [LICENSE] No enterprise license attached, running community edition")
+	case status.Suspended():
+		log.Printf("⚠️  [LICENSE] The enterprise license has not been verifiable since %s (%s) and the grace period is over, running community edition. Contact support@xprem.dev.", stored.ValidationFailedAt.UTC().Format(time.RFC3339), stored.ValidationErrorCode)
+	case status.ValidationFailedAt != nil:
+		log.Printf("⚠️  [LICENSE] Enterprise edition enabled, but the license could not be verified since %s (%s); it drops on %s. Contact support@xprem.dev.", stored.ValidationFailedAt.UTC().Format(time.RFC3339), stored.ValidationErrorCode, status.GraceDeadline().UTC().Format(time.RFC3339))
+	default:
+		log.Printf("🏢 [LICENSE] Enterprise edition enabled (%s, %s plan)", stored.License.OrgName, stored.License.PlanCode)
 	}
 	return nil
 }
 
-// StartSync keeps IsEnterprise() honest on replicas that did not serve the
-// dashboard request that changed the license: the in-process activation state
-// is otherwise only written at boot and by the replica handling the
-// activation/removal, so the others would drift until their next restart.
-// The reconciliation is a primary-key read on a one-row table, so a short
-// interval costs nothing. No-op in stateless mode; runs until ctx is
-// cancelled.
+// ValidateNow re-checks the stored activation against the license server and
+// persists the outcome.
+func (s *LicenseService) ValidateNow(ctx context.Context) {
+	if s.repo == nil {
+		return
+	}
+	stored, err := s.repo.GetLicense(ctx)
+	if err != nil {
+		log.Printf("⚠️  [LICENSE] Could not read the enterprise license from the database: %v", err)
+		return
+	}
+	if stored == nil {
+		return
+	}
+	// Local problems must not start the grace window.
+	if s.instanceId == "" {
+		log.Println("⚠️  [LICENSE] Skipping license validation: the server instance id is unavailable, see the boot logs")
+		return
+	}
+	activationSecret, err := s.repo.GetActivationSecret(ctx)
+	if err != nil {
+		log.Printf("⚠️  [LICENSE] Skipping license validation: %v", err)
+		return
+	}
+	wasFailing := stored.ValidationFailedAt != nil
+	license, err := s.client.Validate(ctx, ValidateParams{
+		InstanceId:       s.instanceId,
+		ActivationSecret: activationSecret,
+		BaseUrl:          s.baseUrl,
+	})
+	if err == nil && !planSupported(*license) {
+		err = &DecisionError{Code: CodePlanNotSupported}
+	}
+	if err == nil {
+		updated, repoErr := s.repo.MarkValidated(ctx, *license)
+		if repoErr != nil {
+			log.Printf("⚠️  [LICENSE] Could not persist the license validation: %v", repoErr)
+			return
+		}
+		applyStatus(s.statusOf(&updated))
+		if wasFailing {
+			log.Println("🏢 [LICENSE] Enterprise license verification recovered")
+		}
+		return
+	}
+
+	// A cancelled context is a shutdown, not a license decision.
+	if ctx.Err() != nil {
+		return
+	}
+	code := CodeServerUnreachable
+	if errors.Is(err, ErrServerRejected) {
+		code = CodeServerRejected
+	}
+	var refusal *DecisionError
+	if errors.As(err, &refusal) {
+		code = refusal.Code
+	}
+	updated, repoErr := s.repo.MarkValidationFailed(ctx, code)
+	if repoErr != nil {
+		log.Printf("⚠️  [LICENSE] License validation failed (%v) and the failure could not be persisted: %v", err, repoErr)
+		return
+	}
+	status := s.statusOf(&updated)
+	if status.Suspended() {
+		if IsEnterprise() {
+			log.Printf("🚨 [LICENSE] The enterprise license could not be verified for %d days (%s), dropping to community edition. Contact support@xprem.dev.", int(GracePeriod.Hours()/24), code)
+			// Before Deactivate: the gate must still be open.
+			s.recordSuspendedEvent(ctx, code)
+		}
+		Deactivate()
+		return
+	}
+	if deadline := status.GraceDeadline(); deadline != nil {
+		log.Printf("⚠️  [LICENSE] Could not verify the enterprise license (%s); enterprise features stay on until %s. Contact support@xprem.dev if this persists.", code, deadline.UTC().Format(time.RFC3339))
+	}
+}
+
+// StartValidationLoop re-validates now and then every 15 minutes until ctx is
+// cancelled; the cache lock keeps it to one validation per interval.
+func (s *LicenseService) StartValidationLoop(ctx context.Context) {
+	if s.repo == nil {
+		return
+	}
+	go func() {
+		s.validateWithLock(ctx)
+		ticker := time.NewTicker(validateInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.validateWithLock(ctx)
+			}
+		}
+	}()
+}
+
+func (s *LicenseService) validateWithLock(ctx context.Context) {
+	locked, err := cache.GetCache().TryLock(validateLockKey, validateLockTTLSeconds)
+	if err != nil {
+		// A broken lock backend must not silently stop validation; a duplicate
+		// run is harmless.
+		log.Printf("⚠️  [LICENSE] Could not take the validation lock, validating anyway: %v", err)
+	} else if !locked {
+		return
+	}
+	s.ValidateNow(ctx)
+}
+
+// StartSync reconciles the in-process activation state with the stored row
+// until ctx is cancelled.
 func (s *LicenseService) StartSync(ctx context.Context, interval time.Duration) {
 	if s.repo == nil {
 		return
@@ -226,18 +418,6 @@ func (s *LicenseService) StartSync(ctx context.Context, interval time.Duration) 
 	}()
 }
 
-func equalExpiry(a, b *time.Time) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Equal(*b)
-}
-
-// syncFromStore reconciles the process-wide activation state with the stored
-// key. Re-activation is unconditional when the stored key verifies, one
-// Ed25519 check per interval is negligible and it also propagates renewals
-// (same license id, new expiry), but transitions are only logged when the
-// active license actually changed, so the loop stays silent in steady state.
 func (s *LicenseService) syncFromStore(ctx context.Context) {
 	stored, err := s.repo.GetLicense(ctx)
 	if err != nil {
@@ -245,24 +425,22 @@ func (s *LicenseService) syncFromStore(ctx context.Context) {
 		return
 	}
 	previous := Current()
-	if stored == nil {
-		Deactivate()
-		if previous != nil {
+	status := s.statusOf(stored)
+	// Emitted before applyStatus: deactivating closes the recorder's license
+	// gate. The validation loop only observes the deadline every 15 minutes,
+	// so the suspension is usually first seen here.
+	if previous != nil && stored != nil && status.Suspended() {
+		s.recordSuspendedEvent(ctx, stored.ValidationErrorCode)
+	}
+	applyStatus(status)
+	if previous == nil && status.Valid() {
+		log.Printf("🏢 [LICENSE] Enterprise license synced from the database (%s)", status.License.OrgName)
+	}
+	if previous != nil && !status.Valid() {
+		if stored == nil {
 			log.Println("🏘️  [LICENSE] Enterprise license removed from the database, dropping to community edition")
+		} else {
+			log.Printf("🚨 [LICENSE] Enterprise license suspended (%s), dropping to community edition. Contact support@xprem.dev.", stored.ValidationErrorCode)
 		}
-		return
-	}
-	license, err := Activate(stored.Key)
-	if err != nil {
-		// Activate leaves the previous state untouched on failure, so an
-		// unusable stored key must drop the in-memory license explicitly.
-		Deactivate()
-		if previous != nil {
-			log.Printf("⚠️  [LICENSE] Stored enterprise license key is no longer usable (%v), dropping to community edition", err)
-		}
-		return
-	}
-	if previous == nil || previous.LicenseID != license.LicenseID || !equalExpiry(previous.Expiry, license.Expiry) {
-		log.Printf("🏢 [LICENSE] Enterprise license %s synced from the database", license.LicenseID)
 	}
 }

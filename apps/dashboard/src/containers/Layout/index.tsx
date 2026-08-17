@@ -1,4 +1,5 @@
 import { AppSidebar } from '@/components/app-sidebar';
+import { LicenseGraceBanner } from '@/ee/components/LicenseGraceBanner';
 import { XpremMark } from '@/components/xprem-mark';
 import { useEffect, useState } from 'react';
 import { Menu } from 'lucide-react';
@@ -33,6 +34,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
       <div className="flex min-h-screen w-full bg-background">
         <AppSidebar onOpenCommandPalette={openCommandPalette} />
         <main className="min-w-0 flex-1">
+          <LicenseGraceBanner />
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/80 bg-background/95 px-4 backdrop-blur lg:hidden">
             <div className="flex items-center gap-2.5">
               <XpremMark className="h-8 w-8 rounded-lg" />

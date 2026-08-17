@@ -16,13 +16,16 @@ Everything outside `ee/` directories is and will remain MIT.
 ## How gating works
 
 Enterprise features are compiled into the regular server binary but stay
-dormant until a valid license key is activated. Licenses are issued through
-[Keygen](https://keygen.sh) using the `ED25519_SIGN` scheme and verified fully
-offline by `ee/licensing` against the account's embedded Ed25519 verify key —
-no network calls, no phone home.
+dormant until a valid license key is activated. Keys are checked and attached
+from the dashboard against the Mercure Technologies license server
+(`https://api.xprem.dev`); the resulting activation is persisted in the
+database and re-validated every 15 minutes. When the server refuses or cannot
+be reached, enterprise features stay on for a 7-day grace window (the
+dashboard warns to contact support@xprem.dev) before the license drops back
+to community edition.
 
-- `ee/licensing` — signed-key parsing, signature verification, and runtime
-  activation state (`licensing.IsEnterprise()`).
+- `ee/licensing` — license server client (check/attach/validate), grace
+  window handling, and runtime activation state (`licensing.IsEnterprise()`).
 
 ## Conventions
 

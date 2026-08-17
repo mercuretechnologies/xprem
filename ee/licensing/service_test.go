@@ -7,29 +7,84 @@ package licensing
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeLicenseRepo is an in-memory LicenseRepository mirroring the singleton
 // row of the enterprise_license table.
 type fakeLicenseRepo struct {
-	stored *StoredLicense
-	err    error
+	stored    *StoredLicense
+	secret    string
+	secretErr error
+	err       error
+	saveHook  func(ctx context.Context)
 }
 
 func (r *fakeLicenseRepo) GetLicense(ctx context.Context) (*StoredLicense, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	return r.stored, nil
+	if r.stored == nil {
+		return nil, nil
+	}
+	snapshot := *r.stored
+	return &snapshot, nil
 }
 
-func (r *fakeLicenseRepo) UpsertLicense(ctx context.Context, key string) (StoredLicense, error) {
+func (r *fakeLicenseRepo) GetActivationSecret(ctx context.Context) (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	if r.secretErr != nil {
+		return "", r.secretErr
+	}
+	return r.secret, nil
+}
+
+func (r *fakeLicenseRepo) SaveActivation(ctx context.Context, key string, activationSecret string, license License) (StoredLicense, error) {
+	if r.saveHook != nil {
+		r.saveHook(ctx)
+	}
 	if r.err != nil {
 		return StoredLicense{}, r.err
 	}
-	r.stored = &StoredLicense{Key: key, UpdatedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	r.secret = activationSecret
+	r.stored = &StoredLicense{
+		Key:             key,
+		License:         license,
+		ActivatedAt:     now,
+		LastValidatedAt: &now,
+	}
+	return *r.stored, nil
+}
+
+func (r *fakeLicenseRepo) MarkValidated(ctx context.Context, license License) (StoredLicense, error) {
+	if r.err != nil {
+		return StoredLicense{}, r.err
+	}
+	now := time.Now().UTC()
+	r.stored.License = license
+	r.stored.LastValidatedAt = &now
+	r.stored.ValidationFailedAt = nil
+	r.stored.ValidationErrorCode = ""
+	return *r.stored, nil
+}
+
+func (r *fakeLicenseRepo) MarkValidationFailed(ctx context.Context, errorCode string) (StoredLicense, error) {
+	if r.err != nil {
+		return StoredLicense{}, r.err
+	}
+	if r.stored.ValidationFailedAt == nil {
+		now := time.Now().UTC()
+		r.stored.ValidationFailedAt = &now
+	}
+	r.stored.ValidationErrorCode = errorCode
 	return *r.stored, nil
 }
 
@@ -41,12 +96,45 @@ func (r *fakeLicenseRepo) DeleteLicense(ctx context.Context) error {
 	return nil
 }
 
+func newTestService(t *testing.T, repo LicenseRepository, client *Client) *LicenseService {
+	t.Helper()
+	Deactivate()
+	t.Cleanup(Deactivate)
+	return NewLicenseService(repo, client, "instance-1", "https://updates.example.com")
+}
+
+const proInformationsJSON = `{
+	"org": {"name": "Acme Corp"},
+	"planCode": "pro",
+	"subscription": {"startAt": "2026-01-01T00:00:00.000Z", "endAt": null, "renewalAt": null}
+}`
+
+func checkAnswersValidAcme(w http.ResponseWriter, r *http.Request) {
+	writeJSONBody(w, http.StatusOK, `{"valid": true, "licenseInformations": `+acmeInformationsJSON+`}`)
+}
+
+func repoWithAcme() *fakeLicenseRepo {
+	now := time.Now().UTC()
+	return &fakeLicenseRepo{
+		secret: "secret-42",
+		stored: &StoredLicense{
+			Key:             "XPREM-KEY",
+			License:         acmeLicense(),
+			ActivatedAt:     now.Add(-24 * time.Hour),
+			LastValidatedAt: &now,
+		},
+	}
+}
+
 func TestServiceStatelessModeAnswersControlPlaneError(t *testing.T) {
-	service := NewLicenseService(nil)
+	service := newTestService(t, nil, NewClient(""))
 	if _, err := service.Status(context.Background()); !errors.Is(err, ErrLicenseRequiresControlPlane) {
 		t.Fatalf("expected ErrLicenseRequiresControlPlane, got %v", err)
 	}
-	if _, err := service.Activate(context.Background(), "key/whatever"); !errors.Is(err, ErrLicenseRequiresControlPlane) {
+	if _, err := service.Check(context.Background(), "XPREM-KEY"); !errors.Is(err, ErrLicenseRequiresControlPlane) {
+		t.Fatalf("expected ErrLicenseRequiresControlPlane, got %v", err)
+	}
+	if _, err := service.Attach(context.Background(), "XPREM-KEY"); !errors.Is(err, ErrLicenseRequiresControlPlane) {
 		t.Fatalf("expected ErrLicenseRequiresControlPlane, got %v", err)
 	}
 	if err := service.Remove(context.Background()); !errors.Is(err, ErrLicenseRequiresControlPlane) {
@@ -55,181 +143,307 @@ func TestServiceStatelessModeAnswersControlPlaneError(t *testing.T) {
 	if err := service.ActivateFromStore(context.Background()); err != nil {
 		t.Fatalf("expected boot activation to be a no-op in stateless mode, got %v", err)
 	}
+	// Must not panic nor call the network.
+	service.ValidateNow(context.Background())
 }
 
-func TestServiceActivatePersistsAndEnablesEnterprise(t *testing.T) {
-	priv := setupTestKeypair(t)
+func TestAttachPersistsActivationAndEnablesEnterprise(t *testing.T) {
 	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
+	fake := &fakeLicenseServer{
+		check: checkAnswersValidAcme,
+		attach: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"isActive": true, "activationSecret": "secret-42", "licenseInformations": `+acmeInformationsJSON+`}`)
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
 
-	status, err := service.Activate(context.Background(), signTestKey(t, priv, in(24*time.Hour)))
-	if err != nil {
-		t.Fatalf("expected activation to succeed, got %v", err)
-	}
-	if !status.Valid() {
-		t.Fatalf("expected a valid status, got %+v", status)
-	}
-	if repo.stored == nil {
-		t.Fatal("expected the key to be persisted")
-	}
-	if !IsEnterprise() {
-		t.Fatal("expected IsEnterprise after activation")
-	}
+	status, err := service.Attach(context.Background(), "XPREM-KEY")
+	require.NoError(t, err)
+	assert.True(t, status.Valid())
+	require.NotNil(t, repo.stored)
+	assert.Equal(t, "XPREM-KEY", repo.stored.Key)
+	assert.Equal(t, "secret-42", repo.secret)
+	assert.Equal(t, "Acme Corp", repo.stored.License.OrgName)
+	assert.True(t, IsEnterprise())
 }
 
-func TestServiceActivateRejectsBadKeysWithoutPersisting(t *testing.T) {
-	priv := setupTestKeypair(t)
+func TestAttachRefusalLeavesStoreAndEditionUntouched(t *testing.T) {
 	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
+	fake := &fakeLicenseServer{
+		check: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"valid": false, "errorCode": "LICENSE_KEY_ALREADY_USED"}`)
+		},
+		attach: func(w http.ResponseWriter, r *http.Request) {
+			t.Error("attach must not be called for a key the check refused")
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
 
-	if _, err := service.Activate(context.Background(), "not-a-key"); !errors.Is(err, ErrMalformedKey) {
-		t.Fatalf("expected ErrMalformedKey, got %v", err)
-	}
-	if _, err := service.Activate(context.Background(), signTestKey(t, priv, in(-time.Hour))); !errors.Is(err, ErrExpired) {
-		t.Fatalf("expected ErrExpired, got %v", err)
-	}
-	if repo.stored != nil {
-		t.Fatal("expected no key to be persisted after rejected activations")
-	}
-	if IsEnterprise() {
-		t.Fatal("expected community edition after rejected activations")
-	}
+	_, err := service.Attach(context.Background(), "XPREM-KEY")
+	var refusal *DecisionError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, CodeLicenseKeyAlreadyUsed, refusal.Code)
+	assert.Nil(t, repo.stored)
+	assert.False(t, IsEnterprise())
 }
 
-func TestServiceRemoveDropsToCommunity(t *testing.T) {
-	priv := setupTestKeypair(t)
+func TestCheckHasNoSideEffect(t *testing.T) {
 	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
+	fake := &fakeLicenseServer{
+		check: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"valid": true, "licenseInformations": `+acmeInformationsJSON+`}`)
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
 
-	if _, err := service.Activate(context.Background(), signTestKey(t, priv, in(24*time.Hour))); err != nil {
-		t.Fatalf("expected activation to succeed, got %v", err)
+	result, err := service.Check(context.Background(), "XPREM-KEY")
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	assert.Nil(t, repo.stored)
+	assert.False(t, IsEnterprise(), "a check must not activate anything")
+}
+
+func TestCheckRefusesUnsupportedPlan(t *testing.T) {
+	repo := &fakeLicenseRepo{}
+	fake := &fakeLicenseServer{
+		check: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"valid": true, "licenseInformations": `+proInformationsJSON+`}`)
+		},
 	}
-	if err := service.Remove(context.Background()); err != nil {
-		t.Fatalf("expected removal to succeed, got %v", err)
+	service := newTestService(t, repo, fake.client(t))
+
+	result, err := service.Check(context.Background(), "XPREM-KEY")
+	require.NoError(t, err)
+	assert.False(t, result.Valid)
+	assert.Equal(t, CodePlanNotSupported, result.ErrorCode)
+}
+
+func TestAttachRefusesUnsupportedPlanBeforeConsumingKey(t *testing.T) {
+	repo := &fakeLicenseRepo{}
+	fake := &fakeLicenseServer{
+		check: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"valid": true, "licenseInformations": `+proInformationsJSON+`}`)
+		},
+		attach: func(w http.ResponseWriter, r *http.Request) {
+			t.Error("attach must not consume a key whose plan is unsupported")
+		},
 	}
-	if repo.stored != nil {
-		t.Fatal("expected the stored key to be deleted")
+	service := newTestService(t, repo, fake.client(t))
+
+	_, err := service.Attach(context.Background(), "XPREM-KEY")
+	var refusal *DecisionError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, CodePlanNotSupported, refusal.Code)
+	assert.Nil(t, repo.stored)
+	assert.False(t, IsEnterprise())
+}
+
+func TestValidateNowPlanDowngradeStartsGrace(t *testing.T) {
+	repo := repoWithAcme()
+	fake := &fakeLicenseServer{
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"isActive": true, "licenseInformations": `+proInformationsJSON+`}`)
+		},
 	}
-	if IsEnterprise() {
-		t.Fatal("expected community edition after removal")
+	service := newTestService(t, repo, fake.client(t))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	require.NotNil(t, repo.stored.ValidationFailedAt)
+	assert.Equal(t, CodePlanNotSupported, repo.stored.ValidationErrorCode)
+	assert.True(t, IsEnterprise(), "the grace window applies to a plan downgrade too")
+}
+
+func TestValidateNowSuccessClearsFailureAndRefreshesLicense(t *testing.T) {
+	repo := repoWithAcme()
+	failedAt := time.Now().Add(-time.Hour).UTC()
+	repo.stored.ValidationFailedAt = &failedAt
+	repo.stored.ValidationErrorCode = CodeServerUnreachable
+
+	fake := &fakeLicenseServer{
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			refreshed := `{
+				"org": {"name": "Acme Corp"},
+				"planCode": "enterprise",
+				"subscription": {"startAt": "2026-01-01T00:00:00.000Z", "endAt": null, "renewalAt": "2028-01-01T00:00:00.000Z"}
+			}`
+			writeJSONBody(w, http.StatusOK, `{"isActive": true, "licenseInformations": `+refreshed+`}`)
+		},
 	}
+	service := newTestService(t, repo, fake.client(t))
+
+	service.ValidateNow(context.Background())
+
+	assert.Nil(t, repo.stored.ValidationFailedAt)
+	assert.Empty(t, repo.stored.ValidationErrorCode)
+	require.NotNil(t, repo.stored.License.SubscriptionRenewalAt)
+	assert.Equal(t, 2028, repo.stored.License.SubscriptionRenewalAt.Year(), "a successful validation refreshes the descriptor")
+	assert.True(t, IsEnterprise())
+}
+
+func TestValidateNowRefusalStartsGraceAndKeepsEnterpriseOn(t *testing.T) {
+	repo := repoWithAcme()
+	fake := &fakeLicenseServer{
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusBadRequest, `{"valid": false, "errorCode": "SUBSCRIPTION_INACTIVE"}`)
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	require.NotNil(t, repo.stored.ValidationFailedAt)
+	assert.Equal(t, CodeSubscriptionInactive, repo.stored.ValidationErrorCode)
+	assert.True(t, IsEnterprise(), "the grace window keeps enterprise features on")
+}
+
+func TestValidateNowKeepsTheFirstFailureAsGraceAnchor(t *testing.T) {
+	repo := repoWithAcme()
+	anchor := time.Now().Add(-48 * time.Hour).UTC()
+	repo.stored.ValidationFailedAt = &anchor
+	repo.stored.ValidationErrorCode = CodeServerUnreachable
+
+	fake := &fakeLicenseServer{
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusBadRequest, `{"valid": false, "errorCode": "SUBSCRIPTION_INACTIVE"}`)
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	assert.True(t, repo.stored.ValidationFailedAt.Equal(anchor), "repeat failures must not push the grace deadline back")
+	assert.Equal(t, CodeSubscriptionInactive, repo.stored.ValidationErrorCode)
+	assert.True(t, IsEnterprise())
+}
+
+func TestValidateNowSuspendsOnceGraceIsExhausted(t *testing.T) {
+	repo := repoWithAcme()
+	anchor := time.Now().Add(-GracePeriod - time.Hour).UTC()
+	repo.stored.ValidationFailedAt = &anchor
+	repo.stored.ValidationErrorCode = CodeSubscriptionInactive
+
+	fake := &fakeLicenseServer{
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusBadRequest, `{"valid": false, "errorCode": "SUBSCRIPTION_INACTIVE"}`)
+		},
+	}
+	service := newTestService(t, repo, fake.client(t))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	assert.False(t, IsEnterprise(), "an exhausted grace window drops the license")
+	require.NotNil(t, repo.stored, "the row stays so the dashboard can explain the suspension")
+}
+
+func TestValidateNowUnreachableServerCountsAsFailure(t *testing.T) {
+	repo := repoWithAcme()
+	fake := &fakeLicenseServer{} // no validate handler: 404 answers
+	service := newTestService(t, repo, fake.client(t))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	require.NotNil(t, repo.stored.ValidationFailedAt)
+	assert.Equal(t, CodeServerUnreachable, repo.stored.ValidationErrorCode)
+	assert.True(t, IsEnterprise())
+}
+
+func TestValidateNowSkipsWithoutInstanceIdInsteadOfBurningGrace(t *testing.T) {
+	repo := repoWithAcme()
+	Deactivate()
+	t.Cleanup(Deactivate)
+	service := NewLicenseService(repo, NewClient("http://127.0.0.1:1"), "", "https://updates.example.com")
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	assert.Nil(t, repo.stored.ValidationFailedAt, "a missing instance id is a local problem, not a license decision")
+	assert.True(t, IsEnterprise())
+}
+
+func TestValidateNowSkipsWhenSecretUnreadableInsteadOfBurningGrace(t *testing.T) {
+	repo := repoWithAcme()
+	repo.secretErr = errors.New("failed to unseal the license activation secret")
+	service := newTestService(t, repo, NewClient("http://127.0.0.1:1"))
+	Activate(repo.stored.License)
+
+	service.ValidateNow(context.Background())
+
+	assert.Nil(t, repo.stored.ValidationFailedAt, "an unreadable secret is a local problem, not a license decision")
+	assert.True(t, IsEnterprise())
+}
+
+func TestValidateNowIgnoresShutdownCancellation(t *testing.T) {
+	repo := repoWithAcme()
+	service := newTestService(t, repo, NewClient("http://127.0.0.1:1"))
+	Activate(repo.stored.License)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	service.ValidateNow(cancelled)
+
+	assert.Nil(t, repo.stored.ValidationFailedAt, "a shutdown must not be recorded as a license failure")
+	assert.True(t, IsEnterprise())
+}
+
+func TestActivateFromStoreWithinGrace(t *testing.T) {
+	repo := repoWithAcme()
+	failedAt := time.Now().Add(-time.Hour).UTC()
+	repo.stored.ValidationFailedAt = &failedAt
+	service := newTestService(t, repo, NewClient(""))
+
+	require.NoError(t, service.ActivateFromStore(context.Background()))
+	assert.True(t, IsEnterprise())
+}
+
+func TestActivateFromStoreSuspendedRunsCommunity(t *testing.T) {
+	repo := repoWithAcme()
+	failedAt := time.Now().Add(-GracePeriod - time.Hour).UTC()
+	repo.stored.ValidationFailedAt = &failedAt
+	service := newTestService(t, repo, NewClient(""))
+
+	require.NoError(t, service.ActivateFromStore(context.Background()))
+	assert.False(t, IsEnterprise())
+
 	status, err := service.Status(context.Background())
-	if err != nil {
-		t.Fatalf("expected status to succeed, got %v", err)
-	}
-	if status.HasKey || status.Valid() {
-		t.Fatalf("expected an empty status, got %+v", status)
-	}
+	require.NoError(t, err)
+	assert.True(t, status.HasKey)
+	assert.True(t, status.Suspended())
+	assert.False(t, status.Valid())
 }
 
-func TestServiceActivateFromStore(t *testing.T) {
-	priv := setupTestKeypair(t)
-	repo := &fakeLicenseRepo{stored: &StoredLicense{Key: signTestKey(t, priv, in(24*time.Hour)), UpdatedAt: time.Now()}}
-	service := NewLicenseService(repo)
+func TestRemoveDropsToCommunity(t *testing.T) {
+	repo := repoWithAcme()
+	service := newTestService(t, repo, NewClient(""))
+	Activate(repo.stored.License)
 
-	if err := service.ActivateFromStore(context.Background()); err != nil {
-		t.Fatalf("expected boot activation to succeed, got %v", err)
-	}
-	if !IsEnterprise() {
-		t.Fatal("expected IsEnterprise after boot activation")
-	}
+	require.NoError(t, service.Remove(context.Background()))
+	assert.Nil(t, repo.stored)
+	assert.False(t, IsEnterprise())
 }
 
-func TestServiceActivateFromStoreWithExpiredKeyStaysCommunity(t *testing.T) {
-	priv := setupTestKeypair(t)
-	repo := &fakeLicenseRepo{stored: &StoredLicense{Key: signTestKey(t, priv, in(-time.Hour)), UpdatedAt: time.Now()}}
-	service := NewLicenseService(repo)
-
-	if err := service.ActivateFromStore(context.Background()); err != nil {
-		t.Fatalf("expected an expired stored key to be non-fatal, got %v", err)
+func TestAttachPersistsWhenTheRequestContextIsCancelled(t *testing.T) {
+	fake := &fakeLicenseServer{
+		check: checkAnswersValidAcme,
+		attach: func(w http.ResponseWriter, r *http.Request) {
+			writeJSONBody(w, http.StatusOK, `{"isActive": true, "activationSecret": "secret-42", "licenseInformations": `+acmeInformationsJSON+`}`)
+		},
 	}
-	if IsEnterprise() {
-		t.Fatal("expected community edition with an expired stored key")
-	}
-	// The dashboard still sees the key, the parsed payload and the reason it
-	// is not usable.
-	status, err := service.Status(context.Background())
-	if err != nil {
-		t.Fatalf("expected status to succeed, got %v", err)
-	}
-	if !status.HasKey || status.Valid() || !errors.Is(status.Err, ErrExpired) || status.License == nil {
-		t.Fatalf("expected an expired-key status, got %+v", status)
-	}
-}
-
-func TestServiceActivateFromStoreSurfacesInfrastructureErrors(t *testing.T) {
-	infraErr := errors.New("connection refused")
-	service := NewLicenseService(&fakeLicenseRepo{err: infraErr})
-	if err := service.ActivateFromStore(context.Background()); !errors.Is(err, infraErr) {
-		t.Fatalf("expected the infrastructure error to surface, got %v", err)
-	}
-}
-
-// The sync loop scenarios below call syncFromStore directly: they model what
-// a replica that did NOT serve the dashboard request observes when its
-// reconciliation fires.
-
-func TestSyncFromStorePicksUpActivationFromAnotherReplica(t *testing.T) {
-	priv := setupTestKeypair(t)
 	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	repo.saveHook = func(saveCtx context.Context) {
+		cancel()
+		assert.NoError(t, saveCtx.Err(), "the attach consumed the single-use key; persistence must survive the request context")
+	}
+	service := newTestService(t, repo, fake.client(t))
 
-	service.syncFromStore(context.Background())
-	if IsEnterprise() {
-		t.Fatal("expected community edition while no key is stored")
-	}
-	// Another replica stores a key: only the database row moves.
-	repo.stored = &StoredLicense{Key: signTestKey(t, priv, in(24*time.Hour)), UpdatedAt: time.Now()}
-	service.syncFromStore(context.Background())
-	if !IsEnterprise() {
-		t.Fatal("expected IsEnterprise after the sync picked up the stored key")
-	}
-}
-
-func TestSyncFromStoreDropsRemovalFromAnotherReplica(t *testing.T) {
-	priv := setupTestKeypair(t)
-	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
-
-	if _, err := service.Activate(context.Background(), signTestKey(t, priv, in(24*time.Hour))); err != nil {
-		t.Fatalf("expected activation to succeed, got %v", err)
-	}
-	// Another replica removes the license: only the database row moves.
-	repo.stored = nil
-	service.syncFromStore(context.Background())
-	if IsEnterprise() {
-		t.Fatal("expected community edition after the sync noticed the removal")
-	}
-}
-
-func TestSyncFromStorePropagatesRenewal(t *testing.T) {
-	priv := setupTestKeypair(t)
-	repo := &fakeLicenseRepo{stored: &StoredLicense{Key: signTestKey(t, priv, in(time.Hour)), UpdatedAt: time.Now()}}
-	service := NewLicenseService(repo)
-	if err := service.ActivateFromStore(context.Background()); err != nil {
-		t.Fatalf("expected boot activation to succeed, got %v", err)
-	}
-	// A renewed key carries the same license id with a later expiry; the sync
-	// must refresh the in-memory expiry, not treat it as the same state.
-	repo.stored = &StoredLicense{Key: signTestKey(t, priv, in(48*time.Hour)), UpdatedAt: time.Now()}
-	service.syncFromStore(context.Background())
-	active := Current()
-	if active == nil || active.Expiry == nil || time.Until(*active.Expiry) < 24*time.Hour {
-		t.Fatalf("expected the renewed expiry to be active, got %+v", active)
-	}
-}
-
-func TestSyncFromStoreKeepsStateOnInfrastructureError(t *testing.T) {
-	priv := setupTestKeypair(t)
-	repo := &fakeLicenseRepo{}
-	service := NewLicenseService(repo)
-	if _, err := service.Activate(context.Background(), signTestKey(t, priv, in(24*time.Hour))); err != nil {
-		t.Fatalf("expected activation to succeed, got %v", err)
-	}
-	// A transient database failure must not drop a valid license.
-	repo.err = errors.New("connection refused")
-	service.syncFromStore(context.Background())
-	if !IsEnterprise() {
-		t.Fatal("expected the active license to survive a transient database error")
-	}
+	_, err := service.Attach(ctx, "XPREM-KEY")
+	require.NoError(t, err)
+	require.NotNil(t, repo.stored)
+	assert.Equal(t, "secret-42", repo.secret)
 }
