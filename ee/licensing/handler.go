@@ -7,6 +7,7 @@ package licensing
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -133,6 +134,7 @@ func renderLicenseServiceError(w http.ResponseWriter, err error) {
 		errors.Is(err, ErrInstanceIdUnavailable):
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 	default:
+		log.Printf("🚨 [LICENSE] Unexpected license operation error: %v", err)
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 	}
 }

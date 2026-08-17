@@ -98,7 +98,7 @@ type LicenseService struct {
 // then answers ErrLicenseRequiresControlPlane.
 func NewLicenseService(repo LicenseRepository, client *Client, instanceId string, baseUrl string) *LicenseService {
 	// The server matches baseUrl by exact string equality.
-	return &LicenseService{repo: repo, client: client, instanceId: instanceId, baseUrl: strings.TrimSuffix(baseUrl, "/")}
+	return &LicenseService{repo: repo, client: client, instanceId: instanceId, baseUrl: strings.TrimRight(baseUrl, "/")}
 }
 
 // SetOnAuditEvent plugs the audit emission seam. Nil-safe.
