@@ -214,6 +214,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	}
 
 	if telemetryEnabled && instanceIdErr == nil {
+		log.Println("📡 [TELEMETRY] Hourly usage ping enabled (instance id, base URL, version, configuration shape); set DISABLE_TELEMETRY=true to opt out")
 		telemetry.NewTelemetryService(userRepo, appRepo, instanceId).Start(ctx)
 	}
 
