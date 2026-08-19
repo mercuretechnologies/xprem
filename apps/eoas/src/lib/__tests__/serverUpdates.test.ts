@@ -136,6 +136,23 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
     expect((options?.headers as Record<string, string>)['use-cli-auth']).toBe('true');
   });
 
+  it('wraps the bare-array response of pre-pagination servers into a page', async () => {
+    const legacyBody = [update({ updateId: '10' }), update({ updateId: '9', platform: 'android' })];
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
+      ok: true,
+      json: async () => legacyBody,
+    } as Response);
+
+    const page = await fetchUpdates({
+      baseUrl: 'https://ota.example.com',
+      appId: 'app-1',
+      branch: 'main',
+      runtimeVersion: '1.0.0',
+      credentials,
+    });
+    expect(page).toEqual({ items: legacyBody, nextCursor: null });
+  });
+
   it('fetches publish groups from their group-level cursor endpoint', async () => {
     const payload = {
       items: [],
