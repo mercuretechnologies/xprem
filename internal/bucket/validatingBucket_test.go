@@ -52,6 +52,8 @@ func (s *stubBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId 
 	s.mark()
 	return nil, nil
 }
+func (s *stubBucket) GetInstanceID() (string, error)              { s.mark(); return "", nil }
+func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); return nil }
 func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
 func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
 func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }

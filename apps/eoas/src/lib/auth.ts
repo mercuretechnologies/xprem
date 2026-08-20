@@ -11,6 +11,15 @@ export function detectServerImplementation(): ServerImplementation {
   return process.env.EOO_TOKEN ? 'eoo' : 'expo';
 }
 
+// A 401 in expo mode may mean the server only accepts its own dashboard
+// tokens; the CLI cannot know the server's mode, so it can only hint.
+export function missingEooTokenHint(status: number): string {
+  if (status !== 401 || detectServerImplementation() !== 'expo') {
+    return '';
+  }
+  return '\nHint: servers running with a database control plane (DB_URL set) issue their own CLI tokens and do not accept EXPO_TOKEN — generate a token in the dashboard and set EOO_TOKEN.';
+}
+
 export function retrieveCredentials(): Credentials {
   const serverImplementation = detectServerImplementation();
   if (serverImplementation === 'eoo') {

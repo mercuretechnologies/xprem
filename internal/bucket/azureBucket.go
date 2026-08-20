@@ -407,6 +407,37 @@ func (b *AzureBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId
 	}, nil
 }
 
+func (b *AzureBucket) GetInstanceID() (string, error) {
+	ctx := context.Background()
+	cc, err := b.containerClient()
+	if err != nil {
+		return "", err
+	}
+	resp, err := cc.NewBlobClient(b.prefixedKey(".instanceid")).DownloadStream(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	if _, err := io.Copy(buf, resp.Body); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+func (b *AzureBucket) PersistInstanceID(id string) error {
+	ctx := context.Background()
+	cc, err := b.containerClient()
+	if err != nil {
+		return err
+	}
+	_, err = cc.NewBlockBlobClient(b.prefixedKey(".instanceid")).UploadBuffer(ctx, []byte(id+"\n"), nil)
+	return err
+}
+
 func (b *AzureBucket) RetrieveMigrationHistory() ([]string, error) {
 	ctx := context.Background()
 	cc, err := b.containerClient()

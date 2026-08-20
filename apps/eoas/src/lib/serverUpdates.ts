@@ -109,7 +109,12 @@ export async function fetchUpdates({
   if (!response.ok) {
     throw new Error(`Failed to fetch updates: ${await response.text()}`);
   }
-  return (await response.json()) as ServerUpdatesPage;
+  const body = (await response.json()) as ServerUpdatesPage | ServerUpdateItem[];
+  // Servers older than v3.1.2 return a bare array instead of a page.
+  if (Array.isArray(body)) {
+    return { items: body, nextCursor: null };
+  }
+  return body;
 }
 
 // Publish groups only exist in control-plane mode. A 404 marks group mode as

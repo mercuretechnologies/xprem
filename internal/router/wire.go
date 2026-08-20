@@ -15,6 +15,7 @@ import (
 	"xprem/ee/observe"
 	"xprem/ee/rbac"
 	"xprem/ee/sso"
+	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/database"
@@ -115,6 +116,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var explorer *observe.Explorer
 	var checkInRecorder *observe.CheckInRecorder
 
+	telemetryEnabled := !config.IsServerTelemetryDisabled() && !config.IsTestMode()
+	var instanceId string
+	var instanceIdErr error
+
 	cleanup := func() {}
 	// Releases in reverse acquisition order.
 	addCleanup := func(release func()) {
@@ -167,6 +172,13 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
 		envVarRepo = store.NewPostgresEnvVarStore(dbEngine)
 
+		// Resolved even when telemetry is off: licensing needs the instance id.
+		seedInstanceId, _ := resolvedBucket.GetInstanceID()
+		instanceId, instanceIdErr = store.NewPostgresServerInstanceStore(dbEngine).GetOrCreateInstanceID(ctx, seedInstanceId)
+		if instanceIdErr != nil {
+			log.Printf("⚠️  [INSTANCE] Could not resolve the server instance id, license activation and heartbeats are unavailable this run: %v", instanceIdErr)
+		}
+
 		if config.IsDeviceTelemetryDisabled() {
 			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
@@ -204,6 +216,17 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		branchRepo = store.NewBucketBranchStore(resolvedBucket)
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
+		if telemetryEnabled {
+			instanceId, instanceIdErr = store.NewBucketServerInstanceStore(resolvedBucket, cache.GetCache()).GetOrCreateInstanceID(ctx)
+			if instanceIdErr != nil {
+				log.Printf("⚠️  [TELEMETRY] Could not resolve the server instance id, heartbeats stay off for this run: %v", instanceIdErr)
+			}
+		}
+	}
+
+	if telemetryEnabled && instanceIdErr == nil {
+		log.Println("📡 [TELEMETRY] Hourly usage ping enabled (instance id, base URL, version, configuration shape); set DISABLE_TELEMETRY=true to opt out")
+		telemetry.NewTelemetryService(userRepo, appRepo, instanceId).Start(ctx)
 	}
 
 	// The router starts the geo resolver in every mode, so its cleanup does
@@ -212,19 +235,26 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 
 	logLegacyAppIdFallback()
 
-	licenseService := licensing.NewLicenseService(licenseRepo)
-	if err := licenseService.ActivateFromStore(ctx); err != nil {
-		log.Printf("⚠️  [LICENSE] Could not load the enterprise license from the database: %v", err)
-	}
-	licenseService.StartSync(ctx, 30*time.Second)
-
-	apiKeyAccessService := apikeyrestrictions.NewApiKeyAccessService(apiKeyAccessRepo)
-	branchProtectionService := branchprotection.NewService(branchProtectionRepo)
 	auditService := audit.NewAuditService(auditRepo)
 	if err := auditService.StartArchiveFromEnv(ctx); err != nil {
 		log.Fatalf("🚨 [AUDIT] %v", err)
 	}
 	auditService.StartRetentionPurgeFromEnv(ctx)
+
+	licenseClient := licensing.NewClient(config.GetEnv("LICENSE_API_URL"))
+	licenseService := licensing.NewLicenseService(licenseRepo, licenseClient, instanceId, config.GetEnv("BASE_URL"))
+	// Wired before the loops start: they emit audit events from goroutines.
+	licenseService.SetOnAuditEvent(auditService.Record)
+	if err := licenseService.ActivateFromStore(ctx); err != nil {
+		log.Printf("⚠️  [LICENSE] Could not load the enterprise license from the database: %v", err)
+	}
+	licenseService.StartSync(ctx, 30*time.Second)
+	if !config.IsTestMode() {
+		licenseService.StartValidationLoop(ctx)
+	}
+
+	apiKeyAccessService := apikeyrestrictions.NewApiKeyAccessService(apiKeyAccessRepo)
+	branchProtectionService := branchprotection.NewService(branchProtectionRepo)
 	apiKeyAccessService.SetOnAuditEvent(auditService.Record)
 	branchProtectionService.SetOnAuditEvent(auditService.Record)
 	rbacService := rbac.NewRBACService(rbacRepo, userRepo)
@@ -241,7 +271,6 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	dashboardAuthService.SetOnAuditEvent(auditService.Record)
 	ssoService.SetOnAuditEvent(auditService.Record)
 	userService.SetOnAuditEvent(auditService.Record)
-	licenseService.SetOnAuditEvent(auditService.Record)
 	appService := services.NewAppService(appRepo)
 	appService.SetOnAuditEvent(auditService.Record)
 	branchService := services.NewBranchService(branchRepo, channelRepo, updateRepo, rolloutRepo, resolvedBucket)

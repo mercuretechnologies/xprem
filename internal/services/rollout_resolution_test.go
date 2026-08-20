@@ -590,6 +590,10 @@ func (fakeRolloutBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdat
 	}, nil
 }
 
+func (fakeRolloutBucket) GetInstanceID() (string, error) { return "", nil }
+
+func (fakeRolloutBucket) PersistInstanceID(_ string) error { return nil }
+
 func (fakeRolloutBucket) RetrieveMigrationHistory() ([]string, error) { return nil, nil }
 
 func (fakeRolloutBucket) ApplyMigration(_ string) error { return nil }

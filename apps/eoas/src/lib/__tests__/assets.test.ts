@@ -1,6 +1,6 @@
 // node-fetch's Response, not the DOM one: that is what fetchWithRetries resolves to.
 import type { Response } from 'node-fetch';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { activeRolloutConflictMessage, requestUploadUrls } from '../assets';
 import { fetchWithRetries } from '../fetch';
@@ -169,5 +169,50 @@ describe('requestUploadUrls rollout guardrails', () => {
     await expect(requestUploadUrls(baseParams())).rejects.toThrow(
       activeRolloutConflictMessage('main')
     );
+  });
+});
+
+describe('requestUploadUrls auth failures', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function respondWithStatus(status: number): void {
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
+      ok: false,
+      status,
+      text: async () => 'Error validating auth',
+    } as Response);
+  }
+
+  async function captureError(promise: Promise<unknown>): Promise<Error> {
+    try {
+      await promise;
+    } catch (error) {
+      return error as Error;
+    }
+    throw new Error('expected the call to reject');
+  }
+
+  it('hints at EOO_TOKEN on a 401 when publishing with Expo credentials', async () => {
+    vi.stubEnv('EOO_TOKEN', '');
+    respondWithStatus(401);
+    await expect(requestUploadUrls(baseParams())).rejects.toThrow(/set EOO_TOKEN/);
+  });
+
+  it('does not hint when the publish already used a dashboard token', async () => {
+    vi.stubEnv('EOO_TOKEN', 'eoo_test');
+    respondWithStatus(401);
+    const error = await captureError(requestUploadUrls(baseParams()));
+    expect(error.message).toContain('Failed to request upload URL: Error validating auth');
+    expect(error.message).not.toContain('EOO_TOKEN');
+  });
+
+  it('does not hint on non-401 failures', async () => {
+    vi.stubEnv('EOO_TOKEN', '');
+    respondWithStatus(403);
+    const error = await captureError(requestUploadUrls(baseParams()));
+    expect(error.message).toContain('Failed to request upload URL');
+    expect(error.message).not.toContain('EOO_TOKEN');
   });
 });

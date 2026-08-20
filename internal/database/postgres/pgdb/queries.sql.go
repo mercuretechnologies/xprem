@@ -1652,7 +1652,7 @@ func (q *Queries) GetDeviceIdentityForUpdate(ctx context.Context, arg GetDeviceI
 }
 
 const getEnterpriseLicense = `-- name: GetEnterpriseLicense :one
-SELECT singleton, license_key, created_at, updated_at FROM enterprise_license
+SELECT singleton, license_key, sealed_activation_secret, org_name, plan_code, subscription_start_at, subscription_end_at, subscription_renewal_at, activated_at, last_validated_at, validation_failed_at, validation_error_code, created_at, updated_at FROM enterprise_license
 WHERE singleton
 `
 
@@ -1662,6 +1662,16 @@ func (q *Queries) GetEnterpriseLicense(ctx context.Context) (EnterpriseLicense, 
 	err := row.Scan(
 		&i.Singleton,
 		&i.LicenseKey,
+		&i.SealedActivationSecret,
+		&i.OrgName,
+		&i.PlanCode,
+		&i.SubscriptionStartAt,
+		&i.SubscriptionEndAt,
+		&i.SubscriptionRenewalAt,
+		&i.ActivatedAt,
+		&i.LastValidatedAt,
+		&i.ValidationFailedAt,
+		&i.ValidationErrorCode,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -2113,6 +2123,17 @@ func (q *Queries) GetSealedEnvValue(ctx context.Context, arg GetSealedEnvValuePa
 	var sealed_value string
 	err := row.Scan(&sealed_value)
 	return sealed_value, err
+}
+
+const getServerInstanceID = `-- name: GetServerInstanceID :one
+SELECT id FROM server_instance
+`
+
+func (q *Queries) GetServerInstanceID(ctx context.Context) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getServerInstanceID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getSurfableBranches = `-- name: GetSurfableBranches :many
@@ -3279,6 +3300,22 @@ func (q *Queries) InsertSSOIdentity(ctx context.Context, arg InsertSSOIdentityPa
 		arg.Email,
 	)
 	return err
+}
+
+const insertServerInstance = `-- name: InsertServerInstance :one
+INSERT INTO server_instance (id)
+VALUES ($1)
+ON CONFLICT (singleton) DO NOTHING
+RETURNING id
+`
+
+// ON CONFLICT DO NOTHING returns no row when another replica minted the id
+// first; the caller falls back to reading the winner's row.
+func (q *Queries) InsertServerInstance(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertServerInstance, id)
+	var id_2 pgtype.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const insertUpdate = `-- name: InsertUpdate :one
@@ -4617,6 +4654,88 @@ func (q *Queries) ListUserAppGrants(ctx context.Context, userID pgtype.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const markEnterpriseLicenseValidated = `-- name: MarkEnterpriseLicenseValidated :one
+UPDATE enterprise_license SET
+    org_name = $1,
+    plan_code = $2,
+    subscription_start_at = $3,
+    subscription_end_at = $4,
+    subscription_renewal_at = $5,
+    last_validated_at = CURRENT_TIMESTAMP,
+    validation_failed_at = NULL,
+    validation_error_code = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE singleton
+RETURNING singleton, license_key, sealed_activation_secret, org_name, plan_code, subscription_start_at, subscription_end_at, subscription_renewal_at, activated_at, last_validated_at, validation_failed_at, validation_error_code, created_at, updated_at
+`
+
+type MarkEnterpriseLicenseValidatedParams struct {
+	OrgName               string             `json:"org_name"`
+	PlanCode              string             `json:"plan_code"`
+	SubscriptionStartAt   pgtype.Timestamptz `json:"subscription_start_at"`
+	SubscriptionEndAt     pgtype.Timestamptz `json:"subscription_end_at"`
+	SubscriptionRenewalAt pgtype.Timestamptz `json:"subscription_renewal_at"`
+}
+
+func (q *Queries) MarkEnterpriseLicenseValidated(ctx context.Context, arg MarkEnterpriseLicenseValidatedParams) (EnterpriseLicense, error) {
+	row := q.db.QueryRow(ctx, markEnterpriseLicenseValidated,
+		arg.OrgName,
+		arg.PlanCode,
+		arg.SubscriptionStartAt,
+		arg.SubscriptionEndAt,
+		arg.SubscriptionRenewalAt,
+	)
+	var i EnterpriseLicense
+	err := row.Scan(
+		&i.Singleton,
+		&i.LicenseKey,
+		&i.SealedActivationSecret,
+		&i.OrgName,
+		&i.PlanCode,
+		&i.SubscriptionStartAt,
+		&i.SubscriptionEndAt,
+		&i.SubscriptionRenewalAt,
+		&i.ActivatedAt,
+		&i.LastValidatedAt,
+		&i.ValidationFailedAt,
+		&i.ValidationErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const markEnterpriseLicenseValidationFailed = `-- name: MarkEnterpriseLicenseValidationFailed :one
+UPDATE enterprise_license SET
+    validation_failed_at = COALESCE(validation_failed_at, CURRENT_TIMESTAMP),
+    validation_error_code = $1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE singleton
+RETURNING singleton, license_key, sealed_activation_secret, org_name, plan_code, subscription_start_at, subscription_end_at, subscription_renewal_at, activated_at, last_validated_at, validation_failed_at, validation_error_code, created_at, updated_at
+`
+
+func (q *Queries) MarkEnterpriseLicenseValidationFailed(ctx context.Context, validationErrorCode *string) (EnterpriseLicense, error) {
+	row := q.db.QueryRow(ctx, markEnterpriseLicenseValidationFailed, validationErrorCode)
+	var i EnterpriseLicense
+	err := row.Scan(
+		&i.Singleton,
+		&i.LicenseKey,
+		&i.SealedActivationSecret,
+		&i.OrgName,
+		&i.PlanCode,
+		&i.SubscriptionStartAt,
+		&i.SubscriptionEndAt,
+		&i.SubscriptionRenewalAt,
+		&i.ActivatedAt,
+		&i.LastValidatedAt,
+		&i.ValidationFailedAt,
+		&i.ValidationErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const markUpdateAsChecked = `-- name: MarkUpdateAsChecked :execrows
@@ -6184,19 +6303,62 @@ func (q *Queries) UpsertDeviceUpdateFailure(ctx context.Context, arg UpsertDevic
 }
 
 const upsertEnterpriseLicense = `-- name: UpsertEnterpriseLicense :one
-INSERT INTO enterprise_license (singleton, license_key)
-VALUES (TRUE, $1)
-ON CONFLICT (singleton) DO UPDATE
-SET license_key = EXCLUDED.license_key, updated_at = CURRENT_TIMESTAMP
-RETURNING singleton, license_key, created_at, updated_at
+INSERT INTO enterprise_license (
+    singleton, license_key, sealed_activation_secret, org_name, plan_code,
+    subscription_start_at, subscription_end_at, subscription_renewal_at,
+    activated_at, last_validated_at
+)
+VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT (singleton) DO UPDATE SET
+    license_key = EXCLUDED.license_key,
+    sealed_activation_secret = EXCLUDED.sealed_activation_secret,
+    org_name = EXCLUDED.org_name,
+    plan_code = EXCLUDED.plan_code,
+    subscription_start_at = EXCLUDED.subscription_start_at,
+    subscription_end_at = EXCLUDED.subscription_end_at,
+    subscription_renewal_at = EXCLUDED.subscription_renewal_at,
+    activated_at = CURRENT_TIMESTAMP,
+    last_validated_at = CURRENT_TIMESTAMP,
+    validation_failed_at = NULL,
+    validation_error_code = NULL,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING singleton, license_key, sealed_activation_secret, org_name, plan_code, subscription_start_at, subscription_end_at, subscription_renewal_at, activated_at, last_validated_at, validation_failed_at, validation_error_code, created_at, updated_at
 `
 
-func (q *Queries) UpsertEnterpriseLicense(ctx context.Context, licenseKey string) (EnterpriseLicense, error) {
-	row := q.db.QueryRow(ctx, upsertEnterpriseLicense, licenseKey)
+type UpsertEnterpriseLicenseParams struct {
+	LicenseKey             string             `json:"license_key"`
+	SealedActivationSecret string             `json:"sealed_activation_secret"`
+	OrgName                string             `json:"org_name"`
+	PlanCode               string             `json:"plan_code"`
+	SubscriptionStartAt    pgtype.Timestamptz `json:"subscription_start_at"`
+	SubscriptionEndAt      pgtype.Timestamptz `json:"subscription_end_at"`
+	SubscriptionRenewalAt  pgtype.Timestamptz `json:"subscription_renewal_at"`
+}
+
+func (q *Queries) UpsertEnterpriseLicense(ctx context.Context, arg UpsertEnterpriseLicenseParams) (EnterpriseLicense, error) {
+	row := q.db.QueryRow(ctx, upsertEnterpriseLicense,
+		arg.LicenseKey,
+		arg.SealedActivationSecret,
+		arg.OrgName,
+		arg.PlanCode,
+		arg.SubscriptionStartAt,
+		arg.SubscriptionEndAt,
+		arg.SubscriptionRenewalAt,
+	)
 	var i EnterpriseLicense
 	err := row.Scan(
 		&i.Singleton,
 		&i.LicenseKey,
+		&i.SealedActivationSecret,
+		&i.OrgName,
+		&i.PlanCode,
+		&i.SubscriptionStartAt,
+		&i.SubscriptionEndAt,
+		&i.SubscriptionRenewalAt,
+		&i.ActivatedAt,
+		&i.LastValidatedAt,
+		&i.ValidationFailedAt,
+		&i.ValidationErrorCode,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

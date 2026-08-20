@@ -24,6 +24,7 @@ func registerAccountRoutes(
 	accountSubrouter.HandleFunc("/me/password", container.UsersHandler.ChangeMyPasswordHandler).Methods(http.MethodPut)
 
 	accountSubrouter.HandleFunc("/license", container.LicenseHandler.GetLicenseHandler).Methods(http.MethodGet)
+	accountSubrouter.Handle("/license/check", adminOnly(http.HandlerFunc(container.LicenseHandler.CheckLicenseHandler))).Methods(http.MethodPost)
 	accountSubrouter.Handle("/license", adminOnly(http.HandlerFunc(container.LicenseHandler.ActivateLicenseHandler))).Methods(http.MethodPut)
 	accountSubrouter.Handle("/license", adminOnly(http.HandlerFunc(container.LicenseHandler.RemoveLicenseHandler))).Methods(http.MethodDelete)
 
