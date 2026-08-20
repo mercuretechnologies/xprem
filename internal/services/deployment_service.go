@@ -7,7 +7,10 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"runtime"
+	"slices"
 	"strconv"
+	"sync"
 	"xprem/internal/auditlog"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -19,6 +22,7 @@ import (
 	update2 "xprem/internal/update"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -285,6 +289,58 @@ func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params R
 	return nil
 }
 
+// dedupExistingUploadAssets copies the requested files that already exist in
+// the branch's latest update into newUpdate's folder and returns the file
+// names it copied, so the caller can skip requesting uploads for them. Any
+// failure falls back to uploading: the returned slice just omits the file.
+func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, params RequestUploadURLParams, newUpdate types.Update) []string {
+	latestUpdate, err := s.updateService.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
+	if err != nil {
+		log.Printf("[RequestID: %s] Skipping asset dedup: %v", params.RequestID, err)
+		return nil
+	}
+	if latestUpdate == nil {
+		return nil
+	}
+	latestUpdateMetadata, err := update2.GetMetadata(*latestUpdate)
+	if err != nil {
+		log.Printf("[RequestID: %s] Skipping asset dedup: %v", params.RequestID, err)
+		return nil
+	}
+	previousAssets := latestUpdateMetadata.MetadataJSON.FileMetadata.Android.Assets
+	if params.Platform == "ios" {
+		previousAssets = latestUpdateMetadata.MetadataJSON.FileMetadata.IOS.Assets
+	}
+
+	var dedupedAssets []string
+	var mu sync.Mutex
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	// FileNames repeats assets shared by both platforms; copy each once.
+	seen := make(map[string]struct{}, len(params.FileNames))
+	for _, file := range params.FileNames {
+		if _, alreadySeen := seen[file]; alreadySeen {
+			continue
+		}
+		seen[file] = struct{}{}
+		if !slices.ContainsFunc(previousAssets, func(a types.Asset) bool { return a.Path == file }) {
+			continue
+		}
+		g.Go(func() error {
+			if err := s.bucket.CopyFileIntoUpdate(*latestUpdate, newUpdate, file); err != nil {
+				log.Printf("[RequestID: %s] Error copying %s into update: %v", params.RequestID, file, err)
+				return nil
+			}
+			mu.Lock()
+			dedupedAssets = append(dedupedAssets, file)
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
+	return dedupedAssets
+}
+
 func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params RequestUploadURLParams) (*RequestUploadURLResponse, error) {
 	err := s.branchService.UpsertBranchAndRuntimeVersion(ctx, params.AppID, params.BranchName, params.RuntimeVersion)
 	if err != nil {
@@ -305,12 +361,27 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	updateId := update2.GenerateUpdateTimestamp(params.Platform)
 	updateStr := update2.ConvertUpdateTimestampToString(updateId)
 
+	dedupedAssets := s.dedupExistingUploadAssets(ctx, params, types.Update{
+		AppId:          params.AppID,
+		Branch:         params.BranchName,
+		RuntimeVersion: params.RuntimeVersion,
+		UpdateId:       updateStr,
+	})
+
+	filesToUpload := params.FileNames
+	if len(dedupedAssets) > 0 {
+		log.Printf("[RequestID: %s] Reusing %d unchanged assets from the previous update", params.RequestID, len(dedupedAssets))
+		filesToUpload = slices.DeleteFunc(slices.Clone(params.FileNames), func(file string) bool {
+			return slices.Contains(dedupedAssets, file)
+		})
+	}
+
 	updateRequests, err := bucket.RequestUploadUrlsForFileUpdates(
 		params.AppID,
 		params.BranchName,
 		params.RuntimeVersion,
 		updateStr,
-		params.FileNames,
+		filesToUpload,
 	)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error requesting upload urls: %v", params.RequestID, err)

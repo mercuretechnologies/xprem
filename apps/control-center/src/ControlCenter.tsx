@@ -1,7 +1,6 @@
 import { Component, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  InteractionManager,
   Modal,
   Pressable,
   ScrollView,
@@ -108,7 +107,7 @@ function ControlCenterPanel() {
   useEffect(() => {
     if (!config) return;
     let cancelled = false;
-    const task = InteractionManager.runAfterInteractions(() => {
+    const handle = requestIdleCallback(() => {
       probeOnce(config)
         .then(result => {
           if (cancelled || result === null) return;
@@ -124,7 +123,7 @@ function ControlCenterPanel() {
     });
     return () => {
       cancelled = true;
-      task.cancel();
+      cancelIdleCallback(handle);
     };
   }, [config]);
 

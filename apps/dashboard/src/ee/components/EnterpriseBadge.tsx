@@ -37,9 +37,9 @@ export const EnterpriseBadge = () => {
           Enterprise
         </div>
         <div
-          className="truncate font-mono text-[10px] text-emerald-700/70 dark:text-emerald-300/60"
-          title={license.licenseId}>
-          {license.licenseId?.split('-')[0]}
+          className="truncate text-[10px] text-emerald-700/70 dark:text-emerald-300/60"
+          title={license.orgName}>
+          {license.orgName}
         </div>
       </div>
     </div>

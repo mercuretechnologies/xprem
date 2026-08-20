@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"xprem/config"
 	"xprem/internal/types"
@@ -20,6 +21,10 @@ var s3KeyPrefixDeprecationOnce sync.Once
 // filesystem paths while staying comfortably above realistic names
 // (UUIDs are 36, semver+build metadata under 100).
 const maxSegmentLen = 128
+
+// copyFileTimeout bounds a single CopyFileIntoUpdate provider call, so a
+// stalled copy degrades into a regular upload instead of hanging the publish.
+const copyFileTimeout = 30 * time.Second
 
 // validateSegment ensures a single-segment identifier (branch, runtimeVersion,
 // updateId, migrationId) is safe to embed in a storage path / object key.
@@ -146,11 +151,14 @@ type Bucket interface {
 	GetFile(update types.Update, assetPath string) (*types.BucketFile, error)
 	RequestUploadUrlForFileUpdate(appId string, branch string, runtimeVersion string, updateId string, fileName string) (string, error)
 	UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error
+	CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error
 	DeleteUpdateFolder(appId string, branch string, runtimeVersion string, updateId string) error
 	CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error)
 	RetrieveMigrationHistory() ([]string, error)
 	ApplyMigration(migrationId string) error
 	RemoveMigrationFromHistory(migrationId string) error
+	GetInstanceID() (string, error)
+	PersistInstanceID(id string) error
 }
 
 type BucketType string

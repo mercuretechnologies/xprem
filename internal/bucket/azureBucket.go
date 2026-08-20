@@ -293,6 +293,30 @@ func copyBlobAndWait(ctx context.Context, cc *container.Client, sourceURL, destK
 	return nil
 }
 
+func (b *AzureBucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	if b.ContainerName == "" {
+		return errors.New("ContainerName not set")
+	}
+	cc, err := b.containerClient()
+	if err != nil {
+		return err
+	}
+	srcKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName))
+	dstKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", target.AppId, target.Branch, target.RuntimeVersion, target.UpdateId, fileName))
+	// StartCopyFromURL authorizes the source through its URL, so the
+	// same-account source gets a short-lived read SAS.
+	srcURL, err := azure.SignBlobSAS(b.ContainerName, srcKey, sas.BlobPermissions{Read: true}, 10*time.Minute)
+	if err != nil {
+		return fmt.Errorf("sign source %s: %w", srcKey, err)
+	}
+	copyCtx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
+	defer cancel()
+	if err := copyBlobAndWait(copyCtx, cc, srcURL, dstKey); err != nil {
+		return fmt.Errorf("copy %s -> %s: %w", srcKey, dstKey, err)
+	}
+	return nil
+}
+
 func (b *AzureBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {
 	if b.ContainerName == "" {
 		return nil, errors.New("ContainerName not set")
@@ -381,6 +405,37 @@ func (b *AzureBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId
 		UpdateId:       newUpdateId,
 		CreatedAt:      helpers.NormalizeTimestampToDuration(updateId),
 	}, nil
+}
+
+func (b *AzureBucket) GetInstanceID() (string, error) {
+	ctx := context.Background()
+	cc, err := b.containerClient()
+	if err != nil {
+		return "", err
+	}
+	resp, err := cc.NewBlobClient(b.prefixedKey(".instanceid")).DownloadStream(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	if _, err := io.Copy(buf, resp.Body); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+func (b *AzureBucket) PersistInstanceID(id string) error {
+	ctx := context.Background()
+	cc, err := b.containerClient()
+	if err != nil {
+		return err
+	}
+	_, err = cc.NewBlockBlobClient(b.prefixedKey(".instanceid")).UploadBuffer(ctx, []byte(id+"\n"), nil)
+	return err
 }
 
 func (b *AzureBucket) RetrieveMigrationHistory() ([]string, error) {

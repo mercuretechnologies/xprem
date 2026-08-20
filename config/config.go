@@ -54,6 +54,11 @@ func IsDeviceTelemetryDisabled() bool {
 	return disabled
 }
 
+func IsServerTelemetryDisabled() bool {
+	disabled, _ := strconv.ParseBool(GetEnv("DISABLE_TELEMETRY"))
+	return disabled
+}
+
 func ValidateMasterKey() error {
 	awsKeyId := GetEnv("AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID")
 	localKey := GetEnv("DB_KEYS_MASTER_KEY_B64")

@@ -204,3 +204,27 @@ func TestUploadPathIsInBranchRefusesWithoutABucketRoot(t *testing.T) {
 	t.Setenv("LOCAL_BUCKET_BASE_PATH", "")
 	assert.False(t, uploadPathIsInBranch("/updates/app1/main/1.0.0/17/bundle.js", "app1", "main"))
 }
+
+func TestLocalBucket_CopyFileIntoUpdate(t *testing.T) {
+	base := t.TempDir()
+	b := &LocalBucket{BasePath: base}
+	source := types.Update{AppId: "app1", Branch: "main", RuntimeVersion: "1.0.0", UpdateId: "100"}
+	target := types.Update{AppId: "app1", Branch: "main", RuntimeVersion: "1.0.0", UpdateId: "200"}
+
+	sourceFile := filepath.Join(base, "app1", "main", "1.0.0", "100", "assets", "img.png")
+	assert.Nil(t, os.MkdirAll(filepath.Dir(sourceFile), 0o755))
+	assert.Nil(t, os.WriteFile(sourceFile, []byte("png-bytes"), 0o644))
+
+	assert.Nil(t, b.CopyFileIntoUpdate(source, target, "assets/img.png"))
+
+	copied, err := os.ReadFile(filepath.Join(base, "app1", "main", "1.0.0", "200", "assets", "img.png"))
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("png-bytes"), copied)
+}
+
+func TestLocalBucket_CopyFileIntoUpdate_MissingSourceErrors(t *testing.T) {
+	b := &LocalBucket{BasePath: t.TempDir()}
+	source := types.Update{AppId: "app1", Branch: "main", RuntimeVersion: "1.0.0", UpdateId: "100"}
+	target := types.Update{AppId: "app1", Branch: "main", RuntimeVersion: "1.0.0", UpdateId: "200"}
+	assert.NotNil(t, b.CopyFileIntoUpdate(source, target, "assets/absent.png"))
+}

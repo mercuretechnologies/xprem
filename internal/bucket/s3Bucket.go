@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -322,6 +323,31 @@ func (b *S3Bucket) PutObject(ctx context.Context, key string, body []byte) error
 	return nil
 }
 
+func (b *S3Bucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	if b.BucketName == "" {
+		return errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return fmt.Errorf("error getting S3 client: %w", err)
+	}
+	sourceKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", source.AppId, source.Branch, source.RuntimeVersion, source.UpdateId, fileName))
+	targetKey := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/%s", target.AppId, target.Branch, target.RuntimeVersion, target.UpdateId, fileName))
+	// Bounded so a stalled provider call cannot hold up the publish response;
+	// the caller treats a timed-out copy as "upload it instead".
+	copyCtx, cancel := context.WithTimeout(context.Background(), copyFileTimeout)
+	defer cancel()
+	_, err = s3Client.CopyObject(copyCtx, &s3.CopyObjectInput{
+		Bucket:     awssdk.String(b.BucketName),
+		CopySource: awssdk.String(url.QueryEscape(b.BucketName + "/" + sourceKey)),
+		Key:        awssdk.String(targetKey),
+	})
+	if err != nil {
+		return fmt.Errorf("error copying object %s -> %s: %w", sourceKey, targetKey, err)
+	}
+	return nil
+}
+
 func (b *S3Bucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {
 	if b.BucketName == "" {
 		return nil, errors.New("BucketName not set")
@@ -415,6 +441,52 @@ func (b *S3Bucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId st
 		UpdateId:       newUpdateId,
 		CreatedAt:      helpers.NormalizeTimestampToDuration(updateId),
 	}, nil
+}
+
+func (b *S3Bucket) GetInstanceID() (string, error) {
+	if b.BucketName == "" {
+		return "", errors.New("BucketName not set")
+	}
+	s3Client, errS3 := aws.GetS3Client()
+	if errS3 != nil {
+		return "", errS3
+	}
+	resp, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.prefixedKey(".instanceid")),
+	})
+	if err != nil {
+		var noSuchKey *s3types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			return "", nil
+		}
+		return "", fmt.Errorf("GetObject error: %w", err)
+	}
+	defer resp.Body.Close()
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(content)), nil
+}
+
+func (b *S3Bucket) PersistInstanceID(id string) error {
+	if b.BucketName == "" {
+		return errors.New("BucketName not set")
+	}
+	s3Client, errS3 := aws.GetS3Client()
+	if errS3 != nil {
+		return errS3
+	}
+	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.prefixedKey(".instanceid")),
+		Body:   bytes.NewReader([]byte(id + "\n")),
+	})
+	if err != nil {
+		return fmt.Errorf("PutObject error: %w", err)
+	}
+	return nil
 }
 
 func (b *S3Bucket) RetrieveMigrationHistory() ([]string, error) {

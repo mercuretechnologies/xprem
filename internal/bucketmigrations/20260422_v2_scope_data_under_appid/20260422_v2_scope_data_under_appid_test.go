@@ -43,6 +43,10 @@ func (u unreachableBucket) UploadFileIntoUpdate(types.Update, string, io.Reader)
 	u.t.Fatal("migration should have skipped")
 	return nil
 }
+func (u unreachableBucket) CopyFileIntoUpdate(types.Update, types.Update, string) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
 func (u unreachableBucket) DeleteUpdateFolder(string, string, string, string) error {
 	u.t.Fatal("migration should have skipped")
 	return nil
@@ -50,6 +54,14 @@ func (u unreachableBucket) DeleteUpdateFolder(string, string, string, string) er
 func (u unreachableBucket) CreateUpdateFrom(*types.Update, string) (*types.Update, error) {
 	u.t.Fatal("migration should have skipped")
 	return nil, nil
+}
+func (u unreachableBucket) GetInstanceID() (string, error) {
+	u.t.Fatal("migration should have skipped")
+	return "", nil
+}
+func (u unreachableBucket) PersistInstanceID(string) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
 }
 func (u unreachableBucket) RetrieveMigrationHistory() ([]string, error) {
 	u.t.Fatal("migration should have skipped")

@@ -674,17 +674,36 @@ export type GrantRecord = {
 
 // The deployment's Enterprise Edition license status (/api/license,
 // control-plane only). `valid` is the single source of truth for "enterprise
-// features are on": `hasKey` can be true with `valid` false when the stored
-// key is expired or malformed, in which case `error` says why. `expiresAt` is
-// absent for a perpetual license.
+// features are on": it stays true through the grace window while
+// `validationFailedAt` warns that the license server refuses or cannot be
+// reached, and flips to false (`suspended` true) once `graceEndsAt` passes.
 export type LicenseStatus = {
   hasKey: boolean;
   valid: boolean;
-  error?: string;
-  licenseId?: string;
-  issuedAt?: string;
-  expiresAt?: string;
+  suspended?: boolean;
+  orgName?: string;
+  planCode?: string;
+  subscriptionStartAt?: string;
+  subscriptionEndAt?: string;
+  subscriptionRenewalAt?: string;
   activatedAt?: string;
+  lastValidatedAt?: string;
+  validationFailedAt?: string;
+  validationErrorCode?: string;
+  graceEndsAt?: string;
+};
+
+// Outcome of the no-side-effect key check (/api/license/check): either valid
+// with the license descriptor to confirm before attaching, or an errorCode
+// saying why the key is not usable.
+export type LicenseCheckResult = {
+  valid: boolean;
+  errorCode?: string;
+  orgName?: string;
+  planCode?: string;
+  subscriptionStartAt?: string;
+  subscriptionEndAt?: string;
+  subscriptionRenewalAt?: string;
 };
 
 // Pre-auth SSO state (/auth/sso/config), read by the login page to decide
@@ -1172,6 +1191,15 @@ export class ApiClient {
   public async deleteSsoSettings() {
     return this.request<void>(`/api/sso`, {
       method: 'DELETE',
+    });
+  }
+
+  // Asks the license server whether the key is usable, without consuming it.
+  public async checkLicense(key: string) {
+    return this.request<LicenseCheckResult>(`/api/license/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
     });
   }
 

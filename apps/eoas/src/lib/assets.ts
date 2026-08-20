@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import Joi from 'joi';
 import path from 'path';
 
-import { Credentials, getAuthHeaders } from './auth';
+import { Credentials, getAuthHeaders, missingEooTokenHint } from './auth';
 import { RequestedPlatform } from './expoConfig';
 import { fetchWithRetries } from './fetch';
 import Log from './log';
@@ -349,7 +349,7 @@ export async function requestUploadUrls({
   }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Failed to request upload URL: ${text}`);
+    throw new Error(`Failed to request upload URL: ${text}${missingEooTokenHint(response.status)}`);
   }
   const json = await response.json();
   // Joi's sanitized value, not the raw payload: it is the object the schema

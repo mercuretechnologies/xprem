@@ -16,7 +16,17 @@ import Log from '../../lib/log';
 import Publish from '../publish';
 
 vi.mock('@expo/spawn-async', () => ({ default: vi.fn() }));
-vi.mock('../../lib/fetch', () => ({ fetchWithRetries: vi.fn() }));
+vi.mock('../../lib/fetch', () => {
+  const fetchWithRetries = vi.fn();
+  return {
+    fetchWithRetries,
+    // Forwards to the same spy with the built options, so putCalls() sees the
+    // multipart uploads exactly like the plain ones.
+    fetchWithRetriesRebuildingBody: vi.fn(async (url: string, makeOptions: () => unknown) =>
+      fetchWithRetries(url, makeOptions() as any)
+    ),
+  };
+});
 vi.mock('../../lib/auth', () => ({
   retrieveCredentials: () => ({ token: 'test-token' }),
   validateCredentials: () => true,

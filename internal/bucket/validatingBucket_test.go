@@ -40,6 +40,10 @@ func (s *stubBucket) UploadFileIntoUpdate(update types.Update, fileName string, 
 	s.mark()
 	return nil
 }
+func (s *stubBucket) CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error {
+	s.mark()
+	return nil
+}
 func (s *stubBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
 	s.mark()
 	return nil
@@ -48,6 +52,8 @@ func (s *stubBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId 
 	s.mark()
 	return nil, nil
 }
+func (s *stubBucket) GetInstanceID() (string, error)              { s.mark(); return "", nil }
+func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); return nil }
 func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
 func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
 func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }
@@ -214,6 +220,42 @@ func TestValidatingBucket_UploadFileIntoUpdate_RejectsTraversalInFileName(t *tes
 	err := v.UploadFileIntoUpdate(validUpdate(), "../evil.js", bytes.NewReader(nil))
 	assert.Error(t, err)
 	assert.False(t, stub.called)
+}
+
+func TestValidatingBucket_CopyFileIntoUpdate_RejectsTraversalInFileName(t *testing.T) {
+	stub := &stubBucket{}
+	v := &validatingBucket{Inner: stub}
+	err := v.CopyFileIntoUpdate(validUpdate(), validUpdate(), "../evil.js")
+	assert.Error(t, err)
+	assert.False(t, stub.called)
+}
+
+func TestValidatingBucket_CopyFileIntoUpdate_RejectsInvalidUpdates(t *testing.T) {
+	badUpdate := validUpdate()
+	badUpdate.UpdateId = "123/../456"
+	for _, c := range []struct {
+		name           string
+		source, target types.Update
+	}{
+		{"bad source", badUpdate, validUpdate()},
+		{"bad target", validUpdate(), badUpdate},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubBucket{}
+			v := &validatingBucket{Inner: stub}
+			err := v.CopyFileIntoUpdate(c.source, c.target, "assets/img.png")
+			assert.Error(t, err)
+			assert.False(t, stub.called)
+		})
+	}
+}
+
+func TestValidatingBucket_CopyFileIntoUpdate_DelegatesOnValidInput(t *testing.T) {
+	stub := &stubBucket{}
+	v := &validatingBucket{Inner: stub}
+	err := v.CopyFileIntoUpdate(validUpdate(), validUpdate(), "assets/img.png")
+	assert.NoError(t, err)
+	assert.True(t, stub.called)
 }
 
 func TestValidatingBucket_DeleteUpdateFolder_RejectsSlashInUpdateId(t *testing.T) {
