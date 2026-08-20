@@ -12,15 +12,21 @@ import {
   GitBranch,
   Info,
   KeyRound,
+  Lock,
   LogOut,
   Monitor,
   Moon,
   Plus,
+  Key,
+  Container,
+  Rocket,
   Search,
+  Server,
   Settings,
   ShieldCheck,
   Sun,
   Users,
+  Wrench,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
@@ -70,6 +76,47 @@ const NavLink = ({
   );
 };
 
+// Smaller nav entry for links nested under an expandable group.
+const SubNavLink = ({
+  to,
+  icon: Icon,
+  badge,
+  title,
+  onNavigate,
+  children,
+}: {
+  to: string;
+  icon: typeof Box;
+  badge?: React.ReactNode;
+  title?: string;
+  onNavigate?: () => void;
+  children: React.ReactNode;
+}) => {
+  const { pathname } = useLocation();
+  // `to` may carry a query string (Observe); only the path decides active state.
+  const path = to.split('?')[0];
+  const isActive = pathname === path || pathname.startsWith(`${path}/`);
+  return (
+    <Link
+      to={to}
+      title={title}
+      onClick={e => {
+        if (pathname === path) e.preventDefault();
+        onNavigate?.();
+      }}
+      className={clsx(
+        'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors',
+        isActive
+          ? 'bg-accent font-medium text-foreground'
+          : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+      )}>
+      <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+      <span>{children}</span>
+      {badge}
+    </Link>
+  );
+};
+
 // Marks a nav entry as part of the Enterprise edition, with the emerald
 // accent shared by the enterprise UI.
 const EnterpriseNavBadge = () => (
@@ -94,17 +141,65 @@ const PendingUsersBadge = ({ count }: { count: number }) => (
 // arrive, and so the page keeps its full height for the data.
 const ObserveNav = ({ onNavigate }: { onNavigate?: () => void }) => {
   const { pathname, search } = useLocation();
-  const navigationId = useId();
   const isActive = pathname === '/observe' || pathname.startsWith('/observe/');
-  const [isOpen, setIsOpen] = useState(isActive);
-  useEffect(() => {
-    if (isActive) setIsOpen(true);
-  }, [isActive]);
 
   // Filters, period and live state all live in the query string. Carrying it
   // across sub-pages is the whole point: you narrow to a branch once, then
   // walk performance, events and logs on that same slice.
   const carried = isActive ? search : '';
+
+  return (
+    <ExpandableSection
+      label="Observe"
+      icon={ChartNoAxesCombined}
+      to={`/observe/overview${carried}`}
+      paths={['/observe']}
+      onNavigate={onNavigate}>
+      {observeNavigation.map(page => (
+        <SubNavLink
+          key={page.value}
+          to={`/observe/${page.value}${carried}`}
+          icon={page.icon}
+          title={page.question}
+          onNavigate={onNavigate}>
+          {page.label}
+        </SubNavLink>
+      ))}
+    </ExpandableSection>
+  );
+};
+
+const SectionLabel = ({ children }: { children: React.ReactNode }) => (
+  <p className="px-3 pb-1.5 pt-5 text-xs font-medium text-muted-foreground">{children}</p>
+);
+
+// Collapsible nav group with the same behavior as Observe: the header is a
+// link to the group's first page, the chevron alone toggles the sub-entries.
+const ExpandableSection = ({
+  label,
+  icon: Icon,
+  to,
+  paths,
+  onNavigate,
+  children,
+}: {
+  label: string;
+  icon?: typeof Box;
+  to: string;
+  paths: string[];
+  onNavigate?: () => void;
+  children: React.ReactNode;
+}) => {
+  const { pathname } = useLocation();
+  const contentId = useId();
+  const isActive = paths.some(path => pathname === path || pathname.startsWith(`${path}/`));
+  const [isOpen, setIsOpen] = useState(isActive);
+
+  useEffect(() => {
+    if (isActive) {
+      setIsOpen(true);
+    }
+  }, [isActive]);
 
   return (
     <div>
@@ -116,20 +211,28 @@ const ObserveNav = ({ onNavigate }: { onNavigate?: () => void }) => {
             : 'text-muted-foreground hover:border-border hover:bg-accent/70 hover:text-foreground'
         )}>
         <Link
-          to={`/observe/overview${carried}`}
-          onClick={() => onNavigate?.()}
+          to={to}
+          onClick={e => {
+            if (isOpen) {
+              e.preventDefault();
+              setIsOpen(false);
+              return;
+            }
+            setIsOpen(true);
+            onNavigate?.();
+          }}
           className={clsx(
             'flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-sm',
             isActive && 'font-medium'
           )}>
-          <ChartNoAxesCombined className="h-4 w-4" strokeWidth={1.75} />
-          <span>Observe</span>
+          {Icon && <Icon className="h-4 w-4" strokeWidth={1.75} />}
+          <span>{label}</span>
         </Link>
         <button
           type="button"
           aria-expanded={isOpen}
-          aria-controls={navigationId}
-          aria-label={isOpen ? 'Collapse Observe' : 'Expand Observe'}
+          aria-controls={contentId}
+          aria-label={isOpen ? `Collapse ${label}` : `Expand ${label}`}
           onClick={() => setIsOpen(open => !open)}
           className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
           <ChevronDown
@@ -142,38 +245,18 @@ const ObserveNav = ({ onNavigate }: { onNavigate?: () => void }) => {
       </div>
 
       {isOpen && (
-        <div id={navigationId} className="ml-4 mt-0.5 space-y-0.5 border-l border-border/70 pl-2">
-          {observeNavigation.map(page => {
-            const to = `/observe/${page.value}`;
-            const active = pathname === to;
-            return (
-              <Link
-                key={page.value}
-                to={`${to}${carried}`}
-                onClick={() => onNavigate?.()}
-                title={page.question}
-                className={clsx(
-                  'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors',
-                  active
-                    ? 'bg-accent font-medium text-foreground'
-                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-                )}>
-                <page.icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-                <span>{page.label}</span>
-              </Link>
-            );
-          })}
+        <div id={contentId} className="ml-4 mt-0.5 space-y-0.5 border-l border-border/70 pl-2">
+          {children}
         </div>
       )}
     </div>
   );
 };
 
-const SectionLabel = ({ children }: { children: React.ReactNode }) => (
-  <p className="px-3 pb-1.5 pt-5 text-xs font-medium text-muted-foreground">{children}</p>
-);
-
+const serverPaths = ['/settings', '/license', '/account'];
 const accessSecurityPaths = ['/users', '/roles', '/sso', '/audit-logs'];
+const otaPaths = ['/updates', '/channels', '/branches']
+const buildPaths = ['/build-credentials', '/environments'];
 
 const themeOptions: Array<{
   value: ThemePreference;
@@ -228,20 +311,8 @@ export function AppSidebar({
 } = {}) {
   const { CONTROL_PLANE_ENABLED, SERVER_VERSION } = useSettings();
   const { isAdmin } = useCurrentUser();
-  const { pathname } = useLocation();
   const { apps, selectedAppId, setSelectedAppId, refreshApps, isLoading } = useSelectedApp();
-  const accessSecurityNavigationId = useId();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const isAccessSecurityActive = accessSecurityPaths.some(
-    path => pathname === path || pathname.startsWith(`${path}/`)
-  );
-  const [isAccessSecurityOpen, setIsAccessSecurityOpen] = useState(isAccessSecurityActive);
-
-  useEffect(() => {
-    if (isAccessSecurityActive) {
-      setIsAccessSecurityOpen(true);
-    }
-  }, [isAccessSecurityActive]);
 
   // Same query key as the Users page, so react-query serves both from one
   // request and approving an account refreshes the badge on its own.
@@ -335,111 +406,119 @@ export function AppSidebar({
             <>
               <SectionLabel>Application</SectionLabel>
               <div className="space-y-0.5">
-                {CONTROL_PLANE_ENABLED && (
-                  <NavLink to="/updates" icon={HardDriveDownload} onNavigate={onNavigate}>
-                    Updates
-                  </NavLink>
-                )}
+                <ExpandableSection
+                  label="OTA Updates"
+                  icon={Rocket}
+                  to={CONTROL_PLANE_ENABLED ? '/updates' : '/channels'}
+                  paths={otaPaths}
+                  onNavigate={onNavigate}>
+                  {CONTROL_PLANE_ENABLED && (
+                    <SubNavLink to="/updates" icon={HardDriveDownload} onNavigate={onNavigate}>
+                      Updates
+                    </SubNavLink>
+                  )}
+                  <SubNavLink to="/channels" icon={Box} onNavigate={onNavigate}>
+                    Channels
+                  </SubNavLink>
+                  <SubNavLink to="/branches" icon={GitBranch} onNavigate={onNavigate}>
+                    Branches
+                  </SubNavLink>
+                </ExpandableSection>
                 {CONTROL_PLANE_ENABLED && <ObserveNav onNavigate={onNavigate} />}
-                <NavLink to="/channels" icon={Box} onNavigate={onNavigate}>
-                  Channels
-                </NavLink>
-                <NavLink to="/branches" icon={GitBranch} onNavigate={onNavigate}>
-                  Branches
-                </NavLink>
+                
+                {CONTROL_PLANE_ENABLED && (
+                  <>
+                    <ExpandableSection
+                      label="Builds"
+                      icon={Wrench}
+                      to={'/build-credentials'}
+                      paths={buildPaths}
+                      onNavigate={onNavigate}>
+                        <SubNavLink to="/build-credentials" icon={Key} onNavigate={onNavigate}>
+                          Credentials
+                        </SubNavLink>
+                        <SubNavLink to="/environments" icon={Container} onNavigate={onNavigate}>
+                          Environments
+                        </SubNavLink>
+                    </ExpandableSection>
+                    <NavLink to="/tokens" icon={KeyRound} onNavigate={onNavigate}>
+                      API tokens
+                    </NavLink>
+                  </>
+                )}
                 <NavLink to="/app-info" icon={Info} onNavigate={onNavigate}>
                   App info
                 </NavLink>
-                {CONTROL_PLANE_ENABLED && (
-                  <NavLink to="/tokens" icon={KeyRound} onNavigate={onNavigate}>
-                    API tokens
-                  </NavLink>
-                )}
               </div>
 
               <div className="mx-3 mt-5 border-t border-border/70" />
             </>
           )}
 
-          <SectionLabel>Server</SectionLabel>
-          <div className="space-y-0.5">
-            <NavLink to="/settings" icon={Settings} onNavigate={onNavigate}>
-              Settings
-            </NavLink>
-            {CONTROL_PLANE_ENABLED && (
-              <NavLink to="/license" icon={BadgeCheck} onNavigate={onNavigate}>
-                License
-              </NavLink>
-            )}
-            <NavLink to="/account" icon={CircleUser} onNavigate={onNavigate}>
-              My account
-            </NavLink>
-          </div>
-
-          {/* Who signs in and how: accounts on one side, SSO on the other.
-              Both are control-plane, admin-managed concerns. */}
-          {CONTROL_PLANE_ENABLED && isAdmin && (
-            <div>
-              <button
-                type="button"
-                aria-expanded={isAccessSecurityOpen}
-                aria-controls={accessSecurityNavigationId}
-                onClick={() => setIsAccessSecurityOpen(open => !open)}
-                className={clsx(
-                  'flex w-full items-center px-3 pb-1.5 pt-5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                  isAccessSecurityActive
-                    ? 'text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}>
-                <span>Access &amp; Security</span>
-                <ChevronDown
-                  className={clsx(
-                    'ml-auto h-3.5 w-3.5 transition-transform duration-150 motion-reduce:transition-none',
-                    isAccessSecurityOpen && 'rotate-180'
-                  )}
-                />
-              </button>
-
-              {isAccessSecurityOpen && (
-                <div
-                  id={accessSecurityNavigationId}
-                  className="ml-2 space-y-0.5 border-l border-border/70 pl-2">
-                  <NavLink
-                    to="/users"
-                    icon={Users}
-                    onNavigate={onNavigate}
-                    badge={
-                      pendingUsersCount > 0 ? (
-                        <PendingUsersBadge count={pendingUsersCount} />
-                      ) : undefined
-                    }>
-                    Users
-                  </NavLink>
-                  <NavLink
-                    to="/roles"
-                    icon={ShieldCheck}
-                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
-                    onNavigate={onNavigate}>
-                    Roles
-                  </NavLink>
-                  <NavLink
-                    to="/sso"
-                    icon={Fingerprint}
-                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
-                    onNavigate={onNavigate}>
-                    SSO
-                  </NavLink>
-                  <NavLink
-                    to="/audit-logs"
-                    icon={ScrollText}
-                    badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
-                    onNavigate={onNavigate}>
-                    Audit log
-                  </NavLink>
-                </div>
+          <div className="mt-3 space-y-0.5">
+            <ExpandableSection
+              label="Server"
+              icon={Server}
+              to="/settings"
+              paths={serverPaths}
+              onNavigate={onNavigate}>
+              <SubNavLink to="/settings" icon={Settings} onNavigate={onNavigate}>
+                Settings
+              </SubNavLink>
+              {CONTROL_PLANE_ENABLED && (
+                <SubNavLink to="/license" icon={BadgeCheck} onNavigate={onNavigate}>
+                  License
+                </SubNavLink>
               )}
-            </div>
-          )}
+              <SubNavLink to="/account" icon={CircleUser} onNavigate={onNavigate}>
+                My account
+              </SubNavLink>
+            </ExpandableSection>
+
+            {/* Who signs in and how: accounts on one side, SSO on the other.
+                Both are control-plane, admin-managed concerns. */}
+            {CONTROL_PLANE_ENABLED && isAdmin && (
+              <ExpandableSection
+                label="Access & Security"
+                icon={Lock}
+                to="/users"
+                paths={accessSecurityPaths}
+                onNavigate={onNavigate}>
+                <SubNavLink
+                  to="/users"
+                  icon={Users}
+                  onNavigate={onNavigate}
+                  badge={
+                    pendingUsersCount > 0 ? (
+                      <PendingUsersBadge count={pendingUsersCount} />
+                    ) : undefined
+                  }>
+                  Users
+                </SubNavLink>
+                <SubNavLink
+                  to="/roles"
+                  icon={ShieldCheck}
+                  badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                  onNavigate={onNavigate}>
+                  Roles
+                </SubNavLink>
+                <SubNavLink
+                  to="/sso"
+                  icon={Fingerprint}
+                  badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                  onNavigate={onNavigate}>
+                  SSO
+                </SubNavLink>
+                <SubNavLink
+                  to="/audit-logs"
+                  icon={ScrollText}
+                  badge={showEnterpriseNavBadges ? <EnterpriseNavBadge /> : undefined}
+                  onNavigate={onNavigate}>
+                  Audit log
+                </SubNavLink>
+              </ExpandableSection>
+            )}
+          </div>
         </nav>
 
         <div className="border-t border-border/80">

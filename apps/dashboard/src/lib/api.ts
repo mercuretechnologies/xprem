@@ -112,6 +112,55 @@ export type BranchUpdateState = {
   rolloutPercentage?: number | null;
 };
 
+export type AppIdentifier = {
+  id: string;
+  platform: 'ios' | 'android';
+  identifier: string;
+  buildNumber: number;
+  hasAndroidCredentials: boolean;
+  createdAt: string;
+}
+
+// The non-secret projection of stored Android signing credentials. Secrets
+// (keystore, passwords, service account key) never come back down; the only
+// signal is hasGoogleServiceAccountKey.
+export type AndroidCredentialsMetadata = {
+  identifier: string;
+  keyAlias: string;
+  hasGoogleServiceAccountKey: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// `keystore` is the keystore file base64-encoded; `googleServiceAccountKey`
+// is the raw service account JSON.
+export type AndroidCredentialsPayload = {
+  keyAlias: string;
+  keystore: string;
+  keystorePassword: string;
+  keyPassword: string;
+  googleServiceAccountKey: string;
+};
+
+// One variable of an environment: metadata only, the value stays server side
+// until explicitly revealed.
+export type EnvVarRecord = {
+  key: string;
+  isPublic: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// A named set of variables (production, staging, ...). Channels may point to
+// one as their default; that binding is on ChannelRecord.environmentName.
+export type EnvironmentRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  vars: EnvVarRecord[];
+};
+
 export type BranchRecord = {
   branchName: string;
   branchId: string;
@@ -1354,6 +1403,144 @@ export class ApiClient {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  public async getAppIdentifiers() {
+     return this.request<AppIdentifier[]>(`${this.appScope()}/identifiers`, {
+      method: 'GET',
+    });
+  }
+
+  public async createAppIdentifier(payload: { platform: 'ios' | 'android'; identifier: string }) {
+    return this.request<{ identifierId: string }>(`${this.appScope()}/identifiers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async deleteAppIdentifier(identifierId: string) {
+    return this.request<void>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  public async setAppIdentifierBuildNumber(identifierId: string, buildNumber: number) {
+    return this.request<void>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/build-number`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buildNumber }),
+      }
+    );
+  }
+
+  // `null` means the identifier has no Android credentials configured yet:
+  // the form renders empty instead of surfacing an error.
+  public async getAndroidCredentials(identifierId: string): Promise<AndroidCredentialsMetadata | null> {
+    try {
+      return await this.request<AndroidCredentialsMetadata>(
+        `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/android`,
+        { method: 'GET' }
+      );
+    } catch (error) {
+      if (error instanceof ApiProblemError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  public async saveAndroidCredentials(identifierId: string, payload: AndroidCredentialsPayload) {
+    return this.request<void>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/android`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  public async deleteAndroidCredentials(identifierId: string) {
+    return this.request<void>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/android`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  public async getEnvironments() {
+    return this.request<EnvironmentRecord[]>(`${this.appScope()}/environments`, {
+      method: 'GET',
+    });
+  }
+
+  public async createEnvironment(name: string) {
+    return this.request<{ id: string; name: string }>(`${this.appScope()}/environments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  public async deleteEnvironment(environment: string) {
+    return this.request<void>(
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  public async setEnvVar(
+    environment: string,
+    key: string,
+    payload: { value: string; isPublic: boolean }
+  ) {
+    return this.request<void>(
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  public async revealEnvVar(environment: string, key: string) {
+    return this.request<{ value: string }>(
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}/value`,
+      {
+        method: 'GET',
+      }
+    );
+  }
+
+  public async deleteEnvVar(environment: string, key: string) {
+    return this.request<void>(
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  // null unbinds the channel from its environment.
+  public async setChannelEnvironment(channelName: string, environment: string | null) {
+    return this.request<void>(
+      `${this.appScope()}/channels/${encodeURIComponent(channelName)}/environment`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ environment }),
       }
     );
   }

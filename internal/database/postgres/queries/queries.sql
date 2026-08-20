@@ -2521,9 +2521,12 @@ DELETE FROM environment_vars
 WHERE environment_id = $1 AND key = $2;
 
 -- name: UpdateChannelEnvironment :execresult
-UPDATE channels
-SET environment_id = $3
-WHERE app_id = $1 AND name = $2;
+-- Refuses an environment of another app even when called with a raw id.
+UPDATE channels c
+SET environment_id = sqlc.narg('environment_id')::uuid
+WHERE c.app_id = $1 AND c.name = $2
+  AND (sqlc.narg('environment_id')::uuid IS NULL
+       OR EXISTS (SELECT 1 FROM environments e WHERE e.id = sqlc.narg('environment_id')::uuid AND e.app_id = c.app_id));
 
 -- name: GetServerInstanceID :one
 SELECT id FROM server_instance;

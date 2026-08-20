@@ -3,12 +3,14 @@ import {
   BadgeCheck,
   Box,
   CircleUser,
+  Container,
   FileText,
+  Fingerprint,
   GitBranch,
   HardDriveDownload,
   Info,
+  Key,
   KeyRound,
-  Radio,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -77,7 +79,11 @@ export const CommandPalette = ({
         { label: 'Branches', path: '/branches', icon: GitBranch },
         { label: 'App info', path: '/app-info', icon: Info },
         ...(CONTROL_PLANE_ENABLED
-          ? [{ label: 'API tokens', path: '/tokens', icon: KeyRound }]
+          ? [
+              { label: 'API tokens', path: '/tokens', icon: KeyRound },
+              { label: 'Build credentials', path: '/build-credentials', icon: Key },
+              { label: 'Environments', path: '/environments', icon: Container },
+            ]
           : []),
       ]
     : [];
@@ -85,15 +91,16 @@ export const CommandPalette = ({
     { label: 'Settings', path: '/settings', icon: Settings },
     ...(CONTROL_PLANE_ENABLED ? [{ label: 'License', path: '/license', icon: BadgeCheck }] : []),
     { label: 'My account', path: '/account', icon: CircleUser },
-    ...(CONTROL_PLANE_ENABLED && isAdmin
+  ];
+  const accessSecurityNavigation: NavigationItem[] =
+    CONTROL_PLANE_ENABLED && isAdmin
       ? [
           { label: 'Users', path: '/users', icon: Users },
           { label: 'Roles', path: '/roles', icon: ShieldCheck },
-          { label: 'SSO', path: '/sso', icon: Radio },
+          { label: 'SSO', path: '/sso', icon: Fingerprint },
           { label: 'Audit log', path: '/audit-logs', icon: ScrollText },
         ]
-      : []),
-  ];
+      : [];
 
   const goTo = (path: string) => {
     onOpenChange(false);
@@ -110,7 +117,7 @@ export const CommandPalette = ({
           <CommandGroup heading="Application">
             {appNavigation.map(item => (
               <CommandItem
-                key={item.path}
+                key={item.label}
                 value={`page ${item.label}`}
                 onSelect={() => goTo(item.path)}>
                 <item.icon />
@@ -165,7 +172,7 @@ export const CommandPalette = ({
         <CommandGroup heading="Server">
           {serverNavigation.map(item => (
             <CommandItem
-              key={item.path}
+              key={item.label}
               value={`page ${item.label}`}
               onSelect={() => goTo(item.path)}>
               <item.icon />
@@ -173,6 +180,23 @@ export const CommandPalette = ({
             </CommandItem>
           ))}
         </CommandGroup>
+
+        {accessSecurityNavigation.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Access & Security">
+              {accessSecurityNavigation.map(item => (
+                <CommandItem
+                  key={item.label}
+                  value={`page ${item.label}`}
+                  onSelect={() => goTo(item.path)}>
+                  <item.icon />
+                  <span>{item.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
 
         {apps.length > 1 && (
           <>
