@@ -63,11 +63,13 @@ const (
 	// keys). Reading the non-secret metadata is open to any viewer.
 	PermCredentialsManage Permission = "credentials:manage"
 	// PermEnvRead reveals the plaintext values of the app's environment
-	// variables. Listing keys (never values) is open to any viewer.
+	// variables. Listing environments and keys (never values) is open to any
+	// viewer.
 	PermEnvRead Permission = "env:read"
-	// PermEnvManage writes and deletes the app's environment variables. It
-	// does not imply PermEnvRead: a config operator can overwrite values
-	// without being able to read them back.
+	// PermEnvManage creates and deletes environments, writes and deletes their
+	// variables, and binds channels to an environment. It does not imply
+	// PermEnvRead: a config operator can overwrite values without being able
+	// to read them back.
 	PermEnvManage Permission = "env:manage"
 )
 

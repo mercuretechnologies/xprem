@@ -583,19 +583,32 @@ func (q *Queries) DeleteEnterpriseLicense(ctx context.Context) error {
 	return err
 }
 
-const deleteEnvVar = `-- name: DeleteEnvVar :execresult
-DELETE FROM branch_env_vars
-WHERE app_id = $1 AND branch_id = $2 AND key = $3
+const deleteEnvironment = `-- name: DeleteEnvironment :execresult
+DELETE FROM environments
+WHERE app_id = $1 AND name = $2
 `
 
-type DeleteEnvVarParams struct {
-	AppID    pgtype.UUID `json:"app_id"`
-	BranchID int64       `json:"branch_id"`
-	Key      string      `json:"key"`
+type DeleteEnvironmentParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
 }
 
-func (q *Queries) DeleteEnvVar(ctx context.Context, arg DeleteEnvVarParams) (pgconn.CommandTag, error) {
-	return q.db.Exec(ctx, deleteEnvVar, arg.AppID, arg.BranchID, arg.Key)
+func (q *Queries) DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteEnvironment, arg.AppID, arg.Name)
+}
+
+const deleteEnvironmentVar = `-- name: DeleteEnvironmentVar :execresult
+DELETE FROM environment_vars
+WHERE environment_id = $1 AND key = $2
+`
+
+type DeleteEnvironmentVarParams struct {
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Key           string      `json:"key"`
+}
+
+func (q *Queries) DeleteEnvironmentVar(ctx context.Context, arg DeleteEnvironmentVarParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, deleteEnvironmentVar, arg.EnvironmentID, arg.Key)
 }
 
 const deleteExpiredOAuthAuthorizationCodes = `-- name: DeleteExpiredOAuthAuthorizationCodes :exec
@@ -1484,7 +1497,7 @@ current_updates AS (
         u.created_at DESC,
         u.id DESC
 )
-SELECT channels.id, channels.app_id, channels.branch_id, channels.name, channels.created_at, channels.branch_surfing_enabled, channels.branch_surfing_pattern, branches.name as branch_name,
+SELECT channels.id, channels.app_id, channels.branch_id, channels.name, channels.created_at, channels.branch_surfing_enabled, channels.branch_surfing_pattern, channels.environment_id, branches.name as branch_name,
     cr.id AS rollout_id,
     rb.name AS rollout_branch_name,
     cr.percentage AS rollout_percentage,
@@ -1497,9 +1510,11 @@ SELECT channels.id, channels.app_id, channels.branch_id, channels.name, channels
     rcu.runtime_version AS rollout_branch_current_runtime_version,
     rcu.commit_hash AS rollout_branch_current_commit_hash,
     rcu.created_at AS rollout_branch_current_update_created_at,
-    rcu.rollout_percentage AS rollout_branch_current_rollout_percentage
+    rcu.rollout_percentage AS rollout_branch_current_rollout_percentage,
+    env.name AS environment_name
 FROM channels
 LEFT JOIN branches ON channels.branch_id = branches.id AND branches.app_id = channels.app_id
+LEFT JOIN environments env ON env.id = channels.environment_id
 LEFT JOIN channel_rollouts cr ON cr.channel_id = channels.id
 LEFT JOIN branches rb ON cr.rollout_branch_id = rb.id
 LEFT JOIN current_updates bcu ON bcu.branch_id = channels.branch_id
@@ -1516,6 +1531,7 @@ type GetChannelsByAppIDRow struct {
 	CreatedAt                             pgtype.Timestamptz `json:"created_at"`
 	BranchSurfingEnabled                  bool               `json:"branch_surfing_enabled"`
 	BranchSurfingPattern                  string             `json:"branch_surfing_pattern"`
+	EnvironmentID                         pgtype.UUID        `json:"environment_id"`
 	BranchName                            *string            `json:"branch_name"`
 	RolloutID                             pgtype.UUID        `json:"rollout_id"`
 	RolloutBranchName                     *string            `json:"rollout_branch_name"`
@@ -1530,6 +1546,7 @@ type GetChannelsByAppIDRow struct {
 	RolloutBranchCurrentCommitHash        *string            `json:"rollout_branch_current_commit_hash"`
 	RolloutBranchCurrentUpdateCreatedAt   pgtype.Timestamptz `json:"rollout_branch_current_update_created_at"`
 	RolloutBranchCurrentRolloutPercentage *int32             `json:"rollout_branch_current_rollout_percentage"`
+	EnvironmentName                       *string            `json:"environment_name"`
 }
 
 func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]GetChannelsByAppIDRow, error) {
@@ -1549,6 +1566,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 			&i.CreatedAt,
 			&i.BranchSurfingEnabled,
 			&i.BranchSurfingPattern,
+			&i.EnvironmentID,
 			&i.BranchName,
 			&i.RolloutID,
 			&i.RolloutBranchName,
@@ -1563,6 +1581,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 			&i.RolloutBranchCurrentCommitHash,
 			&i.RolloutBranchCurrentUpdateCreatedAt,
 			&i.RolloutBranchCurrentRolloutPercentage,
+			&i.EnvironmentName,
 		); err != nil {
 			return nil, err
 		}
@@ -1676,6 +1695,24 @@ func (q *Queries) GetEnterpriseLicense(ctx context.Context) (EnterpriseLicense, 
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getEnvironmentIDByName = `-- name: GetEnvironmentIDByName :one
+SELECT id
+FROM environments
+WHERE app_id = $1 AND name = $2
+`
+
+type GetEnvironmentIDByNameParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) GetEnvironmentIDByName(ctx context.Context, arg GetEnvironmentIDByNameParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getEnvironmentIDByName, arg.AppID, arg.Name)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getLatestUpdate = `-- name: GetLatestUpdate :one
@@ -2106,20 +2143,19 @@ func (q *Queries) GetSSOConfig(ctx context.Context) (SsoConfig, error) {
 	return i, err
 }
 
-const getSealedEnvValue = `-- name: GetSealedEnvValue :one
+const getSealedEnvironmentVarValue = `-- name: GetSealedEnvironmentVarValue :one
 SELECT sealed_value
-FROM branch_env_vars
-WHERE app_id = $1 AND branch_id = $2 AND key = $3
+FROM environment_vars
+WHERE environment_id = $1 AND key = $2
 `
 
-type GetSealedEnvValueParams struct {
-	AppID    pgtype.UUID `json:"app_id"`
-	BranchID int64       `json:"branch_id"`
-	Key      string      `json:"key"`
+type GetSealedEnvironmentVarValueParams struct {
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Key           string      `json:"key"`
 }
 
-func (q *Queries) GetSealedEnvValue(ctx context.Context, arg GetSealedEnvValueParams) (string, error) {
-	row := q.db.QueryRow(ctx, getSealedEnvValue, arg.AppID, arg.BranchID, arg.Key)
+func (q *Queries) GetSealedEnvironmentVarValue(ctx context.Context, arg GetSealedEnvironmentVarValueParams) (string, error) {
+	row := q.db.QueryRow(ctx, getSealedEnvironmentVarValue, arg.EnvironmentID, arg.Key)
 	var sealed_value string
 	err := row.Scan(&sealed_value)
 	return sealed_value, err
@@ -3169,6 +3205,25 @@ func (q *Queries) InsertChannelRollout(ctx context.Context, arg InsertChannelRol
 	return result.RowsAffected(), nil
 }
 
+const insertEnvironment = `-- name: InsertEnvironment :one
+INSERT INTO environments (id, app_id, name)
+VALUES ($1, $2, $3)
+RETURNING id
+`
+
+type InsertEnvironmentParams struct {
+	ID    pgtype.UUID `json:"id"`
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) InsertEnvironment(ctx context.Context, arg InsertEnvironmentParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertEnvironment, arg.ID, arg.AppID, arg.Name)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertOAuthAuthorizationCode = `-- name: InsertOAuthAuthorizationCode :exec
 INSERT INTO oauth_authorization_codes (id, client_id, user_id, redirect_uri, code_challenge, scope, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -4116,35 +4171,74 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 	return items, nil
 }
 
-const listEnvVarsByAppID = `-- name: ListEnvVarsByAppID :many
-SELECT ev.key, ev.is_public, b.name AS branch_name, ev.created_at, ev.updated_at
-FROM branch_env_vars ev
-JOIN branches b ON b.id = ev.branch_id
-WHERE ev.app_id = $1
-ORDER BY b.name ASC, ev.key ASC
+const listEnvironmentVarsByAppID = `-- name: ListEnvironmentVarsByAppID :many
+SELECT ev.environment_id, ev.key, ev.is_public, ev.created_at, ev.updated_at
+FROM environment_vars ev
+JOIN environments e ON e.id = ev.environment_id
+WHERE e.app_id = $1
+ORDER BY e.name ASC, ev.key ASC
 `
 
-type ListEnvVarsByAppIDRow struct {
-	Key        string             `json:"key"`
-	IsPublic   bool               `json:"is_public"`
-	BranchName string             `json:"branch_name"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+type ListEnvironmentVarsByAppIDRow struct {
+	EnvironmentID pgtype.UUID        `json:"environment_id"`
+	Key           string             `json:"key"`
+	IsPublic      bool               `json:"is_public"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
-func (q *Queries) ListEnvVarsByAppID(ctx context.Context, appID pgtype.UUID) ([]ListEnvVarsByAppIDRow, error) {
-	rows, err := q.db.Query(ctx, listEnvVarsByAppID, appID)
+func (q *Queries) ListEnvironmentVarsByAppID(ctx context.Context, appID pgtype.UUID) ([]ListEnvironmentVarsByAppIDRow, error) {
+	rows, err := q.db.Query(ctx, listEnvironmentVarsByAppID, appID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListEnvVarsByAppIDRow
+	var items []ListEnvironmentVarsByAppIDRow
 	for rows.Next() {
-		var i ListEnvVarsByAppIDRow
+		var i ListEnvironmentVarsByAppIDRow
 		if err := rows.Scan(
+			&i.EnvironmentID,
 			&i.Key,
 			&i.IsPublic,
-			&i.BranchName,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnvironmentsByAppID = `-- name: ListEnvironmentsByAppID :many
+SELECT id, name, created_at, updated_at
+FROM environments
+WHERE app_id = $1
+ORDER BY name ASC
+`
+
+type ListEnvironmentsByAppIDRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListEnvironmentsByAppID(ctx context.Context, appID pgtype.UUID) ([]ListEnvironmentsByAppIDRow, error) {
+	rows, err := q.db.Query(ctx, listEnvironmentsByAppID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnvironmentsByAppIDRow
+	for rows.Next() {
+		var i ListEnvironmentsByAppIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -5921,6 +6015,22 @@ func (q *Queries) UpdateChannelBranchSurfing(ctx context.Context, arg UpdateChan
 	)
 }
 
+const updateChannelEnvironment = `-- name: UpdateChannelEnvironment :execresult
+UPDATE channels
+SET environment_id = $3
+WHERE app_id = $1 AND name = $2
+`
+
+type UpdateChannelEnvironmentParams struct {
+	AppID         pgtype.UUID `json:"app_id"`
+	Name          string      `json:"name"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+}
+
+func (q *Queries) UpdateChannelEnvironment(ctx context.Context, arg UpdateChannelEnvironmentParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateChannelEnvironment, arg.AppID, arg.Name, arg.EnvironmentID)
+}
+
 const updateChannelRolloutPercentage = `-- name: UpdateChannelRolloutPercentage :execrows
 UPDATE channel_rollouts
 SET percentage = $1, updated_at = CURRENT_TIMESTAMP
@@ -6219,39 +6329,6 @@ func (q *Queries) UpsertAndroidCredentials(ctx context.Context, arg UpsertAndroi
 	return id, err
 }
 
-const upsertBranchEnvVar = `-- name: UpsertBranchEnvVar :one
-INSERT INTO branch_env_vars (id, app_id, branch_id, key, is_public, sealed_value)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (app_id, branch_id, key) DO UPDATE SET
-    is_public = EXCLUDED.is_public,
-    sealed_value = EXCLUDED.sealed_value,
-    updated_at = CURRENT_TIMESTAMP
-RETURNING id
-`
-
-type UpsertBranchEnvVarParams struct {
-	ID          pgtype.UUID `json:"id"`
-	AppID       pgtype.UUID `json:"app_id"`
-	BranchID    int64       `json:"branch_id"`
-	Key         string      `json:"key"`
-	IsPublic    bool        `json:"is_public"`
-	SealedValue string      `json:"sealed_value"`
-}
-
-func (q *Queries) UpsertBranchEnvVar(ctx context.Context, arg UpsertBranchEnvVarParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, upsertBranchEnvVar,
-		arg.ID,
-		arg.AppID,
-		arg.BranchID,
-		arg.Key,
-		arg.IsPublic,
-		arg.SealedValue,
-	)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const upsertDeviceUpdateFailure = `-- name: UpsertDeviceUpdateFailure :exec
 INSERT INTO device_update_failures (
     app_id, eas_client_id, update_id, failure_type, fatal_error,
@@ -6363,6 +6440,37 @@ func (q *Queries) UpsertEnterpriseLicense(ctx context.Context, arg UpsertEnterpr
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upsertEnvironmentVar = `-- name: UpsertEnvironmentVar :one
+INSERT INTO environment_vars (id, environment_id, key, is_public, sealed_value)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (environment_id, key) DO UPDATE SET
+    is_public = EXCLUDED.is_public,
+    sealed_value = EXCLUDED.sealed_value,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id
+`
+
+type UpsertEnvironmentVarParams struct {
+	ID            pgtype.UUID `json:"id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Key           string      `json:"key"`
+	IsPublic      bool        `json:"is_public"`
+	SealedValue   string      `json:"sealed_value"`
+}
+
+func (q *Queries) UpsertEnvironmentVar(ctx context.Context, arg UpsertEnvironmentVarParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertEnvironmentVar,
+		arg.ID,
+		arg.EnvironmentID,
+		arg.Key,
+		arg.IsPublic,
+		arg.SealedValue,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertIdentitySchemaKey = `-- name: UpsertIdentitySchemaKey :one

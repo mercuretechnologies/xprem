@@ -73,9 +73,11 @@ SELECT channels.*, branches.name as branch_name,
     rcu.runtime_version AS rollout_branch_current_runtime_version,
     rcu.commit_hash AS rollout_branch_current_commit_hash,
     rcu.created_at AS rollout_branch_current_update_created_at,
-    rcu.rollout_percentage AS rollout_branch_current_rollout_percentage
+    rcu.rollout_percentage AS rollout_branch_current_rollout_percentage,
+    env.name AS environment_name
 FROM channels
 LEFT JOIN branches ON channels.branch_id = branches.id AND branches.app_id = channels.app_id
+LEFT JOIN environments env ON env.id = channels.environment_id
 LEFT JOIN channel_rollouts cr ON cr.channel_id = channels.id
 LEFT JOIN branches rb ON cr.rollout_branch_id = rb.id
 LEFT JOIN current_updates bcu ON bcu.branch_id = channels.branch_id
@@ -2473,30 +2475,55 @@ WHERE app_identifiers.app_id = $1 AND app_identifiers.id = $2
       SELECT 1 FROM android_credentials ac WHERE ac.app_identifier_id = app_identifiers.id
   );
 
--- name: UpsertBranchEnvVar :one
-INSERT INTO branch_env_vars (id, app_id, branch_id, key, is_public, sealed_value)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (app_id, branch_id, key) DO UPDATE SET
+-- name: InsertEnvironment :one
+INSERT INTO environments (id, app_id, name)
+VALUES ($1, $2, $3)
+RETURNING id;
+
+-- name: ListEnvironmentsByAppID :many
+SELECT id, name, created_at, updated_at
+FROM environments
+WHERE app_id = $1
+ORDER BY name ASC;
+
+-- name: GetEnvironmentIDByName :one
+SELECT id
+FROM environments
+WHERE app_id = $1 AND name = $2;
+
+-- name: DeleteEnvironment :execresult
+DELETE FROM environments
+WHERE app_id = $1 AND name = $2;
+
+-- name: UpsertEnvironmentVar :one
+INSERT INTO environment_vars (id, environment_id, key, is_public, sealed_value)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (environment_id, key) DO UPDATE SET
     is_public = EXCLUDED.is_public,
     sealed_value = EXCLUDED.sealed_value,
     updated_at = CURRENT_TIMESTAMP
 RETURNING id;
 
--- name: ListEnvVarsByAppID :many
-SELECT ev.key, ev.is_public, b.name AS branch_name, ev.created_at, ev.updated_at
-FROM branch_env_vars ev
-JOIN branches b ON b.id = ev.branch_id
-WHERE ev.app_id = $1
-ORDER BY b.name ASC, ev.key ASC;
+-- name: ListEnvironmentVarsByAppID :many
+SELECT ev.environment_id, ev.key, ev.is_public, ev.created_at, ev.updated_at
+FROM environment_vars ev
+JOIN environments e ON e.id = ev.environment_id
+WHERE e.app_id = $1
+ORDER BY e.name ASC, ev.key ASC;
 
--- name: GetSealedEnvValue :one
+-- name: GetSealedEnvironmentVarValue :one
 SELECT sealed_value
-FROM branch_env_vars
-WHERE app_id = $1 AND branch_id = $2 AND key = $3;
+FROM environment_vars
+WHERE environment_id = $1 AND key = $2;
 
--- name: DeleteEnvVar :execresult
-DELETE FROM branch_env_vars
-WHERE app_id = $1 AND branch_id = $2 AND key = $3;
+-- name: DeleteEnvironmentVar :execresult
+DELETE FROM environment_vars
+WHERE environment_id = $1 AND key = $2;
+
+-- name: UpdateChannelEnvironment :execresult
+UPDATE channels
+SET environment_id = $3
+WHERE app_id = $1 AND name = $2;
 
 -- name: GetServerInstanceID :one
 SELECT id FROM server_instance;

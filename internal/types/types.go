@@ -256,6 +256,9 @@ type ChannelMapping struct {
 	// Branch-surfing setting of the channel; nil in stateless mode, where the
 	// setting does not exist.
 	BranchSurfing *BranchSurfing `json:"branchSurfing,omitempty"`
+	// Environment the channel points to by default; nil when unbound or in
+	// stateless mode.
+	EnvironmentName *string `json:"environmentName,omitempty"`
 }
 
 // BranchSurfing is a channel's branch-surfing setting: whether a device polling

@@ -47,7 +47,7 @@ type AppContainer struct {
 	BranchListHandler           *handlers.BranchListHandler
 	ChannelHandler              *dashhandlers.ChannelHandler
 	CredentialsHandler          *dashhandlers.CredentialsHandler
-	EnvVarsHandler              *dashhandlers.EnvVarsHandler
+	EnvironmentsHandler         *dashhandlers.EnvironmentsHandler
 	ExpoProtocolHandler         *handlers.ExpoProtocolHandler
 	LicenseHandler              *licensing.LicenseHandler
 	RBACHandler                 *rbac.RBACHandler
@@ -100,7 +100,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// exist on the control plane.
 	var appIdentifierRepo services.AppIdentifierRepository
 	var credentialsRepo services.CredentialsRepository
-	var envVarRepo services.EnvVarRepository
+	var environmentRepo services.EnvironmentRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
 	var apiKeyAccessRepo apikeyrestrictions.ApiKeyAccessRepository
@@ -170,7 +170,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
 		appIdentifierRepo = store.NewPostgresAppIdentifierStore(dbEngine)
 		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
-		envVarRepo = store.NewPostgresEnvVarStore(dbEngine)
+		environmentRepo = store.NewPostgresEnvironmentStore(dbEngine)
 
 		// Resolved even when telemetry is off: licensing needs the instance id.
 		seedInstanceId, _ := resolvedBucket.GetInstanceID()
@@ -287,8 +287,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	appIdentifierService.SetOnAuditEvent(auditService.Record)
 	credentialsService := services.NewCredentialsService(credentialsRepo, appIdentifierRepo)
 	credentialsService.SetOnAuditEvent(auditService.Record)
-	envVarService := services.NewEnvVarService(envVarRepo, branchRepo)
-	envVarService.SetOnAuditEvent(auditService.Record)
+	environmentService := services.NewEnvironmentService(environmentRepo)
+	environmentService.SetOnAuditEvent(auditService.Record)
 
 	// Shared across handlers; with Redis configured, also across replicas.
 	rateLimiter := ratelimit.New(cache.GetCache())
@@ -347,7 +347,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
 		AppIdentifiersHandler:       dashhandlers.NewAppIdentifiersHandler(appIdentifierService),
 		CredentialsHandler:          dashhandlers.NewCredentialsHandler(credentialsService),
-		EnvVarsHandler:              dashhandlers.NewEnvVarsHandler(envVarService),
+		EnvironmentsHandler:         dashhandlers.NewEnvironmentsHandler(environmentService),
 		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
 		LicenseHandler:              licensing.NewLicenseHandler(licenseService),
 		AuditHandler:                audit.NewAuditHandler(auditService),
