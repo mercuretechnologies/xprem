@@ -103,6 +103,7 @@ func (s *PostgresChannelStore) GetChannels(ctx context.Context, appId string) ([
 				Enabled: channel.BranchSurfingEnabled,
 				Pattern: channel.BranchSurfingPattern,
 			},
+			EnvironmentName: channel.EnvironmentName,
 		}
 		if channel.RolloutID.Valid && channel.BranchName != nil && channel.RolloutBranchName != nil && channel.RolloutPercentage != nil {
 			mapping.Rollout = &types.ChannelRollout{

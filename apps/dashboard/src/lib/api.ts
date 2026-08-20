@@ -190,6 +190,9 @@ export type ChannelRecord = {
   rolloutBranchCurrentUpdate?: BranchUpdateState | null;
   // Absent in stateless mode, where the setting does not exist.
   branchSurfing?: BranchSurfingRecord | null;
+  // Environment the channel points to by default; absent when unbound or in
+  // stateless mode.
+  environmentName?: string | null;
 };
 
 // Which branches a device polling this channel may ask to be served instead of

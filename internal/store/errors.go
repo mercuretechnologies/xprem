@@ -82,3 +82,11 @@ type ErrResourceNotFound struct {
 func (e *ErrResourceNotFound) Error() string {
 	return fmt.Sprintf("%s with identifier %q not found.", e.Resource, e.Identifier)
 }
+
+type ErrEnvironmentHasChannels struct {
+	EnvironmentName string
+}
+
+func (e *ErrEnvironmentHasChannels) Error() string {
+	return fmt.Sprintf("cannot delete environment %q because channels still point to it. Unbind or delete these channels first.", e.EnvironmentName)
+}

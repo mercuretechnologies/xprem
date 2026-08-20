@@ -83,9 +83,12 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'app_identifier.build_number_set',
       'android_credentials.saved',
       'android_credentials.deleted',
+      'environment.created',
+      'environment.deleted',
       'env_var.updated',
       'env_var.deleted',
       'env_var.revealed',
+      'channel_environment.updated',
     ],
   },
   {

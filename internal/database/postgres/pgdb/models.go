@@ -95,17 +95,6 @@ type Branch struct {
 	Protected bool               `json:"protected"`
 }
 
-type BranchEnvVar struct {
-	ID          pgtype.UUID        `json:"id"`
-	AppID       pgtype.UUID        `json:"app_id"`
-	BranchID    int64              `json:"branch_id"`
-	Key         string             `json:"key"`
-	IsPublic    bool               `json:"is_public"`
-	SealedValue string             `json:"sealed_value"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
 type Channel struct {
 	ID                   int64              `json:"id"`
 	AppID                pgtype.UUID        `json:"app_id"`
@@ -114,6 +103,7 @@ type Channel struct {
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	BranchSurfingEnabled bool               `json:"branch_surfing_enabled"`
 	BranchSurfingPattern string             `json:"branch_surfing_pattern"`
+	EnvironmentID        pgtype.UUID        `json:"environment_id"`
 }
 
 type ChannelRollout struct {
@@ -194,6 +184,24 @@ type EnterpriseLicense struct {
 	ValidationErrorCode    *string            `json:"validation_error_code"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Environment struct {
+	ID        pgtype.UUID        `json:"id"`
+	AppID     pgtype.UUID        `json:"app_id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvironmentVar struct {
+	ID            pgtype.UUID        `json:"id"`
+	EnvironmentID pgtype.UUID        `json:"environment_id"`
+	Key           string             `json:"key"`
+	IsPublic      bool               `json:"is_public"`
+	SealedValue   string             `json:"sealed_value"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type IdentitySchema struct {

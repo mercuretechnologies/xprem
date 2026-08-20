@@ -132,12 +132,13 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   {
-    label: 'Environment variables',
+    label: 'Environments',
     permissions: [
       {
         value: 'env:manage',
-        label: 'Manage environment variables',
-        description: 'Create, overwrite and delete the environment variables of a branch.',
+        label: 'Manage environments',
+        description:
+          'Create and delete environments, overwrite and delete their variables, and choose which environment a channel points to.',
       },
       {
         value: 'env:read',

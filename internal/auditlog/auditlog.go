@@ -91,19 +91,22 @@ const (
 
 	// Credentials and key material. The api_key prefix matches ActorAPIKey's
 	// value so grouping by resource and by actor type line up.
-	ActionAPIKeyCreated             Action = "api_key.created"
-	ActionAPIKeyRevoked             Action = "api_key.revoked"
-	ActionAPIKeyRestrictionsUpdated Action = "api_key.restrictions_updated"
-	ActionBranchProtectionUpdated   Action = "branch_protection.updated"
-	ActionCertificateDownloaded     Action = "certificate.downloaded"
+	ActionAPIKeyCreated               Action = "api_key.created"
+	ActionAPIKeyRevoked               Action = "api_key.revoked"
+	ActionAPIKeyRestrictionsUpdated   Action = "api_key.restrictions_updated"
+	ActionBranchProtectionUpdated     Action = "branch_protection.updated"
+	ActionCertificateDownloaded       Action = "certificate.downloaded"
 	ActionAppIdentifierCreated        Action = "app_identifier.created"
 	ActionAppIdentifierDeleted        Action = "app_identifier.deleted"
 	ActionAppIdentifierBuildNumberSet Action = "app_identifier.build_number_set"
-	ActionAndroidCredentialsSaved   Action = "android_credentials.saved"
-	ActionAndroidCredentialsDeleted Action = "android_credentials.deleted"
-	ActionEnvVarUpdated             Action = "env_var.updated"
-	ActionEnvVarDeleted             Action = "env_var.deleted"
-	ActionEnvVarRevealed            Action = "env_var.revealed"
+	ActionAndroidCredentialsSaved     Action = "android_credentials.saved"
+	ActionAndroidCredentialsDeleted   Action = "android_credentials.deleted"
+	ActionEnvironmentCreated          Action = "environment.created"
+	ActionEnvironmentDeleted          Action = "environment.deleted"
+	ActionEnvVarUpdated               Action = "env_var.updated"
+	ActionEnvVarDeleted               Action = "env_var.deleted"
+	ActionEnvVarRevealed              Action = "env_var.revealed"
+	ActionChannelEnvironmentUpdated   Action = "channel_environment.updated"
 
 	// Access control. permission.denied is the single event for authorization
 	// refusals (the RBAC middleware emits it, with OutcomeDenied); domain

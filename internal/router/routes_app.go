@@ -101,13 +101,19 @@ func registerAppRoutes(
 	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 
-	app.route(http.MethodGet, "/env", container.EnvVarsHandler.ListEnvVarsHandler,
+	app.route(http.MethodGet, "/environments", container.EnvironmentsHandler.ListEnvironmentsHandler,
 		AnyViewer())
-	app.route(http.MethodPut, "/env/branch/{BRANCH}/{KEY}", container.EnvVarsHandler.SetEnvVarHandler,
+	app.route(http.MethodPost, "/environments", container.EnvironmentsHandler.CreateEnvironmentHandler,
 		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
-	app.route(http.MethodGet, "/env/branch/{BRANCH}/{KEY}/value", container.EnvVarsHandler.RevealEnvVarHandler,
+	app.route(http.MethodDelete, "/environments/{ENVIRONMENT}", container.EnvironmentsHandler.DeleteEnvironmentHandler,
+		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/environments/{ENVIRONMENT}/vars/{KEY}", container.EnvironmentsHandler.SetEnvVarHandler,
+		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/environments/{ENVIRONMENT}/vars/{KEY}/value", container.EnvironmentsHandler.RevealEnvVarHandler,
 		NeedsPermission(rbac.PermEnvRead, rbac.FallbackAnyMember))
-	app.route(http.MethodDelete, "/env/branch/{BRANCH}/{KEY}", container.EnvVarsHandler.DeleteEnvVarHandler,
+	app.route(http.MethodDelete, "/environments/{ENVIRONMENT}/vars/{KEY}", container.EnvironmentsHandler.DeleteEnvVarHandler,
+		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/channels/{CHANNEL}/environment", container.EnvironmentsHandler.SetChannelEnvironmentHandler,
 		NeedsPermission(rbac.PermEnvManage, rbac.FallbackAdminOnly))
 
 	app.route(http.MethodGet, "/apiKeys", container.ApiKeyHandler.GetApiKeysHandler,
