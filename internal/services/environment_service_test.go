@@ -211,6 +211,9 @@ func TestEnvironmentLifecycleAndListing(t *testing.T) {
 	var valErr *validation.Error
 	_, err := service.CreateEnvironment(ctx, "app-1", "bad/name")
 	assert.ErrorAs(t, err, &valErr)
+	// "production" and "production " must not both exist.
+	_, err = service.CreateEnvironment(ctx, "app-1", "production ")
+	assert.ErrorAs(t, err, &valErr)
 
 	id, err := service.CreateEnvironment(ctx, "app-1", "preview")
 	require.NoError(t, err)

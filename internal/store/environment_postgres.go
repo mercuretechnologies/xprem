@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type EnvironmentRow struct {
@@ -92,7 +93,8 @@ func (s *PostgresEnvironmentStore) DeleteEnvironment(ctx context.Context, appId 
 		Name:  name,
 	})
 	if err != nil {
-		if database.IsForeignKeyViolation(err) {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "fk_channels_environment" {
 			return &ErrEnvironmentHasChannels{EnvironmentName: name}
 		}
 		return fmt.Errorf("failed to delete environment from database: %w", err)
@@ -112,6 +114,10 @@ func (s *PostgresEnvironmentStore) UpsertEnvVar(ctx context.Context, environment
 		SealedValue:   sealedValue,
 	})
 	if err != nil {
+		// The environment was deleted between the name lookup and this write.
+		if database.IsForeignKeyViolation(err) {
+			return &ErrResourceNotFound{Resource: "environment", Identifier: environmentId}
+		}
 		return fmt.Errorf("failed to save env var in database: %w", err)
 	}
 	return nil

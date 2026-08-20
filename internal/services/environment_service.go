@@ -91,8 +91,20 @@ func validateEnvKey(key string) error {
 	return nil
 }
 
-func (s *EnvironmentService) resolveEnvironment(ctx context.Context, appId string, name string) (string, error) {
+// validateEnvironmentName is validation.Name plus a no-surrounding-whitespace
+// rule: "production" and "production " must not both exist.
+func validateEnvironmentName(name string) error {
 	if err := validation.Name("environment", name); err != nil {
+		return err
+	}
+	if strings.TrimSpace(name) != name {
+		return validation.Errorf("environment", "must not start or end with whitespace")
+	}
+	return nil
+}
+
+func (s *EnvironmentService) resolveEnvironment(ctx context.Context, appId string, name string) (string, error) {
+	if err := validateEnvironmentName(name); err != nil {
 		return "", err
 	}
 	return s.repo.GetEnvironmentIdByName(ctx, appId, name)
@@ -102,7 +114,7 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, appId string
 	if s.repo == nil {
 		return "", store.ErrNotSupportedInStatelessMode
 	}
-	if err := validation.Name("environment", name); err != nil {
+	if err := validateEnvironmentName(name); err != nil {
 		return "", err
 	}
 	id, err := s.repo.InsertEnvironment(ctx, appId, name)
@@ -163,7 +175,7 @@ func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, appId string
 	if s.repo == nil {
 		return store.ErrNotSupportedInStatelessMode
 	}
-	if err := validation.Name("environment", name); err != nil {
+	if err := validateEnvironmentName(name); err != nil {
 		return err
 	}
 	if err := s.repo.DeleteEnvironment(ctx, appId, name); err != nil {

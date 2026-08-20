@@ -28,6 +28,7 @@ import { useSettings } from '@/lib/SettingsContext';
 import { BuildCredentials } from './pages/BuildCredentials';
 import { AppIdentifierDetail } from './pages/BuildCredentials/AppIdentifierDetail';
 import { Environments } from './pages/Environments';
+import { EnvironmentDetail } from './pages/Environments/EnvironmentDetail';
 
 const Observe = lazy(() =>
   import('@/ee/pages/Observe').then(module => ({ default: module.Observe }))
@@ -148,6 +149,10 @@ export const App = () => {
                           element={withLayout(withApp(<AppIdentifierDetail />))}
                         />
                         <Route path="/environments" element={withLayout(withApp(<Environments />))} />
+                        <Route
+                          path="/environments/:environmentName"
+                          element={withLayout(withApp(<EnvironmentDetail />))}
+                        />
                         <Route path="/logout" element={withLayout(<Logout />)} />
                       </Routes>
                     </SelectedAppProvider>

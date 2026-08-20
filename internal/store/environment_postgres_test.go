@@ -159,3 +159,31 @@ func TestChannelEnvironmentBinding(t *testing.T) {
 	assert.Nil(t, channels[0].EnvironmentName)
 	require.NoError(t, envStore.DeleteEnvironment(ctx, appId, "production"))
 }
+
+func TestChannelEnvironmentBindingIsScopedToTheApp(t *testing.T) {
+	envStore, channelStore, appId, pool := setupEnvironmentStore(t)
+	ctx := context.Background()
+	otherAppId := insertBareApp(t, pool)
+	foreignId := insertEnvironment(t, envStore, otherAppId, "production")
+	_, err := channelStore.InsertChannel(ctx, appId, nil, "prod-channel")
+	require.NoError(t, err)
+
+	// Another app's environment id is refused even though it exists.
+	err = envStore.SetChannelEnvironment(ctx, appId, "prod-channel", &foreignId)
+	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	require.True(t, errors.As(err, &notFoundErr))
+	channels, err := channelStore.GetChannels(ctx, appId)
+	require.NoError(t, err)
+	assert.Nil(t, channels[0].EnvironmentName)
+}
+
+func TestEnvVarUpsertOnDeletedEnvironmentIsNotFound(t *testing.T) {
+	envStore, _, appId, _ := setupEnvironmentStore(t)
+	ctx := context.Background()
+	goneId := insertEnvironment(t, envStore, appId, "gone")
+	require.NoError(t, envStore.DeleteEnvironment(ctx, appId, "gone"))
+
+	err := envStore.UpsertEnvVar(ctx, goneId, "API_URL", true, "sealed")
+	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	require.True(t, errors.As(err, &notFoundErr))
+}

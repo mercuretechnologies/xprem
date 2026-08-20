@@ -99,6 +99,7 @@ func (h *EnvironmentsHandler) RevealEnvVarHandler(w http.ResponseWriter, r *http
 	}
 	marshaledResponse, _ := json.Marshal(map[string]string{"value": value})
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "private, no-cache, no-store")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
 }

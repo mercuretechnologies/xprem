@@ -1,6 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Compass, Copy, GitBranch, Plus, Search, Split, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Compass,
+  Copy,
+  GitBranch,
+  Layers,
+  Plus,
+  Search,
+  Split,
+  Trash2,
+} from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, ChannelRecord, describeApiError } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
@@ -17,6 +27,7 @@ import { SelectBranch } from '@/pages/Channels/components/SelectBranch';
 import { StartRolloutDialog } from '@/pages/Channels/components/StartRolloutDialog';
 import { ManageRolloutDialog } from '@/pages/Channels/components/ManageRolloutDialog';
 import { BranchSurfingCard } from '@/pages/Channels/components/BranchSurfingCard';
+import { ChannelEnvironmentCard } from '@/pages/Channels/components/ChannelEnvironmentCard';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -131,6 +142,7 @@ export const Channels = () => {
   const canEditChannelBranch = useAppPermission('channel:edit-branch', 'admin-only');
   const canManageRollout = useAppPermission('channel-rollout:manage', 'admin-only');
   const canManageBranchSurfing = useAppPermission('channel:branch-surfing', 'admin-only');
+  const canManageEnvironment = useAppPermission('env:manage', 'admin-only');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [editingMapping, setEditingMapping] = useState(false);
@@ -295,6 +307,31 @@ export const Channels = () => {
             },
           ]
         : []),
+      ...(CONTROL_PLANE_ENABLED
+        ? [
+            {
+              header: 'Environment',
+              id: 'environment',
+              cell: ({ row }: { row: { original: ChannelRecord } }) =>
+                row.original.environmentName ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 font-medium hover:text-link"
+                    onClick={event => {
+                      event.stopPropagation();
+                      navigate(
+                        `/environments/${encodeURIComponent(row.original.environmentName as string)}`
+                      );
+                    }}>
+                    <Layers className="h-4 w-4 text-muted-foreground" />
+                    {row.original.environmentName}
+                  </button>
+                ) : (
+                  <span className="text-muted-foreground/60">None</span>
+                ),
+            },
+          ]
+        : []),
       {
         header: 'ID',
         accessorKey: 'releaseChannelId',
@@ -449,6 +486,15 @@ export const Channels = () => {
                   )}
                 </div>
               </section>
+            )}
+            {CONTROL_PLANE_ENABLED && (
+              <ChannelEnvironmentCard
+                channel={selectedChannel}
+                canManage={canManageEnvironment}
+                onUpdated={async () => {
+                  await queryClient.invalidateQueries({ queryKey: ['channels', selectedAppId] });
+                }}
+              />
             )}
             {CONTROL_PLANE_ENABLED && (
               <BranchSurfingCard
