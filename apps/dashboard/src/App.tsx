@@ -27,7 +27,7 @@ import { Branches } from '@/pages/Branches';
 import { useSettings } from '@/lib/SettingsContext';
 import { BuildCredentials } from './pages/BuildCredentials';
 import { AppIdentifierDetail } from './pages/BuildCredentials/AppIdentifierDetail';
-import { EnvironmentVariables } from './pages/EnvironmentVariables';
+import { Environments } from './pages/Environments';
 
 const Observe = lazy(() =>
   import('@/ee/pages/Observe').then(module => ({ default: module.Observe }))
@@ -147,7 +147,7 @@ export const App = () => {
                           path="/build-credentials/:identifierId"
                           element={withLayout(withApp(<AppIdentifierDetail />))}
                         />
-                        <Route path="/environment-variables" element={withLayout(<EnvironmentVariables />)} />
+                        <Route path="/environments" element={withLayout(withApp(<Environments />))} />
                         <Route path="/logout" element={withLayout(<Logout />)} />
                       </Routes>
                     </SelectedAppProvider>

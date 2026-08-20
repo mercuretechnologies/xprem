@@ -142,14 +142,23 @@ export type AndroidCredentialsPayload = {
   googleServiceAccountKey: string;
 };
 
-// One env var as listed by GET /env: metadata only, the value stays server
-// side until explicitly revealed.
+// One variable of an environment: metadata only, the value stays server side
+// until explicitly revealed.
 export type EnvVarRecord = {
   key: string;
   isPublic: boolean;
-  branch: string;
   createdAt: string;
   updatedAt: string;
+};
+
+// A named set of variables (production, staging, ...). Channels may point to
+// one as their default; that binding is on ChannelRecord.environmentName.
+export type EnvironmentRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  vars: EnvVarRecord[];
 };
 
 export type BranchRecord = {
@@ -1468,21 +1477,36 @@ export class ApiClient {
     );
   }
 
-  // Env vars are scoped per branch; the list route alone is app-wide and
-  // returns every branch's vars, values excluded.
-  public async getEnvVars() {
-    return this.request<EnvVarRecord[]>(`${this.appScope()}/env`, {
+  public async getEnvironments() {
+    return this.request<EnvironmentRecord[]>(`${this.appScope()}/environments`, {
       method: 'GET',
     });
   }
 
+  public async createEnvironment(name: string) {
+    return this.request<{ id: string; name: string }>(`${this.appScope()}/environments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  public async deleteEnvironment(environment: string) {
+    return this.request<void>(
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
   public async setEnvVar(
-    branch: string,
+    environment: string,
     key: string,
     payload: { value: string; isPublic: boolean }
   ) {
     return this.request<void>(
-      `${this.appScope()}/env/branch/${encodeURIComponent(branch)}/${encodeURIComponent(key)}`,
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1491,20 +1515,32 @@ export class ApiClient {
     );
   }
 
-  public async revealEnvVar(branch: string, key: string) {
+  public async revealEnvVar(environment: string, key: string) {
     return this.request<{ value: string }>(
-      `${this.appScope()}/env/branch/${encodeURIComponent(branch)}/${encodeURIComponent(key)}/value`,
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}/value`,
       {
         method: 'GET',
       }
     );
   }
 
-  public async deleteEnvVar(branch: string, key: string) {
+  public async deleteEnvVar(environment: string, key: string) {
     return this.request<void>(
-      `${this.appScope()}/env/branch/${encodeURIComponent(branch)}/${encodeURIComponent(key)}`,
+      `${this.appScope()}/environments/${encodeURIComponent(environment)}/vars/${encodeURIComponent(key)}`,
       {
         method: 'DELETE',
+      }
+    );
+  }
+
+  // null unbinds the channel from its environment.
+  public async setChannelEnvironment(channelName: string, environment: string | null) {
+    return this.request<void>(
+      `${this.appScope()}/channels/${encodeURIComponent(channelName)}/environment`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ environment }),
       }
     );
   }

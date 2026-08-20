@@ -81,8 +81,8 @@ export const CommandPalette = ({
         ...(CONTROL_PLANE_ENABLED
           ? [
               { label: 'API tokens', path: '/tokens', icon: KeyRound },
-              { label: 'Build credentials', path: '/credentials', icon: Key },
-              { label: 'Environment variables', path: '/credentials', icon: Container },
+              { label: 'Build credentials', path: '/build-credentials', icon: Key },
+              { label: 'Environments', path: '/environments', icon: Container },
             ]
           : []),
       ]
