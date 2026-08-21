@@ -59,7 +59,7 @@
 
 ## OTA updates, channels and rollouts
 
-<xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime with no fork and no custom client. Every bundle lives in your own bucket and every download URL points at infrastructure you own.
+xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime with no fork and no custom client. Every bundle lives in your own bucket and every download URL points at infrastructure you own.
 
 Publish, roll back and republish are [eoas](https://www.npmjs.com/package/eoas) commands. Run them by hand or script them in your pipeline.
 
