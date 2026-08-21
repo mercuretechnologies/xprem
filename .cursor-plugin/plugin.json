@@ -1,0 +1,23 @@
+{
+  "name": "xprem",
+  "description": "Self-hosted Expo OTA updates. Docs MCP plus optional connection to your own xprem /mcp.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Mercure Technologies",
+    "url": "https://xprem.dev"
+  },
+  "homepage": "https://xprem.dev",
+  "repository": "https://github.com/mercuretechnologies/xprem",
+  "license": "MIT",
+  "keywords": ["expo", "ota", "self-hosted", "updates", "mcp"],
+  "variables": {
+    "type": "object",
+    "properties": {
+      "XPREM_MCP_URL": {
+        "type": "string",
+        "title": "xprem instance MCP URL",
+        "description": "Full MCP endpoint of YOUR self-hosted control plane, e.g. https://xprem.example.com/mcp. Leave empty to use docs only."
+      }
+    }
+  }
+}
