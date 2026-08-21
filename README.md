@@ -172,6 +172,10 @@ claude mcp add --transport http xprem-docs https://mercure-technologies.gitbook.
 
 Any other MCP-compatible client (ChatGPT connectors included) can be pointed at the same URL.
 
+### Cursor / Grok Bot plugin
+
+This repository includes the official Cursor / Grok Bot plugin (`.cursor-plugin/plugin.json`, `mcp.json`, and four skills). It always connects the docs MCP at `https://mercure-technologies.gitbook.io/xprem/~gitbook/mcp` (no auth). Instance MCP is **your own** deployed control plane at `https://<your-host>/mcp` — set `XPREM_MCP_URL` in Cursor under **Plugins → Configure**. There is no Mercure-hosted control plane. Marketplace listing is a later submit at [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish).
+
 ## Why self-host
 
 EAS Update is the fastest way to get OTA updates running on a small app. These are the reasons teams move to self-hosted infrastructure instead.
