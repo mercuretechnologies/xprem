@@ -59,7 +59,7 @@
 
 ## OTA updates, channels and rollouts
 
-xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime with no fork and no custom client. Every bundle lives in your own bucket and every download URL points at infrastructure you own.
+<xprem implements the official Expo Updates protocol, so your app keeps the standard `expo-updates` runtime with no fork and no custom client. Every bundle lives in your own bucket and every download URL points at infrastructure you own.
 
 Publish, roll back and republish are [eoas](https://www.npmjs.com/package/eoas) commands. Run them by hand or script them in your pipeline.
 
@@ -154,7 +154,7 @@ Applied to a fleet, one update check per app launch: a typical app produces arou
 2. Run `npx eoas init` in your Expo project to wire it to your server.
 3. Publish your first update with `npx eoas publish --branch production`.
 
-The full walkthrough for both modes is in the documentation: [stateless mode](https://mercure-technologies.gitbook.io/xprem/stateless-mode/getting-started) and [control plane mode](https://mercure-technologies.gitbook.io/xprem/controle-plane-mode/getting-started). Coming from v2? Follow the [migration guide](https://mercure-technologies.gitbook.io/xprem/changelog-and-migrations/migrate-from-v2-to-v3).
+The full walkthrough for both modes is in the documentation: [stateless mode](https://mercure-technologies.gitbook.io/xprem/stateless-mode/getting-started) and [control plane mode](https://mercure-technologies.gitbook.io/xprem/installation-guide/overview). Coming from v2? Follow the [migration guide](https://mercure-technologies.gitbook.io/xprem/changelog-and-migrations/migrate-from-v2-to-v3).
 
 ### Ask the docs from your AI assistant
 
