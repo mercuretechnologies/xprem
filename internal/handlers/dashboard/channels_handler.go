@@ -60,9 +60,7 @@ func (h *ChannelHandler) CreateChannelHandler(w http.ResponseWriter, r *http.Req
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while creating the channel.")
 		return
 	}
-	marshaledResponse, _ := json.Marshal(map[string]interface{}{
-		"channelId": strconv.FormatInt(channelId, 10),
-	})
+	marshaledResponse, _ := json.Marshal(createChannelResponse{ChannelId: strconv.FormatInt(channelId, 10)})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)

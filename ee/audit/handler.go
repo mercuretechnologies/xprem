@@ -134,6 +134,12 @@ func renderAuditLogsServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
+type listAuditLogsResponse struct {
+	Events     []AuditEventResponse `json:"events"`
+	NextCursor *int64               `json:"nextCursor"`
+	Count      int64                `json:"count"`
+}
+
 func (h *AuditHandler) ListAuditLogsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	from, to, errRange := checkAndParseRange(
@@ -181,9 +187,5 @@ func (h *AuditHandler) ListAuditLogsHandler(w http.ResponseWriter, r *http.Reque
 	for i, event := range events {
 		responseEvents[i] = auditEventResponseFrom(event)
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]interface{}{
-		"events":     responseEvents,
-		"nextCursor": nextCursor,
-		"count":      count,
-	})
+	handlers.RenderJSON(w, http.StatusOK, listAuditLogsResponse{Events: responseEvents, NextCursor: nextCursor, Count: count})
 }

@@ -48,9 +48,7 @@ func (h *ApiKeyHandler) CreateApiKeyHandler(w http.ResponseWriter, r *http.Reque
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while generating the API key.")
 		return
 	}
-	marshaledResponse, _ := json.Marshal(map[string]interface{}{
-		"apiKey": apiKey,
-	})
+	marshaledResponse, _ := json.Marshal(createApiKeyResponse{ApiKey: apiKey})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	w.Write(marshaledResponse)

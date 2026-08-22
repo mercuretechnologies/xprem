@@ -51,6 +51,27 @@ type HealthHistoryHandler struct {
 	state  *StateHistory
 }
 
+// healthHistoryResponse and stateHistoryResponse are the two shapes of the
+// health history endpoint, told apart by Source; the dashboard reads them as a
+// discriminated union.
+type healthHistoryResponse struct {
+	Available bool                            `json:"available"`
+	Source    string                          `json:"source"`
+	Updates   map[string][]HealthHistoryPoint `json:"updates"`
+}
+
+type stateHistoryResponse struct {
+	Available bool                           `json:"available"`
+	Source    string                         `json:"source"`
+	Updates   map[string][]StateHistoryPoint `json:"updates"`
+}
+
+type healthSegmentsResponse struct {
+	Available bool                            `json:"available"`
+	Dimension string                          `json:"dimension"`
+	Segments  map[string][]HealthSegmentPoint `json:"segments"`
+}
+
 func NewHealthHistoryHandler(reader HealthHistoryReader, state *StateHistory) *HealthHistoryHandler {
 	// A nil *HealthHistory stored in an interface is itself non-nil. Wiring
 	// does exactly that when ClickHouse is disabled, so normalize it here
@@ -125,11 +146,7 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 	// forgets to branch fails to read the payload rather than mislabelling it.
 	if h.reader == nil {
 		if h.state == nil {
-			handlers.RenderJSON(w, http.StatusOK, map[string]any{
-				"available": false,
-				"source":    "none",
-				"updates":   map[string][]HealthHistoryPoint{},
-			})
+			handlers.RenderJSON(w, http.StatusOK, healthHistoryResponse{Source: "none", Updates: map[string][]HealthHistoryPoint{}})
 			return
 		}
 		points, err := h.state.Read(readContext, mux.Vars(r)["APP_ID"], query.updateIDs, query.from, query.to)
@@ -137,11 +154,7 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 			handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 			return
 		}
-		handlers.RenderJSON(w, http.StatusOK, map[string]any{
-			"available": true,
-			"source":    "state",
-			"updates":   points,
-		})
+		handlers.RenderJSON(w, http.StatusOK, stateHistoryResponse{Available: true, Source: "state", Updates: points})
 		return
 	}
 
@@ -150,11 +163,7 @@ func (h *HealthHistoryHandler) GetUpdateHealthHistoryHandler(w http.ResponseWrit
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{
-		"available": true,
-		"source":    "projected",
-		"updates":   points,
-	})
+	handlers.RenderJSON(w, http.StatusOK, healthHistoryResponse{Available: true, Source: "projected", Updates: points})
 }
 
 // GetUpdateHealthSegmentsHandler answers the same window split by a device
@@ -186,11 +195,7 @@ func (h *HealthHistoryHandler) GetUpdateHealthSegmentsHandler(w http.ResponseWri
 	// reads `segments`, and finding the key missing entirely is a different
 	// failure from finding it empty.
 	if h.reader == nil {
-		handlers.RenderJSON(w, http.StatusOK, map[string]any{
-			"available": false,
-			"dimension": dimension,
-			"segments":  map[string][]HealthSegmentPoint{},
-		})
+		handlers.RenderJSON(w, http.StatusOK, healthSegmentsResponse{Dimension: dimension, Segments: map[string][]HealthSegmentPoint{}})
 		return
 	}
 
@@ -204,11 +209,7 @@ func (h *HealthHistoryHandler) GetUpdateHealthSegmentsHandler(w http.ResponseWri
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{
-		"available": true,
-		"dimension": dimension,
-		"segments":  TrimSegments(segments, maxHealthSegments),
-	})
+	handlers.RenderJSON(w, http.StatusOK, healthSegmentsResponse{Available: true, Dimension: dimension, Segments: TrimSegments(segments, maxHealthSegments)})
 }
 
 func parseHealthHistoryUpdateIDs(raw string) ([]string, bool) {
