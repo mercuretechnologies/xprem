@@ -103,13 +103,13 @@ func (h *AppHandler) CreateAppHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppHandler) GetAppHandler(w http.ResponseWriter, r *http.Request) {
-	appId := mux.Vars(r)["APP_ID"]
-	if err := config.ValidateAppId(appId, "APP_ID"); err != nil {
-		handlers.RenderError(w, http.StatusBadRequest, err.Error())
+	app := services.AppFromContext(r.Context())
+	if app == nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
 		return
 	}
 	cache := cache2.GetCache()
-	cacheKey := dashboard.ComputeGetAppCacheKey(appId)
+	cacheKey := dashboard.ComputeGetAppCacheKey(app.Id)
 	if cacheValue := cache.Get(cacheKey); cacheValue != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -117,17 +117,7 @@ func (h *AppHandler) GetAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app, err := h.appService.GetAppByID(r.Context(), appId)
-	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
-			return
-		}
-		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while fetching the app.")
-		return
-	}
-
-	marshaledResponse, _ := json.Marshal(app)
+	marshaledResponse, _ := json.Marshal(h.appService.PresentApp(r.Context(), *app))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
@@ -192,11 +182,9 @@ func (h *AppHandler) GetAppsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	appId := vars["APP_ID"]
-
-	if err := config.ValidateAppId(appId, "APP_ID"); err != nil {
-		handlers.RenderError(w, http.StatusBadRequest, err.Error())
+	app := services.AppFromContext(r.Context())
+	if app == nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
 		return
 	}
 
@@ -213,15 +201,11 @@ func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.appService.UpdateApp(r.Context(), appId, requestBody.Name)
+	err := h.appService.UpdateApp(r.Context(), *app, requestBody.Name)
 	if err != nil {
 		var valErr *validation.Error
 		if errors.As(err, &valErr) {
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
-			return
-		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while updating the app.")
@@ -230,7 +214,7 @@ func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
 
 	cache := cache2.GetCache()
 	appsCacheKey := dashboard.ComputeGetAppsCacheKey()
-	appCacheKey := dashboard.ComputeGetAppCacheKey(appId)
+	appCacheKey := dashboard.ComputeGetAppCacheKey(app.Id)
 	cache.Delete(appsCacheKey)
 	cache.Delete(appCacheKey)
 
@@ -238,20 +222,14 @@ func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppHandler) DownloadAppCertificateHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	appId := vars["APP_ID"]
-
-	if err := config.ValidateAppId(appId, "APP_ID"); err != nil {
-		handlers.RenderError(w, http.StatusBadRequest, err.Error())
+	app := services.AppFromContext(r.Context())
+	if app == nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
 		return
 	}
 
-	pemCertificateString, err := h.appService.RetrieveAppCertificate(r.Context(), appId)
+	pemCertificateString, err := h.appService.CertificateFor(r.Context(), *app)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
-			return
-		}
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while downloading the app certificate.")
 		return
 	}

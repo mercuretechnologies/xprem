@@ -127,13 +127,17 @@ func TestAppLifecycleEmitsAuditEvents(t *testing.T) {
 	assert.Equal(t, map[string]any{"keys_mode": "database"}, created.Metadata)
 
 	// The rename carries both names; an idempotent rename emits nothing.
-	require.NoError(t, appService.UpdateApp(ctx, appId, "Renamed App"))
+	app, err := appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateApp(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 	renamed := recorder.events[1]
 	assert.Equal(t, auditlog.ActionAppRenamed, renamed.Action)
 	assert.Equal(t, map[string]any{"name": "Renamed App", "previous_name": "My App"}, renamed.Metadata)
 
-	require.NoError(t, appService.UpdateApp(ctx, appId, "Renamed App"))
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateApp(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 
 	// The deletion entry still names the app: read before the row went away.
