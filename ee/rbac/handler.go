@@ -234,7 +234,7 @@ type MyPermissionsResponse struct {
 // GetMyPermissionsHandler is display support only: the server re-checks every
 // mutation through the middlewares regardless of what the UI shows.
 func (h *RBACHandler) GetMyPermissionsHandler(w http.ResponseWriter, r *http.Request) {
-	subject, ok := h.service.resolveSubject(w, r)
+	subject, ok := resolveSubject(w, r)
 	if !ok {
 		return
 	}
