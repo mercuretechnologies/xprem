@@ -19,7 +19,7 @@ func newBlockHarness(t *testing.T) *rolloutTestHarness {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	h := newRolloutTestHarness(t)
-	h.channelRepo.mappings["qa"] = &expo.ChannelMapping{Id: "1", BranchName: "staging"}
+	h.channelRepo.mappings["qa"] = &expo.ChannelResolution{Id: "1", BranchName: "staging"}
 	h.channelRepo.surfing = map[string]*types.BranchSurfing{"qa": {Enabled: true, Pattern: "pr-*"}}
 	h.seed(seedRow{branch: "staging", rtv: "1", platform: "ios", id: 100, checked: true})
 	return h

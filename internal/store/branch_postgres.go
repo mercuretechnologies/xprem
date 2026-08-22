@@ -22,23 +22,30 @@ func NewPostgresBranchStore(engine *database.Engine) *PostgresBranchStore {
 	}
 }
 
-func (s *PostgresBranchStore) InsertBranch(ctx context.Context, branch pgdb.InsertBranchParams) (int64, error) {
-	insertedId, err := s.engine.Queries.InsertBranch(ctx, branch)
+func (s *PostgresBranchStore) InsertBranch(ctx context.Context, appId string, branchName string) (int64, error) {
+	insertedId, err := s.engine.Queries.InsertBranch(ctx, pgdb.InsertBranchParams{AppID: ToPgUUID(appId), Name: branchName})
 	if err != nil {
 		if database.IsUniqueViolation(err) {
-			return 0, &ErrResourceAlreadyExists{Resource: "branch", Identifier: branch.Name}
+			return 0, &ErrResourceAlreadyExists{Resource: "branch", Identifier: branchName}
 		}
 		return 0, err
 	}
 	return insertedId, nil
 }
 
-func (s *PostgresBranchStore) GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
-	pgAppID := ToPgUUID(appId)
-	return s.engine.Queries.GetUpdatesMetadataByBranchName(ctx, pgdb.GetUpdatesMetadataByBranchNameParams{
+func (s *PostgresBranchStore) GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
+	rows, err := s.engine.Queries.GetUpdatesMetadataByBranchName(ctx, pgdb.GetUpdatesMetadataByBranchNameParams{
 		Name:  branchName,
-		AppID: pgAppID,
+		AppID: ToPgUUID(appId),
 	})
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]types.UpdateRef, len(rows))
+	for i, row := range rows {
+		refs[i] = types.UpdateRef{ID: row.ID, RuntimeVersion: row.RuntimeVersion}
+	}
+	return refs, nil
 }
 
 func (s *PostgresBranchStore) DeleteBranchByName(ctx context.Context, appId string, branchName string) error {
@@ -140,11 +147,7 @@ func branchUpdateState(runtimeVersion *string, commitHash *string, createdAt pgt
 }
 
 func (s *PostgresBranchStore) UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error {
-	pgAppID := ToPgUUID(appId)
-	_, err := s.InsertBranch(ctx, pgdb.InsertBranchParams{
-		AppID: pgAppID,
-		Name:  branchName,
-	})
+	_, err := s.InsertBranch(ctx, appId, branchName)
 	if err != nil {
 		if _, ok := err.(*ErrResourceAlreadyExists); ok {
 			err = nil

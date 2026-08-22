@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 	"xprem/internal/auditlog"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
@@ -24,10 +23,10 @@ func (f *fakeCliAuthRepo) ValidateCliCredential(_ context.Context, _ string, _ t
 func (f *fakeCliAuthRepo) InsertApiKey(_ context.Context, _ string, _ string, _ string, _ string) (int64, error) {
 	return 43, nil
 }
-func (f *fakeCliAuthRepo) GetApiKeysMetadataByAppID(_ context.Context, _ string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error) {
-	return []pgdb.GetApiKeysMetadataByAppIDRow{
-		{ID: 41, Name: "other-key"},
-		{ID: 42, Name: "ci-production"},
+func (f *fakeCliAuthRepo) GetApiKeysMetadataByAppID(_ context.Context, _ string) ([]types.ApiKeyMetadata, error) {
+	return []types.ApiKeyMetadata{
+		{ID: "41", Name: "other-key"},
+		{ID: "42", Name: "ci-production"},
 	}, nil
 }
 func (f *fakeCliAuthRepo) GetApiKeyNameByID(_ context.Context, _ string, apiKeyId int64) (string, error) {

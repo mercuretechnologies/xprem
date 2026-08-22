@@ -17,7 +17,7 @@ type BranchResolutionRequest struct {
 	ClientID       string
 	Platform       string
 	RuntimeVersion string
-	Mapping        *expo.ChannelMapping
+	Mapping        *expo.ChannelResolution
 	// RequestedBranch is the xprem-branch header, empty when the device asks for
 	// nothing in particular. Surfing is the channel's setting for it.
 	RequestedBranch string

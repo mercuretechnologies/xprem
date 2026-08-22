@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 	"xprem/internal/crypto"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
@@ -52,9 +54,27 @@ func (s *PostgresAuthStore) InsertApiKey(ctx context.Context, appId string, name
 	})
 }
 
-func (s *PostgresAuthStore) GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error) {
-	pgAppID := ToPgUUID(appId)
-	return s.engine.Queries.GetApiKeysMetadataByAppID(ctx, pgAppID)
+func (s *PostgresAuthStore) GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]types.ApiKeyMetadata, error) {
+	rows, err := s.engine.Queries.GetApiKeysMetadataByAppID(ctx, ToPgUUID(appId))
+	if err != nil {
+		return nil, err
+	}
+	apiKeysMetadata := make([]types.ApiKeyMetadata, len(rows))
+	for i, row := range rows {
+		var lastUsedAt *string
+		if row.LastUsedAt.Valid {
+			formatted := row.LastUsedAt.Time.Format(time.RFC3339)
+			lastUsedAt = &formatted
+		}
+		apiKeysMetadata[i] = types.ApiKeyMetadata{
+			ID:         strconv.FormatInt(row.ID, 10),
+			Name:       row.Name,
+			Hint:       row.Hint,
+			CreatedAt:  row.CreatedAt.Time.Format(time.RFC3339),
+			LastUsedAt: lastUsedAt,
+		}
+	}
+	return apiKeysMetadata, nil
 }
 
 func (s *PostgresAuthStore) RevokeApiKeyByID(ctx context.Context, apiKeyId int64, appId string) (string, error) {

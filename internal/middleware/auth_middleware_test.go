@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"testing"
 
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/services"
 	"xprem/internal/types"
 
@@ -102,7 +101,7 @@ func (fakeCliAuthRepo) GetApiKeyNameByID(_ context.Context, _ string, _ int64) (
 	return "", nil
 }
 
-func (fakeCliAuthRepo) GetApiKeysMetadataByAppID(_ context.Context, _ string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error) {
+func (fakeCliAuthRepo) GetApiKeysMetadataByAppID(_ context.Context, _ string) ([]types.ApiKeyMetadata, error) {
 	return nil, nil
 }
 func (fakeCliAuthRepo) RevokeApiKeyByID(_ context.Context, _ int64, _ string) (string, error) {

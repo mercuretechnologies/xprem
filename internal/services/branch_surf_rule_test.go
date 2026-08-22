@@ -17,7 +17,7 @@ func surfRequest(requested string, surfing types.BranchSurfing, rollout *expo.Ch
 		ClientID:        "device-1",
 		Platform:        "ios",
 		RuntimeVersion:  "3.0.0",
-		Mapping:         &expo.ChannelMapping{Id: "1", BranchName: "staging", Rollout: rollout},
+		Mapping:         &expo.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout},
 		RequestedBranch: requested,
 		Surfing:         surfing,
 	}

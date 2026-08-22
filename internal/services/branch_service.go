@@ -9,7 +9,6 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
@@ -28,9 +27,9 @@ type BranchService struct {
 }
 
 type BranchRepository interface {
-	InsertBranch(ctx context.Context, branch pgdb.InsertBranchParams) (int64, error)
+	InsertBranch(ctx context.Context, appId string, branchName string) (int64, error)
 	UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error
-	GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error)
+	GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error)
 	DeleteBranchByName(ctx context.Context, appId string, branchName string) error
 	GetBranches(ctx context.Context, appId string) ([]types.BranchMapping, error)
 	GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error)
@@ -60,11 +59,7 @@ func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchNa
 	if err := validation.Name("branchName", branchName); err != nil {
 		return 0, err
 	}
-	pgAppID := store.ToPgUUID(appId)
-	branchId, err := s.branchRepo.InsertBranch(ctx, pgdb.InsertBranchParams{
-		AppID: pgAppID,
-		Name:  branchName,
-	})
+	branchId, err := s.branchRepo.InsertBranch(ctx, appId, branchName)
 	if err != nil {
 		return 0, err
 	}
@@ -129,7 +124,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 	appCache := cache.GetCache()
 	appCache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
 	appCache.Delete(dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName))
-	go func(bucketRows []pgdb.GetUpdatesMetadataByBranchNameRow) {
+	go func(bucketRows []types.UpdateRef) {
 		for _, row := range bucketRows {
 			err := s.bucket.DeleteUpdateFolder(appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))
 			if err != nil {

@@ -272,7 +272,7 @@ func TestTheChannelsOwnBranchIsNotOfferedAsASwitch(t *testing.T) {
 			{Name: "pr-1", LastUpdateAt: "2026-08-02T10:00:00Z"},
 			{Name: "staging", LastUpdateAt: "2026-08-01T10:00:00Z"},
 		}})
-	channelRepo.mappings = map[string]*expo.ChannelMapping{
+	channelRepo.mappings = map[string]*expo.ChannelResolution{
 		"qa": {BranchName: "staging"},
 	}
 
@@ -357,6 +357,6 @@ func TestAMappingReadFailureIsNotSwallowed(t *testing.T) {
 
 type mappingErrorChannelRepo struct{ *fakeChannelRepo }
 
-func (mappingErrorChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelMapping, error) {
+func (mappingErrorChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelResolution, error) {
 	return nil, assert.AnError
 }

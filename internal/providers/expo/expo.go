@@ -25,7 +25,7 @@ type UserAccount struct {
 	Email    string `json:"email"`
 }
 
-// ChannelRolloutInfo is the active channel rollout folded into a ChannelMapping in
+// ChannelRolloutInfo is the active channel rollout folded into a ChannelResolution in
 // control-plane mode. ID doubles as the bucketing salt. The stateless (Expo) provider
 // never sets it, so rollouts stay a control-plane-only feature.
 type ChannelRolloutInfo struct {
@@ -34,7 +34,9 @@ type ChannelRolloutInfo struct {
 	Percentage int    `json:"percentage"`
 }
 
-type ChannelMapping struct {
+// ChannelResolution is the branch a channel serves to devices, with its active
+// rollout; the dashboard listing shape is types.ChannelMapping.
+type ChannelResolution struct {
 	Id         string `json:"id"`
 	BranchName string `json:"branchName"`
 	// Set only by the Postgres channel store when the channel has an active rollout.
@@ -356,10 +358,10 @@ func FetchAppName(ctx context.Context, appId string) string {
 	return name
 }
 
-func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
+func FetchChannelMapping(appId, channelName string) (*ChannelResolution, error) {
 	mappingCache := cache2.GetCache()
 	cacheKey := channelMappingCacheKey(appId, channelName)
-	if mapping, ok := cache2.GetJSON[ChannelMapping](mappingCache, cacheKey); ok {
+	if mapping, ok := cache2.GetJSON[ChannelResolution](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}
 
@@ -442,7 +444,7 @@ func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
 		return nil, nil
 	}
 
-	result := &ChannelMapping{
+	result := &ChannelResolution{
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,
 	}

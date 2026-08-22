@@ -17,7 +17,7 @@ func newSurfHarness(t *testing.T, surfing *types.BranchSurfing, rollout *expo.Ch
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	h := newRolloutTestHarness(t)
-	h.channelRepo.mappings["qa"] = &expo.ChannelMapping{Id: "1", BranchName: "staging", Rollout: rollout}
+	h.channelRepo.mappings["qa"] = &expo.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout}
 	h.channelRepo.surfing = map[string]*types.BranchSurfing{"qa": surfing}
 	h.seed(seedRow{branch: "staging", rtv: "1", platform: "ios", id: 100, checked: true})
 	return h

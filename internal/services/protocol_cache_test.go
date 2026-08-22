@@ -39,7 +39,7 @@ type countingChannelRepo struct {
 	surfingErr   error
 }
 
-func (r *countingChannelRepo) GetChannelBranchMapping(ctx context.Context, appId, channelName string) (*expo.ChannelMapping, error) {
+func (r *countingChannelRepo) GetChannelBranchMapping(ctx context.Context, appId, channelName string) (*expo.ChannelResolution, error) {
 	r.calls++
 	return r.fakeChannelRepo.GetChannelBranchMapping(ctx, appId, channelName)
 }
@@ -53,7 +53,7 @@ func (r *countingChannelRepo) GetBranchSurfing(ctx context.Context, appId, chann
 }
 
 func TestChannelBranchMappingCache(t *testing.T) {
-	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelMapping{
+	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelResolution{
 		"production": {Id: "1", BranchName: "main", Rollout: &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 30}},
 	}}}
 	protocolService := NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil)
@@ -94,7 +94,7 @@ func TestChannelBranchMappingCache(t *testing.T) {
 }
 
 func TestChannelBranchMappingNilNeverCached(t *testing.T) {
-	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelMapping{}}}
+	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelResolution{}}}
 	protocolService := NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil)
 	ctx := context.Background()
 	appId := "channel-mapping-nil-test"

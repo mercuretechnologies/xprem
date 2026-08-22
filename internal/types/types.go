@@ -149,6 +149,12 @@ type UpdateDetails struct {
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
 }
 
+// UpdateRef locates one update's files on a branch.
+type UpdateRef struct {
+	ID             int64
+	RuntimeVersion string
+}
+
 type ApiKeyMetadata struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
