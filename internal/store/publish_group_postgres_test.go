@@ -16,7 +16,7 @@ import (
 
 // checkedUpdate publishes and checks one update, stamping a stored uuid so the
 // listing resolves it without reaching for bucket metadata.
-func (f *rolloutFixture) checkedUpdate(t *testing.T, updateId int64, platform string, publishGroup *string) {
+func (f *rolloutFixture) checkedUpdate(t *testing.T, updateId int64, platform types.Platform, publishGroup *string) {
 	t.Helper()
 	ctx := context.Background()
 	created, err := f.updates.CreateUpdate(ctx, f.appId, updateId, rolloutTestDefaultBranch, rolloutTestRuntime, platform, "abc123", "", publishGroup)

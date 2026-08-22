@@ -179,7 +179,7 @@ const (
 // returned unless all is set, but Total always counts every match, so a client
 // can tell it is looking at part of the list. It refuses a channel that does not
 // exist or has branch surfing off.
-func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, platform string, all bool) (types.SurfableBranchList, error) {
+func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, platform types.Platform, all bool) (types.SurfableBranchList, error) {
 	if err := validation.Name("channelName", channelName); err != nil {
 		return types.SurfableBranchList{}, err
 	}

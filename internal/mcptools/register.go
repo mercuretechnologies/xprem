@@ -86,7 +86,7 @@ type ChannelWriter interface {
 }
 
 type DeploymentWriter interface {
-	CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
+	CreateRollback(ctx context.Context, appId string, platform types.Platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
 	RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error)
 	RepublishPublishGroup(ctx context.Context, appId, branchName, runtimeVersion, publishGroup string) (*services.GroupOperationResult, error)
 }

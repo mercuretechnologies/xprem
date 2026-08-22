@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 )
@@ -14,6 +15,32 @@ type Asset struct {
 type PlatformMetadata struct {
 	Bundle string  `json:"bundle"`
 	Assets []Asset `json:"assets"`
+}
+
+// Platform is a client platform an update is built for; a value that went
+// through ParsePlatform is one of the two constants.
+type Platform string
+
+const (
+	PlatformIOS     Platform = "ios"
+	PlatformAndroid Platform = "android"
+)
+
+// ParsePlatform accepts exactly "ios" or "android".
+func ParsePlatform(raw string) (Platform, error) {
+	switch Platform(raw) {
+	case PlatformIOS, PlatformAndroid:
+		return Platform(raw), nil
+	}
+	return "", fmt.Errorf("invalid platform %q", raw)
+}
+
+// Metadata returns the file metadata of this platform.
+func (p Platform) Metadata(m FileMetadata) PlatformMetadata {
+	if p == PlatformIOS {
+		return m.IOS
+	}
+	return m.Android
 }
 
 type FileMetadata struct {
@@ -35,12 +62,12 @@ type UpdateMetadata struct {
 }
 
 type UpdateItem struct {
-	UpdateUUID string `json:"updateUUID"`
-	UpdateId   string `json:"updateId"`
-	CreatedAt  string `json:"createdAt"`
-	CommitHash string `json:"commitHash"`
-	Platform   string `json:"platform"`
-	Message    string `json:"message,omitempty"`
+	UpdateUUID string   `json:"updateUUID"`
+	UpdateId   string   `json:"updateId"`
+	CreatedAt  string   `json:"createdAt"`
+	CommitHash string   `json:"commitHash"`
+	Platform   Platform `json:"platform"`
+	Message    string   `json:"message,omitempty"`
 	// Progressive rollout state (control-plane mode only). Both stay nil in stateless
 	// mode and for non-rollout updates, so listings there serialize byte-identically.
 	RolloutPercentage *int    `json:"rolloutPercentage,omitempty"`
@@ -65,7 +92,7 @@ type UpdateFeedItem struct {
 type UpdateFeedQuery struct {
 	Branch          string
 	RuntimeVersion  string
-	Platform        string
+	Platform        Platform
 	UpdateUUID      string
 	PublishGroup    string
 	CommitHash      string
@@ -88,7 +115,7 @@ type UpdateFeedPage struct {
 // the same path as a single republish.
 type PublishGroupMember struct {
 	UpdateId   string
-	Platform   string
+	Platform   Platform
 	CommitHash string
 }
 
@@ -104,10 +131,10 @@ type PublishGroupItem struct {
 }
 
 type PublishGroupUpdateItem struct {
-	UpdateId   string `json:"updateId"`
-	CreatedAt  string `json:"createdAt"`
-	Platform   string `json:"platform"`
-	CommitHash string `json:"commitHash"`
+	UpdateId   string   `json:"updateId"`
+	CreatedAt  string   `json:"createdAt"`
+	Platform   Platform `json:"platform"`
+	CommitHash string   `json:"commitHash"`
 }
 
 type PublishGroupsPage struct {
@@ -121,10 +148,10 @@ type UpdatesPage struct {
 }
 
 type UpdateStoredMetadata struct {
-	Platform   string `json:"platform"`
-	CommitHash string `json:"commitHash"`
-	UpdateUUID string `json:"updateUUID"`
-	Message    string `json:"message,omitempty"`
+	Platform   Platform `json:"platform"`
+	CommitHash string   `json:"commitHash"`
+	UpdateUUID string   `json:"updateUUID"`
+	Message    string   `json:"message,omitempty"`
 }
 
 type UpdateType int
@@ -139,7 +166,7 @@ type UpdateDetails struct {
 	UpdateId   string     `json:"updateId"`
 	CreatedAt  string     `json:"createdAt"`
 	CommitHash string     `json:"commitHash"`
-	Platform   string     `json:"platform"`
+	Platform   Platform   `json:"platform"`
 	Message    string     `json:"message,omitempty"`
 	Type       UpdateType `json:"type"`
 	ExpoConfig string     `json:"expoConfig"`
@@ -227,11 +254,11 @@ type ChannelRollout struct {
 // RolloutUpdate is one active per-update rollout row (one per platform) as returned by
 // the per-update rollout route.
 type RolloutUpdate struct {
-	UpdateId        string  `json:"updateId"`
-	Platform        string  `json:"platform"`
-	Percentage      int     `json:"percentage"`
-	ControlUpdateId *string `json:"controlUpdateId,omitempty"`
-	CreatedAt       string  `json:"createdAt"`
+	UpdateId        string   `json:"updateId"`
+	Platform        Platform `json:"platform"`
+	Percentage      int      `json:"percentage"`
+	ControlUpdateId *string  `json:"controlUpdateId,omitempty"`
+	CreatedAt       string   `json:"createdAt"`
 }
 
 type BranchUpdateState struct {

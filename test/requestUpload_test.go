@@ -17,6 +17,7 @@ import (
 	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/crypto"
+	"xprem/internal/types"
 	"xprem/internal/update"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -24,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func createUploadRequest(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpdatePath, headerKey, headerValue, platform string) (*httptest.ResponseRecorder, *mux.Router, *mux.Route, *http.Request) {
+func createUploadRequest(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpdatePath, headerKey, headerValue string, platform types.Platform) (*httptest.ResponseRecorder, *mux.Router, *mux.Route, *http.Request) {
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
 	q := fmt.Sprintf("http://localhost:3000/test-app-id/requestUploadUrl/%s?runtimeVersion=%s&platform=%s&commitHash=abc123", branch, runtimeVersion, platform)
 	w := httptest.NewRecorder()
@@ -39,7 +40,7 @@ func createUploadRequest(t *testing.T, projectRoot, branch, runtimeVersion, samp
 	return w, mux.NewRouter(), nil, r
 }
 
-func performUpload(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpdatePath, platform string) string {
+func performUpload(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpdatePath string, platform types.Platform) string {
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
 	requestURL := fmt.Sprintf("http://localhost:3000/test-app-id/requestUploadUrl/%s?runtimeVersion=%s&platform=%s&commitHash=abc123", branch, runtimeVersion, platform)
 	w := httptest.NewRecorder()
@@ -133,13 +134,13 @@ func performUpload(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpda
 	if err := json.Unmarshal(metadataContent, &metadata); err != nil {
 		t.Fatalf("Error unmarshalling update-metadata.json: %v", err)
 	}
-	if metadata["platform"] != platform || metadata["commitHash"] != "abc123" {
+	if metadata["platform"] != string(platform) || metadata["commitHash"] != "abc123" {
 		t.Fatalf("Metadata values not as expected, got: %v", metadata)
 	}
 	return updateId
 }
 
-func markUpdateAsUploaded(t *testing.T, branch, runtimeVersion, updateId, platform string) *httptest.ResponseRecorder {
+func markUpdateAsUploaded(t *testing.T, branch, runtimeVersion, updateId string, platform types.Platform) *httptest.ResponseRecorder {
 	markURL := fmt.Sprintf("http://localhost:3000/test-app-id/markUpdateAsUploaded/%s?platform=%s&runtimeVersion=%s&updateId=%s", branch, platform, runtimeVersion, updateId)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", markURL, nil)

@@ -98,7 +98,7 @@ func (f *rolloutFixture) startChannelRollout(t *testing.T, percentage int) strin
 	return rolloutId
 }
 
-func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int64, platform string, checked bool) types.Update {
+func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int64, platform types.Platform, checked bool) types.Update {
 	t.Helper()
 	created, err := f.updates.CreateUpdate(context.Background(), f.appId, updateId, branch, rolloutTestRuntime, platform, "abc123", "", nil)
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int6
 	return *created
 }
 
-func (f *rolloutFixture) createRolloutUpdate(t *testing.T, branch string, updateId int64, platform string, percentage int) types.Update {
+func (f *rolloutFixture) createRolloutUpdate(t *testing.T, branch string, updateId int64, platform types.Platform, percentage int) types.Update {
 	t.Helper()
 	created, err := f.updates.CreateUpdateWithRollout(context.Background(), f.appId, updateId, branch, rolloutTestRuntime, platform, "abc123", "", percentage, nil)
 	require.NoError(t, err)
