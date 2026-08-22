@@ -56,7 +56,7 @@ func (surfingBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) erro
 func (surfingBranchRepo) GetBranches(_ context.Context, _ string) ([]types.BranchMapping, error) {
 	return nil, nil
 }
-func (surfingBranchRepo) GetSurfableBranches(_ context.Context, _, _ string, _ string) ([]types.SurfableBranch, error) {
+func (surfingBranchRepo) GetSurfableBranches(_ context.Context, _, _ string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return nil, nil
 }
 func (surfingBranchRepo) GetRuntimeVersionsWithUpdateStats(_ context.Context, _, _ string) ([]types.RuntimeVersionWithStats, error) {

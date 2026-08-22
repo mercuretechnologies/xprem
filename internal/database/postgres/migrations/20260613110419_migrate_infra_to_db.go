@@ -292,7 +292,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 							Name:       branch.BranchName,
 							Version:    rv.RuntimeVersion,
 							UpdateType: int32(updateType),
-							Platform:   update.Platform,
+							Platform:   string(update.Platform),
 							CommitHash: update.CommitHash,
 							Message:    messagePtr,
 							CheckedAt:  toTimestamptz(checkedAtTime),

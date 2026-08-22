@@ -16,7 +16,7 @@ import (
 
 // checkedUpdate publishes and checks one update, stamping a stored uuid so the
 // listing resolves it without reaching for bucket metadata.
-func (f *rolloutFixture) checkedUpdate(t *testing.T, updateId int64, platform string, publishGroup *string) {
+func (f *rolloutFixture) checkedUpdate(t *testing.T, updateId int64, platform types.Platform, publishGroup *string) {
 	t.Helper()
 	ctx := context.Background()
 	created, err := f.updates.CreateUpdate(ctx, f.appId, updateId, rolloutTestDefaultBranch, rolloutTestRuntime, platform, "abc123", "", publishGroup)
@@ -86,10 +86,10 @@ func TestGetUpdatesByPublishGroupPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, members, 2)
 	assert.Equal(t, "100", members[0].UpdateId)
-	assert.Equal(t, "ios", members[0].Platform)
+	assert.Equal(t, types.PlatformIOS, members[0].Platform)
 	assert.Equal(t, "abc123", members[0].CommitHash)
 	assert.Equal(t, "200", members[1].UpdateId)
-	assert.Equal(t, "android", members[1].Platform)
+	assert.Equal(t, types.PlatformAndroid, members[1].Platform)
 
 	none, err := fixture.updates.GetUpdatesByPublishGroup(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime, uuid.NewString())
 	require.NoError(t, err)

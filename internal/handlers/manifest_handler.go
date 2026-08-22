@@ -146,11 +146,12 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		return services.ManifestRequestParams{}, errors.New("Invalid protocol version")
 	}
 
-	platform := r.Header.Get("expo-platform")
-	if platform == "" {
-		platform = r.URL.Query().Get("platform")
+	rawPlatform := r.Header.Get("expo-platform")
+	if rawPlatform == "" {
+		rawPlatform = r.URL.Query().Get("platform")
 	}
-	if platform != "ios" && platform != "android" {
+	platform, err := types.ParsePlatform(rawPlatform)
+	if err != nil {
 		return services.ManifestRequestParams{}, errors.New("Invalid platform")
 	}
 

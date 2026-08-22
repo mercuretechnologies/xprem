@@ -16,8 +16,8 @@ type UpdateRepository interface {
 	MarkUpdateAsChecked(ctx context.Context, update types.Update) error
 	GetUpdateDetails(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (types.UpdateDetails, error)
 	GetUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error)
-	GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error)
-	GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error)
+	GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error)
+	GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error)
 	GetUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error)
 	HasActiveRolloutUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string) (bool, error)
 	GetUpdateType(ctx context.Context, update types.Update) (types.UpdateType, error)
@@ -27,12 +27,12 @@ type UpdateRepository interface {
 	// group republish) so consumers can treat them as a single publish. Nil
 	// (older CLIs, rollbacks, internal callers) leaves the rows ungrouped;
 	// the bucket store ignores it entirely (no grouping in stateless mode).
-	CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error)
-	CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error)
+	CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, publishGroup *string) (*types.Update, error)
+	CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error)
 	// message is the reason the rollback was created. Empty for the CLI and
 	// for the rollout revert, which have none to give; the dashboard requires
 	// one so the row says why the fleet was sent back to the embedded bundle.
-	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error)
+	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error)
 	// GetUpdatesByPublishGroup resolves the checked members of one publish
 	// group on (branch, runtime version), for the group republish.
 	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
@@ -61,7 +61,7 @@ func NewUpdateService(updateRepo UpdateRepository, bucket bucket.Bucket) *Update
 // GetLatestUpdateForClient: the flat UpdateWithRollout envelope (update + per-update
 // rollout state + embedded control) stored under the lastUpdate cache key. A nil
 // envelope (no checked update yet) is deliberately never cached.
-func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
+func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	envelopeCache := cache.GetCache()
 	cacheKey := update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, platform)
 	if cachedEnvelope, ok := cache.GetJSON[types.UpdateWithRollout](envelopeCache, cacheKey); ok {
@@ -79,7 +79,7 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 	return latestEnvelope, nil
 }
 
-func (s *UpdateService) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error) {
+func (s *UpdateService) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	envelope, err := s.getLatestUpdateEnvelope(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil || envelope == nil {
 		return nil, err
@@ -102,7 +102,7 @@ type ClientUpdateResolution struct {
 // latest update; out-of-bucket => the control update (nil control => noUpdateAvailable).
 // The control substitution happens here, before any response composition, so the
 // same-current-id short-circuit keeps working for devices already on the control.
-func (s *UpdateService) GetLatestUpdateForClient(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string, clientID string) (ClientUpdateResolution, error) {
+func (s *UpdateService) GetLatestUpdateForClient(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform, clientID string) (ClientUpdateResolution, error) {
 	envelope, err := s.getLatestUpdateEnvelope(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil {
 		return ClientUpdateResolution{}, err

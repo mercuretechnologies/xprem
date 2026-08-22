@@ -1,6 +1,8 @@
 package services
 
 import (
+	"xprem/internal/types"
+
 	"context"
 	"log"
 	update2 "xprem/internal/update"
@@ -10,7 +12,7 @@ import (
 // appId/branch/runtimeVersion/platform combination. It is intended to be
 // called as a goroutine after MarkUpdateAsChecked so the first client
 // request hits warm caches instead of rebuilding everything from scratch.
-func PreWarmManifestCache(updateService *UpdateService, appId string, branch string, runtimeVersion string, platform string) {
+func PreWarmManifestCache(updateService *UpdateService, appId string, branch string, runtimeVersion string, platform types.Platform) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[PreWarm] panic recovered for app=%s branch=%s rv=%s platform=%s: %v", appId, branch, runtimeVersion, platform, r)
@@ -46,7 +48,7 @@ func PreWarmManifestCache(updateService *UpdateService, appId string, branch str
 // per-update rollout. The manifest cache is per updateId, so warming only the rollout
 // update would leave the first out-of-bucket client to re-hash every control asset.
 // No-op when the latest update carries no active rollout or no control.
-func PreWarmControlManifest(updateService *UpdateService, appId string, branch string, runtimeVersion string, platform string) {
+func PreWarmControlManifest(updateService *UpdateService, appId string, branch string, runtimeVersion string, platform types.Platform) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[PreWarm] panic recovered for control app=%s branch=%s rv=%s platform=%s: %v", appId, branch, runtimeVersion, platform, r)
