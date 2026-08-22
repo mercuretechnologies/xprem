@@ -140,8 +140,10 @@ func TestAppLifecycleEmitsAuditEvents(t *testing.T) {
 	require.NoError(t, appService.UpdateApp(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 
-	// The deletion entry still names the app: read before the row went away.
-	require.NoError(t, appService.DeleteApp(ctx, appId))
+	// The deletion entry still names the app.
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.DeleteApp(ctx, app))
 	require.Len(t, recorder.events, 3)
 	assert.Equal(t, auditlog.ActionAppDeleted, recorder.events[2].Action)
 	assert.Equal(t, "Renamed App", recorder.events[2].TargetDisplay)

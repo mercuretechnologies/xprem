@@ -133,23 +133,20 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 	return insertedAppId, nil
 }
 
-func (s *AppService) DeleteApp(ctx context.Context, appId string) error {
-	// Read before the delete: afterwards there is no row left to name in the
-	// audit entry. Best-effort, like the entry itself.
-	displayName := appId
-	if app, err := s.appRepo.GetAppByID(ctx, appId); err == nil && app.Name != "" {
-		displayName = app.Name
-	}
-	err := s.appRepo.DeleteAppByID(ctx, appId)
-	if err != nil {
+func (s *AppService) DeleteApp(ctx context.Context, app config.AppConfig) error {
+	if err := s.appRepo.DeleteAppByID(ctx, app.Id); err != nil {
 		return err
+	}
+	displayName := app.Name
+	if displayName == "" {
+		displayName = app.Id
 	}
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionAppDeleted,
 		TargetType:    "app",
-		TargetID:      appId,
+		TargetID:      app.Id,
 		TargetDisplay: displayName,
-		AppID:         appId,
+		AppID:         app.Id,
 	})
 	return nil
 }

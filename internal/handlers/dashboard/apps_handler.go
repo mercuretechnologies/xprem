@@ -13,8 +13,6 @@ import (
 	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/validation"
-
-	"github.com/gorilla/mux"
 )
 
 // AppVisibilityFilter narrows the dashboard app list to what the requesting
@@ -127,17 +125,12 @@ func (h *AppHandler) GetAppHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppHandler) DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
-	appId := mux.Vars(r)["APP_ID"]
-	if err := config.ValidateAppId(appId, "APP_ID"); err != nil {
-		handlers.RenderError(w, http.StatusBadRequest, err.Error())
+	app := services.AppFromContext(r.Context())
+	if app == nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
 		return
 	}
-	err := h.appService.DeleteApp(r.Context(), appId)
-	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
-			return
-		}
+	if err := h.appService.DeleteApp(r.Context(), *app); err != nil {
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while deleting the app.")
 		return
 	}
@@ -145,7 +138,7 @@ func (h *AppHandler) DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 
 	cache := cache2.GetCache()
 	appsCacheKey := dashboard.ComputeGetAppsCacheKey()
-	appCacheKey := dashboard.ComputeGetAppCacheKey(appId)
+	appCacheKey := dashboard.ComputeGetAppCacheKey(app.Id)
 	cache.Delete(appCacheKey)
 	cache.Delete(appsCacheKey)
 }

@@ -55,7 +55,7 @@ func NewRouter(container *AppContainer) *mux.Router {
 
 	// adminOnly guards the global administration surface (users, roles,
 	// license, SSO, app creation).
-	adminOnly := middleware.NewAdminMiddleware(container.UserRepo)
+	adminOnly := middleware.NewAdminMiddleware()
 
 	registerOAuthApiRoutes(apiSubrouter, container)
 	registerAccountRoutes(apiSubrouter, container, adminOnly)
