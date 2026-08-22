@@ -26,8 +26,8 @@ func guardService(t *testing.T, surfing *types.BranchSurfing) *ExpoProtocolServi
 }
 
 func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {
-	mapped := &expo.ChannelMapping{Id: "1", BranchName: "staging"}
-	withRollout := &expo.ChannelMapping{
+	mapped := &expo.ChannelResolution{Id: "1", BranchName: "staging"}
+	withRollout := &expo.ChannelResolution{
 		Id: "1", BranchName: "staging",
 		Rollout: &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 50},
 	}
@@ -35,7 +35,7 @@ func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {
 	cases := []struct {
 		name    string
 		surfing *types.BranchSurfing
-		mapping *expo.ChannelMapping
+		mapping *expo.ChannelResolution
 		branch  string
 		want    bool
 	}{
@@ -59,7 +59,7 @@ func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {
 // branch it has no claim to.
 func TestAssetBranchGuardDeniesOnUnknownChannel(t *testing.T) {
 	service := guardService(t, nil)
-	mapped := &expo.ChannelMapping{Id: "1", BranchName: "staging"}
+	mapped := &expo.ChannelResolution{Id: "1", BranchName: "staging"}
 
 	assert.False(t, service.isAssetBranchAllowed(context.Background(), guardAppID, "qa", "pr-482", mapped))
 }

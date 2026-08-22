@@ -166,7 +166,7 @@ func (s *PostgresChannelStore) GetUpdatesByRunTimeVersionAndBranchName(ctx conte
 	})
 }
 
-func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
+func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelResolution, error) {
 	pgAppID := ToPgUUID(appId)
 	mapping, err := s.engine.Queries.GetChannelBranchMapping(ctx, pgdb.GetChannelBranchMappingParams{
 		AppID: pgAppID,
@@ -182,7 +182,7 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 		return nil, fmt.Errorf("failed to retrieve channel mapping from database: %w", err)
 	}
 	mappingStr := strconv.FormatInt(mapping.ID, 10)
-	result := &expo.ChannelMapping{
+	result := &expo.ChannelResolution{
 		Id:         mappingStr,
 		BranchName: mapping.BranchName,
 	}

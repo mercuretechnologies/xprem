@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/rollout"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
@@ -38,7 +37,6 @@ type UpdateRepository interface {
 	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
 	GetUpdatesByPublishGroup(ctx context.Context, appId string, branchName string, runtimeVersion string, publishGroup string) ([]types.PublishGroupMember, error)
 	GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error)
-	GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error)
 	GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error)
 	GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error)
 	RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error)

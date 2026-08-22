@@ -60,7 +60,7 @@ func (s *BucketChannelStore) GetChannels(ctx context.Context, appId string) ([]t
 	return channels, nil
 }
 
-func (s *BucketChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
+func (s *BucketChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelResolution, error) {
 	return expo.FetchChannelMapping(appId, channelName)
 }
 

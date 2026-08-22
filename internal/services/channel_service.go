@@ -35,7 +35,7 @@ type ChannelRepository interface {
 	DeleteChannel(ctx context.Context, channelName string, appId string) error
 	GetChannelNameByBranchName(ctx context.Context, appId string, branchName string) ([]string, error)
 	GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error)
-	GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error)
+	GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelResolution, error)
 	// GetBranchSurfing returns nil, nil when the channel does not exist.
 	GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error)
 	SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error
