@@ -407,14 +407,16 @@ func (s *SSOService) BeginLogin(ctx context.Context) (*LoginRedirect, error) {
 		return nil, err
 	}
 	verifier := oauth2.GenerateVerifier()
-	flowToken, err := crypto.GenerateJWTToken(s.secret, jwt.MapClaims{
-		"sub":      flowSubject,
-		"type":     flowClaimType,
-		"exp":      time.Now().Add(flowTTL).Unix(),
-		"iat":      time.Now().Unix(),
-		"state":    state,
-		"nonce":    nonce,
-		"verifier": verifier,
+	flowToken, err := crypto.GenerateJWTToken(s.secret, flowClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   flowSubject,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(flowTTL)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		Type:     flowClaimType,
+		State:    state,
+		Nonce:    nonce,
+		Verifier: verifier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error while generating the sso flow token: %w", err)
@@ -582,18 +584,25 @@ type flowState struct {
 	verifier string
 }
 
+// flowClaims is the claim set of the token that carries an SSO login across
+// the redirect to the IdP and back.
+type flowClaims struct {
+	jwt.RegisteredClaims
+	Type     string `json:"type"`
+	State    string `json:"state"`
+	Nonce    string `json:"nonce"`
+	Verifier string `json:"verifier"`
+}
+
 func (s *SSOService) verifyFlowToken(flowToken string) (*flowState, error) {
-	claims := jwt.MapClaims{}
+	claims := flowClaims{}
 	if _, err := crypto.DecodeAndExtractJWTToken(s.secret, flowToken, &claims); err != nil {
 		return nil, err
 	}
-	if claims["type"] != flowClaimType || claims["sub"] != flowSubject {
+	if claims.Type != flowClaimType || claims.Subject != flowSubject {
 		return nil, errors.New("not an sso flow token")
 	}
-	flow := &flowState{}
-	flow.state, _ = claims["state"].(string)
-	flow.nonce, _ = claims["nonce"].(string)
-	flow.verifier, _ = claims["verifier"].(string)
+	flow := &flowState{state: claims.State, nonce: claims.Nonce, verifier: claims.Verifier}
 	if flow.state == "" || flow.nonce == "" || flow.verifier == "" {
 		return nil, errors.New("incomplete sso flow token")
 	}
