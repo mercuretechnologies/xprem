@@ -32,6 +32,8 @@ func TestManifestParamsReadsEveryHeader(t *testing.T) {
 	r.Header.Set("xprem-surf-blocked", "pr-482@200")
 	r.Header.Set("EAS-Client-ID", "device-1")
 	r.Header.Set("expo-current-update-id", "11111111-1111-4111-8111-111111111111")
+	r.Header.Set("expo-embedded-update-id", "33333333-3333-4333-8333-333333333333")
+	r.Header.Set("expo-expect-signature", "true")
 	r.Header.Set("expo-fatal-error", "boom")
 	r.Header.Set("Expo-Recent-Failed-Update-Ids", `"22222222-2222-4222-8222-222222222222"`)
 
@@ -48,6 +50,8 @@ func TestManifestParamsReadsEveryHeader(t *testing.T) {
 	assert.Equal(t, "pr-482@200", params.SurfBlockTokens)
 	assert.Equal(t, "device-1", params.ClientID)
 	assert.Equal(t, "11111111-1111-4111-8111-111111111111", params.CurrentUpdateID)
+	assert.Equal(t, "33333333-3333-4333-8333-333333333333", params.EmbeddedUpdateID)
+	assert.Equal(t, "true", params.ExpectSignature)
 	assert.Equal(t, "boom", params.ExpoFatalError)
 	assert.Equal(t, `"22222222-2222-4222-8222-222222222222"`, params.RecentFailedUpdateIDs)
 }
