@@ -206,6 +206,7 @@ func (h *IdentityHandler) DeleteSchemaKeyHandler(w http.ResponseWriter, r *http.
 func (h *IdentityHandler) SearchValuesHandler(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, valuesResponse{Values: []ValueCount{}})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
