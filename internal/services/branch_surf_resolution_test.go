@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"testing"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
@@ -13,11 +12,11 @@ import (
 // These cover the wiring the unit tests cannot see: ManifestRequestParams.XpremBranch
 // reaching the rule chain and changing which branch is served. Drop any link of that
 // chain and only these fail.
-func newSurfHarness(t *testing.T, surfing *types.BranchSurfing, rollout *expo.ChannelRolloutInfo) *rolloutTestHarness {
+func newSurfHarness(t *testing.T, surfing *types.BranchSurfing, rollout *types.ChannelRolloutInfo) *rolloutTestHarness {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	h := newRolloutTestHarness(t)
-	h.channelRepo.mappings["qa"] = &expo.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout}
+	h.channelRepo.mappings["qa"] = &types.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout}
 	h.channelRepo.surfing = map[string]*types.BranchSurfing{"qa": surfing}
 	h.seed(seedRow{branch: "staging", rtv: "1", platform: "ios", id: 100, checked: true})
 	return h
@@ -89,7 +88,7 @@ func TestResolveManifestBundleSurfOutranksAnActiveRollout(t *testing.T) {
 	const salt = "surf-vs-rollout-salt"
 	h := newSurfHarness(t,
 		&types.BranchSurfing{Enabled: true, Pattern: "pr-*"},
-		&expo.ChannelRolloutInfo{ID: salt, BranchName: "canary", Percentage: 100},
+		&types.ChannelRolloutInfo{ID: salt, BranchName: "canary", Percentage: 100},
 	)
 	h.seed(seedRow{branch: "canary", rtv: "1", platform: "ios", id: 200, checked: true})
 	h.seed(seedRow{branch: "pr-482", rtv: "1", platform: "ios", id: 300, checked: true})

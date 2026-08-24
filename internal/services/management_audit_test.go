@@ -5,7 +5,6 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/auditlog"
-	"xprem/internal/providers/expo"
 	"xprem/internal/store"
 	"xprem/internal/types"
 
@@ -55,7 +54,7 @@ func (f *fakeMgmtChannelRepo) GetChannelNameByBranchName(_ context.Context, _ st
 func (f *fakeMgmtChannelRepo) GetChannels(_ context.Context, _ string) ([]types.ChannelMapping, error) {
 	return nil, nil
 }
-func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*expo.ChannelResolution, error) {
+func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*types.ChannelResolution, error) {
 	return nil, nil
 }
 func (f *fakeMgmtChannelRepo) GetBranchSurfing(_ context.Context, _ string, _ string) (*types.BranchSurfing, error) {

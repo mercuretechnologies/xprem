@@ -8,7 +8,6 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 
 	"github.com/jackc/pgx/v5"
@@ -166,7 +165,7 @@ func (s *PostgresChannelStore) GetUpdatesByRunTimeVersionAndBranchName(ctx conte
 	})
 }
 
-func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelResolution, error) {
+func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
 	pgAppID := ToPgUUID(appId)
 	mapping, err := s.engine.Queries.GetChannelBranchMapping(ctx, pgdb.GetChannelBranchMappingParams{
 		AppID: pgAppID,
@@ -182,12 +181,12 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 		return nil, fmt.Errorf("failed to retrieve channel mapping from database: %w", err)
 	}
 	mappingStr := strconv.FormatInt(mapping.ID, 10)
-	result := &expo.ChannelResolution{
+	result := &types.ChannelResolution{
 		Id:         mappingStr,
 		BranchName: mapping.BranchName,
 	}
 	if mapping.RolloutID.Valid && mapping.RolloutBranchName != nil && mapping.RolloutPercentage != nil {
-		result.Rollout = &expo.ChannelRolloutInfo{
+		result.Rollout = &types.ChannelRolloutInfo{
 			ID:         mapping.RolloutID.String(),
 			BranchName: *mapping.RolloutBranchName,
 			Percentage: int(*mapping.RolloutPercentage),

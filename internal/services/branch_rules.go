@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"xprem/internal/branch"
-	"xprem/internal/providers/expo"
 	"xprem/internal/rollout"
 	"xprem/internal/types"
 )
@@ -17,7 +16,7 @@ type BranchResolutionRequest struct {
 	ClientID       string
 	Platform       string
 	RuntimeVersion string
-	Mapping        *expo.ChannelResolution
+	Mapping        *types.ChannelResolution
 	// RequestedBranch is the xprem-branch header, empty when the device asks for
 	// nothing in particular. Surfing is the channel's setting for it.
 	RequestedBranch string

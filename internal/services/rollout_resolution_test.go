@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"xprem/config"
-	"xprem/internal/providers/expo"
 	"xprem/internal/rollout"
 	"xprem/internal/store"
 	"xprem/internal/types"
@@ -438,7 +437,7 @@ func (r *fakeRolloutRepo) ClearUpdateRollout(_ context.Context, appId, branchNam
 }
 
 type fakeChannelRepo struct {
-	mappings map[string]*expo.ChannelResolution
+	mappings map[string]*types.ChannelResolution
 	// surfing is the branch-surfing setting GetBranchSurfing answers with, per
 	// channel name. A channel absent from the map does not exist.
 	surfing map[string]*types.BranchSurfing
@@ -477,7 +476,7 @@ func (r *fakeChannelRepo) GetChannels(_ context.Context, _ string) ([]types.Chan
 	return nil, nil
 }
 
-func (r *fakeChannelRepo) GetChannelBranchMapping(_ context.Context, _, channelName string) (*expo.ChannelResolution, error) {
+func (r *fakeChannelRepo) GetChannelBranchMapping(_ context.Context, _, channelName string) (*types.ChannelResolution, error) {
 	mapping, ok := r.mappings[channelName]
 	if !ok {
 		return nil, nil
@@ -611,7 +610,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 	t.Helper()
 	events := &eventLog{}
 	updateRepo := &fakeUpdateRepo{events: events}
-	channelRepo := &fakeChannelRepo{mappings: map[string]*expo.ChannelResolution{}}
+	channelRepo := &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{}}
 	rolloutRepo := &fakeRolloutRepo{updateRepo: updateRepo, events: events}
 	updateService := NewUpdateService(updateRepo, nil)
 	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeRolloutBucket{})
@@ -759,7 +758,7 @@ func TestGetLatestUpdateForClientDecisionTree(t *testing.T) {
 func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
 	ctx := context.Background()
 	h := newRolloutTestHarness(t)
-	h.channelRepo.mappings["production"] = &expo.ChannelResolution{Id: "1", BranchName: "main"}
+	h.channelRepo.mappings["production"] = &types.ChannelResolution{Id: "1", BranchName: "main"}
 	// A rollout published on top of a rollback (the progressive hotfix case): the
 	// out-of-bucket cohort must receive the rollback directive, so the update type
 	// dispatch has to run on the served update, not on the latest row.
@@ -798,10 +797,10 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 
 	newChannelRolloutHarness := func(t *testing.T) *rolloutTestHarness {
 		h := newRolloutTestHarness(t)
-		h.channelRepo.mappings["production"] = &expo.ChannelResolution{
+		h.channelRepo.mappings["production"] = &types.ChannelResolution{
 			Id:         "1",
 			BranchName: "main",
-			Rollout:    &expo.ChannelRolloutInfo{ID: channelSalt, BranchName: "beta", Percentage: 30},
+			Rollout:    &types.ChannelRolloutInfo{ID: channelSalt, BranchName: "beta", Percentage: 30},
 		}
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
 		return h
@@ -1124,9 +1123,9 @@ func TestRolloutServiceRequiresControlPlane(t *testing.T) {
 func TestResolveAssetUpdateTiers(t *testing.T) {
 	ctx := context.Background()
 
-	newAssetHarness := func(t *testing.T) (*rolloutTestHarness, *expo.ChannelResolution, string, string) {
+	newAssetHarness := func(t *testing.T) (*rolloutTestHarness, *types.ChannelResolution, string, string) {
 		h := newRolloutTestHarness(t)
-		h.channelRepo.mappings["production"] = &expo.ChannelResolution{Id: "1", BranchName: "main"}
+		h.channelRepo.mappings["production"] = &types.ChannelResolution{Id: "1", BranchName: "main"}
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true, uuid: "11111111-1111-1111-1111-111111111111"})
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 200, checked: true, percentage: 40, controlId: 100, uuid: "22222222-2222-2222-2222-222222222222"})
 		branchMap, err := h.channelRepo.GetChannelBranchMapping(ctx, h.appId, "production")

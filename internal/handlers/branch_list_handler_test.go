@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"xprem/internal/providers/expo"
 	"xprem/internal/services"
 	"xprem/internal/types"
 
@@ -32,7 +31,7 @@ func (r *stubChannelRepo) GetChannelNameByBranchName(_ context.Context, _, _ str
 func (r *stubChannelRepo) GetChannels(_ context.Context, _ string) ([]types.ChannelMapping, error) {
 	return nil, nil
 }
-func (r *stubChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelResolution, error) {
+func (r *stubChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*types.ChannelResolution, error) {
 	return nil, nil
 }
 func (r *stubChannelRepo) GetBranchSurfing(_ context.Context, _, channelName string) (*types.BranchSurfing, error) {

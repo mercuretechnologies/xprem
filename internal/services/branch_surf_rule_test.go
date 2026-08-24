@@ -3,21 +3,20 @@ package services
 import (
 	"context"
 	"testing"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func surfRequest(requested string, surfing types.BranchSurfing, rollout *expo.ChannelRolloutInfo) *BranchResolutionRequest {
+func surfRequest(requested string, surfing types.BranchSurfing, rollout *types.ChannelRolloutInfo) *BranchResolutionRequest {
 	return &BranchResolutionRequest{
 		AppID:           "app-1",
 		ChannelName:     "qa",
 		ClientID:        "device-1",
 		Platform:        "ios",
 		RuntimeVersion:  "3.0.0",
-		Mapping:         &expo.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout},
+		Mapping:         &types.ChannelResolution{Id: "1", BranchName: "staging", Rollout: rollout},
 		RequestedBranch: requested,
 		Surfing:         surfing,
 	}
@@ -56,7 +55,7 @@ func TestBranchSurfRuleDeclines(t *testing.T) {
 // Asking for the branch the channel already maps to is not a surf, so the chain
 // carries on to the rollout rule instead of pinning the device out of its bucket.
 func TestBranchSurfRuleKeepsTheRolloutWhenAskedForTheMappedBranch(t *testing.T) {
-	rollout := &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
+	rollout := &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
 	req := surfRequest("staging", types.BranchSurfing{Enabled: true, Pattern: "*"}, rollout)
 
 	candidates, err := ResolveBranchCandidates(context.Background(), DefaultBranchRules(), req)
@@ -67,7 +66,7 @@ func TestBranchSurfRuleKeepsTheRolloutWhenAskedForTheMappedBranch(t *testing.T) 
 
 // A surf wins over an active rollout: it is an explicit choice, not a draw.
 func TestBranchSurfRuleOutranksTheRollout(t *testing.T) {
-	rollout := &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
+	rollout := &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
 	req := surfRequest("pr-482", types.BranchSurfing{Enabled: true, Pattern: "pr-*"}, rollout)
 
 	candidates, err := ResolveBranchCandidates(context.Background(), DefaultBranchRules(), req)
@@ -77,7 +76,7 @@ func TestBranchSurfRuleOutranksTheRollout(t *testing.T) {
 }
 
 func TestBranchSurfRuleIsInertWithoutARequestedBranch(t *testing.T) {
-	rollout := &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
+	rollout := &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 100}
 	req := surfRequest("", types.BranchSurfing{}, rollout)
 
 	candidates, err := ResolveBranchCandidates(context.Background(), DefaultBranchRules(), req)
@@ -99,7 +98,7 @@ func TestBranchSurfRuleIsInertWithoutARequestedBranch(t *testing.T) {
 // having been selected into the rollout. Reverse this and the rule below must
 // exclude Rollout.BranchName, and ListSurfableBranches must stop listing it.
 func TestSurfingOntoTheRolloutTargetIsHonoured(t *testing.T) {
-	rollout := &expo.ChannelRolloutInfo{BranchName: "canary", Percentage: 5}
+	rollout := &types.ChannelRolloutInfo{BranchName: "canary", Percentage: 5}
 	on := types.BranchSurfing{Enabled: true, Pattern: "*"}
 
 	assert.True(t, HonoursSurf(surfRequest("canary", on, rollout)),
