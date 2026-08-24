@@ -7,13 +7,11 @@ package licensing
 import (
 	"context"
 	"fmt"
-	"time"
 	"xprem/internal/crypto"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/keyStore"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/store"
 )
 
 // activationSecretAAD is the AES-GCM AAD binding the sealed secret to this
@@ -30,21 +28,6 @@ func NewPostgresLicenseStore(engine *database.Engine) *PostgresLicenseStore {
 	return &PostgresLicenseStore{engine: engine}
 }
 
-func toPgTimestamptz(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
-}
-
-func fromPgTimestamptz(ts pgtype.Timestamptz) *time.Time {
-	if !ts.Valid {
-		return nil
-	}
-	t := ts.Time
-	return &t
-}
-
 func storedFromRow(row pgdb.EnterpriseLicense) *StoredLicense {
 	stored := &StoredLicense{
 		Key: row.LicenseKey,
@@ -52,12 +35,12 @@ func storedFromRow(row pgdb.EnterpriseLicense) *StoredLicense {
 			OrgName:               row.OrgName,
 			PlanCode:              row.PlanCode,
 			SubscriptionStartAt:   row.SubscriptionStartAt.Time,
-			SubscriptionEndAt:     fromPgTimestamptz(row.SubscriptionEndAt),
-			SubscriptionRenewalAt: fromPgTimestamptz(row.SubscriptionRenewalAt),
+			SubscriptionEndAt:     store.FromPgTimestamptz(row.SubscriptionEndAt),
+			SubscriptionRenewalAt: store.FromPgTimestamptz(row.SubscriptionRenewalAt),
 		},
 		ActivatedAt:        row.ActivatedAt.Time,
-		LastValidatedAt:    fromPgTimestamptz(row.LastValidatedAt),
-		ValidationFailedAt: fromPgTimestamptz(row.ValidationFailedAt),
+		LastValidatedAt:    store.FromPgTimestamptz(row.LastValidatedAt),
+		ValidationFailedAt: store.FromPgTimestamptz(row.ValidationFailedAt),
 	}
 	if row.ValidationErrorCode != nil {
 		stored.ValidationErrorCode = *row.ValidationErrorCode
@@ -99,9 +82,9 @@ func (s *PostgresLicenseStore) SaveActivation(ctx context.Context, key string, a
 		SealedActivationSecret: sealedSecret,
 		OrgName:                license.OrgName,
 		PlanCode:               license.PlanCode,
-		SubscriptionStartAt:    toPgTimestamptz(&startAt),
-		SubscriptionEndAt:      toPgTimestamptz(license.SubscriptionEndAt),
-		SubscriptionRenewalAt:  toPgTimestamptz(license.SubscriptionRenewalAt),
+		SubscriptionStartAt:    store.ToPgTimestamptz(&startAt),
+		SubscriptionEndAt:      store.ToPgTimestamptz(license.SubscriptionEndAt),
+		SubscriptionRenewalAt:  store.ToPgTimestamptz(license.SubscriptionRenewalAt),
 	})
 	if err != nil {
 		return StoredLicense{}, fmt.Errorf("failed to store enterprise license in database: %w", err)
@@ -114,9 +97,9 @@ func (s *PostgresLicenseStore) MarkValidated(ctx context.Context, license Licens
 	row, err := s.engine.Queries.MarkEnterpriseLicenseValidated(ctx, pgdb.MarkEnterpriseLicenseValidatedParams{
 		OrgName:               license.OrgName,
 		PlanCode:              license.PlanCode,
-		SubscriptionStartAt:   toPgTimestamptz(&startAt),
-		SubscriptionEndAt:     toPgTimestamptz(license.SubscriptionEndAt),
-		SubscriptionRenewalAt: toPgTimestamptz(license.SubscriptionRenewalAt),
+		SubscriptionStartAt:   store.ToPgTimestamptz(&startAt),
+		SubscriptionEndAt:     store.ToPgTimestamptz(license.SubscriptionEndAt),
+		SubscriptionRenewalAt: store.ToPgTimestamptz(license.SubscriptionRenewalAt),
 	})
 	if err != nil {
 		return StoredLicense{}, fmt.Errorf("failed to record the license validation in database: %w", err)
