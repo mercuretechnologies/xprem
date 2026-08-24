@@ -29,7 +29,7 @@ type BranchService struct {
 type BranchRepository interface {
 	InsertBranch(ctx context.Context, appId string, branchName string) (int64, error)
 	UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error
-	GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error)
+	GetUpdateRefsByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error)
 	DeleteBranchByName(ctx context.Context, appId string, branchName string) error
 	GetBranches(ctx context.Context, appId string) ([]types.BranchMapping, error)
 	GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error)
@@ -106,7 +106,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 			}
 		}
 	}
-	rows, err := s.branchRepo.GetUpdatedMetadataByBranchName(ctx, appId, branchName)
+	rows, err := s.branchRepo.GetUpdateRefsByBranchName(ctx, appId, branchName)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve updates linked to the branch from database: %w", err)
 	}

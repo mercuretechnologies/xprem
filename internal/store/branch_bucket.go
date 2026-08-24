@@ -27,8 +27,8 @@ func (s *BucketBranchStore) InsertBranch(ctx context.Context, appId string, bran
 	return 0, fmt.Errorf("branch creation is only supported in db mode")
 }
 
-func (s *BucketBranchStore) GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
-	return nil, fmt.Errorf("getting updated metadata by branch name is only supported in db mode")
+func (s *BucketBranchStore) GetUpdateRefsByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
+	return nil, fmt.Errorf("getting update refs by branch name is only supported in db mode")
 }
 
 func (s *BucketBranchStore) DeleteBranchByName(ctx context.Context, appId string, branchName string) error {

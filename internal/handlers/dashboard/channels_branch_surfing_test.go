@@ -47,7 +47,7 @@ func (surfingBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, er
 func (surfingBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (surfingBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
+func (surfingBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (surfingBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) error { return nil }

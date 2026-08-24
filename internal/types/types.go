@@ -149,7 +149,8 @@ type UpdateDetails struct {
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
 }
 
-// UpdateRef locates one update's files on a branch.
+// UpdateRef is the (update id, runtime version) pair that, with a branch,
+// locates an update's folder in the bucket.
 type UpdateRef struct {
 	ID             int64
 	RuntimeVersion string
@@ -330,7 +331,7 @@ type ChannelRolloutInfo struct {
 }
 
 // ChannelResolution is the branch a channel serves to devices, with its active
-// rollout; the dashboard listing shape is types.ChannelMapping.
+// rollout; the dashboard listing shape is ChannelMapping.
 type ChannelResolution struct {
 	Id         string `json:"id"`
 	BranchName string `json:"branchName"`

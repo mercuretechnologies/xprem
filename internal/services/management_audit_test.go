@@ -76,7 +76,7 @@ func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64
 func (f *fakeMgmtBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _ string, _ string, _ string) error {
 	return nil
 }
-func (f *fakeMgmtBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _ string, _ string) ([]types.UpdateRef, error) {
+func (f *fakeMgmtBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _ string, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (f *fakeMgmtBranchRepo) DeleteBranchByName(_ context.Context, _ string, _ string) error {

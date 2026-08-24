@@ -25,8 +25,6 @@ type UserAccount struct {
 	Email    string `json:"email"`
 }
 
-
-
 type BranchMapping struct {
 	BranchName  string  `json:"branchName"`
 	BranchId    string  `json:"branchId"`

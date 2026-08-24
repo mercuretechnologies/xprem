@@ -522,7 +522,7 @@ func (fakeBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _, _, _ s
 	return nil
 }
 
-func (fakeBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
+func (fakeBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 

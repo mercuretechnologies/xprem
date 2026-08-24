@@ -51,7 +51,7 @@ func (r *stubBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, er
 func (r *stubBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (r *stubBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
+func (r *stubBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (r *stubBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) error { return nil }

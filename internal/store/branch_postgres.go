@@ -33,7 +33,7 @@ func (s *PostgresBranchStore) InsertBranch(ctx context.Context, appId string, br
 	return insertedId, nil
 }
 
-func (s *PostgresBranchStore) GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
+func (s *PostgresBranchStore) GetUpdateRefsByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
 	rows, err := s.engine.Queries.GetUpdatesMetadataByBranchName(ctx, pgdb.GetUpdatesMetadataByBranchNameParams{
 		Name:  branchName,
 		AppID: ToPgUUID(appId),
