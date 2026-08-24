@@ -146,11 +146,12 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		return services.ManifestRequestParams{}, errors.New("Invalid protocol version")
 	}
 
-	platform := r.Header.Get("expo-platform")
-	if platform == "" {
-		platform = r.URL.Query().Get("platform")
+	rawPlatform := r.Header.Get("expo-platform")
+	if rawPlatform == "" {
+		rawPlatform = r.URL.Query().Get("platform")
 	}
-	if platform != "ios" && platform != "android" {
+	platform, err := types.ParsePlatform(rawPlatform)
+	if err != nil {
 		return services.ManifestRequestParams{}, errors.New("Invalid platform")
 	}
 
@@ -173,6 +174,8 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		SurfBlockTokens:       r.Header.Get(services.SurfBlockedHeader),
 		ClientID:              r.Header.Get("EAS-Client-ID"),
 		CurrentUpdateID:       r.Header.Get("expo-current-update-id"),
+		EmbeddedUpdateID:      r.Header.Get("expo-embedded-update-id"),
+		ExpectSignature:       r.Header.Get("expo-expect-signature"),
 		ExpoFatalError:        r.Header.Get("expo-fatal-error"),
 		RecentFailedUpdateIDs: r.Header.Get("Expo-Recent-Failed-Update-Ids"),
 	}, nil
@@ -202,9 +205,6 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	appId := params.AppID
-	platform := params.Platform
-	runtimeVersion := params.RuntimeVersion
-	protocolVersion := params.ProtocolVersion
 
 	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
 	if err != nil {
@@ -259,15 +259,14 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 	}
 
 	if result.Update == nil {
-		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, runtimeVersion, result.BranchName)
-		h.protocolService.PutNoUpdateAvailableInResponse(w, r, appId, runtimeVersion, protocolVersion, requestID)
+		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, params.RuntimeVersion, result.BranchName)
+		h.protocolService.PutNoUpdateAvailableInResponse(r.Context(), w, params)
 		return
 	}
 
-	updateType := result.UpdateType
-	if updateType == types.NormalUpdate {
-		h.protocolService.PutUpdateInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID, refusedBranch)
+	if result.UpdateType == types.NormalUpdate {
+		h.protocolService.PutUpdateInResponse(r.Context(), w, params, *result.Update, refusedBranch)
 	} else {
-		h.protocolService.PutRollbackInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID)
+		h.protocolService.PutRollbackInResponse(r.Context(), w, params, *result.Update)
 	}
 }

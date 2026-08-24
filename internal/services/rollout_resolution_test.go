@@ -49,7 +49,7 @@ func (l *eventLog) snapshot() []string {
 type fakeStoredUpdate struct {
 	update            types.Update
 	updateType        types.UpdateType
-	platform          string
+	platform          types.Platform
 	checked           bool
 	rolloutPercentage *int
 	controlUpdateId   *string
@@ -92,7 +92,7 @@ func (r *fakeUpdateRepo) findRowLocked(appId, branchName, updateId string) *fake
 
 // latestCheckedLocked mirrors the GetLatestUpdateWithRollout SQL: newest checked row
 // for (branch, rtv, platform) by numeric id.
-func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion, platform string) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion string, platform types.Platform) *fakeStoredUpdate {
 	var latest *fakeStoredUpdate
 	var latestId int64 = -1
 	for _, row := range r.rows {
@@ -112,7 +112,7 @@ func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion, 
 	return latest
 }
 
-func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchName, runtimeVersion, platform string, updateType types.UpdateType) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, updateType types.UpdateType) *fakeStoredUpdate {
 	row := &fakeStoredUpdate{
 		update: types.Update{
 			AppId:          appId,
@@ -168,7 +168,7 @@ func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, upda
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, runtimeVersion, platform string) (*types.Update, error) {
+func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.latestCheckedLocked(appId, branchName, runtimeVersion, platform)
@@ -179,7 +179,7 @@ func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, r
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, branchName, runtimeVersion, platform string) (*types.UpdateWithRollout, error) {
+func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, branchName, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.latestCheckedLocked(appId, branchName, runtimeVersion, platform)
@@ -242,7 +242,7 @@ func (r *fakeUpdateRepo) IsUpdateValid(_ context.Context, update types.Update) (
 	return row != nil && row.checked, nil
 }
 
-func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string, publishGroup *string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string, publishGroup *string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.appendRowLocked(appId, updateId, branchName, runtimeVersion, platform, types.NormalUpdate)
@@ -254,7 +254,7 @@ func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId 
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The control resolves at insert time to the latest checked update of the same
@@ -275,7 +275,7 @@ func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.appendRowLocked(appId, updateId, branchName, runtimeVersion, platform, types.Rollback)
@@ -516,7 +516,7 @@ type fakeBranchRepo struct {
 	surfable map[string][]types.SurfableBranch
 }
 
-func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
+func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return r.surfable[runtimeVersion], nil
 }
 
@@ -639,7 +639,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 type seedRow struct {
 	branch     string
 	rtv        string
-	platform   string
+	platform   types.Platform
 	id         int64
 	updateType types.UpdateType
 	checked    bool

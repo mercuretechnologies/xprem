@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"xprem/internal/compression"
 	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 )
@@ -21,6 +22,12 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 	}
 
 	channelName := r.Header.Get("expo-channel-name")
+	platform, err := types.ParsePlatform(r.URL.Query().Get("platform"))
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, r.URL.Query().Get("platform"))
+		http.Error(w, "Invalid platform", http.StatusBadRequest)
+		return
+	}
 
 	params := services.AssetResolutionParams{
 		RequestID:         requestID,
@@ -28,7 +35,7 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 		ChannelName:       channelName,
 		AssetName:         r.URL.Query().Get("asset"),
 		RuntimeVersion:    r.URL.Query().Get("runtimeVersion"),
-		Platform:          r.URL.Query().Get("platform"),
+		Platform:          platform,
 		ClientID:          r.Header.Get("EAS-Client-ID"),
 		Branch:            r.URL.Query().Get("branch"),
 		UpdateID:          r.URL.Query().Get("updateId"),

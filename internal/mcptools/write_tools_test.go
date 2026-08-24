@@ -49,12 +49,12 @@ func (f *fakeWriteServices) DeleteChannel(_ context.Context, channelName string,
 	return nil
 }
 
-func (f *fakeWriteServices) CreateRollback(_ context.Context, _, platform, _, runtimeVersion, branchName, _ string) (*types.Update, error) {
+func (f *fakeWriteServices) CreateRollback(_ context.Context, _ string, platform types.Platform, _, runtimeVersion, branchName, _ string) (*types.Update, error) {
 	if f.rollbackErr != nil {
 		return nil, f.rollbackErr
 	}
-	f.rollbacks = append(f.rollbacks, platform)
-	return &types.Update{Branch: branchName, RuntimeVersion: runtimeVersion, UpdateId: "new-" + platform}, nil
+	f.rollbacks = append(f.rollbacks, string(platform))
+	return &types.Update{Branch: branchName, RuntimeVersion: runtimeVersion, UpdateId: "new-" + string(platform)}, nil
 }
 
 func (f *fakeWriteServices) RepublishUpdateByID(_ context.Context, _, branchName, runtimeVersion, updateId string) (*types.Update, error) {
@@ -225,7 +225,7 @@ func (c contextCapturingWriter) DeleteBranch(ctx context.Context, _ string, _ st
 	return nil
 }
 
-func (c contextCapturingWriter) CreateRollback(ctx context.Context, _, _, _, _, _, _ string) (*types.Update, error) {
+func (c contextCapturingWriter) CreateRollback(ctx context.Context, _ string, _ types.Platform, _, _, _, _ string) (*types.Update, error) {
 	c.onRollback(ctx)
 	return &types.Update{}, nil
 }
@@ -355,7 +355,7 @@ func (f failAfterFirstPlatform) CreateBranch(context.Context, string, string) (i
 	return 0, nil
 }
 func (f failAfterFirstPlatform) DeleteBranch(context.Context, string, string) error { return nil }
-func (f failAfterFirstPlatform) CreateRollback(_ context.Context, _, platform, _, runtimeVersion, branchName, _ string) (*types.Update, error) {
+func (f failAfterFirstPlatform) CreateRollback(_ context.Context, _ string, platform types.Platform, _, runtimeVersion, branchName, _ string) (*types.Update, error) {
 	if f.onCall() > 1 {
 		return nil, errors.New("failed to insert rollback update into database: dial tcp 10.0.0.5:5432: connect: connection refused")
 	}

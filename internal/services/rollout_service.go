@@ -333,7 +333,7 @@ func (s *RolloutService) RevertUpdateRollout(ctx context.Context, appId string, 
 			// reverted. Name them and the manual recovery instead of failing generically.
 			remaining := make([]string, 0, len(activeRollouts)-i)
 			for _, r := range activeRollouts[i:] {
-				remaining = append(remaining, r.Platform)
+				remaining = append(remaining, string(r.Platform))
 			}
 			return nil, &RolloutRequestError{
 				Status: http.StatusInternalServerError,

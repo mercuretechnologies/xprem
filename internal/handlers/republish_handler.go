@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"xprem/internal/services"
 	"xprem/internal/types"
-	types2 "xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -38,22 +37,27 @@ func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
-	platform := r.URL.Query().Get("platform")
+	rawPlatform := r.URL.Query().Get("platform")
 	publishGroup, err := parsePublishGroupTarget(r)
 	if err != nil {
 		log.Printf("[RequestID: %s] %v", requestID, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if publishGroup != nil && (platform != "" || r.URL.Query().Get("updateId") != "") {
+	if publishGroup != nil && (rawPlatform != "" || r.URL.Query().Get("updateId") != "") {
 		log.Printf("[RequestID: %s] Both updateId/platform and publishGroup provided", requestID)
 		http.Error(w, "Provide either an updateId and platform or a publishGroup, not both", http.StatusBadRequest)
 		return
 	}
-	if publishGroup == nil && (platform == "" || (platform != "ios" && platform != "android")) {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
-		http.Error(w, "Invalid platform", http.StatusBadRequest)
-		return
+	var platform types.Platform
+	if publishGroup == nil {
+		parsed, err := types.ParsePlatform(rawPlatform)
+		if err != nil {
+			log.Printf("[RequestID: %s] Invalid platform: %s", requestID, rawPlatform)
+			http.Error(w, "Invalid platform", http.StatusBadRequest)
+			return
+		}
+		platform = parsed
 	}
 	if branchName == "" {
 		log.Printf("[RequestID: %s] No branch provided", requestID)
@@ -107,7 +111,7 @@ func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "No updateId provided", http.StatusBadRequest)
 		return
 	}
-	previousUpdate := &types2.Update{
+	previousUpdate := &types.Update{
 		AppId:          appId,
 		Branch:         branchName,
 		RuntimeVersion: runtimeVersion,

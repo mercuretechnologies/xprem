@@ -35,11 +35,13 @@ type ManifestRequestParams struct {
 	RequestID             string
 	AppID                 string
 	ChannelName           string
-	Platform              string
+	Platform              types.Platform
 	RuntimeVersion        string
 	ProtocolVersion       int64
 	ClientID              string
 	CurrentUpdateID       string
+	EmbeddedUpdateID      string
+	ExpectSignature       string
 	ExpoFatalError        string
 	RecentFailedUpdateIDs string
 	XpremBranch           string
@@ -69,7 +71,7 @@ type AssetResolutionParams struct {
 	ChannelName    string
 	AssetName      string
 	RuntimeVersion string
-	Platform       string
+	Platform       types.Platform
 	// ClientID is the device's EAS-Client-ID header.
 	ClientID string
 	// Branch and UpdateID are the query params baked into manifest asset URLs; when
@@ -162,7 +164,7 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 	return signedHash, nil
 }
 
-func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.Buffer, protocolVersion int64, runtimeVersion string, requestID string) {
+func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.Buffer, protocolVersion int64, requestID string) {
 	w.Header().Set("expo-protocol-version", strconv.FormatInt(protocolVersion, 10))
 	w.Header().Set("expo-sfv-version", "0")
 	w.Header().Set("cache-control", "private, max-age=0")
@@ -177,22 +179,21 @@ func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.B
 	}
 }
 
-func (s *ExpoProtocolService) PutUpdateInResponse(w http.ResponseWriter, r *http.Request, appId string, lastUpdate types.Update, platform string, protocolVersion int64, requestID string, refusedBranch string) {
-	currentUpdateId := r.Header.Get("expo-current-update-id")
+func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, lastUpdate types.Update, refusedBranch string) {
 	metadata, err := update2.GetMetadata(lastUpdate)
 	if err != nil {
-		log.Printf("[RequestID: %s] Error getting metadata: %v", requestID, err)
+		log.Printf("[RequestID: %s] Error getting metadata: %v", params.RequestID, err)
 		http.Error(w, "Error getting metadata", http.StatusInternalServerError)
 		return
 	}
 
-	if currentUpdateId != "" && currentUpdateId == crypto.ConvertSHA256HashToUUID(metadata.ID) && protocolVersion == 1 {
-		s.PutNoUpdateAvailableInResponse(w, r, appId, lastUpdate.RuntimeVersion, protocolVersion, requestID)
+	if params.CurrentUpdateID != "" && params.CurrentUpdateID == crypto.ConvertSHA256HashToUUID(metadata.ID) && params.ProtocolVersion == 1 {
+		s.PutNoUpdateAvailableInResponse(ctx, w, params)
 		return
 	}
-	manifest, err := update2.ComposeUpdateManifest(&metadata, lastUpdate, platform)
+	manifest, err := update2.ComposeUpdateManifest(&metadata, lastUpdate, params.Platform)
 	if err != nil {
-		log.Printf("[RequestID: %s] Error composing manifest: %v", requestID, err)
+		log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
 		http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 		return
 	}
@@ -200,15 +201,16 @@ func (s *ExpoProtocolService) PutUpdateInResponse(w http.ResponseWriter, r *http
 	// cache is keyed by branch, and this is per request. Signing happens
 	// downstream, so it covers the stamp.
 	manifest.Extra.BranchSurfingRefused = refusedBranch
-	if currentUpdateId != "" {
-		metrics.TrackUpdateDownload(appId, platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
+	if params.CurrentUpdateID != "" {
+		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
 	}
 	w.Header().Set("expo-manifest-filters", `branch="`+lastUpdate.Branch+`"`)
-	s.PutResponse(w, r, appId, manifest, "manifest", lastUpdate.RuntimeVersion, protocolVersion, requestID)
+	s.PutResponse(ctx, w, params, manifest, "manifest")
 }
 
-func (s *ExpoProtocolService) PutResponse(w http.ResponseWriter, r *http.Request, appId string, content interface{}, fieldName string, runtimeVersion string, protocolVersion int64, requestID string) {
-	signedHash, err := s.signDirectiveOrManifest(r.Context(), appId, content, r.Header.Get("expo-expect-signature"))
+func (s *ExpoProtocolService) PutResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, content interface{}, fieldName string) {
+	requestID := params.RequestID
+	signedHash, err := s.signDirectiveOrManifest(ctx, params.AppID, content, params.ExpectSignature)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error signing content: %v", requestID, err)
 		http.Error(w, "Error signing content", http.StatusInternalServerError)
@@ -228,22 +230,21 @@ func (s *ExpoProtocolService) PutResponse(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Error creating multipart response", http.StatusInternalServerError)
 		return
 	}
-	writeResponse(w, writer, buf, protocolVersion, runtimeVersion, requestID)
+	writeResponse(w, writer, buf, params.ProtocolVersion, requestID)
 }
 
-func (s *ExpoProtocolService) PutRollbackInResponse(w http.ResponseWriter, r *http.Request, appId string, lastUpdate types.Update, platform string, protocolVersion int64, requestID string) {
-	if protocolVersion == 0 {
+func (s *ExpoProtocolService) PutRollbackInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, lastUpdate types.Update) {
+	requestID := params.RequestID
+	if params.ProtocolVersion == 0 {
 		http.Error(w, "Rollback not supported in protocol version 0", http.StatusBadRequest)
 		return
 	}
-	embeddedUpdateId := r.Header.Get("expo-embedded-update-id")
-	if embeddedUpdateId == "" {
+	if params.EmbeddedUpdateID == "" {
 		http.Error(w, "No embedded update id provided", http.StatusBadRequest)
 		return
 	}
-	currentUpdateId := r.Header.Get("expo-current-update-id")
-	if currentUpdateId != "" && currentUpdateId == embeddedUpdateId {
-		s.PutNoUpdateAvailableInResponse(w, r, appId, lastUpdate.RuntimeVersion, protocolVersion, requestID)
+	if params.CurrentUpdateID != "" && params.CurrentUpdateID == params.EmbeddedUpdateID {
+		s.PutNoUpdateAvailableInResponse(ctx, w, params)
 		return
 	}
 
@@ -255,17 +256,17 @@ func (s *ExpoProtocolService) PutRollbackInResponse(w http.ResponseWriter, r *ht
 		http.Error(w, "Error creating rollback directive", http.StatusInternalServerError)
 		return
 	}
-	metrics.TrackUpdateDownload(appId, platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, lastUpdate.UpdateId, "rollback")
-	s.PutResponse(w, r, appId, directive, "directive", lastUpdate.RuntimeVersion, protocolVersion, requestID)
+	metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, lastUpdate.UpdateId, "rollback")
+	s.PutResponse(ctx, w, params, directive, "directive")
 }
 
-func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(w http.ResponseWriter, r *http.Request, appId string, runtimeVersion string, protocolVersion int64, requestID string) {
-	if protocolVersion == 0 {
+func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams) {
+	if params.ProtocolVersion == 0 {
 		http.Error(w, "NoUpdateAvailable directive not available in protocol version 0", http.StatusNoContent)
 		return
 	}
 	directive := update2.CreateNoUpdateAvailableDirective()
-	s.PutResponse(w, r, appId, directive, "directive", runtimeVersion, protocolVersion, requestID)
+	s.PutResponse(ctx, w, params, directive, "directive")
 }
 
 func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params ManifestRequestParams) (ManifestResult, error) {
@@ -289,7 +290,15 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
 	}
 
-	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, params.XpremBranch, params.SurfBlockTokens, params.RecentFailedUpdateIDs, branchMap)
+	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+		AppID:           params.AppID,
+		ChannelName:     params.ChannelName,
+		ClientID:        params.ClientID,
+		Platform:        params.Platform,
+		RuntimeVersion:  params.RuntimeVersion,
+		Mapping:         branchMap,
+		RequestedBranch: params.XpremBranch,
+	}, params.SurfBlockTokens, params.RecentFailedUpdateIDs)
 	if err != nil {
 		return ManifestResult{}, err
 	}
@@ -299,12 +308,12 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	// rollout invisible in the metrics it is meant to be judged from.
 	if params.ExpoFatalError != "" {
 		if params.CurrentUpdateID != "" {
-			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
+			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 		} else if params.RecentFailedUpdateIDs != "" {
-			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.RecentFailedUpdateIDs)
+			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.RecentFailedUpdateIDs)
 		}
 	}
-	metrics.TrackActiveUser(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
+	metrics.TrackActiveUser(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 
 	if lastUpdate == nil {
 		return ManifestResult{
@@ -328,18 +337,9 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 // nil (out-of-bucket with no control => noUpdateAvailable, deliberately no fallback to
 // the next candidate). Shared by manifest and asset resolution so the two paths take
 // the same rollout decision for a device.
-func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, appId string, channelName string, clientID string, platform string, runtimeVersion string, requestedBranch string, surfBlockTokens string, failedUpdateIDsRaw string, branchMap *expo.ChannelMapping) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
-	req := &BranchResolutionRequest{
-		AppID:           appId,
-		ChannelName:     channelName,
-		ClientID:        clientID,
-		Platform:        platform,
-		RuntimeVersion:  runtimeVersion,
-		Mapping:         branchMap,
-		RequestedBranch: requestedBranch,
-	}
-	if requestedBranch != "" {
-		enabled, pattern := s.branchSurfingEnabled(ctx, appId, channelName)
+func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, req *BranchResolutionRequest, surfBlockTokens string, failedUpdateIDsRaw string) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
+	if req.RequestedBranch != "" {
+		enabled, pattern := s.branchSurfingEnabled(ctx, req.AppID, req.ChannelName)
 		req.Surfing = types.BranchSurfing{Enabled: enabled, Pattern: pattern}
 	}
 	candidates, err := ResolveBranchCandidates(ctx, s.branchRules, req)
@@ -354,12 +354,12 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 	surfing := HonoursSurf(req)
 	var blocks surfBlockSet
 	if surfing && (surfBlockTokens != "" || failedUpdateIDsRaw != "") {
-		blocks = s.collectSurfBlocks(ctx, appId, surfBlockTokens, failedUpdateIDsRaw)
+		blocks = s.collectSurfBlocks(ctx, req.AppID, surfBlockTokens, failedUpdateIDsRaw)
 	}
 
-	servedBranch := branchMap.BranchName
+	servedBranch := req.Mapping.BranchName
 	for _, candidate := range candidates {
-		resolution, err := s.updateService.GetLatestUpdateForClient(ctx, appId, candidate, runtimeVersion, platform, clientID)
+		resolution, err := s.updateService.GetLatestUpdateForClient(ctx, req.AppID, candidate, req.RuntimeVersion, req.Platform, req.ClientID)
 		if err != nil {
 			log.Printf("[RequestID: %s] Error getting latest update: %v", requestID, err)
 			return "", nil, nil, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error getting latest update"}
@@ -367,7 +367,7 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 		if !resolution.BranchHasUpdate {
 			continue
 		}
-		if surfing && candidate == requestedBranch && resolution.Update != nil &&
+		if surfing && candidate == req.RequestedBranch && resolution.Update != nil &&
 			blocks.contains(candidate, resolution.Update.UpdateId) {
 			log.Printf("[RequestID: %s] Refusing surf to %q: update %s failed to launch on this device", requestID, candidate, resolution.Update.UpdateId)
 			blocked = &BlockedSurf{BranchName: candidate, Token: surfBlockToken(candidate, resolution.Update.UpdateId)}
@@ -494,7 +494,15 @@ func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params Ass
 			}
 		}
 	}
-	branchName, lastUpdate, _, err := s.resolveUpdateForDevice(ctx, params.RequestID, params.AppID, params.ChannelName, params.ClientID, params.Platform, params.RuntimeVersion, params.Branch, "", "", branchMap)
+	branchName, lastUpdate, _, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+		AppID:           params.AppID,
+		ChannelName:     params.ChannelName,
+		ClientID:        params.ClientID,
+		Platform:        params.Platform,
+		RuntimeVersion:  params.RuntimeVersion,
+		Mapping:         branchMap,
+		RequestedBranch: params.Branch,
+	}, "", "")
 	return branchName, lastUpdate, err
 }
 

@@ -15,7 +15,7 @@ type AssetsRequest struct {
 	Branch         string
 	AssetName      string
 	RuntimeVersion string
-	Platform       string
+	Platform       types.Platform
 	RequestID      string
 	Update         *types.Update
 }
@@ -50,11 +50,6 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("No asset name provided")}
 	}
 
-	if req.Platform == "" || (req.Platform != "ios" && req.Platform != "android") {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, req.Platform)
-		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("Invalid platform")}
-	}
-
 	if req.RuntimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("No runtime version provided")}
@@ -80,16 +75,11 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error getting metadata")}
 	}
 
-	var platformMetadata types.PlatformMetadata
-	switch req.Platform {
-	case "android":
-		platformMetadata = metadata.MetadataJSON.FileMetadata.Android
-	case "ios":
-		platformMetadata = metadata.MetadataJSON.FileMetadata.IOS
-	default:
+	platformMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(req.Platform)
+	if err != nil || platformMetadata.Bundle == "" {
+		log.Printf("[RequestID: %s] Error getting platform metadata: %v", requestID, err)
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("Platform not supported")}
 	}
-
 	isLaunchAsset := platformMetadata.Bundle == req.AssetName
 
 	var assetMetadata types.Asset
