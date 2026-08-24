@@ -165,7 +165,7 @@ func (s *BucketUpdateStore) GetUpdateDetails(ctx context.Context, appId string, 
 		UpdateId:   update.UpdateId,
 		CreatedAt:  helpers.NormalizeTimestamp(numberUpdate).Format(time.RFC3339),
 		CommitHash: storedMetadata.CommitHash,
-		Platform:   types.Platform(storedMetadata.Platform),
+		Platform:   storedMetadata.Platform,
 		Message:    storedMetadata.Message,
 		Type:       s.updateType(*update),
 		ExpoConfig: string(expoConfig),
@@ -198,7 +198,7 @@ func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.
 				UpdateId:   update.UpdateId,
 				CreatedAt:  helpers.NormalizeTimestamp(numberUpdate).Format(time.RFC3339),
 				CommitHash: storedMetadata.CommitHash,
-				Platform:   types.Platform(storedMetadata.Platform),
+				Platform:   storedMetadata.Platform,
 				Message:    storedMetadata.Message,
 			})
 			if len(updatesResponse) == limit+1 {
@@ -220,7 +220,7 @@ func (s *BucketUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx context.
 			UpdateId:   update.UpdateId,
 			CreatedAt:  helpers.NormalizeTimestamp(numberUpdate).Format(time.RFC3339),
 			CommitHash: storedMetadata.CommitHash,
-			Platform:   types.Platform(storedMetadata.Platform),
+			Platform:   storedMetadata.Platform,
 			Message:    storedMetadata.Message,
 		})
 		if len(updatesResponse) == limit+1 {
