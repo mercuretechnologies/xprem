@@ -75,14 +75,11 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error getting metadata")}
 	}
 
-	var platformMetadata types.PlatformMetadata
-	switch req.Platform {
-	case types.PlatformAndroid, types.PlatformIOS:
-		platformMetadata = req.Platform.Metadata(metadata.MetadataJSON.FileMetadata)
-	default:
+	platformMetadata, err := metadata.MetadataJSON.FileMetadata.GetPlatformMetadata(req.Platform)
+	if err != nil || platformMetadata.Bundle == "" {
+		log.Printf("[RequestID: %s] Error getting platform metadata: %v", requestID, err)
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("Platform not supported")}
 	}
-
 	isLaunchAsset := platformMetadata.Bundle == req.AssetName
 
 	var assetMetadata types.Asset

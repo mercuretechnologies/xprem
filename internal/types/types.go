@@ -35,17 +35,20 @@ func ParsePlatform(raw string) (Platform, error) {
 	return "", fmt.Errorf("invalid platform %q", raw)
 }
 
-// Metadata returns the file metadata of this platform.
-func (p Platform) Metadata(m FileMetadata) PlatformMetadata {
-	if p == PlatformIOS {
-		return m.IOS
-	}
-	return m.Android
-}
-
 type FileMetadata struct {
 	Android PlatformMetadata `json:"android"`
 	IOS     PlatformMetadata `json:"ios"`
+}
+
+func (f FileMetadata) GetPlatformMetadata(platform Platform) (PlatformMetadata, error) {
+	switch platform {
+	case PlatformIOS:
+		return f.IOS, nil
+	case PlatformAndroid:
+		return f.Android, nil
+	default:
+		return PlatformMetadata{}, fmt.Errorf("unsupported platform: %s", platform)
+	}
 }
 
 type MetadataObject struct {
