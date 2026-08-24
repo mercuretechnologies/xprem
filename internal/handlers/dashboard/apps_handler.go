@@ -90,9 +90,7 @@ func (h *AppHandler) CreateAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	marshaledResponse, _ := json.Marshal(map[string]interface{}{
-		"appId": appId,
-	})
+	marshaledResponse, _ := json.Marshal(createAppResponse{AppId: appId})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	w.Write(marshaledResponse)

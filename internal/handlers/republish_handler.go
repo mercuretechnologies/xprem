@@ -27,6 +27,11 @@ func NewRepublishHandler(deploymentService *services.DeploymentService) *Republi
 // (historical behavior), ?publishGroup=<uuid> republishes every member of that
 // publish group on its own platform, the new rows sharing a new server-minted
 // group returned in the response.
+type republishGroupResponse struct {
+	PublishGroup string         `json:"publishGroup"`
+	Updates      []types.Update `json:"updates"`
+}
+
 func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 	vars := mux.Vars(r)
@@ -96,10 +101,7 @@ func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("expo-publish-group", result.PublishGroup)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"publishGroup": result.PublishGroup,
-			"updates":      result.Updates,
-		})
+		json.NewEncoder(w).Encode(republishGroupResponse{PublishGroup: result.PublishGroup, Updates: result.Updates})
 		return
 	}
 

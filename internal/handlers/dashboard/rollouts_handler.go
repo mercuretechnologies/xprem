@@ -178,11 +178,7 @@ func (h *RolloutHandler) GetUpdateRolloutHandler(w http.ResponseWriter, r *http.
 	if activeRollouts == nil {
 		activeRollouts = []types.RolloutUpdate{}
 	}
-	response := map[string]interface{}{
-		"active":  len(activeRollouts) > 0,
-		"updates": activeRollouts,
-	}
-	marshaledResponse, _ := json.Marshal(response)
+	marshaledResponse, _ := json.Marshal(updateRolloutResponse{Active: len(activeRollouts) > 0, Updates: activeRollouts})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
