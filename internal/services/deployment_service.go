@@ -47,7 +47,7 @@ type ProcessUpdateParams struct {
 	RequestID      string
 	AppID          string
 	BranchName     string
-	Platform       string
+	Platform       types.Platform
 	RuntimeVersion string
 	UpdateID       string
 }
@@ -65,7 +65,7 @@ type RequestUploadURLParams struct {
 	RequestID      string
 	AppID          string
 	BranchName     string
-	Platform       string
+	Platform       types.Platform
 	CommitHash     string
 	RuntimeVersion string
 	FileNames      []string
@@ -171,7 +171,7 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 		}
 		log.Printf("[RequestID: %s] Latest update evaluation triggered auto-check routine.", params.RequestID)
 		s.recordDeliveryEvent(ctx, auditlog.ActionUpdatePublished, *currentUpdate,
-			map[string]any{"platform": params.Platform})
+			map[string]any{"platform": string(params.Platform)})
 		return nil
 	}
 
@@ -189,7 +189,7 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 		}
 		log.Printf("[RequestID: %s] Updates are not identical, update marked as checked", params.RequestID)
 		s.recordDeliveryEvent(ctx, auditlog.ActionUpdatePublished, *currentUpdate,
-			map[string]any{"platform": params.Platform})
+			map[string]any{"platform": string(params.Platform)})
 		return nil
 	}
 
@@ -254,11 +254,11 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	for _, cacheKey := range cacheKeys {
 		cache.Delete(cacheKey)
 	}
-	go PreWarmManifestCache(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, "ios")
-	go PreWarmManifestCache(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, "android")
+	go PreWarmManifestCache(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformIOS)
+	go PreWarmManifestCache(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformAndroid)
 	// No-op unless the checked update activated a per-update rollout.
-	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, "ios")
-	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, "android")
+	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformIOS)
+	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformAndroid)
 	return nil
 }
 
@@ -308,7 +308,7 @@ func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, param
 		return nil
 	}
 	previousAssets := latestUpdateMetadata.MetadataJSON.FileMetadata.Android.Assets
-	if params.Platform == "ios" {
+	if params.Platform == types.PlatformIOS {
 		previousAssets = latestUpdateMetadata.MetadataJSON.FileMetadata.IOS.Assets
 	}
 
@@ -431,7 +431,7 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	}, nil
 }
 
-func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
+func (s *DeploymentService) CreateRollback(ctx context.Context, appId string, platform types.Platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
 	hasActiveRollout, err := s.updateRepo.HasActiveRolloutUpdate(ctx, appId, branchName, runtimeVersion)
 	if err != nil {
 		return nil, err
@@ -443,7 +443,7 @@ func (s *DeploymentService) CreateRollback(ctx context.Context, appId, platform,
 	if err != nil {
 		return nil, err
 	}
-	metadata := map[string]any{"platform": platform, "commit_hash": commitHash}
+	metadata := map[string]any{"platform": string(platform), "commit_hash": commitHash}
 	if message != "" {
 		metadata["message"] = message
 	}
@@ -511,7 +511,7 @@ func (s *DeploymentService) RepublishPublishGroup(ctx context.Context, appId, br
 // createRollbackInternal is CreateRollback without the active-rollout guard; the
 // guard-free path exists for RolloutService, whose revert legitimately writes while
 // the rollout is still active.
-func (s *DeploymentService) createRollbackInternal(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
+func (s *DeploymentService) createRollbackInternal(ctx context.Context, appId string, platform types.Platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error) {
 	updateId := update2.GenerateUpdateTimestamp(platform)
 	rollback, err := s.updateRepo.CreateRollback(ctx, appId, updateId, branchName, runtimeVersion, platform, commitHash, message)
 	if err != nil {
@@ -537,7 +537,7 @@ type RepublishError struct {
 
 func (e *RepublishError) Error() string { return e.Message }
 
-func (s *DeploymentService) RepublishUpdate(ctx context.Context, previousUpdate *types.Update, platform, commitHash string, publishGroup *string) (*types.Update, error) {
+func (s *DeploymentService) RepublishUpdate(ctx context.Context, previousUpdate *types.Update, platform types.Platform, commitHash string, publishGroup *string) (*types.Update, error) {
 	hasActiveRollout, err := s.updateRepo.HasActiveRolloutUpdate(ctx, previousUpdate.AppId, previousUpdate.Branch, previousUpdate.RuntimeVersion)
 	if err != nil {
 		return nil, err
@@ -550,12 +550,12 @@ func (s *DeploymentService) RepublishUpdate(ctx context.Context, previousUpdate 
 		return nil, err
 	}
 	s.recordDeliveryEvent(ctx, auditlog.ActionUpdateRepublished, *newUpdate,
-		map[string]any{"platform": platform, "source_update_id": previousUpdate.UpdateId})
+		map[string]any{"platform": string(platform), "source_update_id": previousUpdate.UpdateId})
 	return newUpdate, nil
 }
 
 // republishUpdateInternal is RepublishUpdate without the active-rollout guard.
-func (s *DeploymentService) republishUpdateInternal(ctx context.Context, previousUpdate *types.Update, platform, commitHash string, publishGroup *string) (*types.Update, error) {
+func (s *DeploymentService) republishUpdateInternal(ctx context.Context, previousUpdate *types.Update, platform types.Platform, commitHash string, publishGroup *string) (*types.Update, error) {
 	existing, err := s.updateRepo.GetUpdate(ctx, previousUpdate.AppId, previousUpdate.Branch, previousUpdate.RuntimeVersion, previousUpdate.UpdateId)
 	if err != nil {
 		return nil, &RepublishError{Status: http.StatusBadRequest, Message: "Error getting update"}

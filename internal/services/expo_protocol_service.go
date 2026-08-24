@@ -35,7 +35,7 @@ type ManifestRequestParams struct {
 	RequestID             string
 	AppID                 string
 	ChannelName           string
-	Platform              string
+	Platform              types.Platform
 	RuntimeVersion        string
 	ProtocolVersion       int64
 	ClientID              string
@@ -71,7 +71,7 @@ type AssetResolutionParams struct {
 	ChannelName    string
 	AssetName      string
 	RuntimeVersion string
-	Platform       string
+	Platform       types.Platform
 	// ClientID is the device's EAS-Client-ID header.
 	ClientID string
 	// Branch and UpdateID are the query params baked into manifest asset URLs; when
@@ -202,7 +202,7 @@ func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.Re
 	// downstream, so it covers the stamp.
 	manifest.Extra.BranchSurfingRefused = refusedBranch
 	if params.CurrentUpdateID != "" {
-		metrics.TrackUpdateDownload(params.AppID, params.Platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
+		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
 	}
 	w.Header().Set("expo-manifest-filters", `branch="`+lastUpdate.Branch+`"`)
 	s.PutResponse(ctx, w, params, manifest, "manifest")
@@ -256,7 +256,7 @@ func (s *ExpoProtocolService) PutRollbackInResponse(ctx context.Context, w http.
 		http.Error(w, "Error creating rollback directive", http.StatusInternalServerError)
 		return
 	}
-	metrics.TrackUpdateDownload(params.AppID, params.Platform, lastUpdate.RuntimeVersion, lastUpdate.Branch, lastUpdate.UpdateId, "rollback")
+	metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, lastUpdate.UpdateId, "rollback")
 	s.PutResponse(ctx, w, params, directive, "directive")
 }
 
@@ -308,12 +308,12 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	// rollout invisible in the metrics it is meant to be judged from.
 	if params.ExpoFatalError != "" {
 		if params.CurrentUpdateID != "" {
-			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
+			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 		} else if params.RecentFailedUpdateIDs != "" {
-			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.RecentFailedUpdateIDs)
+			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.RecentFailedUpdateIDs)
 		}
 	}
-	metrics.TrackActiveUser(params.AppID, params.ClientID, params.Platform, params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
+	metrics.TrackActiveUser(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 
 	if lastUpdate == nil {
 		return ManifestResult{

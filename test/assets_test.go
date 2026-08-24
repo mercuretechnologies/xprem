@@ -56,32 +56,14 @@ func TestBadPlatformForAssets(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
 	mockWorkingExpoResponse("staging")
-	request := assets.AssetsRequest{
-		AppId:          "test-app-id",
-		Branch:         "branch-1",
-		AssetName:      "/assets/4f1cb2cac2370cd5050681232e8575a8",
-		RuntimeVersion: "1",
-		Platform:       "blackberry",
-		RequestID:      "test",
-	}
-	projectRoot, _ := findProjectRoot()
-	testInvalidPlatform := func(t *testing.T, handlerFunc func(assets.AssetsRequest) (assets.AssetsResponse, error)) {
-		response, err := handlerFunc(request)
-		assert.Nil(t, err, "Expected no error")
-		assert.Equal(t, 400, response.StatusCode, "Expected status code 400 for an invalid platform")
-		assert.Equal(t, "Invalid platform", string(response.Body), "Expected 'Invalid platform' message")
-	}
-	t.Run("Test HandleAssetsWithFile", func(t *testing.T) {
-		testInvalidPlatform(t, assets.HandleAssetsWithFile)
-	})
-	t.Run("Test HandleAssetsWithURL", func(t *testing.T) {
-		testInvalidPlatform(t, func(req assets.AssetsRequest) (assets.AssetsResponse, error) {
-			os.Setenv("PRIVATE_CLOUDFRONT_KEY_PATH", filepath.Join(projectRoot, "/test/keys/private-key-cloudfront-test.pem"))
-			os.Setenv("CLOUDFRONT_DOMAIN", "https://cdn.expoopenota.com")
-			os.Setenv("CLOUDFRONT_KEY_PAIR_ID", "test")
-			return assets.HandleAssetsWithURL(req, &cdn.CloudfrontCDN{})
-		})
-	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/assets?asset=bundles%2Fx.js&runtimeVersion=1&platform=blackberry", nil)
+	r.Header.Set("expo-channel-name", "staging")
+	r.Header.Set("expo-app-id", "test-app-id")
+
+	testContainer().ExpoProtocolHandler.HandleAssets(w, r)
+	assert.Equal(t, 400, w.Code, "Expected status code 400 for an invalid platform")
+	assert.Equal(t, "Invalid platform\n", w.Body.String())
 }
 
 func TestMissingRuntimeVersionForAssets(t *testing.T) {

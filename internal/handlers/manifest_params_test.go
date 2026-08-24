@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,7 +44,7 @@ func TestManifestParamsReadsEveryHeader(t *testing.T) {
 	assert.Equal(t, "req-1", params.RequestID)
 	assert.Equal(t, paramsTestAppID, params.AppID)
 	assert.Equal(t, "qa", params.ChannelName)
-	assert.Equal(t, "ios", params.Platform)
+	assert.Equal(t, types.PlatformIOS, params.Platform)
 	assert.Equal(t, "3.0.0", params.RuntimeVersion)
 	assert.Equal(t, int64(1), params.ProtocolVersion)
 	assert.Equal(t, "pr-482", params.XpremBranch)
@@ -103,7 +104,7 @@ func TestManifestParamsFallsBackToTheQueryString(t *testing.T) {
 	params, err := manifestParams(r, "req-1")
 
 	require.NoError(t, err)
-	assert.Equal(t, "android", params.Platform)
+	assert.Equal(t, types.PlatformAndroid, params.Platform)
 	assert.Equal(t, "2.0.0", params.RuntimeVersion)
 }
 

@@ -176,7 +176,7 @@ type countingBranchRepo struct {
 	reads    int
 }
 
-func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
+func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ types.Platform) ([]types.SurfableBranch, error) {
 	r.reads++
 	return r.surfable[runtimeVersion], nil
 }

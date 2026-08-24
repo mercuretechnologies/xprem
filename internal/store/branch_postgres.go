@@ -71,12 +71,12 @@ func (s *PostgresBranchStore) DeleteBranchByName(ctx context.Context, appId stri
 	return nil
 }
 
-func (s *PostgresBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
+func (s *PostgresBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error) {
 	pgAppID := ToPgUUID(appId)
 	rows, err := s.engine.Queries.GetSurfableBranches(ctx, pgdb.GetSurfableBranchesParams{
 		AppID:    pgAppID,
 		Version:  runtimeVersion,
-		Platform: platform,
+		Platform: string(platform),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve surfable branches from database: %w", err)
