@@ -28,12 +28,10 @@ func NewIdentityHandler(service *Service) *IdentityHandler {
 	return &IdentityHandler{service: service}
 }
 
-// requireService short-circuits with a 400 when identity has no storage
-// (stateless mode). Returns the service and true when it is available.
 func (h *IdentityHandler) requireService(w http.ResponseWriter, throw bool) (*Service, bool) {
 	if h.service == nil {
 		if throw {
-			handlers.RenderError(w, http.StatusBadRequest, "Device identity requires a control plane (database).")
+			handlers.RenderError(w, http.StatusBadRequest, "Device identity requires a control plane (database) and to enable DEVICE_TELEMETRY")
 		}
 		return nil, false
 	}
