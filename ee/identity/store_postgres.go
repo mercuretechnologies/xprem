@@ -13,6 +13,7 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -24,15 +25,6 @@ type PostgresIdentityStore struct {
 
 func NewPostgresIdentityStore(engine *database.Engine) *PostgresIdentityStore {
 	return &PostgresIdentityStore{engine: engine}
-}
-
-// toPgUUID surfaces a parse failure as an error, never a zero UUID silently written to the database.
-func toPgUUID(id string) (pgtype.UUID, error) {
-	parsed, err := uuid.Parse(id)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("invalid uuid %q: %w", id, err)
-	}
-	return pgtype.UUID{Bytes: parsed, Valid: true}, nil
 }
 
 func specFromRow(row pgdb.IdentitySchema) KeySpec {
@@ -87,7 +79,7 @@ func deviceFromRow(row pgdb.DeviceIdentity) (Device, error) {
 
 // GetSchema returns the app's allowlist; an app with no declared keys gets an empty schema.
 func (s *PostgresIdentityStore) GetSchema(ctx context.Context, appID string) (Schema, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +97,7 @@ func (s *PostgresIdentityStore) UpsertSchemaKey(ctx context.Context, appID strin
 	if err := ValidateKeySpec(spec); err != nil {
 		return KeySpec{}, err
 	}
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return KeySpec{}, err
 	}
@@ -142,7 +134,7 @@ func (s *PostgresIdentityStore) UpsertSchemaKey(ctx context.Context, appID strin
 // DeleteSchemaKey removes a key from the allowlist and wipes its autocomplete stats in the
 // same transaction. Values already merged into device metadata are left in place.
 func (s *PostgresIdentityStore) DeleteSchemaKey(ctx context.Context, appID string, key string) (bool, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return false, err
 	}
@@ -244,11 +236,11 @@ func applyStatOps(ctx context.Context, q *pgdb.Queries, appUUID pgtype.UUID, ops
 }
 
 func (s *PostgresIdentityStore) mutate(ctx context.Context, appID string, easClientID string, kind mutationKind, raw map[string]any, unsetKeys []string, geo *Geo) (ApplyResult, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -355,11 +347,11 @@ func (s *PostgresIdentityStore) mutate(ctx context.Context, appID string, easCli
 
 // GetDevice returns nil when the install was never seen.
 func (s *PostgresIdentityStore) GetDevice(ctx context.Context, appID string, easClientID string) (*Device, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return nil, err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -392,15 +384,15 @@ func deviceFilterParams(query DeviceQuery) (convertedDeviceFilters, error) {
 	if err != nil {
 		return convertedDeviceFilters{}, fmt.Errorf("marshalling device filter: %w", err)
 	}
-	clientIDs, err := toPgUUIDs(query.EASClientIDs)
+	clientIDs, err := store.ParsePgUUIDs(query.EASClientIDs)
 	if err != nil {
 		return convertedDeviceFilters{}, err
 	}
-	updateIDs, err := toPgUUIDs(query.CurrentUpdateIDs)
+	updateIDs, err := store.ParsePgUUIDs(query.CurrentUpdateIDs)
 	if err != nil {
 		return convertedDeviceFilters{}, err
 	}
-	publishGroups, err := toPgUUIDs(query.UpdateGroupIDs)
+	publishGroups, err := store.ParsePgUUIDs(query.UpdateGroupIDs)
 	if err != nil {
 		return convertedDeviceFilters{}, err
 	}
@@ -415,7 +407,7 @@ func deviceFilterParams(query DeviceQuery) (convertedDeviceFilters, error) {
 // ListDevices returns one page of the device inventory, newest-seen first, keyset-paginated.
 // A nil cursor starts at the first page; the returned cursor is nil on the last page.
 func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, query DeviceQuery, limit int, cursor *DeviceCursor) ([]Device, *DeviceCursor, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -448,7 +440,7 @@ func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, q
 	}
 	if cursor != nil {
 		params.BeforeLastSeen = pgtype.Timestamptz{Time: cursor.LastSeenAt, Valid: true}
-		cursorUUID, err := toPgUUID(cursor.EASClientID)
+		cursorUUID, err := store.ParsePgUUID(cursor.EASClientID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -481,7 +473,7 @@ func (s *PostgresIdentityStore) ListDevices(ctx context.Context, appID string, q
 }
 
 func (s *PostgresIdentityStore) CountOnlineDevices(ctx context.Context, appID string, since time.Time, query DeviceQuery) (int64, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return 0, err
 	}
@@ -513,7 +505,7 @@ func (s *PostgresIdentityStore) CountOnlineDevices(ctx context.Context, appID st
 // SearchMetadataValues returns top values of one key ranked by device count, optionally
 // narrowed by a substring.
 func (s *PostgresIdentityStore) SearchMetadataValues(ctx context.Context, appID string, key string, search string, limit int) ([]ValueCount, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return nil, err
 	}
@@ -557,20 +549,6 @@ func (s *PostgresIdentityStore) SearchMetadataValues(ctx context.Context, appID 
 }
 
 // toPgUUIDs surfaces an unparseable id as an error, not a silently empty result set.
-func toPgUUIDs(values []string) ([]pgtype.UUID, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-	parsed := make([]pgtype.UUID, 0, len(values))
-	for _, value := range values {
-		id, err := toPgUUID(value)
-		if err != nil {
-			return nil, err
-		}
-		parsed = append(parsed, id)
-	}
-	return parsed, nil
-}
 
 // maxHardwareTextRunes bounds the hardware strings before they reach the registry, since
 // Model, OSName and OSVersion are unauthenticated client input into unbounded TEXT columns.
@@ -598,11 +576,11 @@ func optionalText(value string) *string {
 // last_seen (and geo/current update) for a known device or registering a new one. A nil
 // current means this check-in does not know the update and leaves that column alone.
 func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, easClientID string, geo *Geo, current *CurrentUpdate, device DeviceInfo) error {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return err
 	}
@@ -610,7 +588,7 @@ func (s *PostgresIdentityStore) TouchDevice(ctx context.Context, appID string, e
 	// pgx binds every parameter, so observedAt still needs a valid value even when unused.
 	observedAt := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	if current != nil {
-		if currentUpdate, err = toPgUUID(current.ID); err != nil {
+		if currentUpdate, err = store.ParsePgUUID(current.ID); err != nil {
 			return err
 		}
 		if !current.ObservedAt.IsZero() {
@@ -701,16 +679,16 @@ func (s *PostgresIdentityStore) resolveUpdateFailures(
 // failureType are capture-once: the first record of a (device, update) failure names them,
 // and sticky re-sends never overwrite it.
 func (s *PostgresIdentityStore) RecordUpdateFailures(ctx context.Context, appID string, easClientID string, updateIDs []string, fatalError string, failureType FailureType) error {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return err
 	}
 	for _, updateID := range updateIDs {
-		updateUUID, err := toPgUUID(updateID)
+		updateUUID, err := store.ParsePgUUID(updateID)
 		if err != nil {
 			continue // forged id in the header: skip, never fail the batch
 		}
@@ -731,15 +709,15 @@ func (s *PostgresIdentityStore) RecordUpdateFailures(ctx context.Context, appID 
 // RecordRuntimeFailure persists one JS crash using the device event timestamp.
 // That timestamp is bounded by the OTLP decoder before reaching this method.
 func (s *PostgresIdentityStore) RecordRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, fatalError string, occurredAt time.Time) error {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return err
 	}
-	updateUUID, err := toPgUUID(updateID)
+	updateUUID, err := store.ParsePgUUID(updateID)
 	if err != nil {
 		return err
 	}
@@ -759,15 +737,15 @@ func (s *PostgresIdentityStore) RecordRuntimeFailure(ctx context.Context, appID 
 // strictly newer than the latest crash. Native update_issue rows are never
 // resolved by JS activity.
 func (s *PostgresIdentityStore) ResolveRuntimeFailure(ctx context.Context, appID string, easClientID string, updateID string, occurredAt time.Time) error {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return err
 	}
-	clientUUID, err := toPgUUID(easClientID)
+	clientUUID, err := store.ParsePgUUID(easClientID)
 	if err != nil {
 		return err
 	}
-	updateUUID, err := toPgUUID(updateID)
+	updateUUID, err := store.ParsePgUUID(updateID)
 	if err != nil {
 		return err
 	}
@@ -801,13 +779,13 @@ type UpdateHealth struct {
 
 // UpdateHealthByIDs returns health per update uuid, skipping non-UUID ids.
 func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID string, updateIDs []string) (map[string]UpdateHealth, error) {
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]pgtype.UUID, 0, len(updateIDs))
 	for _, raw := range updateIDs {
-		if parsed, err := toPgUUID(raw); err == nil {
+		if parsed, err := store.ParsePgUUID(raw); err == nil {
 			ids = append(ids, parsed)
 		}
 	}
@@ -818,7 +796,7 @@ func (s *PostgresIdentityStore) UpdateHealthByIDs(ctx context.Context, appID str
 	// Every id asked about gets an entry, even zero, so a caller can't confuse "no data" with
 	// "not measured" (both queries below are GROUP BYs that answer nothing for an unused update).
 	for _, raw := range updateIDs {
-		if _, err := toPgUUID(raw); err == nil {
+		if _, err := store.ParsePgUUID(raw); err == nil {
 			health[raw] = UpdateHealth{}
 		}
 	}

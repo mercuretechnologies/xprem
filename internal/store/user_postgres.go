@@ -7,8 +7,6 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // User is a dashboard user account. PasswordHash is only populated by the
@@ -117,7 +115,7 @@ func (s *PostgresUserStore) GetUsers(ctx context.Context) ([]User, error) {
 			IsAdmin:         row.IsAdmin,
 			Enabled:         row.Enabled,
 			CreatedAt:       row.CreatedAt.Time,
-			LastConnectedAt: timestamptzToPtr(row.LastConnectedAt),
+			LastConnectedAt: FromPgTimestamptz(row.LastConnectedAt),
 		}
 	}
 	return users, nil
@@ -220,15 +218,7 @@ func userFromRow(row pgdb.User) User {
 		IsAdmin:         row.IsAdmin,
 		Enabled:         row.Enabled,
 		CreatedAt:       row.CreatedAt.Time,
-		LastConnectedAt: timestamptzToPtr(row.LastConnectedAt),
+		LastConnectedAt: FromPgTimestamptz(row.LastConnectedAt),
 		SessionVersion:  row.SessionVersion,
 	}
-}
-
-func timestamptzToPtr(ts pgtype.Timestamptz) *time.Time {
-	if !ts.Valid {
-		return nil
-	}
-	t := ts.Time
-	return &t
 }

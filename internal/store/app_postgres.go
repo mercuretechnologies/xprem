@@ -7,9 +7,6 @@ import (
 	"xprem/config"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
-
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type PostgresAppStore struct {
@@ -20,27 +17,6 @@ func NewPostgresAppStore(engine *database.Engine) *PostgresAppStore {
 	return &PostgresAppStore{
 		engine: engine,
 	}
-}
-
-func ToPgUUID(id string) pgtype.UUID {
-	goUUID, err := uuid.Parse(id)
-	if err != nil {
-		return pgtype.UUID{
-			Valid: false,
-		}
-	}
-	return pgtype.UUID{
-		Bytes: [16]byte(goUUID),
-		Valid: true,
-	}
-}
-
-// ToPgUUIDPtr maps a nil pointer to the SQL NULL uuid.
-func ToPgUUIDPtr(id *string) pgtype.UUID {
-	if id == nil {
-		return pgtype.UUID{}
-	}
-	return ToPgUUID(*id)
 }
 
 type InsertAppParameters struct {
