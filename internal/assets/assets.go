@@ -75,7 +75,7 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error getting metadata")}
 	}
 
-	platformMetadata, err := metadata.MetadataJSON.FileMetadata.GetPlatformMetadata(req.Platform)
+	platformMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(req.Platform)
 	if err != nil || platformMetadata.Bundle == "" {
 		log.Printf("[RequestID: %s] Error getting platform metadata: %v", requestID, err)
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("Platform not supported")}

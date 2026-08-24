@@ -40,7 +40,7 @@ type FileMetadata struct {
 	IOS     PlatformMetadata `json:"ios"`
 }
 
-func (f FileMetadata) GetPlatformMetadata(platform Platform) (PlatformMetadata, error) {
+func (f FileMetadata) PlatformMetadata(platform Platform) (PlatformMetadata, error) {
 	switch platform {
 	case PlatformIOS:
 		return f.IOS, nil

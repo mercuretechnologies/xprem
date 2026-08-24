@@ -276,8 +276,7 @@ func ComposeUpdateManifest(
 		}
 	}
 
-	platformSpecificMetadata, err := metadata.MetadataJSON.FileMetadata.GetPlatformMetadata(platform)
-
+	platformSpecificMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(platform)
 	if err != nil || platformSpecificMetadata.Bundle == "" {
 		return types.UpdateManifest{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	}
