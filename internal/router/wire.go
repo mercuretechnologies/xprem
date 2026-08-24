@@ -169,7 +169,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		}
 
 		if config.IsDeviceTelemetryDisabled() {
-			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
+			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened.(CLICKHOUSE_URL is ignored.)")
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
