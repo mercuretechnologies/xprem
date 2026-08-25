@@ -37,6 +37,11 @@ func registerDashboardAssets(r *mux.Router) {
 	if !dashutils.IsDashboardEnabled() {
 		return
 	}
+	// 302 and not 301: a permanent redirect on "/" would be cached by browsers
+	// even after the dashboard is disabled or the root gains a real purpose.
+	r.Path("/").Methods(http.MethodGet).HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/", http.StatusFound)
+	})
 	r.PathPrefix("/dashboard").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/dashboard/env.js" {
 			w.Header().Set("Content-Type", "application/javascript")

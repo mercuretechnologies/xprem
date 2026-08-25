@@ -30,6 +30,38 @@ func TestLoginDashboardNotEnabled(t *testing.T) {
 
 }
 
+func TestRootRedirectsToDashboard(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter(testContainer())
+	respRec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/", nil)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusFound, respRec.Code)
+	assert.Equal(t, "/dashboard/", respRec.Header().Get("Location"))
+}
+
+func TestRootNotFoundWhenDashboardDisabled(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	os.Setenv("USE_DASHBOARD", "false")
+	router := infrastructure.NewRouter(testContainer())
+	respRec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/", nil)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusNotFound, respRec.Code)
+}
+
+func TestRootPostNotRedirected(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter(testContainer())
+	respRec := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/", nil)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, respRec.Code)
+}
+
 func loginRequest(email string, password string) *http.Request {
 	formData := url.Values{}
 	formData.Set("email", email)
