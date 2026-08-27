@@ -18,7 +18,7 @@ type CreateBranchModalProps = {
   onClose: () => void;
   // Called once the branch exists so the caller can use it straight away:
   // map it to a channel, prefill a form, ...
-  onBranchCreated?: (branch: { branchId: string; branchName: string }) => void;
+  onBranchCreated?: (branch: { branchId: string; branchName: string }) => void | Promise<void>;
 };
 
 export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBranchModalProps) => {
@@ -42,7 +42,7 @@ export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBr
         title: 'Branch created',
         description: `"${branchName}" is ready to receive updates.`,
       });
-      onBranchCreated?.({ branchId, branchName });
+      await onBranchCreated?.({ branchId, branchName });
       handleClose();
     } catch (error) {
       let errorTitle = 'Error creating branch';
