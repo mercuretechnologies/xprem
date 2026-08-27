@@ -104,6 +104,9 @@ Any other MCP-compatible client (ChatGPT connectors included) can be pointed at 
 
 ## Why choose xprem
 
+xprem was originally built to run in production for apps with hundreds of thousands of monthly active users, under strong security and performance constraints.
+The server is production-ready and enterprise-ready, and it is actively maintained. Feel free to contact us at [contact@xprem.dev](mailto:contact@xprem.dev) if you want to know more.
+
 - **No per-user pricing.**
 
 - **You own the data.**
