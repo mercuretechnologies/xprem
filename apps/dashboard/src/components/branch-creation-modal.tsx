@@ -38,11 +38,23 @@ export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBr
     setIsSubmitting(true);
     try {
       const { branchId } = await api.createBranch(branchName);
-      toast({
-        title: 'Branch created',
-        description: `"${branchName}" is ready to receive updates.`,
-      });
-      await onBranchCreated?.({ branchId, branchName });
+      try {
+        await onBranchCreated?.({ branchId, branchName });
+        toast({
+          title: 'Branch created',
+          description: `"${branchName}" is ready to receive updates.`,
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Refresh the page to use the newly created branch.';
+        toast({
+          title: 'Branch created, but the page could not be updated',
+          description: errorMessage,
+          variant: 'destructive',
+        });
+      }
       handleClose();
     } catch (error) {
       let errorTitle = 'Error creating branch';
