@@ -1,0 +1,16 @@
+{
+  "name": "xprem dev",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "api",
+      "command": "export PATH=\"$(go env GOPATH)/bin:$PATH\"; reflex -r '\\.go$' -s -- sh -c 'go run cmd/api/main.go'"
+    },
+    {
+      "name": "dashboard",
+      "command": "cd apps/dashboard && VITE_OTA_API_URL=http://localhost:3000 npm run dev -- --host 0.0.0.0"
+    }
+  ],
+  "ports": [3000, 5173]
+}
