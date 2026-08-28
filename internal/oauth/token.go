@@ -48,16 +48,28 @@ func ResourceMetadataURL() string {
 	return config.BaseURL() + "/.well-known/oauth-protected-resource/mcp"
 }
 
+// mcpClaims is the claim set of both MCP OAuth JWTs. Type and ID are only set
+// on the refresh token, Audience and Scope only on the access token.
+type mcpClaims struct {
+	jwt.RegisteredClaims
+	Type           string `json:"type,omitempty"`
+	UserID         string `json:"userId"`
+	SessionVersion int32  `json:"sv"`
+	Scope          string `json:"scope,omitempty"`
+}
+
 // IssueAccessToken mints the Bearer token the token endpoint hands out.
 func (s *OAuthService) IssueAccessToken(principal services.DashboardPrincipal) (string, error) {
-	token, err := crypto.GenerateJWTToken(s.secret, jwt.MapClaims{
-		"sub":    mcpSubject,
-		"aud":    ResourceURL(),
-		"exp":    time.Now().Add(accessTokenTTL).Unix(),
-		"iat":    time.Now().Unix(),
-		"userId": principal.UserId,
-		"sv":     principal.SessionVersion,
-		"scope":  ScopeMCP,
+	token, err := crypto.GenerateJWTToken(s.secret, mcpClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   mcpSubject,
+			Audience:  jwt.ClaimStrings{ResourceURL()},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(accessTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		UserID:         principal.UserId,
+		SessionVersion: principal.SessionVersion,
+		Scope:          ScopeMCP,
 	})
 	if err != nil {
 		return "", fmt.Errorf("error while generating the mcp access token: %w", err)
@@ -137,25 +149,24 @@ func (s *OAuthService) ExchangeAuthorizationCode(ctx context.Context, req Exchan
 // one; rotation, replay grace and replay revocation mirror the dashboard's
 // RefreshSession over the same ledger.
 func (s *OAuthService) RefreshAccessToken(ctx context.Context, tokenString string) (*TokenResponse, error) {
-	claims := jwt.MapClaims{}
+	claims := mcpClaims{}
 	if _, err := crypto.DecodeAndExtractJWTToken(s.secret, tokenString, &claims); err != nil {
 		return nil, ErrInvalidGrant
 	}
-	if claims["sub"] != mcpSubject || claims["type"] != "refreshToken" {
+	if claims.Subject != mcpSubject || claims.Type != "refreshToken" {
 		return nil, ErrInvalidGrant
 	}
-	userId, _ := claims["userId"].(string)
-	if userId == "" {
+	if claims.UserID == "" {
 		return nil, ErrInvalidGrant
 	}
-	principal, err := s.principalForUser(ctx, userId)
+	principal, err := s.principalForUser(ctx, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
-	if sessionVersion, _ := claims["sv"].(float64); principal.SessionVersion != int32(sessionVersion) {
+	if principal.SessionVersion != claims.SessionVersion {
 		return nil, ErrInvalidGrant
 	}
-	spentId, _ := claims["jti"].(string)
+	spentId := claims.ID
 	if spentId == "" {
 		return nil, ErrInvalidGrant
 	}
@@ -242,14 +253,16 @@ func (s *OAuthService) issueTokenPair(principal services.DashboardPrincipal, tok
 	if err != nil {
 		return nil, err
 	}
-	refreshToken, err := crypto.GenerateJWTToken(s.secret, jwt.MapClaims{
-		"sub":    mcpSubject,
-		"type":   "refreshToken",
-		"exp":    expiresAt.Unix(),
-		"iat":    time.Now().Unix(),
-		"userId": principal.UserId,
-		"sv":     principal.SessionVersion,
-		"jti":    tokenId,
+	refreshToken, err := crypto.GenerateJWTToken(s.secret, mcpClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   mcpSubject,
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        tokenId,
+		},
+		Type:           "refreshToken",
+		UserID:         principal.UserId,
+		SessionVersion: principal.SessionVersion,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error while generating the mcp refresh token: %w", err)
@@ -267,34 +280,32 @@ func (s *OAuthService) issueTokenPair(principal services.DashboardPrincipal, tok
 // signature proves the token was valid when minted, the user row says whether
 // it still is. The returned time is the token's expiration.
 func (s *OAuthService) AuthenticateMCPToken(ctx context.Context, tokenString string) (*services.DashboardPrincipal, time.Time, error) {
-	claims := jwt.MapClaims{}
+	claims := mcpClaims{}
 	if _, err := crypto.DecodeAndExtractJWTToken(s.secret, tokenString, &claims); err != nil {
 		return nil, time.Time{}, err
 	}
-	if claims["sub"] != mcpSubject {
+	if claims.Subject != mcpSubject {
 		return nil, time.Time{}, errors.New("invalid token subject")
 	}
-	if audience, _ := claims.GetAudience(); len(audience) != 1 || audience[0] != ResourceURL() {
+	if len(claims.Audience) != 1 || claims.Audience[0] != ResourceURL() {
 		return nil, time.Time{}, errors.New("invalid token audience")
 	}
-	expiresAt, err := claims.GetExpirationTime()
-	if err != nil || expiresAt == nil {
+	if claims.ExpiresAt == nil {
 		return nil, time.Time{}, errors.New("invalid token expiration")
 	}
-	userId, _ := claims["userId"].(string)
-	if userId == "" {
+	expiresAt := claims.ExpiresAt
+	if claims.UserID == "" {
 		return nil, time.Time{}, services.ErrSessionRevoked
 	}
-	sessionVersion, _ := claims["sv"].(float64)
 
-	user, err := s.userRepo.GetUserByID(ctx, userId)
+	user, err := s.userRepo.GetUserByID(ctx, claims.UserID)
 	if err != nil {
 		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, time.Time{}, services.ErrSessionRevoked
 		}
 		return nil, time.Time{}, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
 	}
-	if !user.Enabled || user.SessionVersion != int32(sessionVersion) {
+	if !user.Enabled || user.SessionVersion != claims.SessionVersion {
 		return nil, time.Time{}, services.ErrSessionRevoked
 	}
 	return &services.DashboardPrincipal{

@@ -121,31 +121,50 @@ func statelessPasswordVersion() string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// sessionClaims is the claim set of both dashboard session JWTs. SessionVersion
+// is absent on a token minted before it existed, which reads as generation 0.
+type sessionClaims struct {
+	jwt.RegisteredClaims
+	Type           string `json:"type"`
+	UserID         string `json:"userId"`
+	Email          string `json:"email"`
+	IsAdmin        bool   `json:"isAdmin,omitempty"`
+	SessionVersion int32  `json:"sv"`
+	// PasswordVersion is only set in stateless mode.
+	PasswordVersion string `json:"pv,omitempty"`
+}
+
 // statelessClaimsAreCurrent reports whether a stateless token was minted under
 // the password in force now. Always true outside stateless mode, where the
 // account row carries the session version instead.
-func (a *DashboardAuthService) statelessClaimsAreCurrent(claims jwt.MapClaims) bool {
+func (a *DashboardAuthService) statelessClaimsAreCurrent(claims sessionClaims) bool {
 	if a.userRepo != nil {
 		return true
 	}
-	version, _ := claims["pv"].(string)
-	return version == statelessPasswordVersion()
+	return claims.PasswordVersion == statelessPasswordVersion()
+}
+
+func (a *DashboardAuthService) statelessPasswordVersionClaim() string {
+	if a.userRepo == nil {
+		return statelessPasswordVersion()
+	}
+	return ""
 }
 
 // generateSessionToken mints the access half of a dashboard session.
 func (a *DashboardAuthService) generateSessionToken(principal DashboardPrincipal) (*string, error) {
-	claims := jwt.MapClaims{
-		"sub":     dashboardSubject,
-		"exp":     time.Now().Add(sessionTokenTTL).Unix(),
-		"iat":     time.Now().Unix(),
-		"type":    "token",
-		"userId":  principal.UserId,
-		"email":   principal.Email,
-		"isAdmin": principal.IsAdmin,
-		"sv":      principal.SessionVersion,
-	}
-	if a.userRepo == nil {
-		claims["pv"] = statelessPasswordVersion()
+	claims := sessionClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   dashboardSubject,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		Type:            "token",
+		UserID:          principal.UserId,
+		Email:           principal.Email,
+		IsAdmin:         principal.IsAdmin,
+		SessionVersion:  principal.SessionVersion,
+		PasswordVersion: a.statelessPasswordVersionClaim(),
 	}
 	token, err := crypto.GenerateJWTToken(a.Secret, claims)
 	if err != nil {
@@ -157,18 +176,18 @@ func (a *DashboardAuthService) generateSessionToken(principal DashboardPrincipal
 // generateRefreshToken mints the refresh half. tokenId names the ledger row
 // that makes it single-use, and is empty in stateless mode.
 func (a *DashboardAuthService) generateRefreshToken(principal DashboardPrincipal, tokenId string, expiresAt time.Time) (*string, error) {
-	claims := jwt.MapClaims{
-		"sub":    dashboardSubject,
-		"exp":    expiresAt.Unix(),
-		"iat":    time.Now().Unix(),
-		"type":   "refreshToken",
-		"userId": principal.UserId,
-		"email":  principal.Email,
-		"sv":     principal.SessionVersion,
-		"jti":    tokenId,
-	}
-	if a.userRepo == nil {
-		claims["pv"] = statelessPasswordVersion()
+	claims := sessionClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   dashboardSubject,
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        tokenId,
+		},
+		Type:            "refreshToken",
+		UserID:          principal.UserId,
+		Email:           principal.Email,
+		SessionVersion:  principal.SessionVersion,
+		PasswordVersion: a.statelessPasswordVersionClaim(),
 	}
 	refreshToken, err := crypto.GenerateJWTToken(a.Secret, claims)
 	if err != nil {
@@ -383,39 +402,26 @@ func (a *DashboardAuthService) IssueSession(ctx context.Context, user store.User
 // minted for, purely from the claims. It does not check the account still
 // exists; AuthenticateSession does.
 func (a *DashboardAuthService) ValidateSession(tokenString string) (*DashboardPrincipal, error) {
-	claims := jwt.MapClaims{}
+	claims := sessionClaims{}
 	_, err := crypto.DecodeAndExtractJWTToken(a.Secret, tokenString, &claims)
 	if err != nil {
 		return nil, err
 	}
-	if claims["type"] != "token" {
+	if claims.Type != "token" {
 		return nil, errors.New("invalid token type")
 	}
-	if claims["sub"] != dashboardSubject {
+	if claims.Subject != dashboardSubject {
 		return nil, errors.New("invalid token subject")
 	}
 	if !a.statelessClaimsAreCurrent(claims) {
 		return nil, ErrSessionRevoked
 	}
-	principal := DashboardPrincipal{}
-	if userId, ok := claims["userId"].(string); ok {
-		principal.UserId = userId
-	}
-	if email, ok := claims["email"].(string); ok {
-		principal.Email = email
-	}
-	if isAdmin, ok := claims["isAdmin"].(bool); ok {
-		principal.IsAdmin = isAdmin
-	}
-	principal.SessionVersion = sessionVersionClaim(claims)
-	return &principal, nil
-}
-
-// sessionVersionClaim reads the sv claim; a token minted before sv existed
-// has none, which reads as generation 0.
-func sessionVersionClaim(claims jwt.MapClaims) int32 {
-	version, _ := claims["sv"].(float64)
-	return int32(version)
+	return &DashboardPrincipal{
+		UserId:         claims.UserID,
+		Email:          claims.Email,
+		IsAdmin:        claims.IsAdmin,
+		SessionVersion: claims.SessionVersion,
+	}, nil
 }
 
 // AuthenticateSession validates the token and re-reads the account behind it,
@@ -454,14 +460,14 @@ func (a *DashboardAuthService) AuthenticateSession(ctx context.Context, tokenStr
 // Step 2 runs before the spend so a database outage leaves the caller's token
 // intact instead of burning a good credential over a blip.
 func (a *DashboardAuthService) RefreshSession(ctx context.Context, tokenString string) (*DashboardSession, error) {
-	claims := jwt.MapClaims{}
+	claims := sessionClaims{}
 	if _, err := crypto.DecodeAndExtractJWTToken(a.Secret, tokenString, &claims); err != nil {
 		return nil, err
 	}
-	if claims["type"] != "refreshToken" {
+	if claims.Type != "refreshToken" {
 		return nil, errors.New("invalid token type")
 	}
-	if claims["sub"] != dashboardSubject {
+	if claims.Subject != dashboardSubject {
 		return nil, errors.New("invalid token subject")
 	}
 
@@ -469,26 +475,24 @@ func (a *DashboardAuthService) RefreshSession(ctx context.Context, tokenString s
 		if !a.statelessClaimsAreCurrent(claims) {
 			return nil, ErrSessionRevoked
 		}
-		email, _ := claims["email"].(string)
-		principal, err := resolveStatelessPrincipal(email, nil)
+		principal, err := resolveStatelessPrincipal(claims.Email, nil)
 		if err != nil {
 			return nil, err
 		}
 		return a.startSession(ctx, *principal)
 	}
 
-	userId, _ := claims["userId"].(string)
-	principal, err := a.resolveRefreshPrincipal(ctx, userId)
+	principal, err := a.resolveRefreshPrincipal(ctx, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
-	if principal.SessionVersion != sessionVersionClaim(claims) {
+	if principal.SessionVersion != claims.SessionVersion {
 		return nil, ErrSessionRevoked
 	}
 	if a.refreshTokens == nil {
 		return a.startSession(ctx, *principal)
 	}
-	spentId, _ := claims["jti"].(string)
+	spentId := claims.ID
 	if spentId == "" {
 		// Minted before rotation existed, or forged: no ledger row names it.
 		return nil, ErrSessionRevoked

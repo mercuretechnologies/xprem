@@ -3,8 +3,11 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
+	"xprem/internal/crypto"
 	"xprem/internal/store"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,4 +147,30 @@ func TestSSOEnforcementOnPasswordLogin(t *testing.T) {
 	ssoActive = false
 	_, err = authService.LoginWithEmailPassword(ctx, "member@example.com", "Sup3rSecret!")
 	assert.NoError(t, err)
+}
+
+// A session minted before claims were typed (jwt.MapClaims, sv as a JSON
+// number) must keep validating: the claim set is the wire contract.
+func TestSessionClaimsStayCompatibleWithMapClaimsTokens(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	authService := NewDashboardAuthService(newFakeUserRepo(), newFakeRefreshTokenRepo())
+
+	legacy, err := crypto.GenerateJWTToken("test-secret", jwt.MapClaims{
+		"sub":     dashboardSubject,
+		"exp":     time.Now().Add(time.Hour).Unix(),
+		"iat":     time.Now().Unix(),
+		"type":    "token",
+		"userId":  "user-1",
+		"email":   "member@example.com",
+		"isAdmin": true,
+		"sv":      3,
+	})
+	require.NoError(t, err)
+
+	principal, err := authService.ValidateSession(legacy)
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", principal.UserId)
+	assert.Equal(t, "member@example.com", principal.Email)
+	assert.True(t, principal.IsAdmin)
+	assert.Equal(t, int32(3), principal.SessionVersion)
 }

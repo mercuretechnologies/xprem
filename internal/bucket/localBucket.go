@@ -55,16 +55,15 @@ func (b *LocalBucket) RequestUploadUrlForFileUpdate(appId string, branch string,
 	if err != nil {
 		return "", err
 	}
-	token, err := crypto.GenerateJWTToken(config.GetEnv("JWT_SECRET"), jwt.MapClaims{
-		"sub":      GetSubjectForApp(appId),
-		"exp":      time.Now().Add(time.Minute * 10).Unix(),
-		"filePath": filepath.Join(dirPath, fileName),
-		"action":   "uploadLocalFile",
-		"appId":    appId,
-		// The branch this upload belongs to. The route that spends this token
-		// names no branch of its own, so this claim is what lets the router
-		// judge it against the API key's access rules.
-		"branch": branch,
+	token, err := crypto.GenerateJWTToken(config.GetEnv("JWT_SECRET"), uploadClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   GetSubjectForApp(appId),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute * 10)),
+		},
+		FilePath: filepath.Join(dirPath, fileName),
+		Action:   "uploadLocalFile",
+		AppID:    appId,
+		Branch:   branch,
 	})
 	if err != nil {
 		return "", err
@@ -276,6 +275,17 @@ func GetSubjectForApp(appId string) string {
 	return fmt.Sprintf("app:%s", appId)
 }
 
+// uploadClaims is the claim set of a local upload URL token. Branch is what
+// lets the router judge the upload route, which names no branch of its own,
+// against the API key's access rules.
+type uploadClaims struct {
+	jwt.RegisteredClaims
+	FilePath string `json:"filePath"`
+	Action   string `json:"action"`
+	AppID    string `json:"appId"`
+	Branch   string `json:"branch"`
+}
+
 // ValidateUploadTokenAndResolveFilePath decodes and verifies the JWT emitted
 // by RequestUploadUrlForFileUpdate. It returns the resolved filesystem path
 // plus the appId claim so the caller can confirm the token is scoped to the
@@ -283,23 +293,15 @@ func GetSubjectForApp(appId string) string {
 // token for AppA could PUT into AppB's bucket by hitting
 // /{AppB}/uploadLocalFile?token=<appA_token>.
 func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId string, branch string, err error) {
-	claims := jwt.MapClaims{}
-	decodedToken, err := crypto.DecodeAndExtractJWTToken(config.GetEnv("JWT_SECRET"), token, claims)
-	if err != nil {
+	claims := uploadClaims{}
+	if _, err := crypto.DecodeAndExtractJWTToken(config.GetEnv("JWT_SECRET"), token, &claims); err != nil {
 		return "", "", "", err
 	}
-	if !decodedToken.Valid {
-		return "", "", "", errors.New("invalid token")
-	}
-	action, _ := claims["action"].(string)
-	filePath, _ = claims["filePath"].(string)
-	sub, _ := claims["sub"].(string)
-	appId, _ = claims["appId"].(string)
-	branch, _ = claims["branch"].(string)
-	if appId == "" || sub != GetSubjectForApp(appId) {
+	filePath, appId, branch = claims.FilePath, claims.AppID, claims.Branch
+	if appId == "" || claims.Subject != GetSubjectForApp(appId) {
 		return "", "", "", errors.New("invalid token sub")
 	}
-	if action != "uploadLocalFile" {
+	if claims.Action != "uploadLocalFile" {
 		return "", "", "", errors.New("invalid token action")
 	}
 	// The token carries the branch and the file path as two separate claims,
