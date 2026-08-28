@@ -314,6 +314,14 @@ export const ENV_SECTIONS: EnvSection[] = [
         comment:
           'Policy: 8+ characters, an uppercase, a lowercase, a digit and a special character.',
       },
+      {
+        name: 'DASHBOARD_ROOT_REDIRECT',
+        applies: c => c.dashboard !== false,
+        required: false,
+        value: () => 'true',
+        comment:
+          'Sends / to the dashboard login. Off by default: the root stays a 404 rather than pointing every visitor at the admin UI.',
+      },
     ],
   },
   {

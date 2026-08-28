@@ -33,6 +33,7 @@ func TestLoginDashboardNotEnabled(t *testing.T) {
 func TestRootRedirectsToDashboard(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -41,10 +42,21 @@ func TestRootRedirectsToDashboard(t *testing.T) {
 	assert.Equal(t, "/dashboard/", respRec.Header().Get("Location"))
 }
 
+func TestRootNotFoundByDefault(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter(testContainer())
+	respRec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/", nil)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusNotFound, respRec.Code)
+}
+
 func TestRootNotFoundWhenDashboardDisabled(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
 	os.Setenv("USE_DASHBOARD", "false")
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -55,6 +67,7 @@ func TestRootNotFoundWhenDashboardDisabled(t *testing.T) {
 func TestRootPostNotRedirected(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/", nil)
