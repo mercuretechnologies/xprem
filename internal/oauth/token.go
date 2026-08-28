@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"time"
+	"xprem/config"
 	"xprem/internal/crypto"
 	"xprem/internal/services"
 	"xprem/internal/store"
@@ -38,13 +39,13 @@ var ErrInvalidGrant = errors.New("invalid grant")
 // ResourceURL is the RFC 8707 identifier of the MCP server, carried as the
 // aud claim of every access token and required back at verification.
 func ResourceURL() string {
-	return baseURL() + "/mcp"
+	return config.BaseURL() + "/mcp"
 }
 
 // ResourceMetadataURL is where a 401 sends clients to discover how to
 // authenticate (RFC 9728).
 func ResourceMetadataURL() string {
-	return baseURL() + "/.well-known/oauth-protected-resource/mcp"
+	return config.BaseURL() + "/.well-known/oauth-protected-resource/mcp"
 }
 
 // IssueAccessToken mints the Bearer token the token endpoint hands out.

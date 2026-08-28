@@ -3,7 +3,6 @@ package middleware
 import (
 	"net/http"
 	"net/url"
-	"strings"
 	"xprem/config"
 
 	"github.com/gorilla/mux"
@@ -46,7 +45,7 @@ func isDashboardOrigin(origin string) bool {
 	if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
 		return true
 	}
-	base, err := url.Parse(strings.TrimRight(config.GetEnv("BASE_URL"), "/"))
+	base, err := url.Parse(config.BaseURL())
 	if err != nil {
 		return false
 	}

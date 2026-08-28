@@ -73,8 +73,8 @@ func invalidateChannelRolloutCaches(appId string) {
 func (h *RolloutHandler) invalidateUpdateRolloutCaches(appId string, branchName string, runtimeVersion string, affectedRollouts []types.RolloutUpdate) {
 	cache := cache2.GetCache()
 	cacheKeys := []string{
-		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, "ios"),
-		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, "android"),
+		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, types.PlatformIOS),
+		update2.ComputeLastUpdateCacheKey(appId, branchName, runtimeVersion, types.PlatformAndroid),
 		dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName),
 		dashboard.ComputeGetBranchesCacheKey(appId),
 		dashboard.ComputeGetChannelsCacheKey(appId),
@@ -88,8 +88,8 @@ func (h *RolloutHandler) invalidateUpdateRolloutCaches(appId string, branchName 
 	for _, cacheKey := range cacheKeys {
 		cache.Delete(cacheKey)
 	}
-	go services.PreWarmManifestCache(h.updateService, appId, branchName, runtimeVersion, "ios")
-	go services.PreWarmManifestCache(h.updateService, appId, branchName, runtimeVersion, "android")
+	go services.PreWarmManifestCache(h.updateService, appId, branchName, runtimeVersion, types.PlatformIOS)
+	go services.PreWarmManifestCache(h.updateService, appId, branchName, runtimeVersion, types.PlatformAndroid)
 }
 
 func (h *RolloutHandler) StartChannelRolloutHandler(w http.ResponseWriter, r *http.Request) {
@@ -178,11 +178,7 @@ func (h *RolloutHandler) GetUpdateRolloutHandler(w http.ResponseWriter, r *http.
 	if activeRollouts == nil {
 		activeRollouts = []types.RolloutUpdate{}
 	}
-	response := map[string]interface{}{
-		"active":  len(activeRollouts) > 0,
-		"updates": activeRollouts,
-	}
-	marshaledResponse, _ := json.Marshal(response)
+	marshaledResponse, _ := json.Marshal(updateRolloutResponse{Active: len(activeRollouts) > 0, Updates: activeRollouts})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)

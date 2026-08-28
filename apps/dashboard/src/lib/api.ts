@@ -1,4 +1,5 @@
 import { getRefreshToken, getToken, logout, saveReturnTo, setTokens } from '@/lib/auth.ts';
+import { dashboardBasename } from '@/lib/basename.ts';
 
 export type APIProblemPayload = {
   title: string;
@@ -796,7 +797,6 @@ export class ApiClient {
   private appId: string | null = null;
 
   constructor() {
-    // @ts-expect-error window.env is injected at runtime by /env.js
     this.baseUrl = window?.env?.VITE_OTA_API_URL || import.meta.env.VITE_OTA_API_URL;
     if (!this.baseUrl) {
       throw new Error('Missing VITE_OTA_API_URL environment variable');
@@ -941,13 +941,14 @@ export class ApiClient {
       return;
     }
     logout();
-    // Remember where the session died so the next sign-in resumes there; the
-    // stored path is router-relative, so the /dashboard basename is stripped.
-    const currentPath = window.location.pathname.replace(/^\/dashboard/, '');
+    const basename = dashboardBasename();
+    const currentPath = window.location.pathname.startsWith(basename)
+      ? window.location.pathname.slice(basename.length)
+      : window.location.pathname;
     if (currentPath && currentPath !== '/login') {
       saveReturnTo(currentPath + window.location.search);
     }
-    window.location.assign('/dashboard/login');
+    window.location.assign(`${basename}/login`);
   }
 
   public async login(email: string, password: string) {

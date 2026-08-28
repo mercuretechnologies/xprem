@@ -55,9 +55,7 @@ func (h *BranchHandler) CreateBranchHandler(w http.ResponseWriter, r *http.Reque
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while creating the branch.")
 		return
 	}
-	marshaledResponse, _ := json.Marshal(map[string]interface{}{
-		"branchId": strconv.FormatInt(branchId, 10),
-	})
+	marshaledResponse, _ := json.Marshal(createBranchResponse{BranchId: strconv.FormatInt(branchId, 10)})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)

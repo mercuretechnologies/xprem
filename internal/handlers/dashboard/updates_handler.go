@@ -245,9 +245,16 @@ func (h *UpdateHandler) CreateRollbackHandler(w http.ResponseWriter, r *http.Req
 		handlers.RenderError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.Platform != "" && body.Platform != "ios" && body.Platform != "android" {
-		handlers.RenderError(w, http.StatusBadRequest, "platform must be \"ios\", \"android\", or empty for every platform")
-		return
+	// Same fan-out as running the CLI's rollback command once per platform,
+	// which is what an operator without a working copy would otherwise do.
+	targets := []types.Platform{types.PlatformIOS, types.PlatformAndroid}
+	if body.Platform != "" {
+		platform, err := types.ParsePlatform(body.Platform)
+		if err != nil {
+			handlers.RenderError(w, http.StatusBadRequest, "platform must be \"ios\", \"android\", or empty for every platform")
+			return
+		}
+		targets = []types.Platform{platform}
 	}
 	// Required, unlike the CLI's: a rollback from the dashboard is the one
 	// publish nobody can trace back to a commit, so the row has to say why.
@@ -255,13 +262,6 @@ func (h *UpdateHandler) CreateRollbackHandler(w http.ResponseWriter, r *http.Req
 	if err := validation.DisplayName("message", message); err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-
-	// Same fan-out as running the CLI's rollback command once per platform,
-	// which is what an operator without a working copy would otherwise do.
-	targets := []string{"ios", "android"}
-	if body.Platform != "" {
-		targets = []string{body.Platform}
 	}
 
 	// One row per platform, and no transaction spans them: the first failure
@@ -274,10 +274,10 @@ func (h *UpdateHandler) CreateRollbackHandler(w http.ResponseWriter, r *http.Req
 		rollback, err := h.deploymentService.CreateRollback(r.Context(), appId, platform, "", runtimeVersion, branchName, message)
 		if err != nil {
 			if len(created) > 0 {
-				log.Printf("Partial rollback on %s/%s: %s done, %s failed: %v", branchName, runtimeVersion, strings.Join(targets[:len(created)], ", "), platform, err)
+				log.Printf("Partial rollback on %s/%s: %s done, %s failed: %v", branchName, runtimeVersion, platformList(targets[:len(created)]), platform, err)
 				handlers.RenderError(w, http.StatusConflict, fmt.Sprintf(
 					"The rollback was created for %s but failed for %s. Retry it for %s alone.",
-					strings.Join(targets[:len(created)], ", "), platform, platform))
+					platformList(targets[:len(created)]), platform, platform))
 				return
 			}
 			renderPublishError(w, err, "An internal error occurred while creating the rollback.")
@@ -426,10 +426,17 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 		handlers.RenderError(w, http.StatusBadRequest, "cursor is invalid")
 		return
 	}
+	var platform types.Platform
+	if rawPlatform := params.Get("platform"); rawPlatform != "" {
+		if platform, err = types.ParsePlatform(rawPlatform); err != nil {
+			handlers.RenderError(w, http.StatusBadRequest, "platform must be \"ios\" or \"android\"")
+			return
+		}
+	}
 	query := types.UpdateFeedQuery{
 		Branch:         params.Get("branch"),
 		RuntimeVersion: params.Get("runtimeVersion"),
-		Platform:       params.Get("platform"),
+		Platform:       platform,
 		UpdateUUID:     params.Get("uuid"),
 		PublishGroup:   params.Get("groupId"),
 		CommitHash:     params.Get("commitHash"),
@@ -464,4 +471,12 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(page)
+}
+
+func platformList(platforms []types.Platform) string {
+	names := make([]string, len(platforms))
+	for i, platform := range platforms {
+		names[i] = string(platform)
+	}
+	return strings.Join(names, ", ")
 }

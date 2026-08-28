@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"xprem/internal/helpers"
 
 	"github.com/joho/godotenv"
@@ -116,7 +118,54 @@ func validateBucketParams(storageMode string) bool {
 }
 
 func validateBaseUrl(baseUrl string) bool {
-	return baseUrl != "" && helpers.IsValidURL(baseUrl)
+	if baseUrl == "" || !helpers.IsValidURL(baseUrl) {
+		return false
+	}
+	parsed, err := url.Parse(baseUrl)
+	if err != nil {
+		return false
+	}
+	// Paths are appended to BASE_URL, so a query or fragment would end up
+	// before them.
+	return parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == ""
+}
+
+// BaseURL is BASE_URL without any trailing slash.
+func BaseURL() string {
+	return strings.TrimRight(GetEnv("BASE_URL"), "/")
+}
+
+// ServeFromSubPath reports whether the server itself serves under BASE_URL's
+// path; when false the reverse proxy is expected to strip the prefix.
+func ServeFromSubPath() bool {
+	return GetEnv("SERVE_FROM_SUB_PATH") == "true"
+}
+
+// PublicPath is the path component of BASE_URL, empty when BASE_URL has none.
+func PublicPath() string {
+	parsed, err := url.Parse(BaseURL())
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimRight(parsed.Path, "/")
+	if p == "" || p == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		return "/" + p
+	}
+	return p
+}
+
+// PublicHref is path as a root-relative URL under BASE_URL.
+func PublicHref(path string) string {
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return PublicPath() + path
 }
 
 func IsTestMode() bool {

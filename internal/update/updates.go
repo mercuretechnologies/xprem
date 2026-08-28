@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 	"xprem/config"
@@ -31,7 +30,7 @@ func GetUpdateCheckStatus(update types.Update) time.Time {
 	return file.CreatedAt.UTC()
 }
 
-func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform string) string {
+func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform types.Platform) string {
 	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, platform)
 }
 
@@ -39,7 +38,7 @@ func ComputeMetadataCacheKey(appId string, branch string, runtimeVersion string,
 	return fmt.Sprintf("metadata:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId)
 }
 
-func ComputeUpdateManifestCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform string) string {
+func ComputeUpdateManifestCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform types.Platform) string {
 	return fmt.Sprintf("manifest:%s:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId, platform)
 }
 
@@ -168,7 +167,7 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	return metadata, nil
 }
 
-func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platform, branch, updateId string) (string, error) {
+func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion string, platform types.Platform, branch, updateId string) (string, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid base URL: %w", err)
@@ -176,7 +175,7 @@ func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platf
 	query := url.Values{}
 	query.Set("asset", assetFilePath)
 	query.Set("runtimeVersion", runtimeVersion)
-	query.Set("platform", platform)
+	query.Set("platform", string(platform))
 	query.Set("branch", branch)
 	// Pins the asset to the exact update the manifest came from, so rollout
 	// clients on a non-latest update fetch from the right folder (control-plane
@@ -187,10 +186,10 @@ func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platf
 }
 
 func GetAssetEndpoint() string {
-	return config.GetEnv("BASE_URL") + "/assets"
+	return config.BaseURL() + "/assets"
 }
 
-func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform string) (types.ManifestAsset, error) {
+func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform types.Platform) (types.ManifestAsset, error) {
 	cacheKey := ComputeManifestAssetCacheKey(update.AppId, update, asset.Path)
 	assetCache := cache2.GetCache()
 	if manifestAsset, ok := cache2.GetJSON[types.ManifestAsset](assetCache, cacheKey); ok {
@@ -257,7 +256,7 @@ func computeManifestMetadata(update types.Update) json.RawMessage {
 func ComposeUpdateManifest(
 	metadata *types.UpdateMetadata,
 	update types.Update,
-	platform string,
+	platform types.Platform,
 ) (types.UpdateManifest, error) {
 	manifestCache := cache2.GetCache()
 	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
@@ -277,14 +276,8 @@ func ComposeUpdateManifest(
 		}
 	}
 
-	var platformSpecificMetadata types.PlatformMetadata
-	switch platform {
-	case "ios":
-		platformSpecificMetadata = metadata.MetadataJSON.FileMetadata.IOS
-	case "android":
-		platformSpecificMetadata = metadata.MetadataJSON.FileMetadata.Android
-	}
-	if platformSpecificMetadata.Bundle == "" {
+	platformSpecificMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(platform)
+	if err != nil || platformSpecificMetadata.Bundle == "" {
 		return types.UpdateManifest{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	}
 	var (
@@ -386,13 +379,13 @@ func RetrieveUpdateStoredMetadata(update types.Update) (*types.UpdateStoredMetad
 // unique-key/constraint conflicts in relational stores, we append a deterministic
 // platform identifier digit (+1 for iOS, +2 for Android) to the end of the timestamp,
 // mathematically decoupling their identities under any hardware concurrency schedule.
-func GenerateUpdateTimestamp(platform string) int64 {
+func GenerateUpdateTimestamp(platform types.Platform) int64 {
 	milli := time.Now().UnixNano() / int64(time.Millisecond)
 	var platformModifier int64 = 0
-	switch strings.ToLower(platform) {
-	case "ios":
+	switch platform {
+	case types.PlatformIOS:
 		platformModifier = 1
-	case "android":
+	case types.PlatformAndroid:
 		platformModifier = 2
 	default:
 		platformModifier = 9

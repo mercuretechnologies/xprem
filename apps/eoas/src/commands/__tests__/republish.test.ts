@@ -27,10 +27,13 @@ vi.mock('../../lib/vcs', () => ({
 vi.mock('../../lib/package', () => ({
   isExpoInstalled: () => true,
 }));
-vi.mock('../../lib/expoConfig', () => ({
-  getPrivateExpoConfigAsync: async () => ({}),
-  resolveServerUrl: async (_config: unknown, customServerUrl?: string) =>
-    new URL(customServerUrl ?? 'https://ota.example.com/manifest').origin,
+// resolveServerUrl stays real; the config below feeds it the same update URL a
+// project would.
+vi.mock('../../lib/expoConfig', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../lib/expoConfig')>()),
+  getPrivateExpoConfigAsync: async () => ({
+    updates: { url: 'https://ota.example.com/manifest' },
+  }),
   requireExpoAppId: () => 'app-1',
 }));
 vi.mock('../../lib/serverUpdates', async importOriginal => {
@@ -314,13 +317,13 @@ describe('republish command flow', () => {
 
     expect(lastPostUrl().origin).toBe('https://publish.example.com');
     expect(vi.mocked(fetchRuntimeVersions).mock.calls[0][0]).toMatchObject({
-      baseUrl: 'https://publish.example.com',
+      baseUrl: 'https://publish.example.com/some/path',
     });
     expect(vi.mocked(fetchPublishGroups).mock.calls[0][0]).toMatchObject({
-      baseUrl: 'https://publish.example.com',
+      baseUrl: 'https://publish.example.com/some/path',
     });
     expect(vi.mocked(fetchUpdates).mock.calls[0][0]).toMatchObject({
-      baseUrl: 'https://publish.example.com',
+      baseUrl: 'https://publish.example.com/some/path',
     });
   });
 });

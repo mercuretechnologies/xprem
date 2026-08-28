@@ -59,7 +59,7 @@ func testUpdateService() *services.UpdateService {
 // same one wire.go uses in stateless mode. Assertions want this rather than
 // testUpdateService().GetLatestUpdate: the service reads through the lastUpdate
 // cache, which would let an assertion pass on a value a previous step cached.
-func testLatestUpdate(appId, branch, runtimeVersion, platform string) (*types.Update, error) {
+func testLatestUpdate(appId, branch, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	return store.NewBucketUpdateStore(bucket.GetBucket()).
 		GetLatestUpdate(context.Background(), appId, branch, runtimeVersion, platform)
 }

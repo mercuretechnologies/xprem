@@ -112,17 +112,34 @@ func serve(handler *IdentityHandler, method, path, body string) *httptest.Respon
 
 const appPath = "/api/apps/app-1/identity"
 
-func TestNilStoreAnswers400(t *testing.T) {
+// A nil service (stateless mode or DISABLE_DEVICE_TELEMETRY) answers the
+// dashboard's polled reads with empty payloads instead of a 400.
+func TestNilServiceAnswersEmptyReads(t *testing.T) {
 	h := NewIdentityHandler(nil)
-	for _, path := range []string{
-		appPath + "/schema",
-		appPath + "/values?key=userId",
-		appPath + "/devices",
-		appPath + "/devices/abc",
-		appPath + "/update-health?ids=9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10",
+	for path, body := range map[string]string{
+		appPath + "/schema":            `{"keys":[]}`,
+		appPath + "/values?key=userId": `{"values":[]}`,
+		appPath + "/devices":           `{"devices":[],"nextCursor":null}`,
+		appPath + "/online":            `{"online":0,"windowMinutes":20}`,
+		appPath + "/update-health?ids=9b3b89b6-5a0d-4a57-b1f5-6e1d5b7c2a10": `{"updates":{}}`,
 	} {
 		rec := serve(h, http.MethodGet, path, "")
-		require.Equal(t, http.StatusBadRequest, rec.Code, path)
+		require.Equal(t, http.StatusOK, rec.Code, path)
+		require.JSONEq(t, body, rec.Body.String(), path)
+	}
+}
+
+// Schema writes and the device detail keep the hard 400: they are reached by
+// explicit action, never by background polling.
+func TestNilServiceAnswers400(t *testing.T) {
+	h := NewIdentityHandler(nil)
+	for _, request := range []struct{ method, path, body string }{
+		{http.MethodPut, appPath + "/schema/userId", `{"type":"string"}`},
+		{http.MethodDelete, appPath + "/schema/userId", ""},
+		{http.MethodGet, appPath + "/devices/abc", ""},
+	} {
+		rec := serve(h, request.method, request.path, request.body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, request.path)
 	}
 }
 

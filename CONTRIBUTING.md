@@ -8,6 +8,8 @@ For small fixes — typos, documentation improvements, obvious bug fixes — fee
 
 For anything significant (a new feature, a behavior change, a refactor), **please open an issue first** and wait for a maintainer's go-ahead before writing code. This is not bureaucracy: it lets us tell you early if the idea conflicts with the roadmap, overlaps with planned commercial features, or needs a different approach. A feature pull request opened without prior discussion may be closed with a pointer to this document, and nobody enjoys that outcome — least of all us.
 
+We use AI ourselves, and AI-assisted contributions are welcome. Before you send one, read the [AI policy](./AI_POLICY.md). The short version: if you do not understand the code your AI produced, or the project it lands in, open an issue instead of a pull request. We read every line carefully, and we hate AI slop.
+
 ## Open core policy
 
 xprem is an open-core project. The complete OTA workflow is MIT-licensed and will stay that way: publishing updates, release channels, branches, rollbacks, storage backends, CDN integrations, the dashboard, Prometheus metrics, and A/B testing.

@@ -148,7 +148,7 @@ func refreshTokenFromRow(row pgdb.RefreshToken) RefreshToken {
 		UserId:    row.UserID.String(),
 		FamilyId:  row.FamilyID.String(),
 		ExpiresAt: row.ExpiresAt.Time,
-		UsedAt:    timestamptzToPtr(row.UsedAt),
+		UsedAt:    FromPgTimestamptz(row.UsedAt),
 	}
 	if row.ReplacedBy.Valid {
 		successor := row.ReplacedBy.String()

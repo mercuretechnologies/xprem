@@ -54,11 +54,11 @@ func channelBranchSurfingCacheKey(appId string, channelName string) string {
 // and the channel's pattern filters it afterwards, so channels share one entry.
 // The platform belongs in the key, not just the query — an iOS answer served to
 // an Android device would offer branches it cannot be given.
-func surfableBranchesCacheKey(appId string, runtimeVersion string, platform string) string {
+func surfableBranchesCacheKey(appId string, runtimeVersion string, platform types.Platform) string {
 	return fmt.Sprintf("surfable-branches:%s:%s:%s:%s", version.Version, appId, runtimeVersion, platform)
 }
 
-func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
+func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error) {
 	branchCache := cache2.GetCache()
 	cacheKey := surfableBranchesCacheKey(appId, runtimeVersion, platform)
 	if branches, ok := cache2.GetJSON[[]types.SurfableBranch](branchCache, cacheKey); ok {
@@ -203,7 +203,7 @@ func ForgetBranchSurfing(appId string, channelName string) {
 	invalidateBranchSurfingCache(appId, channelName)
 }
 
-func ForgetSurfableBranches(appId string, runtimeVersion string, platform string) {
+func ForgetSurfableBranches(appId string, runtimeVersion string, platform types.Platform) {
 	cache2.GetCache().Delete(surfableBranchesCacheKey(appId, runtimeVersion, platform))
 }
 

@@ -10,6 +10,7 @@ import (
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/services"
+	"xprem/internal/types"
 	"xprem/internal/validation"
 
 	"github.com/google/uuid"
@@ -74,9 +75,9 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
-	platform := r.URL.Query().Get("platform")
-	if platform == "" || (platform != "ios" && platform != "android") {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
+	platform, err := types.ParsePlatform(r.URL.Query().Get("platform"))
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, r.URL.Query().Get("platform"))
 		http.Error(w, "Invalid platform", http.StatusBadRequest)
 		return
 	}
@@ -105,7 +106,7 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		RuntimeVersion: runtimeVersion,
 		UpdateID:       updateId,
 	}
-	err := h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
+	err = h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, services.ErrUnauthorized) {
 			RenderCliAuthError(w, err)
@@ -205,6 +206,17 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 	w.WriteHeader(http.StatusOK)
 }
 
+// requestUploadUrlsResponse echoes RolloutPercentage and PublishGroup only when
+// the server honoured them: the CLI reads their absence as a server too old to
+// know the parameter (or stateless mode for the group) and warns instead of
+// publishing to every device or pretending the rows are grouped.
+type requestUploadUrlsResponse struct {
+	UpdateID          int64                      `json:"updateId"`
+	UploadRequests    []bucket.FileUploadRequest `json:"uploadRequests"`
+	RolloutPercentage *int                       `json:"rolloutPercentage,omitempty"`
+	PublishGroup      *string                    `json:"publishGroup,omitempty"`
+}
+
 func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 	vars := mux.Vars(r)
@@ -216,11 +228,15 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	platform := r.URL.Query().Get("platform")
-	if platform != "" && (platform != "ios" && platform != "android") {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
-		http.Error(w, "Invalid platform", http.StatusBadRequest)
-		return
+	var platform types.Platform
+	if rawPlatform := r.URL.Query().Get("platform"); rawPlatform != "" {
+		parsed, err := types.ParsePlatform(rawPlatform)
+		if err != nil {
+			log.Printf("[RequestID: %s] Invalid platform: %s", requestID, rawPlatform)
+			http.Error(w, "Invalid platform", http.StatusBadRequest)
+			return
+		}
+		platform = parsed
 	}
 	commitHash := r.URL.Query().Get("commitHash")
 	runtimeVersion := r.URL.Query().Get("runtimeVersion")
@@ -299,20 +315,11 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	response := map[string]interface{}{
-		"updateId":       result.UpdateID,
-		"uploadRequests": result.UploadRequests,
-	}
-	// Echoed back so the CLI can detect a server too old to know the parameter (an
-	// old server silently ignores it and would publish to every device).
-	if rolloutPercentage != nil {
-		response["rolloutPercentage"] = *rolloutPercentage
-	}
-	// Same detection contract for grouping: no echo means the group was not
-	// stored (old server or stateless mode) and the CLI warns instead of
-	// pretending the rows are grouped.
-	if publishGroup != nil {
-		response["publishGroup"] = *publishGroup
+	response := requestUploadUrlsResponse{
+		UpdateID:          result.UpdateID,
+		UploadRequests:    result.UploadRequests,
+		RolloutPercentage: rolloutPercentage,
+		PublishGroup:      publishGroup,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

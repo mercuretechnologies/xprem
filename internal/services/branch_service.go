@@ -32,7 +32,7 @@ type BranchRepository interface {
 	GetUpdateRefsByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error)
 	DeleteBranchByName(ctx context.Context, appId string, branchName string) error
 	GetBranches(ctx context.Context, appId string) ([]types.BranchMapping, error)
-	GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error)
+	GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error)
 	GetRuntimeVersionsWithUpdateStats(ctx context.Context, appId string, branchName string) ([]types.RuntimeVersionWithStats, error)
 	UpdateChannelBranchMapping(ctx context.Context, appId string, channelId string, branchId string) error
 	CreateRuntimeVersion(ctx context.Context, appId string, version string) (int64, error)

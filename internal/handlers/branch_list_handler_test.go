@@ -58,7 +58,7 @@ func (r *stubBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) erro
 func (r *stubBranchRepo) GetBranches(_ context.Context, _ string) ([]types.BranchMapping, error) {
 	return nil, nil
 }
-func (r *stubBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
+func (r *stubBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return r.surfable[runtimeVersion], nil
 }
 func (r *stubBranchRepo) GetRuntimeVersionsWithUpdateStats(_ context.Context, _, _ string) ([]types.RuntimeVersionWithStats, error) {
@@ -274,8 +274,8 @@ func TestBranchListIsScopedToThePlatform(t *testing.T) {
 // the wrong one rather than merely a longer one.
 type platformBranchRepo struct{ services.BranchRepository }
 
-func (platformBranchRepo) GetSurfableBranches(_ context.Context, _, _ string, platform string) ([]types.SurfableBranch, error) {
-	return []types.SurfableBranch{{Name: "pr-" + platform, LastUpdateAt: "2026-08-01T10:00:00Z"}}, nil
+func (platformBranchRepo) GetSurfableBranches(_ context.Context, _, _ string, platform types.Platform) ([]types.SurfableBranch, error) {
+	return []types.SurfableBranch{{Name: "pr-" + string(platform), LastUpdateAt: "2026-08-01T10:00:00Z"}}, nil
 }
 
 func TestBranchListRejectsAMissingOrUnknownPlatform(t *testing.T) {

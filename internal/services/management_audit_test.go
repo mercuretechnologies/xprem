@@ -66,7 +66,7 @@ func (f *fakeMgmtChannelRepo) SetBranchSurfing(_ context.Context, _ string, _ st
 
 type fakeMgmtBranchRepo struct{}
 
-func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ string, _ string) ([]types.SurfableBranch, error) {
+func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return nil, nil
 }
 

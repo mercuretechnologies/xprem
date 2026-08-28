@@ -28,11 +28,11 @@ func NewIdentityHandler(service *Service) *IdentityHandler {
 	return &IdentityHandler{service: service}
 }
 
-// requireService short-circuits with a 400 when identity has no storage
-// (stateless mode). Returns the service and true when it is available.
-func (h *IdentityHandler) requireService(w http.ResponseWriter) (*Service, bool) {
+func (h *IdentityHandler) requireService(w http.ResponseWriter, throw bool) (*Service, bool) {
 	if h.service == nil {
-		handlers.RenderError(w, http.StatusBadRequest, "Device identity requires a control plane (database).")
+		if throw {
+			handlers.RenderError(w, http.StatusBadRequest, "Device identity requires a control plane (database) and to enable DEVICE_TELEMETRY")
+		}
 		return nil, false
 	}
 	return h.service, true
@@ -53,6 +53,28 @@ func renderIdentityServiceError(w http.ResponseWriter, err error) {
 }
 
 // schemaKeyResponse is the wire shape of a KeySpec (camelCase; timestamps RFC3339 UTC).
+type schemaResponse struct {
+	Keys []schemaKeyResponse `json:"keys"`
+}
+
+type valuesResponse struct {
+	Values []ValueCount `json:"values"`
+}
+
+type devicesPageResponse struct {
+	Devices    []deviceResponse `json:"devices"`
+	NextCursor *string          `json:"nextCursor"`
+}
+
+type onlineDevicesResponse struct {
+	Online        int64 `json:"online"`
+	WindowMinutes int   `json:"windowMinutes"`
+}
+
+type updatesHealthResponse struct {
+	Updates map[string]updateHealthResponse `json:"updates"`
+}
+
 type schemaKeyResponse struct {
 	Key       string `json:"key"`
 	Type      string `json:"type"`
@@ -109,8 +131,9 @@ func deviceResponseFrom(d Device) deviceResponse {
 }
 
 func (h *IdentityHandler) GetSchemaHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, schemaResponse{Keys: []schemaKeyResponse{}})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
@@ -125,11 +148,11 @@ func (h *IdentityHandler) GetSchemaHandler(w http.ResponseWriter, r *http.Reques
 		keys = append(keys, schemaKeyResponseFrom(spec))
 	}
 	sortSchemaKeys(keys)
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	handlers.RenderJSON(w, http.StatusOK, schemaResponse{Keys: keys})
 }
 
 func (h *IdentityHandler) UpsertSchemaKeyHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, true)
 	if !ok {
 		return
 	}
@@ -162,7 +185,7 @@ func (h *IdentityHandler) UpsertSchemaKeyHandler(w http.ResponseWriter, r *http.
 }
 
 func (h *IdentityHandler) DeleteSchemaKeyHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, true)
 	if !ok {
 		return
 	}
@@ -181,8 +204,9 @@ func (h *IdentityHandler) DeleteSchemaKeyHandler(w http.ResponseWriter, r *http.
 }
 
 func (h *IdentityHandler) SearchValuesHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, valuesResponse{Values: []ValueCount{}})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
@@ -200,7 +224,7 @@ func (h *IdentityHandler) SearchValuesHandler(w http.ResponseWriter, r *http.Req
 	}
 	out := make([]ValueCount, 0, len(values))
 	out = append(out, values...) // To init with [] instead of nil for the renderJSON
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{"values": out})
+	handlers.RenderJSON(w, http.StatusOK, valuesResponse{Values: out})
 }
 
 // parseDeviceQuery reads the filter parameters shared by the inventory page and the online
@@ -275,8 +299,9 @@ func parseDeviceQuery(w http.ResponseWriter, r *http.Request, service *Service, 
 }
 
 func (h *IdentityHandler) ListDevicesHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, devicesPageResponse{Devices: []deviceResponse{}, NextCursor: nil})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
@@ -303,17 +328,15 @@ func (h *IdentityHandler) ListDevicesHandler(w http.ResponseWriter, r *http.Requ
 	for _, d := range devices {
 		items = append(items, deviceResponseFrom(d))
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{
-		"devices":    items,
-		"nextCursor": encodeDeviceCursor(next),
-	})
+	handlers.RenderJSON(w, http.StatusOK, devicesPageResponse{Devices: items, NextCursor: encodeDeviceCursor(next)})
 }
 
 // OnlineDevicesHandler answers "how many devices are live right now", taking the same
 // filters as the inventory.
 func (h *IdentityHandler) OnlineDevicesHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, onlineDevicesResponse{Online: 0, WindowMinutes: int(DefaultOnlineWindow.Minutes())})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
@@ -339,14 +362,11 @@ func (h *IdentityHandler) OnlineDevicesHandler(w http.ResponseWriter, r *http.Re
 		renderIdentityServiceError(w, err)
 		return
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{
-		"online":        count,
-		"windowMinutes": int(min(window, MaxOnlineWindow).Minutes()),
-	})
+	handlers.RenderJSON(w, http.StatusOK, onlineDevicesResponse{Online: count, WindowMinutes: int(min(window, MaxOnlineWindow).Minutes())})
 }
 
 func (h *IdentityHandler) GetDeviceHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, true)
 	if !ok {
 		return
 	}
@@ -420,8 +440,9 @@ type updateHealthResponse struct {
 // UpdateHealthHandler serves GET .../identity/update-health?ids=uuid,uuid. Every id gets an
 // entry, zeroes when nothing was recorded for it.
 func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.requireService(w)
+	service, ok := h.requireService(w, false)
 	if !ok {
+		handlers.RenderJSON(w, http.StatusOK, updatesHealthResponse{Updates: map[string]updateHealthResponse{}})
 		return
 	}
 	appID := mux.Vars(r)["APP_ID"]
@@ -470,5 +491,5 @@ func (h *IdentityHandler) UpdateHealthHandler(w http.ResponseWriter, r *http.Req
 		}
 		out[parsed.String()] = response
 	}
-	handlers.RenderJSON(w, http.StatusOK, map[string]any{"updates": out})
+	handlers.RenderJSON(w, http.StatusOK, updatesHealthResponse{Updates: out})
 }

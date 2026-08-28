@@ -18,7 +18,7 @@ type CreateBranchModalProps = {
   onClose: () => void;
   // Called once the branch exists so the caller can use it straight away:
   // map it to a channel, prefill a form, ...
-  onBranchCreated?: (branch: { branchId: string; branchName: string }) => void;
+  onBranchCreated?: (branch: { branchId: string; branchName: string }) => void | Promise<void>;
 };
 
 export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBranchModalProps) => {
@@ -33,16 +33,29 @@ export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBr
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const branchName = name.trim();
     if (!branchName || isSubmitting) return;
     setIsSubmitting(true);
     try {
       const { branchId } = await api.createBranch(branchName);
-      toast({
-        title: 'Branch created',
-        description: `"${branchName}" is ready to receive updates.`,
-      });
-      onBranchCreated?.({ branchId, branchName });
+      try {
+        await onBranchCreated?.({ branchId, branchName });
+        toast({
+          title: 'Branch created',
+          description: `"${branchName}" is ready to receive updates.`,
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'Refresh the page to use the newly created branch.';
+        toast({
+          title: 'Branch created, but the page could not be updated',
+          description: errorMessage,
+          variant: 'destructive',
+        });
+      }
       handleClose();
     } catch (error) {
       let errorTitle = 'Error creating branch';

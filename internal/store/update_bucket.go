@@ -30,7 +30,7 @@ func NewBucketUpdateStore(bucket bucket2.Bucket) *BucketUpdateStore {
 
 // GetLatestUpdate returns the newest complete update for the platform, or nil
 // when the branch has none yet.
-func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error) {
+func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	updates, err := bucket2.GetBucket().GetUpdates(appId, branchName, runtimeVersion)
 	if err != nil {
 		return nil, err
@@ -95,9 +95,9 @@ func (s *BucketUpdateStore) MarkUpdateAsChecked(ctx context.Context, update type
 
 // updateMetadataReader marshals the update-metadata.json body. message is
 // omitted when empty.
-func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, error) {
+func updateMetadataReader(platform types.Platform, commitHash, message string) (*bytes.Reader, error) {
 	fileUpdateMetadata := map[string]string{
-		"platform":   platform,
+		"platform":   string(platform),
 		"commitHash": commitHash,
 	}
 	if message != "" {
@@ -111,7 +111,7 @@ func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, 
 }
 
 // publishGroup is ignored: stateless mode has no publish grouping.
-func (s *BucketUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, publishGroup *string) (*types.Update, error) {
 	metadataReader, err := updateMetadataReader(platform, commitHash, message)
 	if err != nil {
 		return nil, err
@@ -276,7 +276,7 @@ func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, updat
 
 // CreateRollback writes the metadata file and the "rollback" marker file;
 // there is no bundle or asset to store for a rollback.
-func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error) {
 	update := types.Update{
 		AppId:          appId,
 		UpdateId:       update2.ConvertUpdateTimestampToString(updateId),
@@ -301,7 +301,7 @@ func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, up
 
 // GetLatestUpdateWithRollout wraps GetLatestUpdate with an empty rollout
 // envelope, since stateless mode has no rollouts.
-func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
+func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	latest, err := s.GetLatestUpdate(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil {
 		return nil, err
@@ -318,7 +318,7 @@ func (s *BucketUpdateStore) HasActiveRolloutUpdate(ctx context.Context, appId st
 	return false, nil
 }
 
-func (s *BucketUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
 	return nil, ErrNotSupportedInStatelessMode
 }
 

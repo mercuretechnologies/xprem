@@ -64,7 +64,7 @@ export default class Publish extends Command {
     }),
     serverUrl: Flags.string({
       description:
-        'URL of the self-hosted update server to publish to. Defaults to the origin of updates.url from your Expo config',
+        'URL of the self-hosted update server to publish to. Defaults to updates.url from your Expo config, minus a trailing /manifest',
       required: false,
     }),
     nonInteractive: Flags.boolean({

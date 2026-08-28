@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/PageHeader';
 import { PasswordRulesChecklist } from '@/components/ui/password-rules-checklist';
 import { isPasswordValid } from '@/lib/password-policy';
+import { dashboardBasename } from '@/lib/basename.ts';
 
 export const Account = () => {
   const { CONTROL_PLANE_ENABLED } = useSettings();
@@ -41,7 +42,7 @@ export const Account = () => {
         // navigation rather than a router transition, for the reason endSession
         // gives in lib/api.ts: the state held above the router never re-reads
         // the cleared tokens, and would keep issuing unauthenticated requests.
-        window.location.assign('/login');
+        window.location.assign(`${dashboardBasename()}/login`);
         return;
       }
       toast({

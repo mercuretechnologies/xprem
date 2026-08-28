@@ -11,10 +11,21 @@ describe('isValidUpdateUrl', () => {
     expect(isValidUpdateUrl('http://localhost:3000')).toBe(true);
   });
 
-  it('rejects URLs with a path or without a scheme', () => {
+  it('accepts a path prefix the server is mounted under', () => {
+    expect(isValidUpdateUrl('https://api.example.com/ota')).toBe(true);
+    expect(isValidUpdateUrl('https://api.example.com/path1/path2')).toBe(true);
+  });
+
+  it('rejects the /manifest device endpoint, a missing scheme, or a non-http scheme', () => {
     expect(isValidUpdateUrl('https://customota.com/manifest')).toBe(false);
+    expect(isValidUpdateUrl('https://api.example.com/ota/manifest')).toBe(false);
     expect(isValidUpdateUrl('customota.com')).toBe(false);
     expect(isValidUpdateUrl('ftp://customota.com')).toBe(false);
+  });
+
+  it('rejects a query string or fragment', () => {
+    expect(isValidUpdateUrl('https://api.example.com/ota?foo=1')).toBe(false);
+    expect(isValidUpdateUrl('https://api.example.com/ota#section')).toBe(false);
   });
 });
 

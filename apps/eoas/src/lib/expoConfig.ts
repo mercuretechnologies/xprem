@@ -410,6 +410,17 @@ function stringifyWithEnv(obj: Record<string, any>): string {
   return json.replace(/"__RAW_EXPR_(\d+)__"/g, (_match, index) => rawExpressions[Number(index)]);
 }
 
+// Strips a trailing /manifest from an Expo updates.url (or --serverUrl) and
+// keeps any path prefix the server is mounted under.
+export function publicServerUrl(raw: string): string {
+  const parsed = new URL(raw);
+  let path = parsed.pathname.replace(/\/+$/, '');
+  if (path.endsWith('/manifest')) {
+    path = path.slice(0, -'/manifest'.length);
+  }
+  return `${parsed.origin}${path}`;
+}
+
 // customServerUrl wins over the Expo config, so a project serving updates and
 // receiving publishes on two different origins can point the CLI at the second
 // one without touching its config.
@@ -424,7 +435,7 @@ export async function resolveServerUrl(
     );
   }
   try {
-    return new URL(updateUrl).origin;
+    return publicServerUrl(updateUrl);
   } catch {
     throw new Error(customServerUrl ? 'Invalid --serverUrl value.' : 'Invalid update URL.');
   }
