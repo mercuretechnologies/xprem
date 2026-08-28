@@ -15,6 +15,7 @@ func TestPublicPathMountsTheApp(t *testing.T) {
 	defer teardown()
 	t.Setenv("BASE_URL", "http://localhost:3000/ota")
 	t.Setenv("SERVE_FROM_SUB_PATH", "true")
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 
 	hc := httptest.NewRecorder()
@@ -59,6 +60,7 @@ func TestNestedPublicPathMountsTheApp(t *testing.T) {
 	defer teardown()
 	t.Setenv("BASE_URL", "https://api.example.com/path1/path2")
 	t.Setenv("SERVE_FROM_SUB_PATH", "true")
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 
 	hc := httptest.NewRecorder()
@@ -86,6 +88,7 @@ func TestStripModeKeepsRootRoutesAndPublicLinks(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
 	t.Setenv("BASE_URL", "https://api.example.com/ota")
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "true")
 	router := infrastructure.NewRouter(testContainer())
 
 	manifest := httptest.NewRecorder()
