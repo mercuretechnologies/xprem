@@ -88,6 +88,14 @@ environment:
     required:
       - key: "useDashboard"
         is: "true"
+  # "true" redirects / to the dashboard login instead of returning 404. Off by
+  # default so the root of a public OTA domain does not point at the admin UI.
+  - name: "DASHBOARD_ROOT_REDIRECT"
+    value: ""
+    enabled:
+      - key: "useDashboard"
+        is: "true"
+    required: false
   - name: "CACHE_MODE"
     key: "cacheMode"
     required: true
