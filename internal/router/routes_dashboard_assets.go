@@ -81,16 +81,23 @@ func registerDashboardAssets(r *mux.Router) {
 				return
 			}
 		}
-		filePath := filepath.Join(dashboardPath, "index.html")
-		fmt.Println("Serving file", filePath)
-		body, err := os.ReadFile(filePath)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		href := html.EscapeString(config.PublicHref("/dashboard") + "/")
-		body = bytes.Replace(body, []byte("<head>"), []byte(`<head><base href="`+href+`">`), 1)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(body)
+		serveIndexWithBaseHref(w, r, filepath.Join(dashboardPath, "index.html"))
 	}))
+}
+
+// serveIndexWithBaseHref serves the SPA entry point with a <base href> naming
+// the dashboard's public mount. The build references its assets with relative
+// paths, so this tag is what keeps them resolving on deep-route refreshes.
+func serveIndexWithBaseHref(w http.ResponseWriter, r *http.Request, indexPath string) {
+	body, err := os.ReadFile(indexPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// EscapeString: the href lands inside an HTML attribute and BASE_URL is
+	// operator input.
+	href := html.EscapeString(config.PublicHref("/dashboard") + "/")
+	body = bytes.Replace(body, []byte("<head>"), []byte(`<head><base href="`+href+`">`), 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(body)
 }
