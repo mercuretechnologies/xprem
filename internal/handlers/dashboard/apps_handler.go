@@ -133,7 +133,7 @@ func (h *AppHandler) DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.appService.DeleteApp(r.Context(), *app); err != nil {
 		notFoundErr := (*store.ErrResourceNotFound)(nil)
 		if errors.As(err, &notFoundErr) {
-			w.WriteHeader(http.StatusNoContent)
+			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while deleting the app.")
