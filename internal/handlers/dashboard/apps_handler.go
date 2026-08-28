@@ -132,7 +132,7 @@ func (h *AppHandler) DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.appService.DeleteApp(r.Context(), *app); err != nil {
 		notFoundErr := (*store.ErrResourceNotFound)(nil)
-		if !errors.As(err, &notFoundErr) {
+		if errors.As(err, &notFoundErr) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
