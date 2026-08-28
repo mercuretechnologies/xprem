@@ -90,6 +90,29 @@ func TestValidBaseUrl(t *testing2.T) {
 	assert.True(t, isValid)
 }
 
+func TestValidBaseUrlWithPath(t *testing2.T) {
+	assert.True(t, validateBaseUrl("https://api.example.com/ota"))
+	assert.True(t, validateBaseUrl("https://api.example.com/path1/path2"))
+}
+
+func TestPublicPath(t *testing2.T) {
+	t.Setenv("BASE_URL", "https://ota.example.com")
+	assert.Equal(t, "", PublicPath())
+	assert.Equal(t, "/dashboard/", PublicHref("/dashboard/"))
+
+	t.Setenv("BASE_URL", "https://ota.example.com/")
+	assert.Equal(t, "", PublicPath())
+
+	t.Setenv("BASE_URL", "https://api.example.com/ota")
+	assert.Equal(t, "/ota", PublicPath())
+	assert.Equal(t, "/ota/dashboard/", PublicHref("/dashboard/"))
+	assert.Equal(t, "/ota/manifest", PublicHref("/manifest"))
+
+	t.Setenv("BASE_URL", "https://api.example.com/path1/path2/")
+	assert.Equal(t, "/path1/path2", PublicPath())
+	assert.Equal(t, "/path1/path2/dashboard", PublicHref("/dashboard"))
+}
+
 func TestNotValidConfigStorage(t *testing2.T) {
 	teardown := setup(t)
 	defer teardown()

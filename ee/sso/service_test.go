@@ -832,6 +832,14 @@ func TestSaveConfigValidatesDiscoveryBeforePersisting(t *testing.T) {
 	assert.Equal(t, "http://localhost:3000/auth/sso/callback", view.RedirectURI)
 }
 
+func TestRedirectURIFollowsBasePath(t *testing.T) {
+	idp := newFakeIdP(t)
+	users := newFakeUserRepo()
+	service, _ := newTestService(t, newFakeSSORepo(users, testConfigFor(idp)), users)
+	t.Setenv("BASE_URL", "https://api.example.com/ota")
+	assert.Equal(t, "https://api.example.com/ota/auth/sso/callback", service.RedirectURI())
+}
+
 func TestSaveConfigKeepsStoredSecretWhenLeftEmpty(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUserRepo()

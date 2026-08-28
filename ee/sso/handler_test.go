@@ -113,6 +113,34 @@ func TestLoginRedirectHandlerSetsFlowCookie(t *testing.T) {
 	assert.False(t, cookie.Secure)
 }
 
+func TestLoginRedirectHandlerScopesFlowCookieToBasePath(t *testing.T) {
+	idp := newFakeIdP(t)
+	users := newFakeUserRepo()
+	handler, _, _ := newTestHandler(t, newFakeSSORepo(users, testConfigFor(idp)), users)
+	t.Setenv("BASE_URL", "https://api.example.com/ota")
+
+	recorder := httptest.NewRecorder()
+	handler.LoginRedirectHandler(recorder, httptest.NewRequest(http.MethodGet, "/auth/sso/login", nil))
+	cookie := flowCookieFrom(t, recorder.Result())
+	require.NotNil(t, cookie)
+	assert.Equal(t, "/ota/auth/sso", cookie.Path)
+	assert.True(t, cookie.Secure)
+}
+
+func TestLoginRedirectHandlerRedirectsErrorsUnderBasePath(t *testing.T) {
+	idp := newFakeIdP(t)
+	users := newFakeUserRepo()
+	handler, service, _ := newTestHandler(t, newFakeSSORepo(users, testConfigFor(idp)), users)
+	service.licenseValid = func() bool { return false }
+	t.Setenv("BASE_URL", "https://api.example.com/ota")
+
+	recorder := httptest.NewRecorder()
+	handler.LoginRedirectHandler(recorder, httptest.NewRequest(http.MethodGet, "/auth/sso/login", nil))
+	location := recorder.Result().Header.Get("Location")
+	assert.True(t, strings.HasPrefix(location, "https://api.example.com/ota/dashboard/login#"))
+	assert.Equal(t, ssoErrLicense, fragmentValues(t, location).Get("ssoError"))
+}
+
 func TestLoginRedirectHandlerRedirectsErrorsToLoginPage(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUserRepo()

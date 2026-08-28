@@ -1,7 +1,10 @@
 package infrastructure
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"os"
@@ -40,20 +43,24 @@ func registerDashboardAssets(r *mux.Router) {
 	// 302 and not 301: a permanent redirect on "/" would be cached by browsers
 	// even after the dashboard is disabled or the root gains a real purpose.
 	r.Path("/").Methods(http.MethodGet).HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/", http.StatusFound)
+		http.Redirect(w, r, config.PublicHref("/dashboard/"), http.StatusFound)
 	})
 	r.PathPrefix("/dashboard").Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/dashboard/env.js" {
 			w.Header().Set("Content-Type", "application/javascript")
-			baseURL := config.GetEnv("BASE_URL")
+			baseURL := config.BaseURL()
 			if baseURL == "" {
 				baseURL = "http://localhost:3000"
 			}
-			w.Write([]byte(fmt.Sprintf("window.env = { VITE_OTA_API_URL: '%s' };", baseURL)))
+			env, _ := json.Marshal(map[string]string{
+				"VITE_OTA_API_URL":   baseURL,
+				"DASHBOARD_BASENAME": config.PublicHref("/dashboard"),
+			})
+			fmt.Fprintf(w, "window.env = %s;", env)
 			return
 		}
 		if r.URL.Path == "/dashboard" {
-			target := "/dashboard/"
+			target := config.PublicHref("/dashboard/")
 			if r.URL.RawQuery != "" {
 				target += "?" + r.URL.RawQuery
 			}
@@ -74,6 +81,14 @@ func registerDashboardAssets(r *mux.Router) {
 		}
 		filePath := filepath.Join(dashboardPath, "index.html")
 		fmt.Println("Serving file", filePath)
-		http.ServeFile(w, r, filePath)
+		body, err := os.ReadFile(filePath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		href := html.EscapeString(config.PublicHref("/dashboard") + "/")
+		body = bytes.Replace(body, []byte("<head>"), []byte(`<head><base href="`+href+`">`), 1)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(body)
 	}))
 }

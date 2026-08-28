@@ -269,7 +269,7 @@ func (s *SSOService) PublicConfig(ctx context.Context) PublicConfig {
 // RedirectURI is derived from BASE_URL, never configured: it is displayed
 // read-only in the dashboard for copy-pasting into the IdP's app settings.
 func (s *SSOService) RedirectURI() string {
-	return strings.TrimRight(config.GetEnv("BASE_URL"), "/") + "/auth/sso/callback"
+	return config.BaseURL() + "/auth/sso/callback"
 }
 
 func (s *SSOService) adminView(cfg *SSOConfig) *AdminConfig {

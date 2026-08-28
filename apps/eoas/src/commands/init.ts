@@ -44,7 +44,8 @@ export default class Init extends Command {
       validate: v => !!v,
     });
     const { updateUrl: promptedUrl } = await promptAsync({
-      message: 'Enter the URL of your update server (ex: https://customota.com)',
+      message:
+        'Enter the URL of your update server (ex: https://customota.com or https://api.example.com/ota)',
       name: 'updateUrl',
       type: 'text',
       initial: (getExpoConfigUpdateUrl(config) || '').replace(/\/manifest$/, ''),
@@ -52,7 +53,7 @@ export default class Init extends Command {
         return !!v && isValidUpdateUrl(v);
       },
     });
-    let manifestEndpoint = `${promptedUrl}/manifest`;
+    let manifestEndpoint = `${promptedUrl.replace(/\/+$/, '')}/manifest`;
     const updateUrl = getExpoConfigUpdateUrl(config);
     if (updateUrl && !updateUrl.includes('expo.dev')) {
       const confirmed = await confirmAsync({

@@ -231,7 +231,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	auditService.StartRetentionPurgeFromEnv(ctx)
 
 	licenseClient := licensing.NewClient(config.GetEnv("LICENSE_API_URL"))
-	licenseService := licensing.NewLicenseService(licenseRepo, licenseClient, instanceId, config.GetEnv("BASE_URL"))
+	licenseService := licensing.NewLicenseService(licenseRepo, licenseClient, instanceId, config.BaseURL())
 	// Wired before the loops start: they emit audit events from goroutines.
 	licenseService.SetOnAuditEvent(auditService.Record)
 	if err := licenseService.ActivateFromStore(ctx); err != nil {

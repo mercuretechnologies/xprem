@@ -66,6 +66,25 @@ func TestAuthorizeRedirectsToConsent(t *testing.T) {
 	}
 }
 
+func TestAuthorizeConsentURLKeepsBasePath(t *testing.T) {
+	handler, clientRepo, _ := newTestHandlerWithCodes(t)
+	t.Setenv("BASE_URL", "https://api.example.com/ota")
+	clientID := seedClient(t, clientRepo, "http://127.0.0.1:53422/callback")
+
+	query := validAuthorizeQuery(clientID)
+	query.Set("resource", "https://api.example.com/ota/mcp")
+	res := httptest.NewRecorder()
+	handler.AuthorizeHandler(res, httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+query.Encode(), nil))
+
+	if res.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d: %s", res.Code, res.Body.String())
+	}
+	location := res.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://api.example.com/ota/dashboard/oauth/consent?") {
+		t.Fatalf("expected consent under BASE_URL path, got %s", location)
+	}
+}
+
 func TestAuthorizeRejections(t *testing.T) {
 	handler, clientRepo, _ := newTestHandlerWithCodes(t)
 	clientID := seedClient(t, clientRepo, "http://127.0.0.1:53422/callback")

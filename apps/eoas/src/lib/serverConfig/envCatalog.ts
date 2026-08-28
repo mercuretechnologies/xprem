@@ -48,7 +48,16 @@ export const ENV_SECTIONS: EnvSection[] = [
         applies: () => true,
         required: true,
         value: c => or(c.baseUrl, '<https://your-ota-domain>'),
-        comment: 'Public HTTPS URL of the server; manifest and asset URLs are built from it.',
+        comment:
+          'Public HTTPS URL of the server, including a path prefix if the gateway mounts it under one (e.g. https://api.example.com/ota).',
+      },
+      {
+        name: 'SERVE_FROM_SUB_PATH',
+        applies: c => c.serveFromSubPath === true,
+        required: true,
+        value: () => 'true',
+        comment:
+          "Serve every route under the BASE_URL path prefix. Remove when the gateway strips the prefix before forwarding (it only affects routing; links always use BASE_URL's path).",
       },
       {
         name: 'JWT_SECRET',
@@ -521,6 +530,7 @@ export function inferChoicesFromEnv(env: Record<string, string>): ServerChoices 
   const cacheMode = (env.CACHE_MODE ?? 'local') as CacheMode;
   return {
     baseUrl: env.BASE_URL,
+    serveFromSubPath: env.SERVE_FROM_SUB_PATH === 'true',
     jwtSecret: env.JWT_SECRET,
     dbUrl: env.DB_URL,
     masterKeySource,
