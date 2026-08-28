@@ -33,6 +33,7 @@ export const CreateBranchModal = ({ isOpen, onClose, onBranchCreated }: CreateBr
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const branchName = name.trim();
     if (!branchName || isSubmitting) return;
     setIsSubmitting(true);
