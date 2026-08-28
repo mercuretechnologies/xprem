@@ -8,7 +8,15 @@
 set -euo pipefail
 
 echo "==> [start] PostgreSQL"
-sudo pg_ctlcluster 16 main start 2>/dev/null || sudo pg_ctlcluster 16 main restart 2>/dev/null || true
+# Discover the installed cluster instead of hardcoding a major version, so a
+# different PostgreSQL package version still starts.
+read -r PG_VER PG_CLUSTER < <(pg_lsclusters -h 2>/dev/null | awk 'NR==1 {print $1, $2}')
+PG_VER="${PG_VER:-16}"
+PG_CLUSTER="${PG_CLUSTER:-main}"
+echo "    using cluster ${PG_VER}/${PG_CLUSTER}"
+sudo pg_ctlcluster "$PG_VER" "$PG_CLUSTER" start 2>/dev/null \
+  || sudo pg_ctlcluster "$PG_VER" "$PG_CLUSTER" restart 2>/dev/null \
+  || true
 
 echo "    waiting for PostgreSQL to accept connections"
 for _ in $(seq 1 30); do
