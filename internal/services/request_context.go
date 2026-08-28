@@ -1,6 +1,9 @@
 package services
 
-import "context"
+import (
+	"context"
+	"xprem/config"
+)
 
 // The request-identity context keys live here, next to the types and services
 // that produce them, not in the HTTP middleware that stamps them: the
@@ -82,4 +85,22 @@ const PrincipalExtraKey = "principal"
 func PrincipalFromExtra(extra map[string]any) *DashboardPrincipal {
 	principal, _ := extra[PrincipalExtraKey].(*DashboardPrincipal)
 	return principal
+}
+
+type appContextKey struct{}
+
+// WithApp stores the app the app-resolver middleware loaded for the route's
+// APP_ID.
+func WithApp(ctx context.Context, app config.AppConfig) context.Context {
+	return context.WithValue(ctx, appContextKey{}, app)
+}
+
+// AppFromContext returns the app stored by WithApp, or nil off an app-scoped
+// route.
+func AppFromContext(ctx context.Context) *config.AppConfig {
+	app, ok := ctx.Value(appContextKey{}).(config.AppConfig)
+	if !ok {
+		return nil
+	}
+	return &app
 }
