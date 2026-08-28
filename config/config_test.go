@@ -95,6 +95,12 @@ func TestValidBaseUrlWithPath(t *testing2.T) {
 	assert.True(t, validateBaseUrl("https://api.example.com/path1/path2"))
 }
 
+func TestNotValidBaseUrlWithQueryOrFragment(t *testing2.T) {
+	assert.False(t, validateBaseUrl("https://api.example.com/ota?foo=bar"))
+	assert.False(t, validateBaseUrl("https://api.example.com/ota#section"))
+	assert.False(t, validateBaseUrl("https://api.example.com?"))
+}
+
 func TestPublicPath(t *testing2.T) {
 	t.Setenv("BASE_URL", "https://ota.example.com")
 	assert.Equal(t, "", PublicPath())

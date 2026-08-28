@@ -118,7 +118,16 @@ func validateBucketParams(storageMode string) bool {
 }
 
 func validateBaseUrl(baseUrl string) bool {
-	return baseUrl != "" && helpers.IsValidURL(baseUrl)
+	if baseUrl == "" || !helpers.IsValidURL(baseUrl) {
+		return false
+	}
+	parsed, err := url.Parse(baseUrl)
+	if err != nil {
+		return false
+	}
+	// Paths are appended to BASE_URL, so a query or fragment would end up
+	// before them.
+	return parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == ""
 }
 
 // BaseURL is BASE_URL without any trailing slash.
