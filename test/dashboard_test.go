@@ -45,6 +45,7 @@ func TestRootRedirectsToDashboard(t *testing.T) {
 func TestRootNotFoundByDefault(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
+	t.Setenv("DASHBOARD_ROOT_REDIRECT", "")
 	router := infrastructure.NewRouter(testContainer())
 	respRec := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
