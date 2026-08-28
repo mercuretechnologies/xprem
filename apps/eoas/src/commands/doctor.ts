@@ -1,7 +1,7 @@
 import { Env } from '@expo/eas-build-job';
 import { Command, Flags } from '@oclif/core';
 
-import { getExpoAppId, getExpoConfigUpdateUrl, getPrivateExpoConfigAsync } from '../lib/expoConfig';
+import { getExpoAppId, getPrivateExpoConfigAsync, resolveServerUrl } from '../lib/expoConfig';
 import { fetchWithRetries } from '../lib/fetch';
 import Log from '../lib/log';
 import { ora } from '../lib/ora';
@@ -74,20 +74,10 @@ export default class Doctor extends Command {
     const privateConfig = await getPrivateExpoConfigAsync(projectDir, {
       env: process.env as Env,
     });
-    const updateUrl = flags.url ?? getExpoConfigUpdateUrl(privateConfig);
-    if (!updateUrl) {
-      Log.error(
-        "Update url is not setup in your config. Please run 'eoas init' to setup the update url, or pass --url"
-      );
+    const baseUrl = await resolveServerUrl(privateConfig, flags.url).catch(e => {
+      Log.error(e.message);
       process.exit(1);
-    }
-    let baseUrl: string;
-    try {
-      baseUrl = new URL(updateUrl).origin;
-    } catch (e) {
-      Log.error('Invalid URL', e);
-      process.exit(1);
-    }
+    });
 
     const appId = flags.appId ?? getExpoAppId(privateConfig);
 

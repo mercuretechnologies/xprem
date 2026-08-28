@@ -17,6 +17,7 @@ func TestDashboardServesStaticFile(t *testing.T) {
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
 	assert.Contains(t, respRec.Body.String(), "window.env")
+	assert.Contains(t, respRec.Body.String(), `"DASHBOARD_BASENAME":"/dashboard"`)
 }
 
 func TestDashboardSPAFallback(t *testing.T) {

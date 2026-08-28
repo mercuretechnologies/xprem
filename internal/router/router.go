@@ -61,5 +61,5 @@ func NewRouter(container *AppContainer) *mux.Router {
 	registerAccountRoutes(apiSubrouter, container, adminOnly)
 	registerAppRoutes(apiSubrouter, container)
 
-	return r
+	return mountPublicPath(r, container)
 }

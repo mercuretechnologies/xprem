@@ -99,7 +99,7 @@ func sanitizeForLog(value string) string {
 // fragment: fragments never reach a server, so neither tokens nor error codes
 // can end up in access logs anywhere.
 func loginPageURL(fragment url.Values) string {
-	return strings.TrimRight(config.GetEnv("BASE_URL"), "/") + "/dashboard/login#" + fragment.Encode()
+	return config.BaseURL() + "/dashboard/login#" + fragment.Encode()
 }
 
 func redirectWithError(w http.ResponseWriter, r *http.Request, code string) {
@@ -115,7 +115,7 @@ func flowCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     flowCookieName,
 		Value:    value,
-		Path:     "/auth/sso",
+		Path:     config.PublicHref("/auth/sso"),
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,

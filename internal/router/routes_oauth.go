@@ -29,6 +29,20 @@ func registerOAuthRoutes(r *mux.Router, container *AppContainer) {
 	r.HandleFunc("/oauth/authorize", h.AuthorizeHandler).Methods(http.MethodGet)
 }
 
+// registerOAuthWellKnownInserted serves RFC 8414 / 9728 path-inserted discovery
+// at the host root when BASE_URL has a path (issuer https://host/ota →
+// /.well-known/oauth-authorization-server/ota). The prefixed copies live on
+// the inner router via stripPrefix.
+func registerOAuthWellKnownInserted(r *mux.Router, container *AppContainer, prefix string) {
+	if container.OAuthHandler == nil || prefix == "" {
+		return
+	}
+	h := container.OAuthHandler
+	r.HandleFunc("/.well-known/oauth-protected-resource"+prefix+"/mcp", oauth.WithCORS(h.ProtectedResourceMetadataHandler)).Methods(http.MethodGet, http.MethodOptions)
+	r.HandleFunc("/.well-known/oauth-protected-resource"+prefix, oauth.WithCORS(h.ProtectedResourceMetadataHandler)).Methods(http.MethodGet, http.MethodOptions)
+	r.HandleFunc("/.well-known/oauth-authorization-server"+prefix, oauth.WithCORS(h.AuthorizationServerMetadataHandler)).Methods(http.MethodGet, http.MethodOptions)
+}
+
 // registerOAuthApiRoutes mounts the consent endpoint behind the dashboard
 // session; api is the authenticated /api subrouter.
 func registerOAuthApiRoutes(api *mux.Router, container *AppContainer) {

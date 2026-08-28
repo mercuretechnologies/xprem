@@ -6,6 +6,7 @@ package licensing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -185,6 +186,35 @@ func TestAttachRefusalLeavesStoreAndEditionUntouched(t *testing.T) {
 	assert.Equal(t, CodeLicenseKeyAlreadyUsed, refusal.Code)
 	assert.Nil(t, repo.stored)
 	assert.False(t, IsEnterprise())
+}
+
+// The license server binds keys to baseUrl by exact string equality, so a
+// BASE_URL with a path prefix must reach it whole, not reduced to its origin.
+func TestLicenseCallsSendTheFullBaseURLPathIncluded(t *testing.T) {
+	requireFullBaseUrl := func(r *http.Request) {
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "https://api.example.com/ota", body["baseUrl"])
+	}
+	fake := &fakeLicenseServer{
+		check: func(w http.ResponseWriter, r *http.Request) {
+			requireFullBaseUrl(r)
+			checkAnswersValidAcme(w, r)
+		},
+		validate: func(w http.ResponseWriter, r *http.Request) {
+			requireFullBaseUrl(r)
+			writeJSONBody(w, http.StatusOK, `{"isActive": true, "licenseInformations": `+acmeInformationsJSON+`}`)
+		},
+	}
+	repo := repoWithAcme()
+	Deactivate()
+	t.Cleanup(Deactivate)
+	service := NewLicenseService(repo, fake.client(t), "instance-1", "https://api.example.com/ota/")
+
+	_, err := service.Check(context.Background(), "XPREM-KEY")
+	require.NoError(t, err)
+	service.ValidateNow(context.Background())
+	assert.Nil(t, repo.stored.ValidationFailedAt, "validate must have sent the exact baseUrl the fake expected")
 }
 
 func TestCheckHasNoSideEffect(t *testing.T) {
