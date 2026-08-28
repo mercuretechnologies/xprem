@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"xprem/internal/bucket"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 )
@@ -35,8 +34,8 @@ func (s *BucketAuthStore) InsertApiKey(ctx context.Context, appId string, name s
 	return 0, ErrNotSupportedInStatelessMode
 }
 
-func (s *BucketAuthStore) GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error) {
-	return []pgdb.GetApiKeysMetadataByAppIDRow{}, ErrNotSupportedInStatelessMode
+func (s *BucketAuthStore) GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]types.ApiKeyMetadata, error) {
+	return []types.ApiKeyMetadata{}, ErrNotSupportedInStatelessMode
 }
 
 func (s *BucketAuthStore) GetApiKeyNameByID(ctx context.Context, appId string, apiKeyId int64) (string, error) {

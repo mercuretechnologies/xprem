@@ -6,7 +6,6 @@ import (
 	"testing"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	"xprem/internal/version"
 )
@@ -39,7 +38,7 @@ type countingChannelRepo struct {
 	surfingErr   error
 }
 
-func (r *countingChannelRepo) GetChannelBranchMapping(ctx context.Context, appId, channelName string) (*expo.ChannelMapping, error) {
+func (r *countingChannelRepo) GetChannelBranchMapping(ctx context.Context, appId, channelName string) (*types.ChannelResolution, error) {
 	r.calls++
 	return r.fakeChannelRepo.GetChannelBranchMapping(ctx, appId, channelName)
 }
@@ -53,8 +52,8 @@ func (r *countingChannelRepo) GetBranchSurfing(ctx context.Context, appId, chann
 }
 
 func TestChannelBranchMappingCache(t *testing.T) {
-	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelMapping{
-		"production": {Id: "1", BranchName: "main", Rollout: &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 30}},
+	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{
+		"production": {Id: "1", BranchName: "main", Rollout: &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 30}},
 	}}}
 	protocolService := NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil)
 	ctx := context.Background()
@@ -94,7 +93,7 @@ func TestChannelBranchMappingCache(t *testing.T) {
 }
 
 func TestChannelBranchMappingNilNeverCached(t *testing.T) {
-	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*expo.ChannelMapping{}}}
+	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{}}}
 	protocolService := NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil)
 	ctx := context.Background()
 	appId := "channel-mapping-nil-test"

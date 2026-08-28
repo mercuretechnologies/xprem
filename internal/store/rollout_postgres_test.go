@@ -78,9 +78,9 @@ func newRolloutFixture(t *testing.T) *rolloutFixture {
 	}
 	_, err = pool.Exec(ctx, "INSERT INTO apps (id, name) VALUES ($1, $2)", fixture.appId, "rollout-store-test")
 	require.NoError(t, err)
-	fixture.defaultBranchId, err = fixture.branches.InsertBranch(ctx, pgdb.InsertBranchParams{AppID: store.ToPgUUID(fixture.appId), Name: rolloutTestDefaultBranch})
+	fixture.defaultBranchId, err = fixture.branches.InsertBranch(ctx, fixture.appId, rolloutTestDefaultBranch)
 	require.NoError(t, err)
-	fixture.rolloutBranchId, err = fixture.branches.InsertBranch(ctx, pgdb.InsertBranchParams{AppID: store.ToPgUUID(fixture.appId), Name: rolloutTestRolloutBranch})
+	fixture.rolloutBranchId, err = fixture.branches.InsertBranch(ctx, fixture.appId, rolloutTestRolloutBranch)
 	require.NoError(t, err)
 	_, err = fixture.branches.CreateRuntimeVersion(ctx, fixture.appId, rolloutTestRuntime)
 	require.NoError(t, err)

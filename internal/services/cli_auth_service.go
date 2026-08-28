@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 )
@@ -38,7 +36,7 @@ var ErrCliAuthUnavailable = fmt.Errorf("could not verify this credential")
 type CliAuthRepository interface {
 	ValidateCliCredential(ctx context.Context, appId string, auth types.Auth) (int64, error)
 	InsertApiKey(ctx context.Context, appId string, name string, hint string, hashedKey string) (int64, error)
-	GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error)
+	GetApiKeysMetadataByAppID(ctx context.Context, appId string) ([]types.ApiKeyMetadata, error)
 	// GetApiKeyNameByID feeds the audit actor display; RevokeApiKeyByID
 	// returns the revoked key's name so the audit entry needs no second read.
 	GetApiKeyNameByID(ctx context.Context, appId string, apiKeyId int64) (string, error)
@@ -134,24 +132,9 @@ func (s *CliAuthService) GenerateAPIKey(ctx context.Context, appId string, name 
 }
 
 func (s *CliAuthService) GetApiKeysMetadata(ctx context.Context, appId string) ([]types.ApiKeyMetadata, error) {
-	rows, err := s.authRepo.GetApiKeysMetadataByAppID(ctx, appId)
+	apiKeysMetadata, err := s.authRepo.GetApiKeysMetadataByAppID(ctx, appId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve API keys metadata from database: %w", err)
-	}
-	apiKeysMetadata := make([]types.ApiKeyMetadata, len(rows))
-	for i, row := range rows {
-		var lastUsedAtStr *string
-		if row.LastUsedAt.Valid {
-			timeStr := row.LastUsedAt.Time.Format(time.RFC3339)
-			lastUsedAtStr = &timeStr
-		}
-		apiKeysMetadata[i] = types.ApiKeyMetadata{
-			ID:         strconv.FormatInt(row.ID, 10),
-			Name:       row.Name,
-			Hint:       row.Hint,
-			CreatedAt:  row.CreatedAt.Time.Format(time.RFC3339),
-			LastUsedAt: lastUsedAtStr,
-		}
 	}
 	return apiKeysMetadata, nil
 }

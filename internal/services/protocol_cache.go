@@ -7,7 +7,6 @@ import (
 	"strings"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	"xprem/internal/version"
 )
@@ -132,16 +131,16 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 // made outside the dashboard can take the provider's TTL plus this one to
 // reach devices.
 // An unknown or unmapped channel (nil) is never cached.
-func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
+func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
 	return cachedChannelMapping(ctx, s.channelRepo, appId, channelName)
 }
 
 // cachedChannelMapping is channelBranchMapping without the service, so the
 // branch list can read the same entry the delivery path already fills.
-func cachedChannelMapping(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (*expo.ChannelMapping, error) {
+func cachedChannelMapping(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (*types.ChannelResolution, error) {
 	mappingCache := cache2.GetCache()
 	cacheKey := channelMappingCacheKey(appId, channelName)
-	if mapping, ok := cache2.GetJSON[expo.ChannelMapping](mappingCache, cacheKey); ok {
+	if mapping, ok := cache2.GetJSON[types.ChannelResolution](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}
 	mapping, err := channelRepo.GetChannelBranchMapping(ctx, appId, channelName)

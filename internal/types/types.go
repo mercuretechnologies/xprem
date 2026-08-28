@@ -179,6 +179,13 @@ type UpdateDetails struct {
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
 }
 
+// UpdateRef is the (update id, runtime version) pair that, with a branch,
+// locates an update's folder in the bucket.
+type UpdateRef struct {
+	ID             int64
+	RuntimeVersion string
+}
+
 type ApiKeyMetadata struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
@@ -342,4 +349,22 @@ type BucketFile struct {
 type Auth struct {
 	Token         *string
 	SessionSecret *string
+}
+
+// ChannelRolloutInfo is the active channel rollout folded into a ChannelResolution in
+// control-plane mode. ID doubles as the bucketing salt. The stateless (Expo) provider
+// never sets it, so rollouts stay a control-plane-only feature.
+type ChannelRolloutInfo struct {
+	ID         string `json:"id"`
+	BranchName string `json:"branchName"`
+	Percentage int    `json:"percentage"`
+}
+
+// ChannelResolution is the branch a channel serves to devices, with its active
+// rollout; the dashboard listing shape is ChannelMapping.
+type ChannelResolution struct {
+	Id         string `json:"id"`
+	BranchName string `json:"branchName"`
+	// Set only by the Postgres channel store when the channel has an active rollout.
+	Rollout *ChannelRolloutInfo `json:"rollout,omitempty"`
 }

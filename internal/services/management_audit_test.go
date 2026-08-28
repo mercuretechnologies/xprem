@@ -5,8 +5,6 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/auditlog"
-	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
 	"xprem/internal/store"
 	"xprem/internal/types"
 
@@ -56,7 +54,7 @@ func (f *fakeMgmtChannelRepo) GetChannelNameByBranchName(_ context.Context, _ st
 func (f *fakeMgmtChannelRepo) GetChannels(_ context.Context, _ string) ([]types.ChannelMapping, error) {
 	return nil, nil
 }
-func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*expo.ChannelMapping, error) {
+func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*types.ChannelResolution, error) {
 	return nil, nil
 }
 func (f *fakeMgmtChannelRepo) GetBranchSurfing(_ context.Context, _ string, _ string) (*types.BranchSurfing, error) {
@@ -72,13 +70,13 @@ func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ 
 	return nil, nil
 }
 
-func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
+func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, error) {
 	return 7, nil
 }
 func (f *fakeMgmtBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _ string, _ string, _ string) error {
 	return nil
 }
-func (f *fakeMgmtBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _ string, _ string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
+func (f *fakeMgmtBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _ string, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (f *fakeMgmtBranchRepo) DeleteBranchByName(_ context.Context, _ string, _ string) error {

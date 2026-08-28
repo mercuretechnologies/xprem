@@ -8,8 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
 	"xprem/internal/services"
 	"xprem/internal/types"
 
@@ -33,7 +31,7 @@ func (r *stubChannelRepo) GetChannelNameByBranchName(_ context.Context, _, _ str
 func (r *stubChannelRepo) GetChannels(_ context.Context, _ string) ([]types.ChannelMapping, error) {
 	return nil, nil
 }
-func (r *stubChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelMapping, error) {
+func (r *stubChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*types.ChannelResolution, error) {
 	return nil, nil
 }
 func (r *stubChannelRepo) GetBranchSurfing(_ context.Context, _, channelName string) (*types.BranchSurfing, error) {
@@ -47,13 +45,13 @@ type stubBranchRepo struct {
 	surfable map[string][]types.SurfableBranch
 }
 
-func (r *stubBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
+func (r *stubBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, error) {
 	return 0, nil
 }
 func (r *stubBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (r *stubBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _, _ string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
+func (r *stubBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (r *stubBranchRepo) DeleteBranchByName(_ context.Context, _, _ string) error { return nil }

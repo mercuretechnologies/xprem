@@ -7,7 +7,6 @@ import (
 	"errors"
 	bucket2 "xprem/internal/bucket"
 	"xprem/internal/crypto"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/helpers"
 	"xprem/internal/types"
 
@@ -298,10 +297,6 @@ func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, up
 		return nil, err
 	}
 	return &update, nil
-}
-
-func (s *BucketUpdateStore) GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error) {
-	return pgdb.GetUpdateByBranchNameAndRuntimeRow{}, ErrNotSupportedInStatelessMode
 }
 
 // GetLatestUpdateWithRollout wraps GetLatestUpdate with an empty rollout

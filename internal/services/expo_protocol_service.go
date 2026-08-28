@@ -18,7 +18,6 @@ import (
 	"xprem/internal/crypto"
 	"xprem/internal/keyStore"
 	"xprem/internal/metrics"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 )
@@ -465,7 +464,7 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 // Tiers 1 and 2 only exist on the control plane; in stateless mode resolution goes
 // straight to tier 3, which with no rollout state degrades to exactly today's
 // latest-update behavior.
-func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params AssetResolutionParams, branchMap *expo.ChannelMapping) (string, *types.Update, error) {
+func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params AssetResolutionParams, branchMap *types.ChannelResolution) (string, *types.Update, error) {
 	if config.IsDBMode() {
 		if params.UpdateID != "" && params.Branch != "" && s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, params.Branch, branchMap) {
 			pinnedUpdate, err := s.updateRepo.GetUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
@@ -511,7 +510,7 @@ func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params Ass
 // permissive as that resolution. Wider and the branch query param becomes a
 // cross-branch read primitive; narrower and the assets of a legitimately surfed
 // branch 404.
-func (s *ExpoProtocolService) isAssetBranchAllowed(ctx context.Context, appId string, channelName string, branchName string, branchMap *expo.ChannelMapping) bool {
+func (s *ExpoProtocolService) isAssetBranchAllowed(ctx context.Context, appId string, channelName string, branchName string, branchMap *types.ChannelResolution) bool {
 	if branchName == branchMap.BranchName {
 		return true
 	}
