@@ -120,6 +120,7 @@ export interface RequestUploadUrlItem {
   requestUploadUrl: string;
   fileName: string;
   filePath: string;
+  originalFileName: string;
   // Extra headers the server requires on the PUT to requestUploadUrl
   // (e.g. x-ms-blob-type for Azure Blob Storage). Absent on older servers.
   headers?: Record<string, string>;
@@ -153,6 +154,7 @@ const uploadRequestJoi = Joi.object({
     .required(),
   fileName: Joi.string().required(),
   filePath: Joi.string().required(),
+  originalFileName: Joi.string().required(),
   headers: uploadRequestHeadersJoi,
   // Unknown keys are tolerated so a newer server can add fields without
   // breaking older CLIs; nothing reads them.
@@ -266,47 +268,48 @@ export async function resolveUploadRequests({
   const resolved: ResolvedUploadRequest[] = [];
   for (const item of uploadRequests) {
     assertSafeUploadUrl(item.requestUploadUrl);
-    assertRelativePathShape(item.filePath);
+    const exportPath = item.originalFileName;
+    assertRelativePathShape(exportPath);
 
-    const manifestEntry = manifestByPath.get(item.filePath);
+    const manifestEntry = manifestByPath.get(exportPath);
     if (!manifestEntry) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": the server asked for a file that is not part of this export.`
+        `Refusing to upload "${exportPath}": the server asked for a file that is not part of this export.`
       );
     }
-    if (item.fileName !== path.basename(item.filePath)) {
+    if (item.fileName !== path.basename(exportPath)) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": the server returned the mismatched name "${item.fileName}".`
+        `Refusing to upload "${exportPath}": the server returned the mismatched name "${item.fileName}".`
       );
     }
-    if (seen.has(item.filePath)) {
-      throw new Error(`The server requested "${item.filePath}" more than once.`);
+    if (seen.has(exportPath)) {
+      throw new Error(`The server requested "${exportPath}" more than once.`);
     }
-    seen.add(item.filePath);
+    seen.add(exportPath);
 
-    const absolutePath = path.resolve(exportRoot, item.filePath);
+    const absolutePath = path.resolve(exportRoot, exportPath);
     // Unreachable on POSIX: a path with no '..' segment and no leading separator
     // cannot resolve out of the root. Kept for the Windows drive-relative case
     // ("C:file" when the export root sits on another drive) and as a backstop if
     // the checks above are ever relaxed.
     if (absolutePath !== exportRoot && !absolutePath.startsWith(exportRoot + path.sep)) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": it resolves outside the export directory.`
+        `Refusing to upload "${exportPath}": it resolves outside the export directory.`
       );
     }
     let realPath: string;
     try {
       realPath = await fs.realpath(absolutePath);
     } catch {
-      throw new Error(`File ${item.filePath} not found in the export directory.`);
+      throw new Error(`File ${exportPath} not found in the export directory.`);
     }
     // The root is already canonical, so any difference here means a symlink was
     // traversed, either as the file itself or as one of its parent directories.
     if (realPath !== absolutePath) {
-      throw new Error(`Refusing to upload "${item.filePath}": it is or goes through a symlink.`);
+      throw new Error(`Refusing to upload "${exportPath}": it is or goes through a symlink.`);
     }
     if (!(await fs.lstat(absolutePath)).isFile()) {
-      throw new Error(`Refusing to upload "${item.filePath}": it is not a regular file.`);
+      throw new Error(`Refusing to upload "${exportPath}": it is not a regular file.`);
     }
 
     resolved.push({ item, absolutePath, manifestEntry });

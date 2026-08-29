@@ -98,6 +98,13 @@ func ValidateBlobHash(hash string) error {
 	return nil
 }
 
+func ValidateUploadFile(name, hash string) error {
+	if err := validateRelativePath("file name", name); err != nil {
+		return err
+	}
+	return ValidateBlobHash(hash)
+}
+
 // BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
 func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
@@ -275,6 +282,8 @@ type FileUploadRequest struct {
 	RequestUploadUrl string `json:"requestUploadUrl"`
 	FileName         string `json:"fileName"`
 	FilePath         string `json:"filePath"`
+	OriginalFileName string `json:"originalFileName"`
+	Hash             string `json:"hash"`
 	// Headers must be sent verbatim by the uploader on its PUT to
 	// RequestUploadUrl. Azure Put Blob rejects requests missing
 	// x-ms-blob-type, and carrying the requirement in the response keeps
@@ -282,10 +291,17 @@ type FileUploadRequest struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-func RequestUploadUrlsForFileUpdates(appId string, branch string, runtimeVersion string, updateId string, fileNames []string) ([]FileUploadRequest, error) {
-	uniqueFileNames := make(map[string]struct{})
-	for _, fileName := range fileNames {
-		uniqueFileNames[fileName] = struct{}{}
+type UploadFile struct {
+	Name string
+	Hash string
+}
+
+func RequestUploadUrlsForFileUpdates(appId string, branch string, files []UploadFile) ([]FileUploadRequest, error) {
+	unique := make(map[string]string, len(files))
+	for _, file := range files {
+		if _, seen := unique[file.Hash]; !seen {
+			unique[file.Hash] = file.Name
+		}
 	}
 
 	bucket := GetBucket()
@@ -297,13 +313,13 @@ func RequestUploadUrlsForFileUpdates(appId string, branch string, runtimeVersion
 	var requests []FileUploadRequest
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(uniqueFileNames))
+	errChan := make(chan error, len(unique))
 
-	wg.Add(len(uniqueFileNames))
-	for fileName := range uniqueFileNames {
-		go func(fileName string) {
+	wg.Add(len(unique))
+	for fileHash, originalName := range unique {
+		go func(fileHash, originalName string) {
 			defer wg.Done()
-			requestUploadUrl, err := bucket.RequestUploadUrlForFileUpdate(appId, branch, runtimeVersion, updateId, fileName)
+			requestUploadUrl, err := bucket.RequestBlobUploadURL(appId, fileHash, branch)
 			if err != nil {
 				errChan <- err
 				return
@@ -311,12 +327,14 @@ func RequestUploadUrlsForFileUpdates(appId string, branch string, runtimeVersion
 			mu.Lock()
 			requests = append(requests, FileUploadRequest{
 				RequestUploadUrl: requestUploadUrl,
-				FileName:         filepath.Base(fileName),
-				FilePath:         fileName,
+				FileName:         filepath.Base(originalName),
+				FilePath:         originalName,
+				OriginalFileName: originalName,
+				Hash:             fileHash,
 				Headers:          uploadHeaders,
 			})
 			mu.Unlock()
-		}(fileName)
+		}(fileHash, originalName)
 	}
 
 	wg.Wait()

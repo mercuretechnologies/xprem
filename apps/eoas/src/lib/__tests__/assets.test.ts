@@ -65,6 +65,7 @@ describe('requestUploadUrls response schema', () => {
     requestUploadUrl: 'https://storage.example.com/upload/bundle.js',
     fileName: 'bundle.js',
     filePath: 'bundle.js',
+    originalFileName: 'bundle.js',
   };
 
   it('accepts a well-formed response and its optional headers', async () => {
@@ -119,7 +120,19 @@ describe('requestUploadUrls response schema', () => {
     ],
     [
       'a missing requestUploadUrl',
-      { updateId: '1', uploadRequests: [{ fileName: 'bundle.js', filePath: 'bundle.js' }] },
+      {
+        updateId: '1',
+        uploadRequests: [
+          { fileName: 'bundle.js', filePath: 'bundle.js', originalFileName: 'bundle.js' },
+        ],
+      },
+    ],
+    [
+      'a missing originalFileName',
+      {
+        updateId: '1',
+        uploadRequests: [{ ...validItem, originalFileName: undefined }],
+      },
     ],
     [
       'a non-http upload URL',

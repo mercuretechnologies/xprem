@@ -1,6 +1,7 @@
 package types
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -200,6 +201,41 @@ type ManifestAsset struct {
 	FileExtension string `json:"fileExtension"`
 	ContentType   string `json:"contentType"`
 	Url           string `json:"url"`
+}
+
+// UpdateAssetMapping is the shaped launch asset and assets persisted on an
+// update. Url is rebuilt at serve time.
+type UpdateAssetMapping struct {
+	LaunchAsset ShapedAsset   `json:"launchAsset"`
+	Assets      []ShapedAsset `json:"assets"`
+}
+
+func (m *UpdateAssetMapping) Scan(src any) error {
+	if src == nil {
+		return nil
+	}
+	var data []byte
+	switch v := src.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("cannot scan %T into UpdateAssetMapping", src)
+	}
+	return json.Unmarshal(data, m)
+}
+
+func (m UpdateAssetMapping) Value() (driver.Value, error) {
+	return json.Marshal(m)
+}
+
+// ShapedAsset is a ManifestAsset without Url.
+type ShapedAsset struct {
+	Hash          string `json:"hash"`
+	Key           string `json:"key"`
+	FileExtension string `json:"fileExtension"`
+	ContentType   string `json:"contentType"`
 }
 
 type ExtraManifestData struct {

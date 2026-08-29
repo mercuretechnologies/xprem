@@ -115,12 +115,11 @@ func performUpload(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpda
 	for err := range errs {
 		t.Fatalf("Error during file uploads: %v", err)
 	}
-	for _, recorder := range ws {
+	for i, recorder := range ws {
 		if recorder.Code != 200 {
 			t.Fatalf("A file upload returned status %d instead of 200", recorder.Code)
 		}
-		sampleReq := fileUploadRequests[0]
-		expectedFilePath := filepath.Join(projectRoot, "updates", "test-app-id", branch, runtimeVersion, updateId, sampleReq.FilePath)
+		expectedFilePath := filepath.Join(projectRoot, "updates", "test-app-id", "cas", fileUploadRequests[i].Hash)
 		if _, err := os.Open(expectedFilePath); err != nil {
 			t.Fatalf("Error opening uploaded file %s: %v", expectedFilePath, err)
 		}
@@ -225,6 +224,54 @@ func TestRequestUploadUrlWithBadRequestBody(t *testing.T) {
 	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code, "Expected status code 400")
 	assert.Equal(t, "No file names provided\n", w.Body.String(), "Expected error message")
+}
+
+func TestRequestUploadUrlRejectsMissingHash(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockExpoForRequestUploadUrlTest("staging")
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("Error finding project root: %v", err)
+	}
+	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
+	q := "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", q, nil)
+	r.Header.Set("Authorization", "Bearer expo_test_token")
+	body, err := json.Marshal(map[string]any{"files": []map[string]string{{"name": "metadata.json"}}})
+	if err != nil {
+		t.Fatalf("Error marshalling body: %v", err)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	serveThroughRouter(w, r)
+	assert.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid hash")
+}
+
+func TestRequestUploadUrlRejectsMalformedHash(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockExpoForRequestUploadUrlTest("staging")
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("Error finding project root: %v", err)
+	}
+	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
+	q := "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", q, nil)
+	r.Header.Set("Authorization", "Bearer expo_test_token")
+	body, err := json.Marshal(map[string]any{
+		"files": []map[string]string{{"name": "metadata.json", "hash": "not-a-hash"}},
+	})
+	if err != nil {
+		t.Fatalf("Error marshalling body: %v", err)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	serveThroughRouter(w, r)
+	assert.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid hash")
 }
 
 func TestRequestUploadUrlWithBadFilenamesType(t *testing.T) {
@@ -353,9 +400,9 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 	for err := range errs {
 		assert.Nil(t, err, "Expected no errors")
 	}
-	for _, rec := range ws {
+	for i, rec := range ws {
 		assert.Equal(t, 200, rec.Code, "Expected status code 200")
-		expectedFile := filepath.Join(projectRoot, "/updates/test-app-id/DO_NOT_USE/1/", updateIdHeader, uploadRequests[0].FilePath)
+		expectedFile := filepath.Join(projectRoot, "updates", "test-app-id", "cas", uploadRequests[i].Hash)
 		if _, err := os.Open(expectedFile); err != nil {
 			assert.Nil(t, err, "Expected no errors when opening uploaded file")
 		}

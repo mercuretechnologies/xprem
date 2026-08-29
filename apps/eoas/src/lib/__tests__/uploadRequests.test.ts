@@ -20,10 +20,12 @@ const manifest: AssetToUpload[] = [
 ];
 
 function item(overrides: Partial<RequestUploadUrlItem> = {}): RequestUploadUrlItem {
+  const filePath = overrides.filePath ?? 'metadata.json';
   return {
     requestUploadUrl: 'https://storage.example.com/upload/metadata.json',
     fileName: 'metadata.json',
-    filePath: 'metadata.json',
+    filePath,
+    originalFileName: filePath,
     ...overrides,
   };
 }
@@ -71,6 +73,21 @@ describe('resolveUploadRequests on a well-behaved server response', () => {
 
   it('accepts an empty response', async () => {
     await expect(resolve([])).resolves.toEqual([]);
+  });
+
+  it('resolves via originalFileName when filePath is a content hash', async () => {
+    const resolved = await resolveUploadRequests({
+      uploadRequests: [
+        item({
+          filePath: 'LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ',
+          fileName: 'metadata.json',
+          originalFileName: 'metadata.json',
+        }),
+      ],
+      exportDir,
+      manifest,
+    });
+    expect(resolved[0].absolutePath).toBe(path.join(fs.realpathSync(exportDir), 'metadata.json'));
   });
 });
 

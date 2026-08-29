@@ -22,6 +22,13 @@ func TestValidateBlobHash(t *testing.T) {
 	assert.Error(t, ValidateBlobHash("LPJNul/wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"))
 }
 
+func TestValidateUploadFile(t *testing.T) {
+	assert.NoError(t, ValidateUploadFile("assets/icon.png", testBlobHash))
+	assert.Error(t, ValidateUploadFile("", testBlobHash))
+	assert.Error(t, ValidateUploadFile("../etc/passwd", testBlobHash))
+	assert.Error(t, ValidateUploadFile("metadata.json", "short"))
+}
+
 func TestBlobObjectKey(t *testing.T) {
 	assert.Equal(t, "app-1/cas/"+testBlobHash, BlobObjectKey("app-1", testBlobHash))
 }
@@ -104,4 +111,3 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 	assert.Equal(t, "production", branch)
 	assert.Equal(t, filepath.Join(root, "app-1", casDir, testBlobHash), filePath)
 }
-

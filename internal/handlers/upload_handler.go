@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/services"
@@ -164,8 +164,7 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 	// No branch check here: the router already judged the branch this token
 	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
 
-	fileName := filepath.Base(filePath)
-	file, _, err := r.FormFile(fileName)
+	file, err := firstMultipartFile(r)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error retrieving file from form: %v", requestID, err)
 		http.Error(w, "Error retrieving file from form", http.StatusBadRequest)
@@ -290,6 +289,13 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		http.Error(w, "No file names provided", http.StatusBadRequest)
 		return
 	}
+	for _, file := range bodyReq.Files {
+		if err := bucket.ValidateUploadFile(file.Name, file.Hash); err != nil {
+			log.Printf("[RequestID: %s] Invalid upload file %q: %v", requestID, file.Name, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	params := services.RequestUploadURLParams{
 		RequestID:         requestID,
@@ -298,7 +304,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		Platform:          platform,
 		CommitHash:        commitHash,
 		RuntimeVersion:    runtimeVersion,
-		Files:         	   bodyReq.Files,
+		Files:             bodyReq.Files,
 		Message:           bodyReq.Message,
 		RolloutPercentage: rolloutPercentage,
 		PublishGroupID:    publishGroup,
@@ -330,4 +336,16 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		log.Printf("[RequestID: %s] Error encoding response serialization: %v", requestID, err)
 	}
 
+}
+
+func firstMultipartFile(r *http.Request) (multipart.File, error) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		return nil, err
+	}
+	for _, files := range r.MultipartForm.File {
+		if len(files) > 0 {
+			return files[0].Open()
+		}
+	}
+	return nil, http.ErrMissingFile
 }
