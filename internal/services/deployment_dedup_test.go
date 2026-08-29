@@ -118,7 +118,7 @@ func TestRequestUploadURLs_FirstPublishSkipsDedup(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		Files: hashedUploads("metadata.json", "assets/aaa"),
+		Files:          hashedUploads("metadata.json", "assets/aaa"),
 	})
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"metadata.json", "assets/aaa"}, requestedFilePaths(resp))
@@ -148,7 +148,7 @@ func TestRequestUploadURLs_DedupIgnoresOtherPlatformUpdates(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "android",
 		RuntimeVersion: "1",
-		Files: hashedUploads("metadata.json", "assets/shared"),
+		Files:          hashedUploads("metadata.json", "assets/shared"),
 	})
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"metadata.json", "assets/shared"}, requestedFilePaths(resp))
