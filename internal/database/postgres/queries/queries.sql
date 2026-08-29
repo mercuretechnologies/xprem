@@ -368,6 +368,22 @@ WHERE updates.id = $1 AND branch_id = (
       AND name = $4
 );
 
+-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+);
+
+-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
+
 -- name: GetLatestUpdate :one
 SELECT 
     u.id,

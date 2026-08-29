@@ -512,6 +512,45 @@ func (s *PostgresUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, 
 	}, nil
 }
 
+func (s *PostgresUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	mapping, err := s.engine.Queries.GetUpdateAssetMapping(ctx, pgdb.GetUpdateAssetMappingParams{
+		ID:    updateIdInt,
+		AppID: ToPgUUID(update.AppId),
+		Name:  update.Branch,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update asset mapping from database: %w", err)
+	}
+	return mapping, nil
+}
+
+func (s *PostgresUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	commandTag, err := s.engine.Queries.SetUpdateAssetMapping(ctx, pgdb.SetUpdateAssetMappingParams{
+		ID:           updateIdInt,
+		AssetMapping: mapping,
+		AppID:        ToPgUUID(update.AppId),
+		Name:         update.Branch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to store update asset mapping in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return fmt.Errorf("no rows were updated when storing the asset mapping for update ID %s", update.UpdateId)
+	}
+	return nil
+}
+
 func (s *PostgresUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
 	updateIdInt, _ := strconv.ParseInt(update.UpdateId, 10, 64)
 	var uuidToStore pgtype.UUID

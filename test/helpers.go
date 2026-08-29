@@ -100,6 +100,17 @@ func GlobalAfterEach(t *testing.T) {
 		// Clean both legacy path (./updates/DO_NOT_USE) and v2 multi-app path
 		// (./updates/test-app-id/DO_NOT_USE), tests mix both depending on how
 		// they set LOCAL_BUCKET_BASE_PATH.
+		// The cas folders hold the blobs a presign run wrote: left behind, the
+		// next run sees them as already uploaded and skips the upload requests.
+		for _, casPath := range []string{
+			filepath.Join(projectRoot, "./updates/cas"),
+			filepath.Join(projectRoot, "./updates/test-app-id/cas"),
+			filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas"),
+		} {
+			if err := os.RemoveAll(casPath); err != nil {
+				t.Errorf("Error removing cas directory: %v", err)
+			}
+		}
 		for _, updatesPath := range []string{
 			filepath.Join(projectRoot, "./updates/DO_NOT_USE"),
 			filepath.Join(projectRoot, "./updates/test-app-id/DO_NOT_USE"),
@@ -401,37 +412,21 @@ func mockExpoForRequestUploadUrlTest(channelName string) {
 		})
 }
 
-func ComputeUploadRequestsInput(dirPath string) handlers.RequestUploadURLsRequest {
-	metadataFilePath := filepath.Join(dirPath, "metadata.json")
-	metadataFile, err := os.Open(metadataFilePath)
+// ComputeUploadRequestsInput mirrors what eoas posts for one platform: that
+// platform's launch asset and assets, plus the config files, each stamped with
+// its role.
+func ComputeUploadRequestsInput(dirPath string, platform types.Platform) handlers.RequestUploadURLsRequest {
+	metadataFile, err := os.Open(filepath.Join(dirPath, "metadata.json"))
 	if err != nil {
 		panic(err)
 	}
 	defer metadataFile.Close()
 	var metadataObject types.MetadataObject
-	err = json.NewDecoder(metadataFile).Decode(&metadataObject)
-	if err != nil {
+	if err := json.NewDecoder(metadataFile).Decode(&metadataObject); err != nil {
 		panic(err)
 	}
-	fileNames := make([]string, 0)
-	for _, asset := range metadataObject.FileMetadata.IOS.Assets {
-		fileNames = append(fileNames, asset.Path)
-	}
-	for _, asset := range metadataObject.FileMetadata.Android.Assets {
-		fileNames = append(fileNames, asset.Path)
-	}
-	if metadataObject.FileMetadata.Android.Bundle != "" {
-		fileNames = append(fileNames, metadataObject.FileMetadata.Android.Bundle)
-	}
-	if metadataObject.FileMetadata.IOS.Bundle != "" {
-		fileNames = append(fileNames, metadataObject.FileMetadata.IOS.Bundle)
-	}
-	// Add metadata.json & expoConfig.json
-	fileNames = append(fileNames, "metadata.json")
-	fileNames = append(fileNames, "expoConfig.json")
-	files := make([]services.FileUploadItem, 0, len(fileNames))
-	for _, name := range fileNames {
-		data, err := os.ReadFile(filepath.Join(dirPath, name))
+	item := func(relativePath, ext string, role services.FileRole) services.FileUploadItem {
+		data, err := os.ReadFile(filepath.Join(dirPath, relativePath))
 		if err != nil {
 			panic(err)
 		}
@@ -439,10 +434,31 @@ func ComputeUploadRequestsInput(dirPath string) handlers.RequestUploadURLsReques
 		if err != nil {
 			panic(err)
 		}
-		files = append(files, services.FileUploadItem{
-			Name: name,
+		file := services.FileUploadItem{
+			Path: relativePath,
 			Hash: crypto.GetBase64URLEncoding(sum),
-		})
+			Ext:  ext,
+			Role: role,
+		}
+		if role != services.FileRoleConfig {
+			key, err := crypto.CreateHash(data, "md5", "hex")
+			if err != nil {
+				panic(err)
+			}
+			file.Key = key
+		}
+		return file
+	}
+	files := []services.FileUploadItem{
+		item("metadata.json", "json", services.FileRoleConfig),
+		item("expoConfig.json", "json", services.FileRoleConfig),
+	}
+	platformMetadata, err := metadataObject.FileMetadata.PlatformMetadata(platform)
+	if err == nil && platformMetadata.Bundle != "" {
+		files = append(files, item(platformMetadata.Bundle, "hbc", services.FileRoleLaunch))
+		for _, asset := range platformMetadata.Assets {
+			files = append(files, item(asset.Path, asset.Ext, services.FileRoleAsset))
+		}
 	}
 	return handlers.RequestUploadURLsRequest{Files: files}
 }

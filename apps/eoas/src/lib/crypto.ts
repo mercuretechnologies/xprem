@@ -7,13 +7,24 @@ export function toBase64Url(buffer: Buffer): string {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function hashFile(filePath: string): Promise<string> {
-  const digest = await new Promise<Buffer>((resolve, reject) => {
-    const file = fs.createReadStream(filePath).on('error', reject);
-    const hash = file.pipe(createHash('sha256')).on('error', reject);
-    hash.on('finish', () => {
-      resolve(hash.read());
-    });
+export interface FileDigest {
+  // ManifestAsset.hash, and the object key under {appId}/cas/.
+  hash: string;
+  // ManifestAsset.key: the md5 expo-updates uses as its on-device cache key.
+  key: string;
+}
+
+export async function digestFile(filePath: string): Promise<FileDigest> {
+  const sha256 = createHash('sha256');
+  const md5 = createHash('md5');
+  await new Promise<void>((resolve, reject) => {
+    fs.createReadStream(filePath)
+      .on('error', reject)
+      .on('data', chunk => {
+        sha256.update(chunk);
+        md5.update(chunk);
+      })
+      .on('end', resolve);
   });
-  return toBase64Url(digest);
+  return { hash: toBase64Url(sha256.digest()), key: md5.digest('hex') };
 }

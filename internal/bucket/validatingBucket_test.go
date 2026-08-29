@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"xprem/internal/types"
@@ -314,4 +315,28 @@ func TestValidatingBucket_ValidInputsDelegate(t *testing.T) {
 	_, err := v.GetFile(validUpdate(), "assets/image.png")
 	assert.NoError(t, err)
 	assert.True(t, stub.called)
+}
+
+// The backends list the children of {appId}/, and the cas folder is one of
+// them: without the filter the dashboard renders "cas" as a branch.
+func TestValidatingBucketGetBranchesHidesCas(t *testing.T) {
+	base := t.TempDir()
+	writeFile(t, filepath.Join(base, "app-1", "branch-a", "1.0", "100", ".check"))
+	writeFile(t, filepath.Join(base, "app-1", "cas", "some-blob-hash"))
+
+	b := &validatingBucket{Inner: &LocalBucket{BasePath: base}}
+
+	branches, err := b.GetBranches("app-1")
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"branch-a"}, branches)
+}
+
+func TestValidatingBucketRejectsTheReservedBranchName(t *testing.T) {
+	b := &validatingBucket{Inner: &stubBucket{}}
+
+	_, err := b.GetRuntimeVersions("app-1", casDir)
+	assert.ErrorContains(t, err, "reserved")
+
+	_, err = b.RequestUploadUrlForFileUpdate("app-1", casDir, "1.0", "100", "metadata.json")
+	assert.ErrorContains(t, err, "reserved")
 }

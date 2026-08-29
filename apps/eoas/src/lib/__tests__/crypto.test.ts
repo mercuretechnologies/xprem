@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { hashFile, toBase64Url } from '../crypto';
+import { digestFile, toBase64Url } from '../crypto';
 
 let tmpDir: string;
 
@@ -14,12 +14,15 @@ afterEach(() => {
   }
 });
 
-describe('hashFile', () => {
-  it('matches the server ManifestAsset.hash encoding', async () => {
+describe('digestFile', () => {
+  it('matches the server ManifestAsset hash and key encodings', async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eoas-hash-'));
     const filePath = path.join(tmpDir, 'hello');
     fs.writeFileSync(filePath, 'hello');
-    await expect(hashFile(filePath)).resolves.toBe('LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ');
+    await expect(digestFile(filePath)).resolves.toEqual({
+      hash: 'LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ',
+      key: '5d41402abc4b2a76b9719d911017c592',
+    });
   });
 
   it('is sha256 of the bytes, then base64url', () => {

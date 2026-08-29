@@ -81,24 +81,29 @@ func VerifyUploadedUpdate(update types.Update) error {
 	return nil
 }
 
-func AreUpdatesIdentical(update1, update2 types.Update) (bool, error) {
-	// An update without metadata (a rollback folder, a partial upload) can
-	// never be identical to another update; comparing must not fail on it.
-	metadata1, errMetadata1 := GetMetadata(update1)
-	if errors.Is(errMetadata1, ErrUpdateMetadataMissing) {
-		return false, nil
+// AreUpdatesIdentical reports whether an incoming publish carries exactly the
+// content the stored update already serves. Both mappings are per-platform, so
+// no file has to be attributed to a platform here.
+func AreUpdatesIdentical(stored, incoming *types.UpdateAssetMapping) bool {
+	if stored == nil || incoming == nil {
+		return false
 	}
-	if errMetadata1 != nil {
-		return false, errMetadata1
+	if stored.LaunchAsset.Hash == "" || stored.LaunchAsset.Hash != incoming.LaunchAsset.Hash {
+		return false
 	}
-	metadata2, errMetadata2 := GetMetadata(update2)
-	if errors.Is(errMetadata2, ErrUpdateMetadataMissing) {
-		return false, nil
+	if len(stored.Assets) != len(incoming.Assets) {
+		return false
 	}
-	if errMetadata2 != nil {
-		return false, errMetadata2
+	storedHashes := make(map[string]struct{}, len(stored.Assets))
+	for _, asset := range stored.Assets {
+		storedHashes[asset.Hash] = struct{}{}
 	}
-	return metadata1.Fingerprint == metadata2.Fingerprint, nil
+	for _, asset := range incoming.Assets {
+		if _, ok := storedHashes[asset.Hash]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func GetExpoConfig(update types.Update) (json.RawMessage, error) {

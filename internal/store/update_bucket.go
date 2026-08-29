@@ -256,6 +256,26 @@ func (s *BucketUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, up
 }
 
 func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
+	return s.mutateStoredMetadata(update, func(metadata *types.UpdateStoredMetadata) {
+		metadata.UpdateUUID = updateUUID
+	})
+}
+
+func (s *BucketUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	storedMetadata, err := update2.RetrieveUpdateStoredMetadata(update)
+	if err != nil || storedMetadata == nil {
+		return nil, err
+	}
+	return storedMetadata.AssetMapping, nil
+}
+
+func (s *BucketUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	return s.mutateStoredMetadata(update, func(metadata *types.UpdateStoredMetadata) {
+		metadata.AssetMapping = mapping
+	})
+}
+
+func (s *BucketUpdateStore) mutateStoredMetadata(update types.Update, apply func(*types.UpdateStoredMetadata)) error {
 	file, err := s.bucket.GetFile(update, "update-metadata.json")
 	if err != nil {
 		return err
@@ -266,7 +286,7 @@ func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, updat
 	if err != nil {
 		return err
 	}
-	storedMetadata.UpdateUUID = updateUUID
+	apply(&storedMetadata)
 	updatedMetadata, err := json.Marshal(storedMetadata)
 	if err != nil {
 		return err

@@ -54,6 +54,7 @@ type fakeStoredUpdate struct {
 	controlUpdateId   *string
 	updateUUID        string
 	publishGroup      *string
+	assetMapping      *types.UpdateAssetMapping
 }
 
 type fakeUpdateRepo struct {
@@ -342,6 +343,27 @@ func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update typ
 	return nil
 }
 
+func (r *fakeUpdateRepo) GetUpdateAssetMapping(_ context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	if row == nil {
+		return nil, nil
+	}
+	return row.assetMapping, nil
+}
+
+func (r *fakeUpdateRepo) StoreUpdateAssetMapping(_ context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	if row == nil {
+		return fmt.Errorf("update %s not found", update.UpdateId)
+	}
+	row.assetMapping = mapping
+	return nil
+}
+
 type fakeRolloutRepo struct {
 	updateRepo *fakeUpdateRepo
 	events     *eventLog
@@ -547,21 +569,39 @@ func (fakeBranchRepo) CreateRuntimeVersion(_ context.Context, _, _ string) (int6
 
 func (fakeBranchRepo) GetBranchByName(_ context.Context, _, _ string) (int64, error) { return 0, nil }
 
-func hashedUpload(name string) FileUploadItem {
-	sum, err := crypto.CreateHash([]byte(name), "sha256", "base64")
+func roledUpload(path, ext string, role FileRole) FileUploadItem {
+	sum, err := crypto.CreateHash([]byte(path), "sha256", "base64")
 	if err != nil {
 		panic(err)
 	}
-	return FileUploadItem{Name: name, Hash: crypto.GetBase64URLEncoding(sum)}
+	return FileUploadItem{
+		Path: path,
+		Hash: crypto.GetBase64URLEncoding(sum),
+		Key:  path + "-key",
+		Ext:  ext,
+		Role: role,
+	}
 }
 
-func hashedUploads(names ...string) []FileUploadItem {
-	files := make([]FileUploadItem, len(names))
-	for i, name := range names {
-		files[i] = hashedUpload(name)
+func configUpload(path string) FileUploadItem {
+	return roledUpload(path, "json", FileRoleConfig)
+}
+
+func hashedUpload(path string) FileUploadItem {
+	return roledUpload(path, "png", FileRoleAsset)
+}
+
+// hashedUploads is a publish the server accepts: the named files as assets,
+// plus the one launch asset every publish must carry.
+func hashedUploads(paths ...string) []FileUploadItem {
+	files := []FileUploadItem{roledUpload(launchAssetPath, "hbc", FileRoleLaunch)}
+	for _, path := range paths {
+		files = append(files, hashedUpload(path))
 	}
 	return files
 }
+
+const launchAssetPath = "bundles/launch.hbc"
 
 // fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
 type fakeRolloutBucket struct{}

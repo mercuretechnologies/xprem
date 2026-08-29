@@ -37,7 +37,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	r := httptest.NewRequest("POST", u.String(), nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 
-	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
+	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	require.NoError(t, err)
 	r.Body = io.NopCloser(bytes.NewReader(uploadRequestsInputJSON))

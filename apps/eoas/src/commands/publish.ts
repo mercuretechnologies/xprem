@@ -8,8 +8,10 @@ import mime from 'mime';
 import path from 'path';
 
 import {
+  NoChangesDetectedError,
   RequestUploadUrlItem,
   activeRolloutConflictMessage,
+  buildUploadFiles,
   computeFilesRequests,
   requestUploadUrls,
   resolveUploadRequests,
@@ -342,35 +344,48 @@ export default class Publish extends Command {
     // One group id for the whole run: every platform update of this publish
     // shares it, so control plane servers list them as a single publish.
     const publishGroupId = randomUUID();
+    // Collected rather than logged inline: writing to the terminal under a
+    // running spinner interleaves with its frames.
+    const unchangedPlatforms: string[] = [];
     try {
-      uploadUrls = await Promise.all(
+      const outcomes = await Promise.all(
         runtimeVersions.map(async ({ runtimeVersion, platform }) => {
           if (!runtimeVersion) {
             throw new Error('Runtime version is not resolved');
           }
-          return {
-            ...(await requestUploadUrls({
-              body: {
-                files: files.map(file => ({
-                  hash: file.hash,
-                  name: file.path,
-                })),
-              },
-              requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
-              auth: credentials,
+          try {
+            return {
+              ...(await requestUploadUrls({
+                body: { files: buildUploadFiles(files, platform) },
+                requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
+                auth: credentials,
+                runtimeVersion,
+                platform,
+                commitHash,
+                message: resolvedMessage,
+                rolloutPercentage,
+                publishGroup: publishGroupId,
+                branch,
+              })),
               runtimeVersion,
               platform,
-              commitHash,
-              message: resolvedMessage,
-              rolloutPercentage,
-              publishGroup: publishGroupId,
-              branch,
-            })),
-            runtimeVersion,
-            platform,
-          };
+            };
+          } catch (error) {
+            if (error instanceof NoChangesDetectedError) {
+              unchangedPlatforms.push(platform);
+              return null;
+            }
+            throw error;
+          }
         })
       );
+      uploadUrls = outcomes.filter((entry): entry is NonNullable<(typeof outcomes)[number]> => {
+        return entry !== null;
+      });
+      if (!uploadUrls.length) {
+        uploadFilesSpinner.warn('⚠️ No changes found in the update, nothing to deploy');
+        return;
+      }
       // Every path and URL the server handed back is checked here, before a
       // single file is opened. A server that forges a filePath would otherwise
       // make the CLI read arbitrary files off this machine and PUT them wherever
@@ -448,6 +463,9 @@ export default class Publish extends Command {
       );
 
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
+      for (const skipped of unchangedPlatforms) {
+        Log.withInfo(`⚠️ There is no change in the update for ${skipped}, ignored...`);
+      }
     } catch (e) {
       uploadFilesSpinner.fail('❌ Failed to upload static files');
       Log.error(e);

@@ -26,7 +26,7 @@ import (
 func buildRolloutUploadRequest(t *testing.T, projectRoot string, rolloutPercentage string) *httptest.ResponseRecorder {
 	t.Helper()
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
-	requestURL := "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1&platform=ios&commitHash=abc123"
+	requestURL := "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1&platform=android&commitHash=abc123"
 	if rolloutPercentage != "" {
 		requestURL += "&rolloutPercentage=" + rolloutPercentage
 	}
@@ -34,7 +34,8 @@ func buildRolloutUploadRequest(t *testing.T, projectRoot string, rolloutPercenta
 	r := httptest.NewRequest("POST", requestURL, nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-4/1/1674170952")
-	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
+	// branch-4/1/1674170952 is an android-only export.
+	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	require.NoError(t, err)
 	r.Body = io.NopCloser(bytes.NewReader(uploadRequestsInputJSON))

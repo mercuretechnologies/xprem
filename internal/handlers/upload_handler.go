@@ -32,6 +32,22 @@ type RequestUploadURLsRequest struct {
 	Message string                    `json:"message,omitempty"`
 }
 
+// validateUploadFiles checks every file names a role and addresses a blob. How
+// many of each a publish needs is the service's rule, not the wire's.
+func validateUploadFiles(files []services.FileUploadItem) error {
+	for _, file := range files {
+		if err := bucket.ValidateUploadFile(file.Path, file.Hash); err != nil {
+			return fmt.Errorf("%s: %w", file.Path, err)
+		}
+		switch file.Role {
+		case services.FileRoleLaunch, services.FileRoleAsset, services.FileRoleConfig:
+		default:
+			return fmt.Errorf("%s: unknown role %q", file.Path, file.Role)
+		}
+	}
+	return nil
+}
+
 // parsePublishGroup reads the optional CLI-minted id grouping the per-platform
 // rows of one eoas publish run. In stateless mode the parameter is ignored
 // entirely: the feature does not exist there, and the missing acknowledgment
@@ -114,16 +130,6 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		}
 		if errors.Is(err, services.ErrInvalidUpdate) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if errors.Is(err, services.ErrNoChangesDetected) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotAcceptable)
-
-			response := map[string]string{
-				"error": "You have already uploaded this update, no changes detected",
-			}
-			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 		if errors.Is(err, services.ErrActiveRolloutBlocksPublish) {
@@ -289,12 +295,10 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		http.Error(w, "No file names provided", http.StatusBadRequest)
 		return
 	}
-	for _, file := range bodyReq.Files {
-		if err := bucket.ValidateUploadFile(file.Name, file.Hash); err != nil {
-			log.Printf("[RequestID: %s] Invalid upload file %q: %v", requestID, file.Name, err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	if err := validateUploadFiles(bodyReq.Files); err != nil {
+		log.Printf("[RequestID: %s] Invalid upload file list: %v", requestID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	params := services.RequestUploadURLParams{
@@ -315,6 +319,19 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		if errors.Is(err, services.ErrActiveRolloutBlocksPublish) {
 			log.Printf("[RequestID: %s] Publish blocked by active rollout: %v", requestID, err)
 			http.Error(w, activeRolloutConflictMessage, http.StatusConflict)
+			return
+		}
+		if errors.Is(err, services.ErrLaunchAssetRequired) {
+			log.Printf("[RequestID: %s] Publish refused: %v", requestID, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, services.ErrNoChangesDetected) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotAcceptable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "You have already uploaded this update, no changes detected",
+			})
 			return
 		}
 		http.Error(w, "Internal server error processing payload URLs", http.StatusInternalServerError)

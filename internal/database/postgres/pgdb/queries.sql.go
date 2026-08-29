@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 const adoptionBreakdown = `-- name: AdoptionBreakdown :many
@@ -2080,6 +2081,26 @@ func (q *Queries) GetSurfableBranches(ctx context.Context, arg GetSurfableBranch
 		return nil, err
 	}
 	return items, nil
+}
+
+const getUpdateAssetMapping = `-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3
+`
+
+type GetUpdateAssetMappingParams struct {
+	ID    int64       `json:"id"`
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) GetUpdateAssetMapping(ctx context.Context, arg GetUpdateAssetMappingParams) (*types.UpdateAssetMapping, error) {
+	row := q.db.QueryRow(ctx, getUpdateAssetMapping, arg.ID, arg.AppID, arg.Name)
+	var asset_mapping *types.UpdateAssetMapping
+	err := row.Scan(&asset_mapping)
+	return asset_mapping, err
 }
 
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
@@ -5416,6 +5437,33 @@ func (q *Queries) SetBranchProtected(ctx context.Context, arg SetBranchProtected
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setUpdateAssetMapping = `-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+)
+`
+
+type SetUpdateAssetMappingParams struct {
+	ID           int64                     `json:"id"`
+	AssetMapping *types.UpdateAssetMapping `json:"asset_mapping"`
+	AppID        pgtype.UUID               `json:"app_id"`
+	Name         string                    `json:"name"`
+}
+
+func (q *Queries) SetUpdateAssetMapping(ctx context.Context, arg SetUpdateAssetMappingParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setUpdateAssetMapping,
+		arg.ID,
+		arg.AssetMapping,
+		arg.AppID,
+		arg.Name,
+	)
 }
 
 const setUpdateRolloutPercentage = `-- name: SetUpdateRolloutPercentage :execrows

@@ -105,6 +105,10 @@ func ValidateUploadFile(name, hash string) error {
 	return ValidateBlobHash(hash)
 }
 
+func ReservedBranchName(branch string) bool {
+	return branch == casDir
+}
+
 // BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
 func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash

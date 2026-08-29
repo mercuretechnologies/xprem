@@ -59,6 +59,9 @@ func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchNa
 	if err := validation.Name("branchName", branchName); err != nil {
 		return 0, err
 	}
+	if bucket.ReservedBranchName(branchName) {
+		return 0, validation.Errorf("branchName", "%q is reserved", branchName)
+	}
 	branchId, err := s.branchRepo.InsertBranch(ctx, appId, branchName)
 	if err != nil {
 		return 0, err

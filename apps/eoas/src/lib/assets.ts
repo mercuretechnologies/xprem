@@ -5,7 +5,7 @@ import Joi from 'joi';
 import path from 'path';
 
 import { Credentials, getAuthHeaders, missingEooTokenHint } from './auth';
-import { hashFile } from './crypto';
+import { FileDigest, digestFile } from './crypto';
 import { RequestedPlatform } from './expoConfig';
 import { fetchWithRetries } from './fetch';
 import Log from './log';
@@ -39,6 +39,42 @@ export interface AssetToUpload {
   name: string;
   ext: string;
   hash: string;
+  key: string;
+  // null for metadata.json and expoConfig.json, which belong to no platform.
+  platform: Platform | null;
+  isLaunchAsset: boolean;
+}
+
+// FileRole is what a published file is to the update, as the server reads it:
+// only the launch asset and the assets end up in the manifest.
+export type FileRole = 'launch' | 'asset' | 'config';
+
+export interface FileUploadItem {
+  path: string;
+  hash: string;
+  key?: string;
+  ext?: string;
+  role: FileRole;
+}
+
+// buildUploadFiles is one platform's publish: its launch asset, its assets and
+// the config files, each stamped with its role. This is what tells the server
+// which bundle is which — only the CLI reads metadata.json.
+export function buildUploadFiles(files: AssetToUpload[], platform: string): FileUploadItem[] {
+  return files
+    .filter(file => file.platform === null || file.platform === platform)
+    .map(file => {
+      if (file.platform === null) {
+        return { path: file.path, hash: file.hash, role: 'config' as const };
+      }
+      return {
+        path: file.path,
+        hash: file.hash,
+        key: file.key,
+        ext: file.ext,
+        role: file.isLaunchAsset ? ('launch' as const) : ('asset' as const),
+      };
+    });
 }
 
 function loadMetadata(distRoot: string): Metadata {
@@ -71,14 +107,14 @@ function loadMetadata(distRoot: string): Metadata {
   return metadata;
 }
 
-async function hashExportFile(exportRoot: string, relativePath: string): Promise<string> {
+async function digestExportFile(exportRoot: string, relativePath: string): Promise<FileDigest> {
   const absolutePath = path.resolve(exportRoot, relativePath);
   if (absolutePath !== exportRoot && !absolutePath.startsWith(exportRoot + path.sep)) {
     throw new Error(
       `Refusing to hash "${relativePath}": it resolves outside the export directory.`
     );
   }
-  return await hashFile(absolutePath);
+  return await digestFile(absolutePath);
 }
 
 export async function computeFilesRequests(
@@ -94,24 +130,48 @@ export async function computeFilesRequests(
     throw new Error(`Export directory ${exportDir} could not be resolved.`);
   }
   const metadata = loadMetadata(exportRoot);
-  const pending: Omit<AssetToUpload, 'hash'>[] = [
-    { path: 'metadata.json', name: 'metadata.json', ext: 'json' },
-    { path: 'expoConfig.json', name: 'expoConfig.json', ext: 'json' },
+  const pending: Omit<AssetToUpload, 'hash' | 'key'>[] = [
+    {
+      path: 'metadata.json',
+      name: 'metadata.json',
+      ext: 'json',
+      platform: null,
+      isLaunchAsset: false,
+    },
+    {
+      path: 'expoConfig.json',
+      name: 'expoConfig.json',
+      ext: 'json',
+      platform: null,
+      isLaunchAsset: false,
+    },
   ];
   for (const platform of Object.keys(metadata.fileMetadata) as Platform[]) {
     if (requestedPlatform !== RequestedPlatform.All && requestedPlatform !== platform) {
       continue;
     }
     const bundle = metadata.fileMetadata[platform].bundle;
-    pending.push({ path: bundle, name: path.basename(bundle), ext: 'hbc' });
+    pending.push({
+      path: bundle,
+      name: path.basename(bundle),
+      ext: 'hbc',
+      platform,
+      isLaunchAsset: true,
+    });
     for (const asset of metadata.fileMetadata[platform].assets) {
-      pending.push({ path: asset.path, name: path.basename(asset.path), ext: asset.ext });
+      pending.push({
+        path: asset.path,
+        name: path.basename(asset.path),
+        ext: asset.ext,
+        platform,
+        isLaunchAsset: false,
+      });
     }
   }
   return await Promise.all(
     pending.map(async entry => ({
       ...entry,
-      hash: await hashExportFile(exportRoot, entry.path),
+      ...(await digestExportFile(exportRoot, entry.path)),
     }))
   );
 }
@@ -321,6 +381,13 @@ export function activeRolloutConflictMessage(branch: string): string {
   return `A progressive rollout is already active for branch "${branch}" on this runtime version. End or revert it from the dashboard before publishing a new update.`;
 }
 
+export class NoChangesDetectedError extends Error {
+  constructor(readonly platform: string) {
+    super(`There is no change in the update for ${platform}`);
+    this.name = 'NoChangesDetectedError';
+  }
+}
+
 export async function requestUploadUrls({
   body,
   requestUploadUrl,
@@ -333,7 +400,7 @@ export async function requestUploadUrls({
   publishGroup,
   branch,
 }: {
-  body: { files: { name: string; hash: string }[] };
+  body: { files: FileUploadItem[] };
   requestUploadUrl: string;
   auth: Credentials;
   runtimeVersion: string;
@@ -359,7 +426,7 @@ export async function requestUploadUrls({
   }
 
   const requestBody: {
-    files: { name: string; hash: string }[];
+    files: FileUploadItem[];
     message?: string;
   } = { ...body };
   if (message) {
@@ -376,6 +443,9 @@ export async function requestUploadUrls({
   });
   if (response.status === 409) {
     throw new Error(activeRolloutConflictMessage(branch));
+  }
+  if (response.status === 406) {
+    throw new NoChangesDetectedError(platform);
   }
   if (!response.ok) {
     const text = await response.text();

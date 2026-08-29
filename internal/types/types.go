@@ -156,6 +156,9 @@ type UpdateStoredMetadata struct {
 	CommitHash string   `json:"commitHash"`
 	UpdateUUID string   `json:"updateUUID"`
 	Message    string   `json:"message,omitempty"`
+	// AssetMapping is the stateless home of the shaped launch asset and assets;
+	// the control plane keeps them in updates.asset_mapping instead.
+	AssetMapping *UpdateAssetMapping `json:"assetMapping,omitempty"`
 }
 
 type UpdateType int

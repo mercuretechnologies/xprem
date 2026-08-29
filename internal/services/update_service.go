@@ -41,6 +41,10 @@ type UpdateRepository interface {
 	GetUpdateFeed(ctx context.Context, appId string, query types.UpdateFeedQuery) ([]types.UpdateFeedItem, error)
 	RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error)
 	StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error
+	// GetUpdateAssetMapping answers nil for an update published before the
+	// mapping existed; callers fall back to the update-folder layout.
+	GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error)
+	StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error
 }
 
 type UpdateService struct {
