@@ -61,6 +61,11 @@ type RequestLocalFileUploadParams struct {
 	Body       multipart.File
 }
 
+type FileUploadItem struct {
+	Name     string `json:"name"`
+	Hash     string `json:"hash"`
+}
+
 type RequestUploadURLParams struct {
 	RequestID      string
 	AppID          string
@@ -68,7 +73,7 @@ type RequestUploadURLParams struct {
 	Platform       types.Platform
 	CommitHash     string
 	RuntimeVersion string
-	FileNames      []string
+	Files      	   []FileUploadItem
 	Message        string
 	// Non-nil publishes the update as a progressive rollout served to this share
 	// of devices (1-99).
@@ -368,11 +373,11 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 		UpdateId:       updateStr,
 	})
 
-	filesToUpload := params.FileNames
+	filesToUpload := params.Files
 	if len(dedupedAssets) > 0 {
 		log.Printf("[RequestID: %s] Reusing %d unchanged assets from the previous update", params.RequestID, len(dedupedAssets))
-		filesToUpload = slices.DeleteFunc(slices.Clone(params.FileNames), func(file string) bool {
-			return slices.Contains(dedupedAssets, file)
+		filesToUpload = slices.DeleteFunc(slices.Clone(params.Files), func(file FileUploadItem) bool {
+			return slices.Contains(dedupedAssets, file.Name)
 		})
 	}
 
