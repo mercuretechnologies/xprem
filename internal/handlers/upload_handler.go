@@ -7,6 +7,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"regexp"
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/services"
@@ -32,15 +33,25 @@ type RequestUploadURLsRequest struct {
 	Message string                    `json:"message,omitempty"`
 }
 
-// validateUploadFiles checks every file names a role and addresses a blob. How
-// many of each a publish needs is the service's rule, not the wire's.
+// manifestKeyPattern is the md5 hex expo-updates uses as its on-device cache
+// key. Only its shape can be checked here: the bytes go straight to the bucket,
+// so nothing server-side ever sees what the digest was taken over.
+var manifestKeyPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// validateUploadFiles checks every file names a role and carries the manifest
+// data its role requires. How many of each a publish needs is the service's
+// rule, not the wire's.
 func validateUploadFiles(files []services.FileUploadItem) error {
 	for _, file := range files {
 		if err := bucket.ValidateUploadFile(file.Path, file.Hash); err != nil {
 			return fmt.Errorf("%s: %w", file.Path, err)
 		}
 		switch file.Role {
-		case services.FileRoleLaunch, services.FileRoleAsset, services.FileRoleConfig:
+		case services.FileRoleLaunch, services.FileRoleAsset:
+			if !manifestKeyPattern.MatchString(file.Key) {
+				return fmt.Errorf("%s: invalid key: must be md5 hex", file.Path)
+			}
+		case services.FileRoleConfig:
 		default:
 			return fmt.Errorf("%s: unknown role %q", file.Path, file.Role)
 		}

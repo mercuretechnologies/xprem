@@ -18,6 +18,7 @@ import (
 	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/crypto"
+	"xprem/internal/services"
 	"xprem/internal/types"
 	"xprem/internal/update"
 
@@ -143,6 +144,36 @@ func TestRequestUploadUrlRejectsMissingHash(t *testing.T) {
 	serveThroughRouter(w, r)
 	assert.Equal(t, 400, w.Code)
 	assert.Contains(t, w.Body.String(), "invalid hash")
+}
+
+func TestRequestUploadUrlRejectsMalformedManifestKey(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockExpoForRequestUploadUrlTest("staging")
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("Error finding project root: %v", err)
+	}
+	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
+	sample := filepath.Join(projectRoot, "test", "test-updates", "test-app-id", "branch-4", "1", "1674170952")
+	body := ComputeUploadRequestsInput(sample, "android")
+	for i := range body.Files {
+		if body.Files[i].Role == services.FileRoleLaunch {
+			// A sha256 base64url where an md5 hex belongs: the shape the CLI
+			// would send if the two digests were ever swapped.
+			body.Files[i].Key = body.Files[i].Hash
+		}
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Error marshalling body: %v", err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE?runtimeVersion=1&platform=android", bytes.NewReader(payload))
+	r.Header.Set("Authorization", "Bearer expo_test_token")
+	serveThroughRouter(w, r)
+	assert.Equal(t, 400, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid key")
 }
 
 func TestRequestUploadUrlRejectsMalformedHash(t *testing.T) {
