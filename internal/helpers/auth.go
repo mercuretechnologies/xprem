@@ -23,6 +23,19 @@ func GetAuth(r *http.Request) types.Auth {
 	return types.Auth{}
 }
 
+// GetExpoAuth reads the Expo credential the import routes carry in headers:
+// an access token, or the expo-cli session. Authorization is the dashboard
+// session and must not be treated as an Expo token.
+func GetExpoAuth(r *http.Request) types.Auth {
+	if token := r.Header.Get("X-Expo-Access-Token"); token != "" {
+		return types.Auth{Token: &token}
+	}
+	if session := r.Header.Get("expo-session"); session != "" {
+		return types.Auth{SessionSecret: &session}
+	}
+	return types.Auth{}
+}
+
 func GetBearerToken(r *http.Request) (string, error) {
 	bearerToken := r.Header.Get("Authorization")
 	if bearerToken == "" {

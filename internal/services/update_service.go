@@ -6,6 +6,7 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/rollout"
+	"xprem/internal/store"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
@@ -32,6 +33,14 @@ type UpdateRepository interface {
 	// for the rollout revert, which have none to give; the dashboard requires
 	// one so the row says why the fleet was sent back to the embedded bundle.
 	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error)
+	// ImportUpdate copies one externally-published update row with its
+	// caller-supplied timeline; false means the row already existed.
+	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
+	ImportUpdate(ctx context.Context, params store.ImportUpdateParams) (bool, error)
+	// UpdateExists reports whether an update row already occupies this
+	// timeline slot on the branch, checked before an import writes any file.
+	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
+	UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error)
 	// GetUpdatesByPublishGroup resolves the checked members of one publish
 	// group on (branch, runtime version), for the group republish.
 	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.

@@ -341,6 +341,14 @@ func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update typ
 	return nil
 }
 
+func (r *fakeUpdateRepo) ImportUpdate(context.Context, store.ImportUpdateParams) (bool, error) {
+	return false, fmt.Errorf("ImportUpdate is not exercised by these tests")
+}
+
+func (r *fakeUpdateRepo) UpdateExists(context.Context, string, string, int64) (bool, error) {
+	return false, fmt.Errorf("UpdateExists is not exercised by these tests")
+}
+
 type fakeRolloutRepo struct {
 	updateRepo *fakeUpdateRepo
 	events     *eventLog

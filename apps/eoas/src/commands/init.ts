@@ -1,7 +1,9 @@
 import { Command } from '@oclif/core';
+import chalk from 'chalk';
 import fs from 'fs-extra';
 import path from 'path';
 
+import { Credentials, retrieveExpoCredentials } from '../lib/auth';
 import {
   createOrModifyExpoConfigAsync,
   getExpoConfigUpdateUrl,
@@ -10,7 +12,16 @@ import {
 import Log from '../lib/log';
 import { ora } from '../lib/ora';
 import { isExpoInstalled } from '../lib/package';
-import { confirmAsync, promptAsync } from '../lib/prompts';
+import { confirmAsync, promptAsync, selectAsync } from '../lib/prompts';
+import {
+  ExpoImportPlan,
+  ExpoImportPlanItem,
+  ImportKeysConfig,
+  fetchHistoryJobStatus,
+  fetchImportPreview,
+  importExpoApp,
+  loginAsAdmin,
+} from '../lib/serverImport';
 import { ensurePrivateKeyIgnored, isValidUpdateUrl } from '../lib/utils';
 
 export default class Init extends Command {
@@ -143,5 +154,247 @@ export default class Init extends Command {
       Log.error(e);
     }
     ensurePrivateKeyIgnored(projectDir);
+
+    // Control-plane servers can copy the app straight from Expo (same UUID,
+    // branches, channels, optionally history) so the first publish just works.
+    await offerServerImport(manifestEndpoint.replace(/\/manifest$/, ''), appId);
+  }
+}
+
+// offerServerImport is the optional last step of init: on a control-plane
+// server, import the app from Expo so the server is ready without a dashboard
+// visit. The server itself refuses when it has no control plane — there is no
+// public capability probe. Every failure warns and returns, an import problem
+// never fails init.
+async function offerServerImport(baseUrl: string, expoAppId: string): Promise<void> {
+  Log.newLine();
+  Log.withInfo(
+    'Servers with a control plane (DB_URL set) can import this app from Expo right\n' +
+      'now (same project UUID, branches and channels), ready before your first publish.'
+  );
+  const wantsImport = await confirmAsync({
+    message:
+      'Import this app from Expo into your server now? (control plane only, requires an admin account)',
+    name: 'import',
+    type: 'confirm',
+  });
+  if (!wantsImport) {
+    Log.log('You can import it later from the dashboard (New app > Import from Expo).');
+    return;
+  }
+  try {
+    const expoCredentials = await resolveExpoCredentials();
+    const adminToken = await promptAdminLogin(baseUrl);
+    if (!adminToken) {
+      return;
+    }
+
+    const previewSpinner = ora('Fetching the import preview from your server').start();
+    let plan: ExpoImportPlan;
+    try {
+      plan = await fetchImportPreview({ baseUrl, adminToken, expoCredentials, expoAppId });
+      previewSpinner.succeed('Import preview ready');
+    } catch (e) {
+      previewSpinner.fail('Could not preview the import');
+      throw e;
+    }
+    if (plan.conflict) {
+      Log.warn(`Nothing to do: ${plan.conflict}`);
+      return;
+    }
+    printImportPlan(plan);
+
+    const confirmed = await confirmAsync({
+      message: 'Proceed with this import?',
+      name: 'proceed',
+      type: 'confirm',
+    });
+    if (!confirmed) {
+      Log.log('Import skipped. You can run it later from the dashboard.');
+      return;
+    }
+
+    const keysConfig = await promptKeysConfig();
+    const historyLimit = await selectAsync<number>(
+      'Also copy the newest published updates? (runs in the background on the server)',
+      [
+        { title: 'No, structure only', value: 0 },
+        { title: 'The 10 newest publishes', value: 10 },
+        { title: 'The 25 newest publishes', value: 25 },
+        { title: 'The 50 newest publishes', value: 50 },
+      ]
+    );
+
+    const importSpinner = ora('Importing the app into your server').start();
+    let result;
+    try {
+      result = await importExpoApp(
+        { baseUrl, adminToken, expoCredentials, expoAppId },
+        keysConfig,
+        historyLimit
+      );
+      importSpinner.succeed(
+        `Imported "${result.name}" with ${result.branchCount} branch(es) and ${result.channelCount} channel(s)`
+      );
+    } catch (e) {
+      importSpinner.fail('Import failed');
+      throw e;
+    }
+    for (const skipped of result.skipped ?? []) {
+      Log.warn(`Skipped ${skipped}`);
+    }
+    if (result.historyJobId) {
+      await followHistoryJob(baseUrl, adminToken, result.historyJobId);
+    }
+    Log.withTick('Your server knows this app: you can publish right away.');
+  } catch (e) {
+    Log.warn(`Server import skipped: ${e instanceof Error ? e.message : e}`);
+    Log.warn(
+      'Your local configuration is done; you can import the app from the dashboard instead.'
+    );
+  }
+}
+
+// resolveExpoCredentials prefers what the machine already has (EXPO_TOKEN or
+// the expo-cli session) and only prompts for a token as a last resort.
+async function resolveExpoCredentials(): Promise<Credentials> {
+  const credentials = retrieveExpoCredentials();
+  if (credentials.token || credentials.sessionSecret) {
+    Log.log(chalk.dim('Using the Expo credentials already on this machine.'));
+    return credentials;
+  }
+  const { expoToken } = await promptAsync({
+    message: 'Enter an Expo access token (create one at https://expo.dev/settings/access-tokens)',
+    name: 'expoToken',
+    type: 'password',
+    validate: v => !!v,
+  });
+  return { token: expoToken };
+}
+
+// promptAdminLogin exchanges dashboard admin credentials for a session token,
+// with two retries on bad credentials; null means the person gave up.
+async function promptAdminLogin(baseUrl: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { email } = await promptAsync({
+      message: 'Dashboard admin email',
+      name: 'email',
+      type: 'text',
+      validate: v => !!v,
+    });
+    const { password } = await promptAsync({
+      message: 'Dashboard admin password',
+      name: 'password',
+      type: 'password',
+      validate: v => !!v,
+    });
+    const spinner = ora('Signing in to your server').start();
+    try {
+      const token = await loginAsAdmin(baseUrl, email, password);
+      spinner.succeed('Signed in');
+      return token;
+    } catch (e) {
+      spinner.fail(`Sign in failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  Log.warn('Too many failed sign-ins.');
+  return null;
+}
+
+function planLine(item: ExpoImportPlanItem, kind: 'branch' | 'channel'): string {
+  if (item.skipReason) {
+    return `  ${chalk.red('✗')} ${item.name} ${chalk.dim(`— ${item.skipReason}`)}`;
+  }
+  const mapping =
+    kind === 'channel'
+      ? chalk.dim(item.mappedBranch ? ` → ${item.mappedBranch}` : ' (unmapped)')
+      : '';
+  const warning = item.warning ? ` ${chalk.yellow(`— ${item.warning}`)}` : '';
+  return `  ${chalk.green('✓')} ${item.name}${mapping}${warning}`;
+}
+
+function printImportPlan(plan: ExpoImportPlan): void {
+  const lines: string[] = [`App: ${chalk.bold(plan.name)} ${chalk.dim(`(${plan.appId})`)}`];
+  if (plan.name !== plan.expoName) {
+    lines.push(
+      chalk.yellow(`The Expo name "${plan.expoName}" is not usable here, the UUID is used instead.`)
+    );
+  }
+  lines.push('', `Branches (${plan.branches.length}):`);
+  lines.push(...plan.branches.map(item => planLine(item, 'branch')));
+  lines.push('', `Channels (${plan.channels.length}):`);
+  lines.push(...plan.channels.map(item => planLine(item, 'channel')));
+  Log.note(lines.join('\n'), 'Import preview');
+}
+
+// promptKeysConfig picks where the app's signing keys live; "database" needs
+// nothing from the person, which is why it is the default.
+async function promptKeysConfig(): Promise<ImportKeysConfig> {
+  const mode = await selectAsync<'database' | 'aws-secrets-manager'>(
+    "Where should the server store this app's code signing keys?",
+    [
+      {
+        title: 'On the server (recommended)',
+        value: 'database',
+        description: 'generated and sealed in the database, nothing to configure',
+      },
+      {
+        title: 'AWS Secrets Manager',
+        value: 'aws-secrets-manager',
+        description: 'the keys live in two existing secrets',
+      },
+    ]
+  );
+  if (mode === 'database') {
+    return { mode };
+  }
+  const { publicSecretId } = await promptAsync({
+    message: 'Secret id holding the public key',
+    name: 'publicSecretId',
+    type: 'text',
+    validate: v => !!v,
+  });
+  const { privateSecretId } = await promptAsync({
+    message: 'Secret id holding the private key',
+    name: 'privateSecretId',
+    type: 'text',
+    validate: v => !!v,
+  });
+  return { mode, publicSecretId, privateSecretId };
+}
+
+// followHistoryJob polls the background history job until it settles, so init
+// ends with the server fully ready instead of "check the dashboard later".
+async function followHistoryJob(baseUrl: string, adminToken: string, jobId: string): Promise<void> {
+  const spinner = ora('Copying the update history').start();
+  for (;;) {
+    let status;
+    try {
+      status = await fetchHistoryJobStatus(baseUrl, adminToken, jobId);
+    } catch (e) {
+      spinner.warn(
+        `Lost track of the history import (${
+          e instanceof Error ? e.message : e
+        }); it keeps running on the server.`
+      );
+      return;
+    }
+    if (status.state === 'done') {
+      spinner.succeed(`Update history copied: ${status.imported} update(s) imported`);
+      for (const skipped of status.skipped ?? []) {
+        Log.warn(`Skipped ${skipped}`);
+      }
+      return;
+    }
+    if (status.state === 'failed' || status.state === 'canceled') {
+      spinner.fail(
+        status.state === 'failed'
+          ? `History import failed: ${status.error || 'unknown error'}`
+          : 'History import canceled'
+      );
+      return;
+    }
+    spinner.update(`Copying the update history (${status.processed}/${status.total})`);
+    await new Promise(resolve => setTimeout(resolve, 2000));
   }
 }

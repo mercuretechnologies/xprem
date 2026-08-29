@@ -28,7 +28,7 @@ import { api } from '@/lib/api';
 import { Combobox } from '@/components/Combobox';
 import { XpremMark } from '@/components/xprem-mark';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
-import { CreateAppModal } from '@/components/app-creation-modal';
+import { CreateAppModal } from '@/components/app-creation';
 import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
 import { EnterpriseBadge } from '@/ee/components/EnterpriseBadge';

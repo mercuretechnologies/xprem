@@ -788,6 +788,49 @@ ON CONFLICT (branch_id, id) DO UPDATE SET
     checked_at = EXCLUDED.checked_at,
     update_uuid = EXCLUDED.update_uuid,
     created_at = EXCLUDED.created_at;
+
+-- name: ImportUpdate :execrows
+-- Copies one externally-published update with caller-supplied timeline
+-- columns; an existing row is left untouched so re-imports are idempotent.
+INSERT INTO updates (
+    id,
+    branch_id,
+    runtime_version_id,
+    update_type,
+    platform,
+    commit_hash,
+    message,
+    checked_at,
+    update_uuid,
+    created_at,
+    publish_group
+) VALUES (
+    $1,
+    (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
+    (SELECT id FROM runtime_versions rv WHERE rv.app_id = $2 AND rv.version = $4),
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12
+)
+ON CONFLICT (branch_id, id) DO NOTHING;
+
+-- name: UpdateExistsOnBranch :one
+-- Reports whether an update row already occupies this timeline slot on the
+-- branch, so a history import never overwrites another update's files.
+SELECT EXISTS (
+    SELECT 1
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND b.name = $2
+      AND u.id = $3
+);
+
 -- name: GetEnterpriseLicense :one
 SELECT * FROM enterprise_license
 WHERE singleton;

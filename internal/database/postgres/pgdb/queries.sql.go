@@ -2768,6 +2768,73 @@ func (q *Queries) HasActiveRolloutUpdate(ctx context.Context, arg HasActiveRollo
 	return exists, err
 }
 
+const importUpdate = `-- name: ImportUpdate :execrows
+INSERT INTO updates (
+    id,
+    branch_id,
+    runtime_version_id,
+    update_type,
+    platform,
+    commit_hash,
+    message,
+    checked_at,
+    update_uuid,
+    created_at,
+    publish_group
+) VALUES (
+    $1,
+    (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
+    (SELECT id FROM runtime_versions rv WHERE rv.app_id = $2 AND rv.version = $4),
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12
+)
+ON CONFLICT (branch_id, id) DO NOTHING
+`
+
+type ImportUpdateParams struct {
+	ID           int64              `json:"id"`
+	AppID        pgtype.UUID        `json:"app_id"`
+	Name         string             `json:"name"`
+	Version      string             `json:"version"`
+	UpdateType   int32              `json:"update_type"`
+	Platform     string             `json:"platform"`
+	CommitHash   string             `json:"commit_hash"`
+	Message      *string            `json:"message"`
+	CheckedAt    pgtype.Timestamptz `json:"checked_at"`
+	UpdateUuid   pgtype.UUID        `json:"update_uuid"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	PublishGroup pgtype.UUID        `json:"publish_group"`
+}
+
+// Copies one externally-published update with caller-supplied timeline
+// columns; an existing row is left untouched so re-imports are idempotent.
+func (q *Queries) ImportUpdate(ctx context.Context, arg ImportUpdateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, importUpdate,
+		arg.ID,
+		arg.AppID,
+		arg.Name,
+		arg.Version,
+		arg.UpdateType,
+		arg.Platform,
+		arg.CommitHash,
+		arg.Message,
+		arg.CheckedAt,
+		arg.UpdateUuid,
+		arg.CreatedAt,
+		arg.PublishGroup,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertApiKey = `-- name: InsertApiKey :one
 INSERT INTO api_keys (app_id, name, hint, hashed_key)
 VALUES ($1, $2, $3, $4)
@@ -5755,6 +5822,32 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.CurrentUpdateArrivedAt,
 	)
 	return i, err
+}
+
+const updateExistsOnBranch = `-- name: UpdateExistsOnBranch :one
+SELECT EXISTS (
+    SELECT 1
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND b.name = $2
+      AND u.id = $3
+)
+`
+
+type UpdateExistsOnBranchParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+	ID    int64       `json:"id"`
+}
+
+// Reports whether an update row already occupies this timeline slot on the
+// branch, so a history import never overwrites another update's files.
+func (q *Queries) UpdateExistsOnBranch(ctx context.Context, arg UpdateExistsOnBranchParams) (bool, error) {
+	row := q.db.QueryRow(ctx, updateExistsOnBranch, arg.AppID, arg.Name, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const updateFailureBreakdownByIDs = `-- name: UpdateFailureBreakdownByIDs :many

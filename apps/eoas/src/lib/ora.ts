@@ -10,6 +10,8 @@ import Log from './log';
 
 export type Spinner = {
   start(text?: string): Spinner;
+  /** Replaces the spinner line while it keeps spinning; silent when degraded. */
+  update(text: string): Spinner;
   succeed(text?: string): Spinner;
   fail(text?: string): Spinner;
   warn(text?: string): Spinner;
@@ -41,6 +43,11 @@ export function ora(options?: string | { text?: string }): Spinner {
         active = clack.spinner();
         active.start(text);
       }
+      return spinner;
+    },
+    update(nextText: string) {
+      text = nextText;
+      active?.message(nextText);
       return spinner;
     },
     succeed(nextText?: string) {

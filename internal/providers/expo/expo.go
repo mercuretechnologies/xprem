@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/types"
@@ -47,8 +48,13 @@ type RawBranchMapping struct {
 	} `json:"data"`
 }
 
+func HasCredential(auth types.Auth) bool {
+	return (auth.Token != nil && strings.TrimSpace(*auth.Token) != "") ||
+		(auth.SessionSecret != nil && strings.TrimSpace(*auth.SessionSecret) != "")
+}
+
 func ValidateAuth(appId string, expoAuth types.Auth) (*UserAccount, error) {
-	if expoAuth.Token == nil && expoAuth.SessionSecret == nil {
+	if !HasCredential(expoAuth) {
 		return nil, errors.New("no valid Expo auth provided")
 	}
 	expoAccount, err := FetchUserAccountInformations(expoAuth)

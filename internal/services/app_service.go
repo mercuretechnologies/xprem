@@ -46,6 +46,14 @@ func (s *AppService) SetOnAuditEvent(record auditlog.RecordFunc) {
 }
 
 func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, uuid.New(), displayName, keysConfig)
+}
+
+func (s *AppService) CreateAppWithId(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, appId, displayName, keysConfig)
+}
+
+func (s *AppService) createApp(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
 	if err := validation.DisplayName("name", displayName); err != nil {
 		return "", err
 	}
@@ -72,7 +80,6 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 		// Surface as a validation error so the handler answers 400, not 500.
 		return "", validation.Errorf("keysConfig", "%v", err)
 	}
-	appId := uuid.New()
 	modeStr := string(keysConfig.Mode)
 	params := store.InsertAppParameters{
 		ID:       appId.String(),
