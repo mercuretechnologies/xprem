@@ -322,7 +322,11 @@ export default class Publish extends Command {
     });
     Log.withInfo(`expoConfig.json file created in ${outputDir} directory`);
     const uploadFilesSpinner = ora('📤 Uploading files...').start();
-    const files = computeFilesRequests(projectDir, outputDir, platform || RequestedPlatform.All);
+    const files = await computeFilesRequests(
+      projectDir,
+      outputDir,
+      platform || RequestedPlatform.All
+    );
     if (!files.length) {
       uploadFilesSpinner.fail('No files to upload');
       process.exit(1);
@@ -347,7 +351,10 @@ export default class Publish extends Command {
           return {
             ...(await requestUploadUrls({
               body: {
-                fileNames: files.map(file => file.path),
+                files: files.map(file => ({
+                  hash: file.hash,
+                  name: file.path,
+                })),
               },
               requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
               auth: credentials,

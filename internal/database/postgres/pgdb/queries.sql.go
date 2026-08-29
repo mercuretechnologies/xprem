@@ -1031,6 +1031,67 @@ func (q *Queries) GetAuditExportCursor(ctx context.Context) (int64, error) {
 	return last_exported_id, err
 }
 
+const getBlob = `-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2
+`
+
+type GetBlobParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Hash  string      `json:"hash"`
+}
+
+func (q *Queries) GetBlob(ctx context.Context, arg GetBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, getBlob, arg.AppID, arg.Hash)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getBlobsByHashes = `-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY($2::text[])
+`
+
+type GetBlobsByHashesParams struct {
+	AppID  pgtype.UUID `json:"app_id"`
+	Hashes []string    `json:"hashes"`
+}
+
+func (q *Queries) GetBlobsByHashes(ctx context.Context, arg GetBlobsByHashesParams) ([]Blob, error) {
+	rows, err := q.db.Query(ctx, getBlobsByHashes, arg.AppID, arg.Hashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Blob
+	for rows.Next() {
+		var i Blob
+		if err := rows.Scan(
+			&i.AppID,
+			&i.Hash,
+			&i.Size,
+			&i.ContentType,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getBranchByName = `-- name: GetBranchByName :one
 SELECT id FROM branches
 WHERE name = $1 AND app_id = $2
@@ -2904,6 +2965,40 @@ func (q *Queries) InsertAuditLogEvent(ctx context.Context, arg InsertAuditLogEve
 		&i.Ip,
 		&i.UserAgent,
 		&i.Metadata,
+	)
+	return i, err
+}
+
+const insertBlob = `-- name: InsertBlob :one
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at
+`
+
+type InsertBlobParams struct {
+	AppID       pgtype.UUID `json:"app_id"`
+	Hash        string      `json:"hash"`
+	Size        int64       `json:"size"`
+	ContentType string      `json:"content_type"`
+}
+
+// ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+// the caller treats that as "already in cas/".
+func (q *Queries) InsertBlob(ctx context.Context, arg InsertBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, insertBlob,
+		arg.AppID,
+		arg.Hash,
+		arg.Size,
+		arg.ContentType,
+	)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
 	)
 	return i, err
 }

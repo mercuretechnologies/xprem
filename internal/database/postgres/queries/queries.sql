@@ -2425,3 +2425,21 @@ INSERT INTO server_instance (id)
 VALUES ($1)
 ON CONFLICT (singleton) DO NOTHING
 RETURNING id;
+
+-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2;
+
+-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY(sqlc.arg('hashes')::text[]);
+
+-- name: InsertBlob :one
+-- ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+-- the caller treats that as "already in cas/".
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at;

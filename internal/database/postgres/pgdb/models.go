@@ -66,6 +66,14 @@ type AuditLogEvent struct {
 	Metadata      []byte             `json:"metadata"`
 }
 
+type Blob struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	Hash        string             `json:"hash"`
+	Size        int64              `json:"size"`
+	ContentType string             `json:"content_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type Branch struct {
 	ID        int64              `json:"id"`
 	AppID     pgtype.UUID        `json:"app_id"`

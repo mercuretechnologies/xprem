@@ -28,8 +28,8 @@ func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHand
 }
 
 type FileNamesRequest struct {
-	FileNames []string `json:"fileNames"`
-	Message   string   `json:"message,omitempty"`
+	Files     []services.FileUploadItem `json:"files"`
+	Message   string      `json:"message,omitempty"`
 }
 
 // parsePublishGroup reads the optional CLI-minted id grouping the per-platform
@@ -285,7 +285,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 	}
 	defer r.Body.Close()
 
-	if len(bodyReq.FileNames) == 0 {
+	if len(bodyReq.Files) == 0 {
 		log.Printf("[RequestID: %s] No file names provided", requestID)
 		http.Error(w, "No file names provided", http.StatusBadRequest)
 		return
@@ -298,7 +298,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		Platform:          platform,
 		CommitHash:        commitHash,
 		RuntimeVersion:    runtimeVersion,
-		FileNames:         bodyReq.FileNames,
+		Files:         	   bodyReq.Files,
 		Message:           bodyReq.Message,
 		RolloutPercentage: rolloutPercentage,
 		PublishGroupID:    publishGroup,

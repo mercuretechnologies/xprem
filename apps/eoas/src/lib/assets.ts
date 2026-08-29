@@ -5,6 +5,7 @@ import Joi from 'joi';
 import path from 'path';
 
 import { Credentials, getAuthHeaders, missingEooTokenHint } from './auth';
+import { hashFile } from './crypto';
 import { RequestedPlatform } from './expoConfig';
 import { fetchWithRetries } from './fetch';
 import Log from './log';
@@ -37,6 +38,7 @@ export interface AssetToUpload {
   path: string;
   name: string;
   ext: string;
+  hash: string;
 }
 
 function loadMetadata(distRoot: string): Metadata {
@@ -69,13 +71,30 @@ function loadMetadata(distRoot: string): Metadata {
   return metadata;
 }
 
-export function computeFilesRequests(
+async function hashExportFile(exportRoot: string, relativePath: string): Promise<string> {
+  const absolutePath = path.resolve(exportRoot, relativePath);
+  if (absolutePath !== exportRoot && !absolutePath.startsWith(exportRoot + path.sep)) {
+    throw new Error(
+      `Refusing to hash "${relativePath}": it resolves outside the export directory.`
+    );
+  }
+  return await hashFile(absolutePath);
+}
+
+export async function computeFilesRequests(
   projectDir: string,
   outputDir: string,
   requestedPlatform: RequestedPlatform
-): AssetToUpload[] {
-  const metadata = loadMetadata(path.join(projectDir, outputDir));
-  const assets: AssetToUpload[] = [
+): Promise<AssetToUpload[]> {
+  const exportDir = path.join(projectDir, outputDir);
+  let exportRoot: string;
+  try {
+    exportRoot = await fs.realpath(exportDir);
+  } catch {
+    throw new Error(`Export directory ${exportDir} could not be resolved.`);
+  }
+  const metadata = loadMetadata(exportRoot);
+  const pending: Omit<AssetToUpload, 'hash'>[] = [
     { path: 'metadata.json', name: 'metadata.json', ext: 'json' },
     { path: 'expoConfig.json', name: 'expoConfig.json', ext: 'json' },
   ];
@@ -84,12 +103,17 @@ export function computeFilesRequests(
       continue;
     }
     const bundle = metadata.fileMetadata[platform].bundle;
-    assets.push({ path: bundle, name: path.basename(bundle), ext: 'hbc' });
+    pending.push({ path: bundle, name: path.basename(bundle), ext: 'hbc' });
     for (const asset of metadata.fileMetadata[platform].assets) {
-      assets.push({ path: asset.path, name: path.basename(asset.path), ext: asset.ext });
+      pending.push({ path: asset.path, name: path.basename(asset.path), ext: asset.ext });
     }
   }
-  return assets;
+  return await Promise.all(
+    pending.map(async entry => ({
+      ...entry,
+      hash: await hashExportFile(exportRoot, entry.path),
+    }))
+  );
 }
 
 export interface RequestUploadUrlItem {
@@ -306,7 +330,7 @@ export async function requestUploadUrls({
   publishGroup,
   branch,
 }: {
-  body: { fileNames: string[] };
+  body: { files: { name: string; hash: string }[] };
   requestUploadUrl: string;
   auth: Credentials;
   runtimeVersion: string;
@@ -331,7 +355,10 @@ export async function requestUploadUrls({
     uploadUrl.searchParams.set('publishGroup', publishGroup);
   }
 
-  const requestBody: { fileNames: string[]; message?: string } = { ...body };
+  const requestBody: {
+    files: { name: string; hash: string }[];
+    message?: string;
+  } = { ...body };
   if (message) {
     requestBody.message = message;
   }
