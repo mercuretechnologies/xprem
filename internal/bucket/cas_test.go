@@ -26,11 +26,6 @@ func TestBlobObjectKey(t *testing.T) {
 	assert.Equal(t, "app-1/cas/"+testBlobHash, BlobObjectKey("app-1", testBlobHash))
 }
 
-func TestValidateBranch_RejectsCASDir(t *testing.T) {
-	assert.Error(t, validateBranch(casDir))
-	assert.NoError(t, validateBranch("main"))
-}
-
 func TestLocalBucket_CASRoundTrip(t *testing.T) {
 	b := &LocalBucket{BasePath: t.TempDir()}
 	ctx := context.Background()
@@ -80,14 +75,6 @@ func TestValidatingBucket_CAS_RejectsBadHash(t *testing.T) {
 	assert.False(t, stub.called)
 }
 
-func TestValidatingBucket_CAS_RejectsReservedBranch(t *testing.T) {
-	stub := &stubBucket{}
-	v := &validatingBucket{Inner: stub}
-	_, err := v.RequestBlobUploadURL("app-1", testBlobHash, casDir)
-	assert.Error(t, err)
-	assert.False(t, stub.called)
-}
-
 func TestValidatingBucket_CAS_DelegatesOnValidInput(t *testing.T) {
 	stub := &stubBucket{}
 	v := &validatingBucket{Inner: stub}
@@ -118,18 +105,3 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "app-1", casDir, testBlobHash), filePath)
 }
 
-func TestValidatingBucket_GetBranchesOmitsCAS(t *testing.T) {
-	v := &validatingBucket{Inner: &listingStub{branches: []string{"main", casDir, "staging"}}}
-	got, err := v.GetBranches("app-1")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"main", "staging"}, got)
-}
-
-type listingStub struct {
-	stubBucket
-	branches []string
-}
-
-func (s *listingStub) GetBranches(string) ([]string, error) {
-	return s.branches, nil
-}

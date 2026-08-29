@@ -20,18 +20,14 @@ func (v *validatingBucket) GetBranches(appId string) ([]string, error) {
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	branches, err := v.Inner.GetBranches(appId)
-	if err != nil {
-		return nil, err
-	}
-	return omitReservedAppChildren(branches), nil
+	return v.Inner.GetBranches(appId)
 }
 
 func (v *validatingBucket) GetRuntimeVersions(appId, branch string) ([]types.RuntimeVersionWithStats, error) {
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	if err := validateBranch(branch); err != nil {
+	if err := validateSegment("branch", branch); err != nil {
 		return nil, err
 	}
 	return v.Inner.GetRuntimeVersions(appId, branch)
@@ -41,7 +37,7 @@ func (v *validatingBucket) GetUpdates(appId, branch, runtimeVersion string) ([]t
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	if err := validateBranch(branch); err != nil {
+	if err := validateSegment("branch", branch); err != nil {
 		return nil, err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -64,7 +60,7 @@ func (v *validatingBucket) RequestUploadUrlForFileUpdate(appId, branch, runtimeV
 	if err := validateSegment("appId", appId); err != nil {
 		return "", err
 	}
-	if err := validateBranch(branch); err != nil {
+	if err := validateSegment("branch", branch); err != nil {
 		return "", err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -106,7 +102,7 @@ func (v *validatingBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, upd
 	if err := validateSegment("appId", appId); err != nil {
 		return err
 	}
-	if err := validateBranch(branch); err != nil {
+	if err := validateSegment("branch", branch); err != nil {
 		return err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -191,21 +187,8 @@ func (v *validatingBucket) RequestBlobUploadURL(appId, hash, branch string) (str
 	if err := ValidateBlobHash(hash); err != nil {
 		return "", err
 	}
-	if err := validateBranch(branch); err != nil {
+	if err := validateSegment("branch", branch); err != nil {
 		return "", err
 	}
 	return v.Inner.RequestBlobUploadURL(appId, hash, branch)
-}
-
-func omitReservedAppChildren(names []string) []string {
-	if len(names) == 0 {
-		return names
-	}
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if name != casDir {
-			out = append(out, name)
-		}
-	}
-	return out
 }

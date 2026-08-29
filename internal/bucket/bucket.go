@@ -86,16 +86,6 @@ func validateRelativePath(name, value string) error {
 	return nil
 }
 
-func validateBranch(branch string) error {
-	if err := validateSegment("branch", branch); err != nil {
-		return err
-	}
-	if branch == casDir {
-		return fmt.Errorf("invalid branch: reserved name")
-	}
-	return nil
-}
-
 func ValidateBlobHash(hash string) error {
 	if len(hash) != blobHashLength {
 		return fmt.Errorf("invalid hash: must be %d characters", blobHashLength)
@@ -124,7 +114,7 @@ func validateUpdate(u *types.Update) error {
 	if err := validateSegment("appId", u.AppId); err != nil {
 		return err
 	}
-	if err := validateBranch(u.Branch); err != nil {
+	if err := validateSegment("branch", u.Branch); err != nil {
 		return err
 	}
 	if err := validateSegment("runtimeVersion", u.RuntimeVersion); err != nil {
