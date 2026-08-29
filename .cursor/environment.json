@@ -12,5 +12,8 @@
       "command": "cd apps/dashboard && VITE_OTA_API_URL=http://localhost:3000 npm run dev -- --host 0.0.0.0"
     }
   ],
-  "ports": [3000, 5173]
+  "ports": [
+    { "name": "api", "port": 3000 },
+    { "name": "dashboard", "port": 5173 }
+  ]
 }
