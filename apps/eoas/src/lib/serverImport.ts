@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 import { Credentials } from './auth';
 import { fetchWithRetries } from './fetch';
 
@@ -30,6 +28,7 @@ export interface ExpoImportResult {
   branchCount: number;
   channelCount: number;
   skipped?: string[];
+  warnings?: string[];
   historyJobId?: string;
 }
 
@@ -67,7 +66,7 @@ export async function loginAsAdmin(
   email: string,
   password: string
 ): Promise<string> {
-  const response = await fetch(`${baseUrl}/auth/login`, {
+  const response = await fetchWithRetries(`${baseUrl}/auth/login`, {
     method: 'POST',
     body: new URLSearchParams({ email, password }),
   });

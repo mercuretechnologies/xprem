@@ -14,6 +14,7 @@ import (
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
+	"github.com/google/uuid"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,10 +243,11 @@ func TestImportAppCopiesStructure(t *testing.T) {
 	assert.Equal(t, "My Imported App", result.Name)
 	assert.Equal(t, 2, result.BranchCount)
 	assert.Equal(t, 3, result.ChannelCount)
-	// bad*branch is skipped (reserved wildcard), and staging loses its target.
-	require.Len(t, result.Skipped, 2)
+	// bad*branch is skipped (reserved wildcard); staging is created unmapped.
+	require.Len(t, result.Skipped, 1)
 	assert.Contains(t, result.Skipped[0], "bad*branch")
-	assert.Contains(t, result.Skipped[1], `channel "staging"`)
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0], `channel "staging"`)
 
 	require.Len(t, appRepo.inserted, 1)
 	assert.Equal(t, importExpoAppID, appRepo.inserted[0].ID)
@@ -403,6 +405,14 @@ func TestPreviewImportBuildsPlan(t *testing.T) {
 
 	// A preview writes nothing.
 	assert.Empty(t, appRepo.inserted)
+}
+
+func TestBuildImportPlanEmptySlices(t *testing.T) {
+	plan := buildImportPlan(uuid.MustParse(importExpoAppID), &expo.ProjectStructure{Name: "Empty"})
+	require.NotNil(t, plan.Branches)
+	require.NotNil(t, plan.Channels)
+	assert.Empty(t, plan.Branches)
+	assert.Empty(t, plan.Channels)
 }
 
 func TestPreviewImportReportsConflict(t *testing.T) {

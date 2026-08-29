@@ -28,7 +28,7 @@ import (
 
 const (
 	historyDownloadConcurrency = 8
-	historyAssetCacheMaxBytes  = 256 << 20
+	historyAssetCacheMaxBytes  = 64 << 20
 	historyCacheableAssetSize  = 8 << 20
 )
 
@@ -223,7 +223,8 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	}
 	touched[branchRuntime{branch: historyUpdate.BranchName, runtime: historyUpdate.RuntimeVersion}] = true
 	if !inserted {
-		return "an update already exists at this instant on this branch", nil
+		log.Printf("[expo-import] timeline slot %s/%s already occupied; bucket files for update %s may have been overwritten", historyUpdate.BranchName, update.UpdateId, historyUpdate.Id)
+		return "an update already exists at this instant on this branch; its files may have been overwritten", nil
 	}
 	return "", nil
 }

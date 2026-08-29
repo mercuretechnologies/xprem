@@ -20,7 +20,7 @@ export const ExpoImportBanner = () => {
   // this, a job finished hours ago would greet every page load for its whole
   // cache lifetime.
   const sawRunningJobIdRef = useRef<string | null>(null);
-  const previousStateRef = useRef<string | null>(null);
+  const invalidatedTerminalJobIdRef = useRef<string | null>(null);
 
   const enabled = Boolean(selectedAppId) && isAdmin && CONTROL_PLANE_ENABLED;
   const jobQuery = useQuery({
@@ -44,18 +44,14 @@ export const ExpoImportBanner = () => {
       sawRunningJobIdRef.current = jobId;
     }
     // The import writes branches, runtime versions and updates; the pages
-    // listing them refresh once it stops.
-    if (
-      status &&
-      status.state !== 'running' &&
-      previousStateRef.current === 'running' &&
-      sawRunningJobIdRef.current === jobId
-    ) {
+    // listing them refresh once it stops, including when this tab first
+    // sees an already-finished job.
+    if (jobId && status && status.state !== 'running' && invalidatedTerminalJobIdRef.current !== jobId) {
       for (const key of ['branches', 'runtimeVersions', 'updates']) {
         queryClient.invalidateQueries({ queryKey: [key, selectedAppId] });
       }
+      invalidatedTerminalJobIdRef.current = jobId;
     }
-    previousStateRef.current = status?.state ?? null;
   }, [jobId, status, queryClient, selectedAppId]);
 
   if (!enabled || !jobId || !status) return null;

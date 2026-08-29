@@ -169,10 +169,13 @@ func historyMultipartResponder(t *testing.T, manifestJSON string) httpmock.Respo
 	require.NoError(t, err)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	for name, payload := range map[string]string{"manifest": manifestJSON, "extensions": string(extensions)} {
-		part, err := writer.CreateFormField(name)
+	for _, field := range []struct{ name, payload string }{
+		{"manifest", manifestJSON},
+		{"extensions", string(extensions)},
+	} {
+		part, err := writer.CreateFormField(field.name)
 		require.NoError(t, err)
-		_, err = part.Write([]byte(payload))
+		_, err = part.Write([]byte(field.payload))
 		require.NoError(t, err)
 	}
 	require.NoError(t, writer.Close())
@@ -571,6 +574,23 @@ func TestImportHistoryUpdateCleansUpFolderWhenInsertFails(t *testing.T) {
 	require.Len(t, historyBucket.deletedFolders, 1)
 	expectedUpdateId := historyUpdateIdFor(t, "2026-01-03T10:20:30.400Z", types.PlatformIOS)
 	assert.Equal(t, strconv.FormatInt(expectedUpdateId, 10), historyBucket.deletedFolders[0])
+}
+
+func TestImportHistoryUpdateSkipsWhenInsertReportsDuplicate(t *testing.T) {
+	httpmock.Activate()
+	defer httpmock.DeactivateAndReset()
+	mockExpoUpdateGroups(t)
+
+	importer := &importFakeUpdateImporter{duplicate: true}
+	historyBucket := &importFakeBucket{}
+	service := historyImportService(t, &importFakeBranchRepo{}, importer, historyBucket)
+
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{}, newHistoryAssetCache())
+
+	require.NoError(t, err)
+	assert.Contains(t, skipReason, "already exists")
+	assert.Contains(t, skipReason, "overwritten")
+	assert.Empty(t, historyBucket.deletedFolders)
 }
 
 func expoHistoryUpdateFixture(permalink string) expo.HistoryUpdate {

@@ -152,6 +152,7 @@ export default class Init extends Command {
     } catch (e) {
       updateConfigSpinner.fail('Failed to update Expo config');
       Log.error(e);
+      return;
     }
     ensurePrivateKeyIgnored(projectDir);
 
@@ -242,6 +243,9 @@ async function offerServerImport(baseUrl: string, expoAppId: string): Promise<vo
     }
     for (const skipped of result.skipped ?? []) {
       Log.warn(`Skipped ${skipped}`);
+    }
+    for (const warning of result.warnings ?? []) {
+      Log.warn(warning);
     }
     if (result.historyJobId) {
       await followHistoryJob(baseUrl, adminToken, result.historyJobId);

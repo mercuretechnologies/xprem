@@ -132,6 +132,7 @@ export type ExpoImportResult = {
   channelCount: number;
   // Branches/channels that could not be copied, with the reason.
   skipped?: string[];
+  warnings?: string[];
   // Background job now copying updates, set when history was requested.
   historyJobId?: string;
 };

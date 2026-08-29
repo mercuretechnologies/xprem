@@ -210,12 +210,14 @@ export const useAppCreation = ({ onClose, onAppCreated }: UseAppCreationParams) 
         ...(includeHistory && { historyLimit }),
       });
       const skippedCount = result.skipped?.length ?? 0;
+      const warningCount = result.warnings?.length ?? 0;
       toast({
         title: 'Import complete',
         description:
           `"${result.name}" imported with ${result.branchCount} branch${result.branchCount === 1 ? '' : 'es'} ` +
           `and ${result.channelCount} channel${result.channelCount === 1 ? '' : 's'}.` +
-          (skippedCount > 0 ? ` ${skippedCount} entries were skipped.` : ''),
+          (skippedCount > 0 ? ` ${skippedCount} entries were skipped.` : '') +
+          (warningCount > 0 ? ` ${warningCount} warning${warningCount === 1 ? '' : 's'}.` : ''),
       });
       if (onAppCreated) {
         onAppCreated(result.appId);

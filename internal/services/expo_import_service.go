@@ -49,6 +49,7 @@ type ExpoImportResult struct {
 	BranchCount  int      `json:"branchCount"`
 	ChannelCount int      `json:"channelCount"`
 	Skipped      []string `json:"skipped,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
 	// HistoryJobId is the background job now copying updates, set when the
 	// import was asked to also copy history.
 	HistoryJobId string `json:"historyJobId,omitempty"`
@@ -119,7 +120,13 @@ func (s *ExpoImportService) fetchImportStructure(ctx context.Context, auth types
 // buildImportPlan applies the same name rules CreateBranch and CreateChannel
 // enforce, so the plan never promises an entry the import would then refuse.
 func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImportPlan {
-	plan := &ExpoImportPlan{AppId: appId.String(), Name: structure.Name, ExpoName: structure.Name}
+	plan := &ExpoImportPlan{
+		AppId:    appId.String(),
+		Name:     structure.Name,
+		ExpoName: structure.Name,
+		Branches: []ExpoImportPlanItem{},
+		Channels: []ExpoImportPlanItem{},
+	}
 	if validation.DisplayName("name", structure.Name) != nil {
 		plan.Name = appId.String()
 	}
@@ -143,6 +150,8 @@ func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImp
 		} else if item.MappedBranch != "" && !keptBranches[item.MappedBranch] {
 			item.Warning = fmt.Sprintf("left unmapped, its branch %q is not imported", item.MappedBranch)
 			item.MappedBranch = ""
+		} else if channel.UnresolvedBranchID != "" {
+			item.Warning = "left unmapped, its Expo branch is not in the project listing"
 		}
 		plan.Channels = append(plan.Channels, item)
 	}
@@ -175,7 +184,8 @@ func (s *ExpoImportService) PreviewImport(ctx context.Context, auth types.Auth, 
 
 // ImportApp creates the app under the Expo project's own UUID and executes
 // the plan PreviewImport shows: kept branches and channels are created, plan
-// skips and warnings become result.Skipped. historyLimit above zero also
+// skips become result.Skipped and plan warnings become result.Warnings.
+// historyLimit above zero also
 // starts the background job copying that many of the newest update groups.
 // Any failure past app creation, the job not starting included, rolls the app
 // back so the import can be retried.
@@ -212,7 +222,7 @@ func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expo
 			continue
 		}
 		if channel.Warning != "" {
-			result.Skipped = append(result.Skipped, fmt.Sprintf("channel %q: %s", channel.Name, channel.Warning))
+			result.Warnings = append(result.Warnings, fmt.Sprintf("channel %q: %s", channel.Name, channel.Warning))
 		}
 		var branchName *string
 		if channel.MappedBranch != "" {

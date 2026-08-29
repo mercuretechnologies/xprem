@@ -81,7 +81,7 @@ func FetchServedManifest(ctx context.Context, permalink string) (*ServedManifest
 	if err != nil {
 		return nil, fmt.Errorf("could not fetch the update manifest: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("could not fetch the update manifest: the server answered %s", resp.Status)
 	}
@@ -135,7 +135,11 @@ func FetchServedManifest(ctx context.Context, permalink string) (*ServedManifest
 
 // maxHistoryAssetBytes caps one downloaded asset; anything past it is treated
 // as a corrupt or hostile response, not an OTA asset.
-const maxHistoryAssetBytes = 2 << 30
+const maxHistoryAssetBytes = 256 << 20
+
+// maxUpdateGroupsPage is the largest updateGroups(limit:) the Expo API
+// accepts; callers asking for more are clamped.
+const maxUpdateGroupsPage = 50
 
 // assetHTTPClient deliberately rides http.DefaultTransport so the test mocks
 // intercept it.
@@ -155,7 +159,7 @@ func DownloadAsset(ctx context.Context, url string, headers map[string]string) (
 	if err != nil {
 		return nil, fmt.Errorf("could not download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("could not download %s: the CDN answered %s", url, resp.Status)
 	}
@@ -202,6 +206,12 @@ func FetchUpdateGroups(ctx context.Context, auth types.Auth, expoAppId string, l
 			}
 		}
 	`
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > maxUpdateGroupsPage {
+		limit = maxUpdateGroupsPage
+	}
 	variables := map[string]interface{}{
 		"appId": expoAppId,
 		"limit": limit,

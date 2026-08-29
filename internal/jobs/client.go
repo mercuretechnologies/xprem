@@ -26,6 +26,9 @@ import (
 // ErrAlreadyRunning refuses a job whose unique constraint matched a live job.
 var ErrAlreadyRunning = errors.New("a job of this kind is already running for this scope")
 
+// Serializes rivermigrate.Migrate across replicas; distinct from the goose lock.
+const riverMigrationLockID = 823672942
+
 // Client wraps the River client. A nil Client is the stateless mode stand-in:
 // the job accessors (Enqueue, Get, LatestByArg, Cancel, Stop) are nil-safe,
 // reads answering "no job" and writes refusing; Workers and Start require a
@@ -56,7 +59,21 @@ func (c *Client) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare the river migrator: %w", err)
 	}
-	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire a connection for the river migration lock: %w", err)
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	if _, err := conn.Exec(lockCtx, "SELECT pg_advisory_lock($1)", riverMigrationLockID); err != nil {
+		cancel()
+		conn.Release()
+		return fmt.Errorf("failed to acquire the river migration lock: %w", err)
+	}
+	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+	_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", riverMigrationLockID)
+	cancel()
+	conn.Release()
+	if err != nil {
 		return fmt.Errorf("failed to migrate the river schema: %w", err)
 	}
 	riverClient, err := river.NewClient(driver, &river.Config{

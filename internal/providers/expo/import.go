@@ -48,6 +48,9 @@ type AccountApps struct {
 type ImportChannel struct {
 	Name       string
 	BranchName *string
+	// UnresolvedBranchID is a plain mapping whose branch was not in the
+	// project's branch list; the channel is still imported, unmapped.
+	UnresolvedBranchID string
 }
 
 // ProjectStructure is everything the import copies off an Expo project.
@@ -217,6 +220,8 @@ func FetchProjectStructure(ctx context.Context, auth types.Auth, expoAppId strin
 					if name, ok := branchNameById[m.BranchId]; ok {
 						branchName := name
 						imported.BranchName = &branchName
+					} else {
+						imported.UnresolvedBranchID = m.BranchId
 					}
 					break
 				}
