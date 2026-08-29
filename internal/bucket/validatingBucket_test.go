@@ -2,6 +2,7 @@ package bucket
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -57,6 +58,22 @@ func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); re
 func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
 func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
 func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }
+func (s *stubBucket) BlobExists(context.Context, string, string) (bool, error) {
+	s.mark()
+	return false, nil
+}
+func (s *stubBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	s.mark()
+	return nil, nil
+}
+func (s *stubBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	s.mark()
+	return "", nil
+}
 
 func validUpdate() types.Update {
 	return types.Update{AppId: "app-1", Branch: "main", RuntimeVersion: "1.0", UpdateId: "123"}

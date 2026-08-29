@@ -2,6 +2,7 @@ package bucket
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +21,11 @@ var s3KeyPrefixDeprecationOnce sync.Once
 // updateId, migrationId). Keeps DoS surface small on map keys and
 // filesystem paths while staying comfortably above realistic names
 // (UUIDs are 36, semver+build metadata under 100).
-const maxSegmentLen = 128
+const (
+	maxSegmentLen  = 128
+	casDir         = "cas"
+	blobHashLength = 43
+)
 
 // copyFileTimeout bounds a single CopyFileIntoUpdate provider call, so a
 // stalled copy degrades into a regular upload instead of hanging the publish.
@@ -81,6 +86,37 @@ func validateRelativePath(name, value string) error {
 	return nil
 }
 
+func validateBranch(branch string) error {
+	if err := validateSegment("branch", branch); err != nil {
+		return err
+	}
+	if branch == casDir {
+		return fmt.Errorf("invalid branch: reserved name")
+	}
+	return nil
+}
+
+func ValidateBlobHash(hash string) error {
+	if len(hash) != blobHashLength {
+		return fmt.Errorf("invalid hash: must be %d characters", blobHashLength)
+	}
+	for _, r := range hash {
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return fmt.Errorf("invalid hash: must be base64url")
+		}
+	}
+	return nil
+}
+
+// BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
+func BlobObjectKey(appId, hash string) string {
+	return appId + "/" + casDir + "/" + hash
+}
+
+func prefixedBlobKey(prefix, appId, hash string) string {
+	return prefix + BlobObjectKey(appId, hash)
+}
+
 func validateUpdate(u *types.Update) error {
 	if u == nil {
 		return fmt.Errorf("update must not be nil")
@@ -88,7 +124,7 @@ func validateUpdate(u *types.Update) error {
 	if err := validateSegment("appId", u.AppId); err != nil {
 		return err
 	}
-	if err := validateSegment("branch", u.Branch); err != nil {
+	if err := validateBranch(u.Branch); err != nil {
 		return err
 	}
 	if err := validateSegment("runtimeVersion", u.RuntimeVersion); err != nil {
@@ -159,6 +195,10 @@ type Bucket interface {
 	RemoveMigrationFromHistory(migrationId string) error
 	GetInstanceID() (string, error)
 	PersistInstanceID(id string) error
+	BlobExists(ctx context.Context, appId, hash string) (bool, error)
+	GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error)
+	PutBlob(ctx context.Context, appId, hash string, body io.Reader) error
+	RequestBlobUploadURL(appId, hash, branch string) (string, error)
 }
 
 type BucketType string

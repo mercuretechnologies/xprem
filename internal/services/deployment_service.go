@@ -321,23 +321,24 @@ func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, param
 	var mu sync.Mutex
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
-	// FileNames repeats assets shared by both platforms; copy each once.
-	seen := make(map[string]struct{}, len(params.FileNames))
-	for _, file := range params.FileNames {
-		if _, alreadySeen := seen[file]; alreadySeen {
+	// Files repeats assets shared by both platforms; copy each once.
+	seen := make(map[string]struct{}, len(params.Files))
+	for _, file := range params.Files {
+		if _, alreadySeen := seen[file.Name]; alreadySeen {
 			continue
 		}
-		seen[file] = struct{}{}
-		if !slices.ContainsFunc(previousAssets, func(a types.Asset) bool { return a.Path == file }) {
+		seen[file.Name] = struct{}{}
+		if !slices.ContainsFunc(previousAssets, func(a types.Asset) bool { return a.Path == file.Name }) {
 			continue
 		}
+		path := file.Name
 		g.Go(func() error {
-			if err := s.bucket.CopyFileIntoUpdate(*latestUpdate, newUpdate, file); err != nil {
-				log.Printf("[RequestID: %s] Error copying %s into update: %v", params.RequestID, file, err)
+			if err := s.bucket.CopyFileIntoUpdate(*latestUpdate, newUpdate, path); err != nil {
+				log.Printf("[RequestID: %s] Error copying %s into update: %v", params.RequestID, path, err)
 				return nil
 			}
 			mu.Lock()
-			dedupedAssets = append(dedupedAssets, file)
+			dedupedAssets = append(dedupedAssets, path)
 			mu.Unlock()
 			return nil
 		})
@@ -381,12 +382,16 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 		})
 	}
 
+	fileNames := make([]string, 0, len(filesToUpload))
+	for _, file := range filesToUpload {
+		fileNames = append(fileNames, file.Name)
+	}
 	updateRequests, err := bucket.RequestUploadUrlsForFileUpdates(
 		params.AppID,
 		params.BranchName,
 		params.RuntimeVersion,
 		updateStr,
-		filesToUpload,
+		fileNames,
 	)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error requesting upload urls: %v", params.RequestID, err)

@@ -9,6 +9,8 @@ type CDN interface {
 	// Missing the appId segment produces a 404 against S3/CloudFront and
 	// GCS-direct (objects are not at the top level anymore).
 	ComputeRedirectionURLForAsset(appId, branch, runtimeVersion, updateId, asset string) (string, error)
+	// ComputeRedirectionURLForBlob signs {keyPrefix}{appId}/cas/{hash}.
+	ComputeRedirectionURLForBlob(appId, hash string) (string, error)
 }
 
 var (

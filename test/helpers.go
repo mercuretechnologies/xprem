@@ -15,6 +15,7 @@ import (
 	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/cdn"
+	"xprem/internal/crypto"
 	"xprem/internal/handlers"
 	"xprem/internal/metrics"
 	infrastructure "xprem/internal/router"
@@ -400,7 +401,7 @@ func mockExpoForRequestUploadUrlTest(channelName string) {
 		})
 }
 
-func ComputeUploadRequestsInput(dirPath string) handlers.FileNamesRequest {
+func ComputeUploadRequestsInput(dirPath string) handlers.RequestUploadURLsRequest {
 	metadataFilePath := filepath.Join(dirPath, "metadata.json")
 	metadataFile, err := os.Open(metadataFilePath)
 	if err != nil {
@@ -428,7 +429,22 @@ func ComputeUploadRequestsInput(dirPath string) handlers.FileNamesRequest {
 	// Add metadata.json & expoConfig.json
 	fileNames = append(fileNames, "metadata.json")
 	fileNames = append(fileNames, "expoConfig.json")
-	return handlers.FileNamesRequest{FileNames: fileNames}
+	files := make([]services.FileUploadItem, 0, len(fileNames))
+	for _, name := range fileNames {
+		data, err := os.ReadFile(filepath.Join(dirPath, name))
+		if err != nil {
+			panic(err)
+		}
+		sum, err := crypto.CreateHash(data, "sha256", "base64")
+		if err != nil {
+			panic(err)
+		}
+		files = append(files, services.FileUploadItem{
+			Name: name,
+			Hash: crypto.GetBase64URLEncoding(sum),
+		})
+	}
+	return handlers.RequestUploadURLsRequest{Files: files}
 }
 
 func ChangeModTime(filePath string, newTime time.Time) error {

@@ -240,7 +240,7 @@ func TestRequestUploadUrlWithBadFilenamesType(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
-	uploadRequestsInputJSON, err := json.Marshal(map[string]int{"fileNames": 1})
+	uploadRequestsInputJSON, err := json.Marshal(map[string]int{"files": 1})
 	if err != nil {
 		t.Fatalf("Error marshalling uploadRequestsInput: %v", err)
 	}

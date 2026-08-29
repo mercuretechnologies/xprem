@@ -27,9 +27,9 @@ func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHand
 	}
 }
 
-type FileNamesRequest struct {
-	Files     []services.FileUploadItem `json:"files"`
-	Message   string      `json:"message,omitempty"`
+type RequestUploadURLsRequest struct {
+	Files   []services.FileUploadItem `json:"files"`
+	Message string                    `json:"message,omitempty"`
 }
 
 // parsePublishGroup reads the optional CLI-minted id grouping the per-platform
@@ -277,7 +277,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var bodyReq FileNamesRequest
+	var bodyReq RequestUploadURLsRequest
 	if err := json.NewDecoder(r.Body).Decode(&bodyReq); err != nil {
 		log.Printf("[RequestID: %s] Error decoding JSON body: %v", requestID, err)
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)

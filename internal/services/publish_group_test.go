@@ -140,7 +140,7 @@ func TestRequestUploadURLsStampsPublishGroup(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames:      []string{"bundle.js"},
+		Files:          hashedUploads("bundle.js"),
 		PublishGroupID: &group,
 	})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestRequestUploadURLsStampsPublishGroup(t *testing.T) {
 		BranchName:        "main",
 		Platform:          "android",
 		RuntimeVersion:    "1",
-		FileNames:         []string{"bundle.js"},
+		Files:             hashedUploads("bundle.js"),
 		RolloutPercentage: &pct,
 		PublishGroupID:    &group,
 	})

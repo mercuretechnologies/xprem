@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xprem/config"
+	"xprem/internal/crypto"
 	"xprem/internal/rollout"
 	"xprem/internal/store"
 	"xprem/internal/types"
@@ -546,6 +547,22 @@ func (fakeBranchRepo) CreateRuntimeVersion(_ context.Context, _, _ string) (int6
 
 func (fakeBranchRepo) GetBranchByName(_ context.Context, _, _ string) (int64, error) { return 0, nil }
 
+func hashedUpload(name string) FileUploadItem {
+	sum, err := crypto.CreateHash([]byte(name), "sha256", "base64")
+	if err != nil {
+		panic(err)
+	}
+	return FileUploadItem{Name: name, Hash: crypto.GetBase64URLEncoding(sum)}
+}
+
+func hashedUploads(names ...string) []FileUploadItem {
+	files := make([]FileUploadItem, len(names))
+	for i, name := range names {
+		files[i] = hashedUpload(name)
+	}
+	return files
+}
+
 // fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
 type fakeRolloutBucket struct{}
 
@@ -593,6 +610,22 @@ func (fakeRolloutBucket) RetrieveMigrationHistory() ([]string, error) { return n
 func (fakeRolloutBucket) ApplyMigration(_ string) error { return nil }
 
 func (fakeRolloutBucket) RemoveMigrationFromHistory(_ string) error { return nil }
+
+func (fakeRolloutBucket) BlobExists(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (fakeRolloutBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	return nil, fmt.Errorf("fake bucket stores no files")
+}
+
+func (fakeRolloutBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	return nil
+}
+
+func (fakeRolloutBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	return "", nil
+}
 
 type rolloutTestHarness struct {
 	appId             string
@@ -874,7 +907,7 @@ func TestPublishRepublishRollbackBlockedDuringActiveRollout(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames:      []string{"bundle.js"},
+		Files:          hashedUploads("bundle.js"),
 	})
 	assert.ErrorIs(t, err, ErrActiveRolloutBlocksPublish)
 
