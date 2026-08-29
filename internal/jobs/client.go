@@ -59,20 +59,23 @@ func (c *Client) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare the river migrator: %w", err)
 	}
-	conn, err := c.pool.Acquire(ctx)
+	// The lock lives on its own connection, not a pooled one: Migrate talks
+	// to the pool, and a one-connection pool would deadlock if the lock sat
+	// on that only slot.
+	lockConn, err := pgx.ConnectConfig(ctx, c.pool.Config().ConnConfig)
 	if err != nil {
-		return fmt.Errorf("failed to acquire a connection for the river migration lock: %w", err)
+		return fmt.Errorf("failed to open a connection for the river migration lock: %w", err)
 	}
 	lockCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	if _, err := conn.Exec(lockCtx, "SELECT pg_advisory_lock($1)", riverMigrationLockID); err != nil {
+	if _, err := lockConn.Exec(lockCtx, "SELECT pg_advisory_lock($1)", riverMigrationLockID); err != nil {
 		cancel()
-		conn.Release()
+		_ = lockConn.Close(context.Background())
 		return fmt.Errorf("failed to acquire the river migration lock: %w", err)
 	}
 	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
-	_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", riverMigrationLockID)
+	_, _ = lockConn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", riverMigrationLockID)
 	cancel()
-	conn.Release()
+	_ = lockConn.Close(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to migrate the river schema: %w", err)
 	}
