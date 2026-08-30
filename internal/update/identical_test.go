@@ -29,6 +29,9 @@ func TestAreUpdatesIdentical(t *testing.T) {
 	assert.False(t, AreUpdatesIdentical(stored, mapping("launch", "a")), "asset removed")
 	assert.False(t, AreUpdatesIdentical(stored, mapping("launch", "a", "b", "c")), "asset added")
 
+	assert.False(t, AreUpdatesIdentical(stored, mapping("launch", "a", "a")), "duplicate hash is not the same content as two distinct assets")
+	assert.True(t, AreUpdatesIdentical(mapping("launch", "a", "a"), mapping("launch", "a", "a")), "duplicate hashes on both sides")
+
 	assert.False(t, AreUpdatesIdentical(nil, mapping("launch", "a", "b")), "update published before mappings existed")
 	assert.False(t, AreUpdatesIdentical(stored, nil), "CLI too old to send a mapping")
 	assert.False(t, AreUpdatesIdentical(mapping("", "a"), mapping("", "a")), "a mapping without a bundle is not content")

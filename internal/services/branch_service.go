@@ -195,5 +195,11 @@ func (s *BranchService) UpdateChannelBranchMapping(ctx context.Context, appId st
 }
 
 func (s *BranchService) UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error {
+	if err := validation.Name("branchName", branchName); err != nil {
+		return err
+	}
+	if bucket.ReservedBranchName(branchName) {
+		return validation.Errorf("branchName", "%q is reserved", branchName)
+	}
 	return s.branchRepo.UpsertBranchAndRuntimeVersion(ctx, appId, branchName, runtimeVersion)
 }

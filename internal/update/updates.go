@@ -63,7 +63,35 @@ func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *typ
 	if metadata.MetadataJSON.FileMetadata.IOS.Bundle == "" && metadata.MetadataJSON.FileMetadata.Android.Bundle == "" {
 		return fmt.Errorf("missing bundle path in metadata")
 	}
+	if mapping == nil {
+		return verifyFolderUploaded(update, metadata)
+	}
 	return verifyBlobsUploaded(ctx, update.AppId, mapping)
+}
+
+func verifyFolderUploaded(update types.Update, metadata types.UpdateMetadata) error {
+	var files []string
+	for _, platformMetadata := range []types.PlatformMetadata{metadata.MetadataJSON.FileMetadata.IOS, metadata.MetadataJSON.FileMetadata.Android} {
+		if platformMetadata.Bundle == "" {
+			continue
+		}
+		files = append(files, platformMetadata.Bundle)
+		for _, asset := range platformMetadata.Assets {
+			files = append(files, asset.Path)
+		}
+	}
+	resolvedBucket := bucket.GetBucket()
+	for _, file := range files {
+		f, err := resolvedBucket.GetFile(update, file)
+		if err != nil {
+			return fmt.Errorf("checking file %s: %w", file, err)
+		}
+		if f == nil {
+			return fmt.Errorf("missing file: %s in update", file)
+		}
+		f.Reader.Close()
+	}
+	return nil
 }
 
 func verifyBlobsUploaded(ctx context.Context, appId string, mapping *types.UpdateAssetMapping) error {
@@ -94,14 +122,16 @@ func AreUpdatesIdentical(stored, incoming *types.UpdateAssetMapping) bool {
 	if len(stored.Assets) != len(incoming.Assets) {
 		return false
 	}
-	storedHashes := make(map[string]struct{}, len(stored.Assets))
+	// Counted, not a set: two assets can share a hash (identical content at two paths).
+	storedHashes := make(map[string]int, len(stored.Assets))
 	for _, asset := range stored.Assets {
-		storedHashes[asset.Hash] = struct{}{}
+		storedHashes[asset.Hash]++
 	}
 	for _, asset := range incoming.Assets {
-		if _, ok := storedHashes[asset.Hash]; !ok {
+		if storedHashes[asset.Hash] == 0 {
 			return false
 		}
+		storedHashes[asset.Hash]--
 	}
 	return true
 }

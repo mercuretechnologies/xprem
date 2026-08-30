@@ -153,6 +153,10 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 			http.Error(w, services.ErrRolloutSuperseded.Error(), http.StatusConflict)
 			return
 		}
+		if validation.IsValidationError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		// Any unexpected runtime/database systems error falls back to standard 500s
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -343,6 +347,10 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "You have already uploaded this update, no changes detected",
 			})
+			return
+		}
+		if validation.IsValidationError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Error(w, "Internal server error processing payload URLs", http.StatusInternalServerError)
