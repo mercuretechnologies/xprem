@@ -168,6 +168,17 @@ func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, upda
 	return &updateCopy, nil
 }
 
+func (r *fakeUpdateRepo) GetCheckedUpdate(_ context.Context, appId, branchName, _, updateId string) (*types.Update, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(appId, branchName, updateId)
+	if row == nil || !row.checked {
+		return nil, nil
+	}
+	updateCopy := row.update
+	return &updateCopy, nil
+}
+
 func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -251,6 +251,21 @@ func (s *BucketUpdateStore) GetUpdate(ctx context.Context, appId string, branchN
 	}, nil
 }
 
+func (s *BucketUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	update, err := s.GetUpdate(ctx, appId, branchName, runtimeVersion, updateId)
+	if err != nil {
+		return nil, err
+	}
+	valid, err := s.IsUpdateValid(ctx, *update)
+	if err != nil {
+		return nil, err
+	}
+	if !valid {
+		return nil, nil
+	}
+	return update, nil
+}
+
 func (s *BucketUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	return update2.RetrieveUpdateStoredMetadata(update)
 }

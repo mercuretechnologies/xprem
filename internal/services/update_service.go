@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -15,6 +16,9 @@ type UpdateRepository interface {
 	MarkUpdateAsChecked(ctx context.Context, update types.Update) error
 	GetUpdateDetails(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (types.UpdateDetails, error)
 	GetUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error)
+	// GetCheckedUpdate is GetUpdate restricted to complete updates: nil unless
+	// the row exists and has been checked.
+	GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error)
 	GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error)
 	GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error)
 	GetUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error)
@@ -76,9 +80,52 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 	if latestEnvelope == nil {
 		return nil, nil
 	}
-	ttl := 1800
+	ttl := lastUpdateEnvelopeCacheTTLSeconds
 	cache.SetJSON(envelopeCache, cacheKey, latestEnvelope, &ttl)
 	return latestEnvelope, nil
+}
+
+// manifestResponseEntry is the poll-ready form of a composed manifest: the
+// exact bytes the response body carries, and the update's UUID for the
+// same-version short-circuit.
+type manifestResponseEntry struct {
+	ManifestJSON json.RawMessage `json:"manifestJson"`
+	UpdateUUID   string          `json:"updateUuid"`
+}
+
+// cachedManifestResponse is the single owner of the composed-manifest cache;
+// the request path and the publish prewarm both go through it. Composing is
+// what costs the store reads, so a warm poll never pays one.
+func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types.Update, platform types.Platform) (manifestResponseEntry, error) {
+	manifestCache := cache.GetCache()
+	cacheKey := update2.ComputeManifestResponseCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
+	if entry, ok := cache.GetJSON[manifestResponseEntry](manifestCache, cacheKey); ok {
+		return entry, nil
+	}
+	metadata, err := update2.GetMetadata(update)
+	if err != nil {
+		return manifestResponseEntry{}, err
+	}
+	storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, update)
+	if err != nil {
+		return manifestResponseEntry{}, err
+	}
+	mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, update)
+	if err != nil {
+		return manifestResponseEntry{}, err
+	}
+	manifest, err := update2.ComposeUpdateManifest(&metadata, update, storedMetadata, mapping, platform)
+	if err != nil {
+		return manifestResponseEntry{}, err
+	}
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return manifestResponseEntry{}, err
+	}
+	entry := manifestResponseEntry{ManifestJSON: manifestJSON, UpdateUUID: manifest.Id}
+	ttl := update2.ImmutableCacheTTLSeconds
+	cache.SetJSON(manifestCache, cacheKey, entry, &ttl)
+	return entry, nil
 }
 
 // GetUpdateAssetMapping answers nil for an update published before the mapping

@@ -115,16 +115,12 @@ func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository
 	}
 }
 
-func createMultipartResponse(headers map[string][]string, jsonContent interface{}) (*multipart.Writer, *bytes.Buffer, error) {
+func createMultipartResponse(headers map[string][]string, contentJSON []byte) (*multipart.Writer, *bytes.Buffer, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	field, err := writer.CreatePart(headers)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error creating multipart field: %w", err)
-	}
-	contentJSON, err := json.Marshal(jsonContent)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error marshaling JSON: %w", err)
 	}
 	if _, err := field.Write(contentJSON); err != nil {
 		return nil, nil, fmt.Errorf("error writing JSON content: %w", err)
@@ -132,7 +128,9 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 	return writer, &buf, nil
 }
 
-func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId string, content interface{}, expectSignatureHeader string) (string, error) {
+// signContentBytes signs the exact bytes the response body carries, so the
+// signature can never drift from what is served.
+func (s *ExpoProtocolService) signContentBytes(ctx context.Context, appId string, contentJSON []byte, expectSignatureHeader string) (string, error) {
 	if expectSignatureHeader == "" {
 		return "", nil
 	}
@@ -141,10 +139,6 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 		return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
 	}
 	privateKey := keyStore.GetPrivateExpoKey(appConfig)
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return "", fmt.Errorf("error stringifying content: %w", err)
-	}
 	// The key fingerprint is part of the cache key so a key rotation misses
 	// the cache instead of serving a signature made with the old key.
 	keyFingerprint, err := crypto.CreateHash([]byte(privateKey), "sha256", "hex")
@@ -185,53 +179,54 @@ func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.B
 }
 
 func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, lastUpdate types.Update, refusedBranch string) {
-	metadata, err := update2.GetMetadata(lastUpdate)
+	entry, err := s.updateService.cachedManifestResponse(ctx, lastUpdate, params.Platform)
 	if err != nil {
-		log.Printf("[RequestID: %s] Error getting metadata: %v", params.RequestID, err)
-		http.Error(w, "Error getting metadata", http.StatusInternalServerError)
+		log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
+		http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 		return
 	}
-
-	if params.CurrentUpdateID != "" && params.CurrentUpdateID == crypto.ConvertSHA256HashToUUID(metadata.ID) && params.ProtocolVersion == 1 {
+	if params.CurrentUpdateID != "" && params.CurrentUpdateID == entry.UpdateUUID && params.ProtocolVersion == 1 {
 		s.PutNoUpdateAvailableInResponse(ctx, w, params)
 		return
 	}
-	// Composing is what costs a store read; a served manifest must not pay for it.
-	manifest, cached := update2.CachedUpdateManifest(lastUpdate, params.Platform)
-	if !cached {
-		storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, lastUpdate)
-		if err != nil {
-			log.Printf("[RequestID: %s] Error getting stored metadata: %v", params.RequestID, err)
-			http.Error(w, "Error getting stored metadata", http.StatusInternalServerError)
+	contentJSON := []byte(entry.ManifestJSON)
+	if refusedBranch != "" {
+		// Per-request stamp on a copy, never on the cached bytes; the rebuilt
+		// content gets its own signature entry by construction.
+		var manifest types.UpdateManifest
+		if err := json.Unmarshal(entry.ManifestJSON, &manifest); err != nil {
+			log.Printf("[RequestID: %s] Error decoding cached manifest: %v", params.RequestID, err)
+			http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 			return
 		}
-		mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, lastUpdate)
+		manifest.Extra.BranchSurfingRefused = refusedBranch
+		contentJSON, err = json.Marshal(manifest)
 		if err != nil {
-			log.Printf("[RequestID: %s] Error getting asset mapping: %v", params.RequestID, err)
-			http.Error(w, "Error getting asset mapping", http.StatusInternalServerError)
-			return
-		}
-		manifest, err = update2.ComposeUpdateManifest(&metadata, lastUpdate, storedMetadata, mapping, params.Platform)
-		if err != nil {
-			log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
+			log.Printf("[RequestID: %s] Error encoding manifest: %v", params.RequestID, err)
 			http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 			return
 		}
 	}
-	// Stamped on the copy about to be served, never on the cached manifest: the
-	// cache is keyed by branch, and this is per request. Signing happens
-	// downstream, so it covers the stamp.
-	manifest.Extra.BranchSurfingRefused = refusedBranch
 	if params.CurrentUpdateID != "" {
-		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
+		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, entry.UpdateUUID, "update")
 	}
 	w.Header().Set("expo-manifest-filters", `branch="`+lastUpdate.Branch+`"`)
-	s.PutResponse(ctx, w, params, manifest, "manifest")
+	s.putRawResponse(ctx, w, params, contentJSON, "manifest")
 }
 
 func (s *ExpoProtocolService) PutResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, content interface{}, fieldName string) {
+	contentJSON, err := json.Marshal(content)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error encoding content: %v", params.RequestID, err)
+		http.Error(w, "Error encoding content", http.StatusInternalServerError)
+		return
+	}
+	s.putRawResponse(ctx, w, params, contentJSON, fieldName)
+}
+
+func (s *ExpoProtocolService) putRawResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, contentJSON []byte, fieldName string) {
 	requestID := params.RequestID
-	signedHash, err := s.signDirectiveOrManifest(ctx, params.AppID, content, params.ExpectSignature)
+	signedHash, err := s.signContentBytes(ctx, params.AppID, contentJSON, params.ExpectSignature)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error signing content: %v", requestID, err)
 		http.Error(w, "Error signing content", http.StatusInternalServerError)
@@ -245,7 +240,7 @@ func (s *ExpoProtocolService) PutResponse(ctx context.Context, w http.ResponseWr
 	if signedHash != "" {
 		headers["expo-signature"] = []string{fmt.Sprintf("sig=\"%s\", keyid=\"main\"", signedHash)}
 	}
-	writer, buf, err := createMultipartResponse(headers, content)
+	writer, buf, err := createMultipartResponse(headers, contentJSON)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error creating multipart response: %v", requestID, err)
 		http.Error(w, "Error creating multipart response", http.StatusInternalServerError)
@@ -534,18 +529,11 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params AssetResolutionParams, branchMap *types.ChannelResolution) (string, *types.Update, error) {
 	if config.IsDBMode() {
 		if params.UpdateID != "" && params.Branch != "" && s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, params.Branch, branchMap) {
-			pinnedUpdate, err := s.updateRepo.GetUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
+			pinnedUpdate, err := s.updateRepo.GetCheckedUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
 			if err != nil {
 				log.Printf("[RequestID: %s] Ignoring invalid updateId param %q: %v", params.RequestID, params.UpdateID, err)
 			} else if pinnedUpdate != nil {
-				valid, err := s.updateRepo.IsUpdateValid(ctx, *pinnedUpdate)
-				if err != nil {
-					log.Printf("[RequestID: %s] Error checking update validity: %v", params.RequestID, err)
-					return "", nil, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error getting latest update"}
-				}
-				if valid {
-					return params.Branch, pinnedUpdate, nil
-				}
+				return params.Branch, pinnedUpdate, nil
 			}
 		}
 		if params.RequestedUpdateID != "" {

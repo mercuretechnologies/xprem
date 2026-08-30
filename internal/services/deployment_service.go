@@ -369,7 +369,9 @@ func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, appId
 // branch already serves for the platform. A store that cannot answer never
 // blocks the publish.
 func (s *DeploymentService) isIdenticalToLatest(ctx context.Context, params RequestUploadURLParams, incoming *types.UpdateAssetMapping) bool {
-	latest, err := s.updateService.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
+	// Straight to the repo: refusing a publish over a stale cached envelope
+	// would block re-shipping the previous good build after a bad one.
+	latest, err := s.updateRepo.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
 	if err != nil {
 		log.Printf("[RequestID: %s] Warning: GetLatestUpdate returned error, skipping identical check: %v", params.RequestID, err)
 		return false

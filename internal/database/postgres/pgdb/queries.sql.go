@@ -9,10 +9,9 @@ import (
 	"context"
 	"net/netip"
 
-	"xprem/internal/types"
-
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 const adoptionBreakdown = `-- name: AdoptionBreakdown :many
@@ -2105,7 +2104,7 @@ func (q *Queries) GetUpdateAssetMapping(ctx context.Context, arg GetUpdateAssetM
 }
 
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -2136,6 +2135,7 @@ type GetUpdateByBranchNameAndRuntimeRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	RolloutPercentage *int32             `json:"rollout_percentage"`
 	ControlUpdateID   *int64             `json:"control_update_id"`
+	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
 }
 
 // app_id is load-bearing, not redundant: pk_updates is (branch_id, id), so an
@@ -2163,6 +2163,7 @@ func (q *Queries) GetUpdateByBranchNameAndRuntime(ctx context.Context, arg GetUp
 		&i.CreatedAt,
 		&i.RolloutPercentage,
 		&i.ControlUpdateID,
+		&i.CheckedAt,
 	)
 	return i, err
 }

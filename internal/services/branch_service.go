@@ -11,6 +11,7 @@ import (
 	"xprem/internal/dashboard"
 	"xprem/internal/store"
 	"xprem/internal/types"
+	update2 "xprem/internal/update"
 	"xprem/internal/validation"
 )
 
@@ -127,6 +128,13 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 	appCache := cache.GetCache()
 	appCache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
 	appCache.Delete(dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName))
+	// Without this a surfing device could still be handed the deleted branch's
+	// cached envelope while its files are being removed below.
+	for _, row := range rows {
+		for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
+			appCache.Delete(update2.ComputeLastUpdateCacheKey(appId, branchName, row.RuntimeVersion, platform))
+		}
+	}
 	go func(bucketRows []types.UpdateRef) {
 		for _, row := range bucketRows {
 			err := s.bucket.DeleteUpdateFolder(appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))

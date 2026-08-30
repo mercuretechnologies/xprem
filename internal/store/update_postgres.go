@@ -224,6 +224,32 @@ func (s *PostgresUpdateStore) GetUpdate(ctx context.Context, appId string, branc
 	}, nil
 }
 
+// GetCheckedUpdate answers in one query what GetUpdate + IsUpdateValid answer
+// in two; it sits on the per-asset-download hot path.
+func (s *PostgresUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	updateIdInt, err := strconv.ParseInt(updateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	update, err := s.GetUpdateByBranchNameAndRuntime(ctx, appId, updateIdInt, branchName, runtimeVersion)
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update by ID from database: %w", err)
+	}
+	if !update.CheckedAt.Valid {
+		return nil, nil
+	}
+	return &types.Update{
+		UpdateId:       strconv.FormatInt(update.ID, 10),
+		Branch:         update.BranchName,
+		RuntimeVersion: update.RuntimeVersion,
+		CreatedAt:      time.Duration(update.CreatedAt.Time.UnixNano()),
+		AppId:          appId,
+	}, nil
+}
+
 func (s *PostgresUpdateStore) GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error) {
 	return s.engine.Queries.GetUpdateByBranchNameAndRuntime(ctx, pgdb.GetUpdateByBranchNameAndRuntimeParams{
 		AppID:   ToPgUUID(appId),

@@ -32,20 +32,24 @@ func GetUpdateCheckStatus(update types.Update) time.Time {
 	return file.CreatedAt.UTC()
 }
 
+// ImmutableCacheTTLSeconds bounds the entries whose keyed content never
+// changes (a published update is immutable): the TTL only reclaims storage.
+const ImmutableCacheTTLSeconds = 7 * 24 * 3600
+
 func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform types.Platform) string {
-	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, platform)
+	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, platform)
 }
 
 func ComputeMetadataCacheKey(appId string, branch string, runtimeVersion string, updateId string) string {
-	return fmt.Sprintf("metadata:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId)
+	return fmt.Sprintf("metadata:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, updateId)
 }
 
-func ComputeUpdateManifestCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform types.Platform) string {
-	return fmt.Sprintf("manifest:%s:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId, platform)
+func ComputeManifestResponseCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform types.Platform) string {
+	return fmt.Sprintf("manifest-response:%s:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, updateId, platform)
 }
 
 func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath string) string {
-	return fmt.Sprintf("asset:%s:%s:%s:%s:%s:%s", appId, version.Version, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
+	return fmt.Sprintf("asset:%s:%s:%s:%s:%s:%s", version.Version, appId, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
 // VerifyUploadedUpdate reports whether every file the update announces actually
@@ -164,7 +168,8 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	}
 	metadata.ID = id
 	metadata.Fingerprint = fingerprint
-	cache2.SetJSON(metadataCache, metadataCacheKey, metadata, nil)
+	metadataTTL := ImmutableCacheTTLSeconds
+	cache2.SetJSON(metadataCache, metadataCacheKey, metadata, &metadataTTL)
 	return metadata, nil
 }
 
@@ -255,7 +260,8 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 		ContentType:   contentType,
 		Url:           finalUrl,
 	}
-	cache2.SetJSON(assetCache, cacheKey, manifestAsset, nil)
+	assetTTL := ImmutableCacheTTLSeconds
+	cache2.SetJSON(assetCache, cacheKey, manifestAsset, &assetTTL)
 	return manifestAsset, nil
 }
 
@@ -357,16 +363,10 @@ func manifestAssetsFromFolder(
 	return assets, launchAsset, nil
 }
 
-// CachedUpdateManifest answers a manifest already composed for this update, so
-// a caller can skip the reads composing one costs.
-func CachedUpdateManifest(update types.Update, platform types.Platform) (types.UpdateManifest, bool) {
-	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
-	return cache2.GetJSON[types.UpdateManifest](cache2.GetCache(), cacheKey)
-}
-
-// ComposeUpdateManifest builds the manifest an update serves. mapping is nil for
-// an update published before the files moved to cas/: its assets are then shaped
-// by reading them back out of the update folder, as they always were.
+// ComposeUpdateManifest builds the manifest an update serves. Pure: caching is
+// the caller's business (the services manifest-response cache). mapping is nil
+// for an update published before the files moved to cas/: its assets are then
+// shaped by reading them back out of the update folder, as they always were.
 func ComposeUpdateManifest(
 	metadata *types.UpdateMetadata,
 	update types.Update,
@@ -374,11 +374,6 @@ func ComposeUpdateManifest(
 	mapping *types.UpdateAssetMapping,
 	platform types.Platform,
 ) (types.UpdateManifest, error) {
-	manifestCache := cache2.GetCache()
-	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
-	if manifest, ok := cache2.GetJSON[types.UpdateManifest](manifestCache, cacheKey); ok {
-		return manifest, nil
-	}
 	expoConfig, errConfig := GetExpoConfig(update)
 	if errConfig != nil {
 		return types.UpdateManifest{}, errConfig
@@ -400,8 +395,6 @@ func ComposeUpdateManifest(
 		Assets:      assets,
 		LaunchAsset: launchAsset,
 	}
-	cache2.SetJSON(manifestCache, cacheKey, manifest, nil)
-
 	return manifest, nil
 }
 

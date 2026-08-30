@@ -838,9 +838,9 @@ func TestPreWarmManifestCache(t *testing.T) {
 	metadataKey := update.ComputeMetadataCacheKey("test-app-id", "branch-1", "1", cachedUpdate.UpdateId)
 	assert.NotEqual(t, "", cache.Get(metadataKey), "metadata cache should be populated after prewarm")
 
-	// Verify manifest cache was populated
-	manifestKey := update.ComputeUpdateManifestCacheKey("test-app-id", "branch-1", "1", cachedUpdate.UpdateId, "android")
-	assert.NotEqual(t, "", cache.Get(manifestKey), "manifest cache should be populated after prewarm")
+	// Verify the manifest response cache was populated
+	manifestKey := update.ComputeManifestResponseCacheKey("test-app-id", "branch-1", "1", cachedUpdate.UpdateId, "android")
+	assert.NotEqual(t, "", cache.Get(manifestKey), "manifest response cache should be populated after prewarm")
 }
 
 // checkInRequest builds a poll carrying the headers a real client sends,

@@ -5,7 +5,6 @@ import (
 
 	"context"
 	"log"
-	update2 "xprem/internal/update"
 )
 
 // PreWarmManifestCache populates the manifest cache layers for the given
@@ -29,26 +28,7 @@ func PreWarmManifestCache(updateService *UpdateService, appId string, branch str
 		return
 	}
 
-	metadata, err := update2.GetMetadata(*latestUpdate)
-	if err != nil {
-		log.Printf("[PreWarm] error getting metadata for update=%s: %v", latestUpdate.UpdateId, err)
-		return
-	}
-
-	storedMetadata, err := updateService.RetrieveUpdateStoredMetadata(ctx, *latestUpdate)
-	if err != nil {
-		log.Printf("[PreWarm] error getting stored metadata for update=%s: %v", latestUpdate.UpdateId, err)
-		return
-	}
-
-	mapping, err := updateService.GetUpdateAssetMapping(ctx, *latestUpdate)
-	if err != nil {
-		log.Printf("[PreWarm] error getting asset mapping for update=%s: %v", latestUpdate.UpdateId, err)
-		return
-	}
-
-	_, err = update2.ComposeUpdateManifest(&metadata, *latestUpdate, storedMetadata, mapping, platform)
-	if err != nil {
+	if _, err := updateService.cachedManifestResponse(ctx, *latestUpdate, platform); err != nil {
 		log.Printf("[PreWarm] error composing manifest for update=%s platform=%s: %v", latestUpdate.UpdateId, platform, err)
 		return
 	}
@@ -58,7 +38,7 @@ func PreWarmManifestCache(updateService *UpdateService, appId string, branch str
 
 // PreWarmControlManifest composes the manifest of the control update behind an active
 // per-update rollout. The manifest cache is per updateId, so warming only the rollout
-// update would leave the first out-of-bucket client to re-hash every control asset.
+// update would leave the first out-of-bucket client to recompose the control's.
 // No-op when the latest update carries no active rollout or no control.
 func PreWarmControlManifest(updateService *UpdateService, appId string, branch string, runtimeVersion string, platform types.Platform) {
 	defer func() {
@@ -77,26 +57,7 @@ func PreWarmControlManifest(updateService *UpdateService, appId string, branch s
 		return
 	}
 
-	metadata, err := update2.GetMetadata(*envelope.Control)
-	if err != nil {
-		log.Printf("[PreWarm] error getting metadata for control update=%s: %v", envelope.Control.UpdateId, err)
-		return
-	}
-
-	storedMetadata, err := updateService.RetrieveUpdateStoredMetadata(ctx, *envelope.Control)
-	if err != nil {
-		log.Printf("[PreWarm] error getting stored metadata for control update=%s: %v", envelope.Control.UpdateId, err)
-		return
-	}
-
-	mapping, err := updateService.GetUpdateAssetMapping(ctx, *envelope.Control)
-	if err != nil {
-		log.Printf("[PreWarm] error getting asset mapping for control update=%s: %v", envelope.Control.UpdateId, err)
-		return
-	}
-
-	_, err = update2.ComposeUpdateManifest(&metadata, *envelope.Control, storedMetadata, mapping, platform)
-	if err != nil {
+	if _, err := updateService.cachedManifestResponse(ctx, *envelope.Control, platform); err != nil {
 		log.Printf("[PreWarm] error composing manifest for control update=%s platform=%s: %v", envelope.Control.UpdateId, platform, err)
 		return
 	}

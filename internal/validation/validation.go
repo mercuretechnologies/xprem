@@ -101,6 +101,12 @@ func namePattern(field, value string, maxLen int) error {
 	if strings.ContainsAny(value, "/\\") {
 		return fail(field, "must not contain path separators")
 	}
+	// ":" is the separator of every cache key a name is embedded in; a name
+	// containing it can collide two different (branch, runtimeVersion) pairs
+	// onto one key.
+	if strings.Contains(value, ":") {
+		return fail(field, "must not contain ':'")
+	}
 	if value == "." || value == ".." {
 		return fail(field, "%q is reserved", value)
 	}
