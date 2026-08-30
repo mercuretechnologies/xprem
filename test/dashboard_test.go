@@ -216,7 +216,7 @@ func TestSettings(t *testing.T) {
 	projectRoot, err := os.Getwd()
 	assert.Nil(t, err)
 
-	responseBody := strings.TrimSpace(string(respRec.Body.Bytes()))
+	responseBody := strings.TrimSpace(respRec.Body.String())
 
 	responseBody = strings.ReplaceAll(responseBody, projectRoot+"/test-updates", "{PROJECT_ROOT}/test/test-updates")
 	responseBody = strings.ReplaceAll(responseBody, projectRoot+"/keys/public-key-test.pem", "{PROJECT_ROOT}/test/keys/public-key-test.pem")
@@ -315,7 +315,7 @@ func TestBranches(t *testing.T) {
 	var response []types.BranchMapping
 	err := json.Unmarshal(respRec.Body.Bytes(), &response)
 	assert.Nil(t, err)
-	assert.Equal(t, `[{"branchName":"branch-1","branchId":"branch-1","releaseChannel":"staging","createdAt":null,"protected":false},{"branchName":"branch-2","branchId":"branch-2","releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-3","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-4","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-legacy","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false}]`, strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, `[{"branchName":"branch-1","branchId":"branch-1","releaseChannel":"staging","createdAt":null,"protected":false},{"branchName":"branch-2","branchId":"branch-2","releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-3","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-4","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-legacy","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false}]`, strings.TrimSpace(respRec.Body.String()))
 }
 
 func TestBranchesWithoutAuth(t *testing.T) {
@@ -520,7 +520,7 @@ func TestRuntimeVersions(t *testing.T) {
 	var response []types.RuntimeVersionWithStats
 	err := json.Unmarshal(respRec.Body.Bytes(), &response)
 	assert.Nil(t, err)
-	assert.Equal(t, "[{\"runtimeVersion\":\"1\",\"lastUpdatedAt\":\"1970-01-20T09:02:50Z\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"numberOfUpdates\":1}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "[{\"runtimeVersion\":\"1\",\"lastUpdatedAt\":\"1970-01-20T09:02:50Z\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"numberOfUpdates\":1}]", strings.TrimSpace(respRec.Body.String()))
 }
 
 func TestRuntimeVersionsOnlyCountsValidUpdates(t *testing.T) {
@@ -539,7 +539,7 @@ func TestRuntimeVersionsOnlyCountsValidUpdates(t *testing.T) {
 	var response []types.RuntimeVersionWithStats
 	err := json.Unmarshal(respRec.Body.Bytes(), &response)
 	assert.Nil(t, err)
-	assert.Equal(t, "[{\"runtimeVersion\":\"1\",\"lastUpdatedAt\":\"1970-01-20T09:02:50Z\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"numberOfUpdates\":1}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "[{\"runtimeVersion\":\"1\",\"lastUpdatedAt\":\"1970-01-20T09:02:50Z\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"numberOfUpdates\":1}]", strings.TrimSpace(respRec.Body.String()))
 }
 
 func TestUpdatesWithoutAuth(t *testing.T) {
@@ -580,7 +580,7 @@ func TestUpdatesRegularBranch1(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(respRec.Body.String()))
 }
 
 func TestUpdatesMultiBranch2(t *testing.T) {
@@ -596,7 +596,7 @@ func TestUpdatesMultiBranch2(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"68e096e2-a619-9d56-7f7c-89f97bc27312\",\"updateId\":\"1737455526\",\"createdAt\":\"1970-01-21T02:37:35Z\",\"commitHash\":\"\",\"platform\":\"ios\"},{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666629141\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666304169\",\"createdAt\":\"1970-01-20T06:51:44Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"68e096e2-a619-9d56-7f7c-89f97bc27312\",\"updateId\":\"1737455526\",\"createdAt\":\"1970-01-21T02:37:35Z\",\"commitHash\":\"\",\"platform\":\"ios\"},{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666629141\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666304169\",\"createdAt\":\"1970-01-20T06:51:44Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"}],\"nextCursor\":null}", strings.TrimSpace(respRec.Body.String()))
 }
 
 func TestUpdatesCursorPagination(t *testing.T) {
@@ -646,5 +646,5 @@ func TestUpdatesSomeNotValidBranch4(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+login().Token)
 	router.ServeHTTP(respRec, req)
 	assert.Equal(t, http.StatusOK, respRec.Code)
-	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"3f23a8c4-cd0e-a5a4-63f2-bb2841e95a01\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, "{\"items\":[{\"updateUUID\":\"3f23a8c4-cd0e-a5a4-63f2-bb2841e95a01\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}],\"nextCursor\":null}", strings.TrimSpace(respRec.Body.String()))
 }

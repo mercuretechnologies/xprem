@@ -208,6 +208,12 @@ type ManifestAsset struct {
 type UpdateAssetMapping struct {
 	LaunchAsset ShapedAsset   `json:"launchAsset"`
 	Assets      []ShapedAsset `json:"assets"`
+	ConfigFiles []ConfigFile  `json:"configFiles,omitempty"`
+}
+
+type ConfigFile struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
 }
 
 func (m *UpdateAssetMapping) Scan(src any) error {

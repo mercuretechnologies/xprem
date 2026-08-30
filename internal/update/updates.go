@@ -133,6 +133,23 @@ func AreUpdatesIdentical(stored, incoming *types.UpdateAssetMapping) bool {
 		}
 		storedHashes[asset.Hash]--
 	}
+	return sameConfigFiles(stored.ConfigFiles, incoming.ConfigFiles)
+}
+
+func sameConfigFiles(stored, incoming []types.ConfigFile) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	storedByPath := make(map[string]string, len(stored))
+	for _, file := range stored {
+		storedByPath[file.Path] = file.Hash
+	}
+	for _, file := range incoming {
+		hash, ok := storedByPath[file.Path]
+		if !ok || hash != file.Hash {
+			return false
+		}
+	}
 	return true
 }
 

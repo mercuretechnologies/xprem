@@ -138,6 +138,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 		purgedRuntimeVersions[row.RuntimeVersion] = struct{}{}
 		for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
 			appCache.Delete(update2.ComputeLastUpdateCacheKey(appId, branchName, row.RuntimeVersion, platform))
+			ForgetSurfableBranches(appId, row.RuntimeVersion, platform)
 		}
 	}
 	go func(bucketRows []types.UpdateRef) {

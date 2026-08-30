@@ -527,6 +527,70 @@ func TestStatelessIdenticalPublishIsRefused(t *testing.T) {
 	}
 }
 
+// copyExportToTemp copies an export fixture so a test can mutate one of its
+// files without touching the checked-in tree.
+func copyExportToTemp(t *testing.T, src string) string {
+	t.Helper()
+	dst := t.TempDir()
+	var copyDir func(from, to string)
+	copyDir = func(from, to string) {
+		entries, err := os.ReadDir(from)
+		if err != nil {
+			t.Fatalf("Error reading %s: %v", from, err)
+		}
+		for _, entry := range entries {
+			fromPath, toPath := filepath.Join(from, entry.Name()), filepath.Join(to, entry.Name())
+			if entry.IsDir() {
+				if err := os.MkdirAll(toPath, 0o755); err != nil {
+					t.Fatalf("Error creating %s: %v", toPath, err)
+				}
+				copyDir(fromPath, toPath)
+				continue
+			}
+			data, err := os.ReadFile(fromPath)
+			if err != nil {
+				t.Fatalf("Error reading %s: %v", fromPath, err)
+			}
+			if err := os.WriteFile(toPath, data, 0o644); err != nil {
+				t.Fatalf("Error writing %s: %v", toPath, err)
+			}
+		}
+	}
+	copyDir(src, dst)
+	return dst
+}
+
+// A publish that changes only a config file is a new update: expoConfig.json is
+// served inside the manifest, so the fleet would otherwise never receive it.
+func TestStatelessConfigOnlyPublishIsAccepted(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockExpoForRequestUploadUrlTest("staging")
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("Error finding project root: %v", err)
+	}
+	basePath := filepath.Join(projectRoot, "updates")
+	os.Setenv("LOCAL_BUCKET_BASE_PATH", basePath)
+	sample := copyExportToTemp(t, filepath.Join(projectRoot, "test", "sample-exports", "bundles-layout"))
+
+	first := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", sample)
+	require.Equal(t, http.StatusOK, first.Code)
+	markUpdateChecked(t, basePath, "DO_NOT_USE", "1", updateIdFromResponse(t, first))
+
+	identical := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", sample)
+	require.Equal(t, http.StatusNotAcceptable, identical.Code, "the very same export must still be refused")
+
+	// Only the expo config changes; the bundle and every asset stay identical.
+	configPath := filepath.Join(sample, "expoConfig.json")
+	config, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, append(config, ' '), 0o644))
+
+	configOnly := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", sample)
+	assert.Equal(t, http.StatusOK, configOnly.Code, "a config-only change must not be refused as identical")
+}
+
 // A publish whose bundle differs from the checked latest goes through.
 func TestStatelessDifferentPublishIsAccepted(t *testing.T) {
 	teardown := setup(t)

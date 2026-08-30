@@ -99,6 +99,8 @@ func assetMapping(files []FileUploadItem) (*types.UpdateAssetMapping, error) {
 			launchAssets++
 		case FileRoleAsset:
 			mapping.Assets = append(mapping.Assets, shapeAsset(file, false))
+		case FileRoleConfig:
+			mapping.ConfigFiles = append(mapping.ConfigFiles, types.ConfigFile{Path: file.Path, Hash: file.Hash})
 		}
 	}
 	if launchAssets != 1 {
