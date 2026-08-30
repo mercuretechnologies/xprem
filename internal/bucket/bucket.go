@@ -298,47 +298,68 @@ type FileUploadRequest struct {
 type UploadFile struct {
 	Name string
 	Hash string
+	// InUpdateFolder routes the presign to the update folder instead of
+	// cas/{hash}. metadata.json differs on every publish by construction and
+	// expoConfig.json is a kilobyte, so addressing them by content buys nothing
+	// and would cost the manifest its only way to read them back.
+	InUpdateFolder bool
 }
 
-func RequestUploadUrlsForFileUpdates(appId string, branch string, files []UploadFile) ([]FileUploadRequest, error) {
-	unique := make(map[string]string, len(files))
-	for _, file := range files {
-		if _, seen := unique[file.Hash]; !seen {
-			unique[file.Hash] = file.Name
-		}
-	}
-
-	bucket := GetBucket()
-	var uploadHeaders map[string]string
+// uploadHeaders are the headers the uploader must send verbatim on its PUT.
+func uploadHeaders(bucket Bucket) map[string]string {
 	if _, ok := UnwrapBucket(bucket).(*AzureBucket); ok {
-		uploadHeaders = map[string]string{"x-ms-blob-type": "BlockBlob"}
+		return map[string]string{"x-ms-blob-type": "BlockBlob"}
+	}
+	return nil
+}
+
+// RequestUploadUrlsForFileUpdates presigns one publish's uploads, routing each
+// file by where it lives: cas/{hash} for content-addressed files, the update
+// folder for the rest.
+func RequestUploadUrlsForFileUpdates(appId, branch, runtimeVersion, updateId string, files []UploadFile) ([]FileUploadRequest, error) {
+	resolvedBucket := GetBucket()
+	headers := uploadHeaders(resolvedBucket)
+
+	// Several files may name the same blob; presign it once.
+	toSign := make([]UploadFile, 0, len(files))
+	seenBlobs := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if !file.InUpdateFolder {
+			if _, dup := seenBlobs[file.Hash]; dup {
+				continue
+			}
+			seenBlobs[file.Hash] = struct{}{}
+		}
+		toSign = append(toSign, file)
 	}
 
-	var requests []FileUploadRequest
-	var mu sync.Mutex
+	requests := make([]FileUploadRequest, len(toSign))
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(unique))
-
-	wg.Add(len(unique))
-	for fileHash, originalName := range unique {
-		go func(fileHash, originalName string) {
+	errChan := make(chan error, len(toSign))
+	wg.Add(len(toSign))
+	for i, file := range toSign {
+		go func(index int, file UploadFile) {
 			defer wg.Done()
-			requestUploadUrl, err := bucket.RequestBlobUploadURL(appId, fileHash, branch)
+			var requestUploadUrl string
+			var err error
+			if file.InUpdateFolder {
+				requestUploadUrl, err = resolvedBucket.RequestUploadUrlForFileUpdate(appId, branch, runtimeVersion, updateId, file.Name)
+			} else {
+				requestUploadUrl, err = resolvedBucket.RequestBlobUploadURL(appId, file.Hash, branch)
+			}
 			if err != nil {
 				errChan <- err
 				return
 			}
-			mu.Lock()
-			requests = append(requests, FileUploadRequest{
+			requests[index] = FileUploadRequest{
 				RequestUploadUrl: requestUploadUrl,
-				FileName:         filepath.Base(originalName),
-				FilePath:         originalName,
-				OriginalFileName: originalName,
-				Hash:             fileHash,
-				Headers:          uploadHeaders,
-			})
-			mu.Unlock()
-		}(fileHash, originalName)
+				FileName:         filepath.Base(file.Name),
+				FilePath:         file.Name,
+				OriginalFileName: file.Name,
+				Hash:             file.Hash,
+				Headers:          headers,
+			}
+		}(i, file)
 	}
 
 	wg.Wait()

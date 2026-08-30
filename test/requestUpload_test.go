@@ -329,7 +329,12 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 	}
 	for i, rec := range ws {
 		assert.Equal(t, 200, rec.Code, "Expected status code 200")
+		// The launch asset and the assets are addressed by content; the config
+		// files stay in the update folder, where the manifest reads them by name.
 		expectedFile := filepath.Join(projectRoot, "updates", "test-app-id", "cas", uploadRequests[i].Hash)
+		if path := uploadRequests[i].FilePath; path == "metadata.json" || path == "expoConfig.json" {
+			expectedFile = filepath.Join(projectRoot, "updates", "test-app-id", "DO_NOT_USE", "1", updateIdHeader, path)
+		}
 		if _, err := os.Open(expectedFile); err != nil {
 			assert.Nil(t, err, "Expected no errors when opening uploaded file")
 		}

@@ -1,10 +1,12 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 	"xprem/config"
@@ -46,7 +48,10 @@ func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath s
 	return fmt.Sprintf("asset:%s:%s:%s:%s:%s:%s", appId, version.Version, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
-func VerifyUploadedUpdate(update types.Update) error {
+// VerifyUploadedUpdate reports whether every file the update announces actually
+// made it to storage. mapping is nil for an update published before the files
+// moved to cas/, whose assets are then looked for in the update folder.
+func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
 	metadata, errMetadata := GetMetadata(update)
 	if errMetadata != nil {
 		return errMetadata
@@ -54,28 +59,19 @@ func VerifyUploadedUpdate(update types.Update) error {
 	if metadata.MetadataJSON.FileMetadata.IOS.Bundle == "" && metadata.MetadataJSON.FileMetadata.Android.Bundle == "" {
 		return fmt.Errorf("missing bundle path in metadata")
 	}
-	files := []string{}
-	if metadata.MetadataJSON.FileMetadata.IOS.Bundle != "" {
-		files = append(files, metadata.MetadataJSON.FileMetadata.IOS.Bundle)
-		for _, asset := range metadata.MetadataJSON.FileMetadata.IOS.Assets {
-			files = append(files, asset.Path)
-		}
-	}
-	if metadata.MetadataJSON.FileMetadata.Android.Bundle != "" {
-		files = append(files, metadata.MetadataJSON.FileMetadata.Android.Bundle)
-		for _, asset := range metadata.MetadataJSON.FileMetadata.Android.Assets {
-			files = append(files, asset.Path)
-		}
-	}
+	return verifyBlobsUploaded(ctx, update.AppId, mapping)
+}
 
+func verifyBlobsUploaded(ctx context.Context, appId string, mapping *types.UpdateAssetMapping) error {
 	resolvedBucket := bucket.GetBucket()
-	for _, file := range files {
-		f, err := resolvedBucket.GetFile(update, file)
+	shaped := append([]types.ShapedAsset{mapping.LaunchAsset}, mapping.Assets...)
+	for _, asset := range shaped {
+		exists, err := resolvedBucket.BlobExists(ctx, appId, asset.Hash)
 		if err != nil {
-			return fmt.Errorf("missing file: %s in update", file)
+			return fmt.Errorf("checking blob %s: %w", asset.Hash, err)
 		}
-		if f != nil {
-			f.Reader.Close()
+		if !exists {
+			return fmt.Errorf("missing blob %s in update", asset.Hash)
 		}
 	}
 	return nil
@@ -190,6 +186,23 @@ func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion string
 	return parsedURL.String(), nil
 }
 
+// BuildBlobAssetURL addresses an asset by its content, for updates whose files
+// live in cas/ and have no path any more. ext carries "bundle" for the launch
+// asset, the same convention shapeAsset uses, so the serving side can rebuild
+// the content type from the one mime table.
+func BuildBlobAssetURL(baseURL, hash, fileExtension string, platform types.Platform) (string, error) {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL: %w", err)
+	}
+	query := url.Values{}
+	query.Set("h", hash)
+	query.Set("ext", strings.TrimPrefix(fileExtension, "."))
+	query.Set("platform", string(platform))
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
+}
+
 func GetAssetEndpoint() string {
 	return config.BaseURL() + "/assets"
 }
@@ -258,39 +271,68 @@ func computeManifestMetadata(update types.Update) json.RawMessage {
 	return json.RawMessage(metadataBytes)
 }
 
-func ComposeUpdateManifest(
+// manifestAssets shapes the platform's assets and launch asset, from the stored
+// mapping when the update has one, and by reading the update folder when it does
+// not.
+func manifestAssets(
+	metadata *types.UpdateMetadata,
+	update types.Update,
+	mapping *types.UpdateAssetMapping,
+	platform types.Platform,
+) ([]types.ManifestAsset, types.ManifestAsset, error) {
+	if mapping != nil {
+		return manifestAssetsFromMapping(mapping, platform)
+	}
+	return manifestAssetsFromFolder(metadata, update, platform)
+}
+
+// manifestAssetsFromMapping needs no storage at all: the publish stored every
+// field the manifest carries, so only the URL is built here.
+func manifestAssetsFromMapping(mapping *types.UpdateAssetMapping, platform types.Platform) ([]types.ManifestAsset, types.ManifestAsset, error) {
+	toManifestAsset := func(shaped types.ShapedAsset) (types.ManifestAsset, error) {
+		assetURL, err := BuildBlobAssetURL(GetAssetEndpoint(), shaped.Hash, shaped.FileExtension, platform)
+		if err != nil {
+			return types.ManifestAsset{}, err
+		}
+		return types.ManifestAsset{
+			Hash:          shaped.Hash,
+			Key:           shaped.Key,
+			FileExtension: shaped.FileExtension,
+			ContentType:   shaped.ContentType,
+			Url:           assetURL,
+		}, nil
+	}
+	launchAsset, err := toManifestAsset(mapping.LaunchAsset)
+	if err != nil {
+		return nil, types.ManifestAsset{}, err
+	}
+	assets := make([]types.ManifestAsset, len(mapping.Assets))
+	for i, shaped := range mapping.Assets {
+		asset, err := toManifestAsset(shaped)
+		if err != nil {
+			return nil, types.ManifestAsset{}, err
+		}
+		assets[i] = asset
+	}
+	return assets, launchAsset, nil
+}
+
+// manifestAssetsFromFolder reads and hashes every file of the update, which is
+// the only way to shape an update published before the mapping existed.
+func manifestAssetsFromFolder(
 	metadata *types.UpdateMetadata,
 	update types.Update,
 	platform types.Platform,
-) (types.UpdateManifest, error) {
-	manifestCache := cache2.GetCache()
-	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
-	if manifest, ok := cache2.GetJSON[types.UpdateManifest](manifestCache, cacheKey); ok {
-		return manifest, nil
-	}
-	expoConfig, errConfig := GetExpoConfig(update)
-	if errConfig != nil {
-		return types.UpdateManifest{}, errConfig
-	}
-	storedMetadata, _ := RetrieveUpdateStoredMetadata(update)
-	if storedMetadata == nil || storedMetadata.UpdateUUID == "" {
-		storedMetadata = &types.UpdateStoredMetadata{
-			Platform:   platform,
-			CommitHash: "",
-			UpdateUUID: crypto.ConvertSHA256HashToUUID(metadata.ID),
-		}
-	}
-
+) ([]types.ManifestAsset, types.ManifestAsset, error) {
 	platformSpecificMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(platform)
 	if err != nil || platformSpecificMetadata.Bundle == "" {
-		return types.UpdateManifest{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+		return nil, types.ManifestAsset{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	}
 	var (
 		assets = make([]types.ManifestAsset, len(platformSpecificMetadata.Assets))
 		errs   = make(chan error, len(platformSpecificMetadata.Assets))
 		wg     sync.WaitGroup
 	)
-
 	for i, a := range platformSpecificMetadata.Assets {
 		wg.Add(1)
 		go func(index int, asset types.Asset) {
@@ -303,20 +345,47 @@ func ComposeUpdateManifest(
 			assets[index] = shapedAsset
 		}(i, a)
 	}
-
 	wg.Wait()
 	close(errs)
-
 	if len(errs) > 0 {
-		return types.UpdateManifest{}, <-errs
+		return nil, types.ManifestAsset{}, <-errs
 	}
-
-	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{
-		Path: platformSpecificMetadata.Bundle,
-		Ext:  "",
-	}, true, platform)
+	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{Path: platformSpecificMetadata.Bundle}, true, platform)
 	if errShape != nil {
-		return types.UpdateManifest{}, errShape
+		return nil, types.ManifestAsset{}, errShape
+	}
+	return assets, launchAsset, nil
+}
+
+// CachedUpdateManifest answers a manifest already composed for this update, so
+// a caller can skip the reads composing one costs.
+func CachedUpdateManifest(update types.Update, platform types.Platform) (types.UpdateManifest, bool) {
+	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
+	return cache2.GetJSON[types.UpdateManifest](cache2.GetCache(), cacheKey)
+}
+
+// ComposeUpdateManifest builds the manifest an update serves. mapping is nil for
+// an update published before the files moved to cas/: its assets are then shaped
+// by reading them back out of the update folder, as they always were.
+func ComposeUpdateManifest(
+	metadata *types.UpdateMetadata,
+	update types.Update,
+	storedMetadata *types.UpdateStoredMetadata,
+	mapping *types.UpdateAssetMapping,
+	platform types.Platform,
+) (types.UpdateManifest, error) {
+	manifestCache := cache2.GetCache()
+	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
+	if manifest, ok := cache2.GetJSON[types.UpdateManifest](manifestCache, cacheKey); ok {
+		return manifest, nil
+	}
+	expoConfig, errConfig := GetExpoConfig(update)
+	if errConfig != nil {
+		return types.UpdateManifest{}, errConfig
+	}
+	assets, launchAsset, err := manifestAssets(metadata, update, mapping, platform)
+	if err != nil {
+		return types.UpdateManifest{}, err
 	}
 
 	manifest := types.UpdateManifest{

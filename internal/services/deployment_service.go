@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"sync"
 	"xprem/internal/auditlog"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -201,7 +202,12 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 		return err
 	}
 
-	errorVerify := update2.VerifyUploadedUpdate(*currentUpdate)
+	mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, *currentUpdate)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error getting asset mapping: %v", params.RequestID, err)
+		return err
+	}
+	errorVerify := update2.VerifyUploadedUpdate(ctx, *currentUpdate, mapping)
 	if errorVerify != nil {
 		log.Printf("[RequestID: %s] Invalid update, deleting folder...", params.RequestID)
 		err := s.bucket.DeleteUpdateFolder(params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID)
@@ -309,31 +315,49 @@ func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params R
 	return nil
 }
 
-// dedupExistingUploadAssets returns the requested files that already exist in
-// the cas folders so the caller can skip requesting uploads for them. Any
-// failure falls back to uploading: the returned slice just omits the file.
-func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, params RequestUploadURLParams) []string {
+// uploadFiles translates the publish's file list for the storage layer: only
+// the config files stay in the update folder.
+func uploadFiles(files []FileUploadItem) []bucket.UploadFile {
+	out := make([]bucket.UploadFile, 0, len(files))
+	for _, file := range files {
+		out = append(out, bucket.UploadFile{
+			Name:           file.Path,
+			Hash:           file.Hash,
+			InUpdateFolder: file.Role == FileRoleConfig,
+		})
+	}
+	return out
+}
+
+// dedupExistingUploadAssets returns the files whose blob is already in cas, so
+// the caller can skip requesting an upload for them. Any failure falls back to
+// uploading: the returned slice just omits the file.
+func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, appId, requestID string, files []bucket.UploadFile) []string {
+	var mu sync.Mutex
 	var dedupedAssets []string
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
-	// Files repeats assets shared by both platforms; copy each once.
-	seen := make(map[string]struct{}, len(params.Files))
-	for _, file := range params.Files {
-		if _, alreadySeen := seen[file.Path]; alreadySeen {
+	// The list repeats assets shared by both platforms; check each once.
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file.InUpdateFolder {
 			continue
 		}
-		seen[file.Path] = struct{}{}
-		path := file.Path
+		if _, alreadySeen := seen[file.Name]; alreadySeen {
+			continue
+		}
+		seen[file.Name] = struct{}{}
 		g.Go(func() error {
-			exists, err := s.bucket.BlobExists(ctx, params.AppID, file.Hash)
+			exists, err := s.bucket.BlobExists(ctx, appId, file.Hash)
 			if err != nil {
-				log.Printf("[RequestID: %s] Error while checking if blob exists: copying %s into update: %v", params.RequestID, path, err)
+				log.Printf("[RequestID: %s] Error while checking if blob exists, uploading %s: %v", requestID, file.Name, err)
 				return nil
 			}
 			if exists {
-				dedupedAssets = append(dedupedAssets, path)
+				mu.Lock()
+				dedupedAssets = append(dedupedAssets, file.Name)
+				mu.Unlock()
 			}
-
 			return nil
 		})
 	}
@@ -392,23 +416,21 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 
 	updateId := update2.GenerateUpdateTimestamp(params.Platform)
 
-	dedupedAssets := s.dedupExistingUploadAssets(ctx, params)
+	files := uploadFiles(params.Files)
 
-	filesToUpload := params.Files
+	dedupedAssets := s.dedupExistingUploadAssets(ctx, params.AppID, params.RequestID, files)
 	if len(dedupedAssets) > 0 {
-		log.Printf("[RequestID: %s] Reusing %d unchanged assets from the previous update", params.RequestID, len(dedupedAssets))
-		filesToUpload = slices.DeleteFunc(slices.Clone(params.Files), func(file FileUploadItem) bool {
-			return slices.Contains(dedupedAssets, file.Path)
+		log.Printf("[RequestID: %s] Reusing %d blobs already in cas", params.RequestID, len(dedupedAssets))
+		files = slices.DeleteFunc(files, func(file bucket.UploadFile) bool {
+			return slices.Contains(dedupedAssets, file.Name)
 		})
 	}
 
-	files := make([]bucket.UploadFile, 0, len(filesToUpload))
-	for _, file := range filesToUpload {
-		files = append(files, bucket.UploadFile{Name: file.Path, Hash: file.Hash})
-	}
 	updateRequests, err := bucket.RequestUploadUrlsForFileUpdates(
 		params.AppID,
 		params.BranchName,
+		params.RuntimeVersion,
+		update2.ConvertUpdateTimestampToString(updateId),
 		files,
 	)
 	if err != nil {

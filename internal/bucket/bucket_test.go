@@ -96,7 +96,7 @@ func TestRequestUploadUrlsCarryAzureBlobTypeHeader(t *testing2.T) {
 		os.Unsetenv("AZURE_STORAGE_ACCOUNT_NAME")
 		os.Unsetenv("AZURE_STORAGE_ACCOUNT_KEY")
 	}()
-	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
+	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
 	assert.Nil(t, err)
 	assert.Len(t, requests, 1)
 	assert.Equal(t, "android.js", requests[0].FileName)
@@ -114,7 +114,7 @@ func TestRequestUploadUrlsCarryNoHeadersOnLocal(t *testing2.T) {
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", t.TempDir())
 	os.Setenv("BASE_URL", "http://localhost:3000")
 	os.Setenv("JWT_SECRET", "test_jwt_secret")
-	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
+	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
 	assert.Nil(t, err)
 	assert.Len(t, requests, 1)
 	assert.Equal(t, "android.js", requests[0].FileName)
@@ -320,4 +320,31 @@ func TestGetGCSBucket(t *testing2.T) {
 	os.Setenv("GCS_BUCKET_NAME", "test-bucket")
 	bucket := unwrap(GetBucket())
 	assert.IsType(t, &GCSBucket{}, bucket)
+}
+
+// One publish, one call: the config files land in the update folder, the
+// assets in cas/, and a blob named twice is presigned once.
+func TestRequestUploadUrlsRouteByDestination(t *testing2.T) {
+	teardown := setup(t)
+	defer teardown()
+	os.Setenv("STORAGE_MODE", "local")
+	os.Setenv("LOCAL_BUCKET_BASE_PATH", t.TempDir())
+	os.Setenv("BASE_URL", "http://localhost:3000")
+	os.Setenv("JWT_SECRET", "test_jwt_secret")
+
+	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{
+		{Name: "metadata.json", Hash: testBlobHash, InUpdateFolder: true},
+		{Name: "bundles/android.js", Hash: testBlobHash},
+		{Name: "assets/copy-of-bundle", Hash: testBlobHash},
+	})
+	assert.Nil(t, err)
+	assert.Len(t, requests, 2)
+
+	byPath := map[string]FileUploadRequest{}
+	for _, request := range requests {
+		byPath[request.FilePath] = request
+	}
+	assert.Contains(t, byPath, "metadata.json")
+	assert.Contains(t, byPath, "bundles/android.js")
+	assert.NotContains(t, byPath, "assets/copy-of-bundle", "same blob presigned once")
 }

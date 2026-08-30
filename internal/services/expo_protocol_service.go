@@ -13,6 +13,7 @@ import (
 	"xprem/config"
 	"xprem/internal/assets"
 	"xprem/internal/branch"
+	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	cdn2 "xprem/internal/cdn"
 	"xprem/internal/crypto"
@@ -80,6 +81,11 @@ type AssetResolutionParams struct {
 	// RequestedUpdateID is the Expo-Requested-Update-ID header: the UUID of the
 	// update the client is downloading.
 	RequestedUpdateID string
+	// Hash and Extension are the content-addressed form of an asset URL, baked
+	// into the manifests of updates whose files live in cas/. The hash is the
+	// whole address: no branch, runtime version or update pins it.
+	Hash      string
+	Extension string
 }
 
 type ExpoAssetError struct {
@@ -190,11 +196,27 @@ func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.Re
 		s.PutNoUpdateAvailableInResponse(ctx, w, params)
 		return
 	}
-	manifest, err := update2.ComposeUpdateManifest(&metadata, lastUpdate, params.Platform)
-	if err != nil {
-		log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
-		http.Error(w, "Error composing manifest", http.StatusInternalServerError)
-		return
+	// Composing is what costs a store read; a served manifest must not pay for it.
+	manifest, cached := update2.CachedUpdateManifest(lastUpdate, params.Platform)
+	if !cached {
+		storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, lastUpdate)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error getting stored metadata: %v", params.RequestID, err)
+			http.Error(w, "Error getting stored metadata", http.StatusInternalServerError)
+			return
+		}
+		mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, lastUpdate)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error getting asset mapping: %v", params.RequestID, err)
+			http.Error(w, "Error getting asset mapping", http.StatusInternalServerError)
+			return
+		}
+		manifest, err = update2.ComposeUpdateManifest(&metadata, lastUpdate, storedMetadata, mapping, params.Platform)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
+			http.Error(w, "Error composing manifest", http.StatusInternalServerError)
+			return
+		}
 	}
 	// Stamped on the copy about to be served, never on the cached manifest: the
 	// cache is keyed by branch, and this is per request. Signing happens
@@ -377,6 +399,47 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 	return servedBranch, nil, blocked, nil
 }
 
+// resolveBlobAsset serves an asset by its content hash. Nothing pins it to a
+// branch or an update: the hash is unguessable and only ever reaches a client
+// that already holds the manifest naming it. The app id still scopes the read,
+// so one tenant cannot address another's blobs.
+func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
+	if err := bucket.ValidateBlobHash(params.Hash); err != nil {
+		log.Printf("[RequestID: %s] %v", params.RequestID, err)
+		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
+	}
+
+	if cdn := cdn2.GetCDN(); cdn != nil {
+		redirectURL, err := cdn.ComputeRedirectionURLForBlob(params.AppID, params.Hash)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error signing blob url: %v", params.RequestID, err)
+			return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+		}
+		return &ExpoAssetResult{RedirectToURL: redirectURL}, nil
+	}
+
+	blob, err := bucket.GetBucket().GetBlob(ctx, params.AppID, params.Hash)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading blob: %v", params.RequestID, err)
+		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+	}
+	if blob == nil {
+		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusNotFound, Message: "Asset not found"}
+	}
+	body, err := bucket.ConvertReadCloserToBytes(blob.Reader)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading blob body: %v", params.RequestID, err)
+		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+	}
+	return &ExpoAssetResult{
+		Body: body,
+		// "bundle" is the extension shapeAsset gives a launch asset, so the one
+		// mime table answers for both kinds.
+		ContentType: update2.AssetContentType(params.Extension, params.Extension == "bundle"),
+		StatusCode:  http.StatusOK,
+	}, nil
+}
+
 func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
 	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
 	// rather than letting them flow into FetchExpoChannelMapping and
@@ -384,6 +447,10 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return &ExpoAssetResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
+	}
+
+	if params.Hash != "" {
+		return s.resolveBlobAsset(ctx, params)
 	}
 
 	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)

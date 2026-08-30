@@ -81,6 +81,18 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 	return latestEnvelope, nil
 }
 
+// GetUpdateAssetMapping answers nil for an update published before the mapping
+// existed; composing then falls back to reading the update folder.
+func (s *UpdateService) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	return s.updateRepo.GetUpdateAssetMapping(ctx, update)
+}
+
+// RetrieveUpdateStoredMetadata exposes the repo read to callers that hold a
+// service rather than the repository (the manifest prewarm).
+func (s *UpdateService) RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
+	return s.updateRepo.RetrieveUpdateStoredMetadata(ctx, update)
+}
+
 func (s *UpdateService) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	envelope, err := s.getLatestUpdateEnvelope(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil || envelope == nil {

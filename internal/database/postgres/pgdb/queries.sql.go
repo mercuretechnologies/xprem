@@ -9,9 +9,10 @@ import (
 	"context"
 	"net/netip"
 
+	"xprem/internal/types"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"xprem/internal/types"
 )
 
 const adoptionBreakdown = `-- name: AdoptionBreakdown :many

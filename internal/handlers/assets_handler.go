@@ -40,6 +40,8 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 		Branch:            r.URL.Query().Get("branch"),
 		UpdateID:          r.URL.Query().Get("updateId"),
 		RequestedUpdateID: r.Header.Get("Expo-Requested-Update-ID"),
+		Hash:              r.URL.Query().Get("h"),
+		Extension:         r.URL.Query().Get("ext"),
 	}
 
 	result, err := h.protocolService.ResolveAssetBundle(r.Context(), params)

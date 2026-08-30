@@ -35,7 +35,19 @@ func PreWarmManifestCache(updateService *UpdateService, appId string, branch str
 		return
 	}
 
-	_, err = update2.ComposeUpdateManifest(&metadata, *latestUpdate, platform)
+	storedMetadata, err := updateService.RetrieveUpdateStoredMetadata(ctx, *latestUpdate)
+	if err != nil {
+		log.Printf("[PreWarm] error getting stored metadata for update=%s: %v", latestUpdate.UpdateId, err)
+		return
+	}
+
+	mapping, err := updateService.GetUpdateAssetMapping(ctx, *latestUpdate)
+	if err != nil {
+		log.Printf("[PreWarm] error getting asset mapping for update=%s: %v", latestUpdate.UpdateId, err)
+		return
+	}
+
+	_, err = update2.ComposeUpdateManifest(&metadata, *latestUpdate, storedMetadata, mapping, platform)
 	if err != nil {
 		log.Printf("[PreWarm] error composing manifest for update=%s platform=%s: %v", latestUpdate.UpdateId, platform, err)
 		return
@@ -71,7 +83,19 @@ func PreWarmControlManifest(updateService *UpdateService, appId string, branch s
 		return
 	}
 
-	_, err = update2.ComposeUpdateManifest(&metadata, *envelope.Control, platform)
+	storedMetadata, err := updateService.RetrieveUpdateStoredMetadata(ctx, *envelope.Control)
+	if err != nil {
+		log.Printf("[PreWarm] error getting stored metadata for control update=%s: %v", envelope.Control.UpdateId, err)
+		return
+	}
+
+	mapping, err := updateService.GetUpdateAssetMapping(ctx, *envelope.Control)
+	if err != nil {
+		log.Printf("[PreWarm] error getting asset mapping for control update=%s: %v", envelope.Control.UpdateId, err)
+		return
+	}
+
+	_, err = update2.ComposeUpdateManifest(&metadata, *envelope.Control, storedMetadata, mapping, platform)
 	if err != nil {
 		log.Printf("[PreWarm] error composing manifest for control update=%s platform=%s: %v", envelope.Control.UpdateId, platform, err)
 		return
