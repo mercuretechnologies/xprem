@@ -474,6 +474,13 @@ export default class Publish extends Command {
       );
 
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
+      for (const { platform: uploadedPlatform, uploadRequests } of uploadUrls) {
+        const totalFiles = buildUploadFiles(files, uploadedPlatform).length;
+        const deduplicated = totalFiles - uploadRequests.length;
+        Log.withInfo(
+          `📊 ${uploadedPlatform}: ${uploadRequests.length}/${totalFiles} files uploaded, ${deduplicated} deduplicated (already on the server)`
+        );
+      }
       for (const skipped of unchangedPlatforms) {
         Log.withInfo(`⚠️ There is no change in the update for ${skipped}, ignored...`);
       }
@@ -555,9 +562,16 @@ export default class Publish extends Command {
     if (hasSuccess) {
       Log.withInfo(`🌿 Branch: \`${branch}\``);
       Log.withInfo(`⏳ Deployed at: \`${new Date().toUTCString()}\`\n`);
+      for (const { platform: publishedPlatform, updateId } of uploadUrls) {
+        Log.withInfo(`🆔 ${publishedPlatform} update id: \`${updateId}\``);
+      }
       const groupAcknowledged = uploadUrls.every(u => u.publishGroup === publishGroupId);
       if (groupAcknowledged) {
-        Log.withInfo(`📦 Publish group: \`${publishGroupId}\``);
+        Log.withInfo(
+          `📦 Publish group: \`${publishGroupId}\` (groups the ${uploadUrls
+            .map(u => u.platform)
+            .join(' + ')} updates of this run)`
+        );
       } else if (uploadUrls.length > 1) {
         // Only worth a note when several platforms were published: a single
         // update has nothing to group anyway.
