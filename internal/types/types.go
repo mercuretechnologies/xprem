@@ -236,12 +236,6 @@ type ShapedAsset struct {
 	Key           string `json:"key"`
 	FileExtension string `json:"fileExtension"`
 	ContentType   string `json:"contentType"`
-	// Path is the export-relative file path. For the launch asset it is the
-	// content identity the publish dedup compares: Metro embeds a hash of the
-	// JS in the file name, while the compiled Hermes bytes differ on every
-	// export (the bundler temp dir is baked in). Empty on mappings stored
-	// before this field existed.
-	Path string `json:"path,omitempty"`
 }
 
 type ExtraManifestData struct {

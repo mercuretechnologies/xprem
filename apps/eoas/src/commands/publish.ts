@@ -91,8 +91,15 @@ export default class Publish extends Command {
     }),
     dumpSourcemap: Flags.boolean({
       description:
-        'Emit Hermes source maps alongside the bundle so the published artifact can be symbolicated by tools like Sentry or PostHog.',
-      default: false,
+        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact; they stay in the output directory and are never uploaded. Disable with --no-dumpSourcemap.',
+      default: true,
+      allowNo: true,
+    }),
+    expoMetroRequire: Flags.boolean({
+      description:
+        'Pass EXPO_USE_METRO_REQUIRE=1 to the export so Metro derives module ids from file paths instead of discovery order (default: true). Identical code then exports byte-identical bundles, which server-side change detection relies on. Disable with --no-expoMetroRequire if the custom Metro require implementation causes issues in your project.',
+      default: true,
+      allowNo: true,
     }),
     'rollout-percentage': Flags.integer({
       min: 1,
@@ -117,6 +124,7 @@ export default class Publish extends Command {
     providedDeprecatedChannel?: string;
     message?: string;
     dumpSourcemap: boolean;
+    expoMetroRequire: boolean;
     rolloutPercentage?: number;
     uploadRate: number;
   } {
@@ -136,6 +144,7 @@ export default class Publish extends Command {
       providedDeprecatedChannel: flags.channel,
       message: flags.message,
       dumpSourcemap: flags.dumpSourcemap,
+      expoMetroRequire: flags.expoMetroRequire,
       rolloutPercentage: flags['rollout-percentage'],
       uploadRate,
     };
@@ -161,6 +170,7 @@ export default class Publish extends Command {
       disableRepositoryCheck,
       message,
       dumpSourcemap,
+      expoMetroRequire,
       rolloutPercentage,
       uploadRate,
     } = this.sanitizeFlags(flags);
@@ -299,6 +309,7 @@ export default class Publish extends Command {
           env: {
             ...process.env,
             EXPO_NO_DOTENV: '1',
+            ...(expoMetroRequire ? { EXPO_USE_METRO_REQUIRE: '1' } : {}),
           },
         }
       );

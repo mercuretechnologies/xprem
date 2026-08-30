@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -110,26 +109,6 @@ func verifyBlobsUploaded(ctx context.Context, appId string, mapping *types.Updat
 	return nil
 }
 
-// hermesContentAddressedPath reports whether path is a Metro-named Hermes
-// bundle (`index-{md5 of the stable JS}.hbc`). Only such a launch asset is
-// compared by path: compiled Hermes bytecode embeds the bundler temp dir, so
-// its bytes differ on every export of identical code, and the Metro name hash
-// is the only content identity left. Everything else, plain-JS bundles
-// included, compares by byte hash, which can only under-dedup, never falsely
-// refuse a publish.
-var hermesContentAddressedName = regexp.MustCompile(`-[0-9a-f]{32}\.hbc$`)
-
-func hermesContentAddressedPath(path string) bool {
-	return hermesContentAddressedName.MatchString(path)
-}
-
-func sameLaunchContent(stored, incoming types.ShapedAsset) bool {
-	if hermesContentAddressedPath(stored.Path) && hermesContentAddressedPath(incoming.Path) {
-		return stored.Path == incoming.Path
-	}
-	return stored.Hash == incoming.Hash
-}
-
 // AreUpdatesIdentical reports whether an incoming publish carries exactly the
 // content the stored update already serves. Both mappings are per-platform, so
 // no file has to be attributed to a platform here.
@@ -137,10 +116,7 @@ func AreUpdatesIdentical(stored, incoming *types.UpdateAssetMapping) bool {
 	if stored == nil || incoming == nil {
 		return false
 	}
-	if stored.LaunchAsset.Hash == "" {
-		return false
-	}
-	if !sameLaunchContent(stored.LaunchAsset, incoming.LaunchAsset) {
+	if stored.LaunchAsset.Hash == "" || stored.LaunchAsset.Hash != incoming.LaunchAsset.Hash {
 		return false
 	}
 	if len(stored.Assets) != len(incoming.Assets) {
