@@ -44,6 +44,7 @@ func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, b
 		if !s.isUpdateValid(updates[i]) {
 			continue
 		}
+		updates[i].UpdateUUID = storedMetadata.UpdateUUID
 		return &updates[i], nil
 	}
 	return nil, nil

@@ -10,6 +10,8 @@ import (
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type UpdateRepository interface {
@@ -54,6 +56,9 @@ type UpdateRepository interface {
 type UpdateService struct {
 	updateRepo UpdateRepository
 	bucket     bucket.Bucket
+	// manifestFlight collapses concurrent composes of one manifest entry:
+	// right after a publish, every poll misses the cache at once.
+	manifestFlight singleflight.Group
 }
 
 func NewUpdateService(updateRepo UpdateRepository, bucket bucket.Bucket) *UpdateService {
@@ -102,30 +107,39 @@ func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types
 	if entry, ok := cache.GetJSON[manifestResponseEntry](manifestCache, cacheKey); ok {
 		return entry, nil
 	}
-	metadata, err := update2.GetMetadata(update)
+	flightEntry, err, _ := s.manifestFlight.Do(cacheKey, func() (any, error) {
+		if entry, ok := cache.GetJSON[manifestResponseEntry](manifestCache, cacheKey); ok {
+			return entry, nil
+		}
+		metadata, err := update2.GetMetadata(update)
+		if err != nil {
+			return nil, err
+		}
+		storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, update)
+		if err != nil {
+			return nil, err
+		}
+		mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, update)
+		if err != nil {
+			return nil, err
+		}
+		manifest, err := update2.ComposeUpdateManifest(&metadata, update, storedMetadata, mapping, platform)
+		if err != nil {
+			return nil, err
+		}
+		manifestJSON, err := json.Marshal(manifest)
+		if err != nil {
+			return nil, err
+		}
+		entry := manifestResponseEntry{ManifestJSON: manifestJSON, UpdateUUID: manifest.Id}
+		ttl := update2.ImmutableCacheTTLSeconds
+		cache.SetJSON(manifestCache, cacheKey, entry, &ttl)
+		return entry, nil
+	})
 	if err != nil {
 		return manifestResponseEntry{}, err
 	}
-	storedMetadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, update)
-	if err != nil {
-		return manifestResponseEntry{}, err
-	}
-	mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, update)
-	if err != nil {
-		return manifestResponseEntry{}, err
-	}
-	manifest, err := update2.ComposeUpdateManifest(&metadata, update, storedMetadata, mapping, platform)
-	if err != nil {
-		return manifestResponseEntry{}, err
-	}
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		return manifestResponseEntry{}, err
-	}
-	entry := manifestResponseEntry{ManifestJSON: manifestJSON, UpdateUUID: manifest.Id}
-	ttl := update2.ImmutableCacheTTLSeconds
-	cache.SetJSON(manifestCache, cacheKey, entry, &ttl)
-	return entry, nil
+	return flightEntry.(manifestResponseEntry), nil
 }
 
 // GetUpdateAssetMapping answers nil for an update published before the mapping

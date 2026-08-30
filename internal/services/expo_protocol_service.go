@@ -179,6 +179,13 @@ func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.B
 }
 
 func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, lastUpdate types.Update, refusedBranch string) {
+	// Envelope UUID first: the most common poll (device already up to date)
+	// answers without reading the composed manifest. Empty for legacy rows
+	// without a stored UUID; the entry comparison below still covers those.
+	if params.CurrentUpdateID != "" && params.ProtocolVersion == 1 && lastUpdate.UpdateUUID != "" && params.CurrentUpdateID == lastUpdate.UpdateUUID {
+		s.PutNoUpdateAvailableInResponse(ctx, w, params)
+		return
+	}
 	entry, err := s.updateService.cachedManifestResponse(ctx, lastUpdate, params.Platform)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)

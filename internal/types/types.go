@@ -273,6 +273,10 @@ type Update struct {
 	RuntimeVersion string        `json:"runtimeVersion"`
 	UpdateId       string        `json:"updateId"`
 	CreatedAt      time.Duration `json:"createdAt"`
+	// UpdateUUID is the persistent manifest id, filled only on the lastUpdate
+	// envelope path so the up-to-date poll can short-circuit without reading
+	// the composed manifest. Empty everywhere else.
+	UpdateUUID string `json:"updateUuid,omitempty"`
 }
 
 // UpdateWithRollout is the flat lastUpdate envelope: an update plus its per-update

@@ -37,19 +37,19 @@ func GetUpdateCheckStatus(update types.Update) time.Time {
 const ImmutableCacheTTLSeconds = 7 * 24 * 3600
 
 func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform types.Platform) string {
-	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, platform)
+	return cache2.Key("lastUpdate", version.Version, appId, branch, runtimeVersion, string(platform))
 }
 
 func ComputeMetadataCacheKey(appId string, branch string, runtimeVersion string, updateId string) string {
-	return fmt.Sprintf("metadata:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, updateId)
+	return cache2.Key("metadata", version.Version, appId, branch, runtimeVersion, updateId)
 }
 
 func ComputeManifestResponseCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform types.Platform) string {
-	return fmt.Sprintf("manifest-response:%s:%s:%s:%s:%s:%s", version.Version, appId, branch, runtimeVersion, updateId, platform)
+	return cache2.Key("manifest-response", version.Version, appId, branch, runtimeVersion, updateId, string(platform))
 }
 
 func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath string) string {
-	return fmt.Sprintf("asset:%s:%s:%s:%s:%s:%s", version.Version, appId, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
+	return cache2.Key("asset", version.Version, appId, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
 // VerifyUploadedUpdate reports whether every file the update announces actually

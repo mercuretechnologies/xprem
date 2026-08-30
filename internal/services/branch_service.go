@@ -130,7 +130,12 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 	appCache.Delete(dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName))
 	// Without this a surfing device could still be handed the deleted branch's
 	// cached envelope while its files are being removed below.
+	purgedRuntimeVersions := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
+		if _, purged := purgedRuntimeVersions[row.RuntimeVersion]; purged {
+			continue
+		}
+		purgedRuntimeVersions[row.RuntimeVersion] = struct{}{}
 		for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
 			appCache.Delete(update2.ComputeLastUpdateCacheKey(appId, branchName, row.RuntimeVersion, platform))
 		}

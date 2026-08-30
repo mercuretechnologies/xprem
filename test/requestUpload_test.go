@@ -413,7 +413,7 @@ func TestShouldPreserveCacheOnUploadRequest(t *testing.T) {
 	cache := cache2.GetCache()
 	cacheKey := update.ComputeLastUpdateCacheKey("test-app-id", "branch-1", "1", "android")
 	value := cache.Get(cacheKey)
-	expectedValue := "{\"appId\":\"test-app-id\",\"branch\":\"branch-1\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000}"
+	expectedValue := "{\"appId\":\"test-app-id\",\"branch\":\"branch-1\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000,\"updateUuid\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\"}"
 	assert.Equal(t, expectedValue, value, "Expected a specific cache value")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)

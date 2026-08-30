@@ -623,6 +623,11 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			AppId:          appId,
 		},
 	}
+	// Legacy rows without a stored UUID leave the field empty; the poll
+	// short-circuit then falls back to the composed manifest's id.
+	if row.UpdateUuid.Valid {
+		result.Update.UpdateUUID = row.UpdateUuid.String()
+	}
 	if row.RolloutPercentage != nil {
 		pct := int(*row.RolloutPercentage)
 		result.RolloutPercentage = &pct
@@ -634,6 +639,9 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			RuntimeVersion: runtimeVersion,
 			CreatedAt:      time.Duration(row.ControlCreatedAt.Time.UnixNano()),
 			AppId:          appId,
+		}
+		if row.ControlUpdateUuid.Valid {
+			result.Control.UpdateUUID = row.ControlUpdateUuid.String()
 		}
 	}
 	return result, nil

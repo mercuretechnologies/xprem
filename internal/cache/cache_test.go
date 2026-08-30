@@ -46,3 +46,14 @@ func TestLocalCacheConcurrentExpiredGets(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, "", c.Get("expired-key"))
 }
+
+func TestKeyEscapesSeparatorSegments(t *testing.T) {
+	require.Equal(t, "lastUpdate:1.0.0:app:main:52.0.0:ios", Key("lastUpdate", "1.0.0", "app", "main", "52.0.0", "ios"))
+
+	// A ':' inside a segment must not collide two different segment tuples
+	// onto one key: (branch "x", rt "1:evil") vs (branch "x:1", rt "evil").
+	require.NotEqual(t, Key("k", "x", "1:evil"), Key("k", "x:1", "evil"))
+	// Nor may a literal "%3A" collide with an escaped ':'.
+	require.NotEqual(t, Key("k", "x%3A1"), Key("k", "x:1"))
+	require.Equal(t, "k:exposdk%3A52.0.0", Key("k", "exposdk:52.0.0"))
+}

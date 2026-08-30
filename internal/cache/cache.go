@@ -39,6 +39,18 @@ func withPrefix(key string) string {
 	return prefix + ":" + key
 }
 
+// Key joins segments with ":" after escaping any "%" and ":" they contain, so
+// a segment holding the separator (a branch named "x:1", an "exposdk:52.0.0"
+// runtime version) can never collide two different keys onto one.
+func Key(segments ...string) string {
+	escaped := make([]string, len(segments))
+	for i, segment := range segments {
+		segment = strings.ReplaceAll(segment, "%", "%25")
+		escaped[i] = strings.ReplaceAll(segment, ":", "%3A")
+	}
+	return strings.Join(escaped, ":")
+}
+
 func ResolveCacheType() CacheType {
 	cacheType := config.GetEnv("CACHE_MODE")
 	switch cacheType {

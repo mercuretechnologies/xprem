@@ -980,7 +980,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id

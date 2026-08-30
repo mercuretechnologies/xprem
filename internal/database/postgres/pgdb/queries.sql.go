@@ -1676,7 +1676,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id
@@ -1712,6 +1713,7 @@ type GetLatestUpdateWithRolloutRow struct {
 	ControlID         *int64             `json:"control_id"`
 	ControlCreatedAt  pgtype.Timestamptz `json:"control_created_at"`
 	ControlUpdateType *int32             `json:"control_update_type"`
+	ControlUpdateUuid pgtype.UUID        `json:"control_update_uuid"`
 }
 
 // Latest checked update for (branch, rtv, platform) plus its control, resolved through
@@ -1740,6 +1742,7 @@ func (q *Queries) GetLatestUpdateWithRollout(ctx context.Context, arg GetLatestU
 		&i.ControlID,
 		&i.ControlCreatedAt,
 		&i.ControlUpdateType,
+		&i.ControlUpdateUuid,
 	)
 	return i, err
 }

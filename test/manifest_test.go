@@ -448,7 +448,7 @@ func TestSkippingNotValidUpdatesAndCache(t *testing.T) {
 	cache := cache2.GetCache()
 	cacheKey := update.ComputeLastUpdateCacheKey("test-app-id", "branch-4", "1", "android")
 	value := cache.Get(cacheKey)
-	assert.Equal(t, "{\"appId\":\"test-app-id\",\"branch\":\"branch-4\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000}", value, "Expected a specific value")
+	assert.Equal(t, "{\"appId\":\"test-app-id\",\"branch\":\"branch-4\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000,\"updateUuid\":\"3f23a8c4-cd0e-a5a4-63f2-bb2841e95a01\"}", value, "Expected a specific value")
 	assert.NotNil(t, file.Reader, "Expected a file")
 }
 

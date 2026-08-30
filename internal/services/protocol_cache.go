@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"xprem/config"
@@ -41,19 +40,19 @@ const (
 )
 
 func appConfigCacheKey(appId string) string {
-	return fmt.Sprintf("app-config:%s:%s", version.Version, appId)
+	return cache2.Key("app-config", version.Version, appId)
 }
 
 func updateTypeCacheKey(update types.Update) string {
-	return fmt.Sprintf("update-type:%s:%s:%s:%s:%s", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	return cache2.Key("update-type", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 }
 
 func channelMappingCacheKey(appId string, channelName string) string {
-	return fmt.Sprintf("channel-mapping:%s:%s:%s", version.Version, appId, channelName)
+	return cache2.Key("channel-mapping", version.Version, appId, channelName)
 }
 
 func channelBranchSurfingCacheKey(appId string, channelName string) string {
-	return fmt.Sprintf("channel-branch-surfing:%s:%s:%s", version.Version, appId, channelName)
+	return cache2.Key("channel-branch-surfing", version.Version, appId, channelName)
 }
 
 // Keyed without the channel: the list is per app, runtime version and platform,
@@ -61,7 +60,7 @@ func channelBranchSurfingCacheKey(appId string, channelName string) string {
 // The platform belongs in the key, not just the query — an iOS answer served to
 // an Android device would offer branches it cannot be given.
 func surfableBranchesCacheKey(appId string, runtimeVersion string, platform types.Platform) string {
-	return fmt.Sprintf("surfable-branches:%s:%s:%s:%s", version.Version, appId, runtimeVersion, platform)
+	return cache2.Key("surfable-branches", version.Version, appId, runtimeVersion, string(platform))
 }
 
 func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error) {
@@ -82,7 +81,7 @@ func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, ap
 }
 
 func signatureCacheKey(appId string, keyFingerprint string, contentHash string) string {
-	return fmt.Sprintf("manifest-signature:%s:%s:%s:%s", version.Version, appId, keyFingerprint, contentHash)
+	return cache2.Key("manifest-signature", version.Version, appId, keyFingerprint, contentHash)
 }
 
 // carriesPlaintextSecret reports whether an app config holds material that
