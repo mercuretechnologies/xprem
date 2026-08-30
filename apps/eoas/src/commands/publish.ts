@@ -118,7 +118,6 @@ export default class Publish extends Command {
     providedDeprecatedChannel?: string;
     message?: string;
     dumpSourcemap: boolean;
-    expoMetroRequire: boolean;
     rolloutPercentage?: number;
     uploadRate: number;
   } {
@@ -138,7 +137,6 @@ export default class Publish extends Command {
       providedDeprecatedChannel: flags.channel,
       message: flags.message,
       dumpSourcemap: flags.dumpSourcemap,
-      expoMetroRequire: flags.expoMetroRequire,
       rolloutPercentage: flags['rollout-percentage'],
       uploadRate,
     };
@@ -164,7 +162,6 @@ export default class Publish extends Command {
       disableRepositoryCheck,
       message,
       dumpSourcemap,
-      expoMetroRequire,
       rolloutPercentage,
       uploadRate,
     } = this.sanitizeFlags(flags);
