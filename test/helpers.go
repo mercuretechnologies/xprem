@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 	"xprem/config"
@@ -79,7 +80,25 @@ func testUpdateType(update types.Update) (types.UpdateType, error) {
 		GetUpdateType(context.Background(), update)
 }
 
+// fixtureCasBlobs is the checked-in content of the fixture cas dir, captured
+// before any test writes into it, so cleanup knows which blobs are fixtures.
+var fixtureCasBlobs = map[string]struct{}{}
+var fixtureCasOnce sync.Once
+
 func GlobalBeforeEach() {
+	fixtureCasOnce.Do(func() {
+		projectRoot, err := findProjectRoot()
+		if err != nil {
+			return
+		}
+		blobs, err := os.ReadDir(filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas"))
+		if err != nil {
+			return
+		}
+		for _, blob := range blobs {
+			fixtureCasBlobs[blob.Name()] = struct{}{}
+		}
+	})
 	metrics.CleanupMetrics()
 	cache := cache2.GetCache()
 	_ = cache.Clear()
@@ -105,10 +124,21 @@ func GlobalAfterEach(t *testing.T) {
 		for _, casPath := range []string{
 			filepath.Join(projectRoot, "./updates/cas"),
 			filepath.Join(projectRoot, "./updates/test-app-id/cas"),
-			filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas"),
 		} {
 			if err := os.RemoveAll(casPath); err != nil {
 				t.Errorf("Error removing cas directory: %v", err)
+			}
+		}
+		// The fixture cas dir is checked in (the CAS-mode fixtures reference its
+		// blobs), so only blobs a test wrote on top of it are removed.
+		fixtureCas := filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas")
+		if blobs, err := os.ReadDir(fixtureCas); err == nil {
+			for _, blob := range blobs {
+				if _, isFixture := fixtureCasBlobs[blob.Name()]; !isFixture {
+					if err := os.Remove(filepath.Join(fixtureCas, blob.Name())); err != nil {
+						t.Errorf("Error removing test-written blob: %v", err)
+					}
+				}
 			}
 		}
 		for _, updatesPath := range []string{

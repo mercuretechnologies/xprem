@@ -51,7 +51,7 @@ func TestRequestUploadUrlWithoutBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error finding project root: %v", err)
 	}
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	w, _, _, r := createUploadRequest(t, projectRoot, "DO_NOT_USE", "1", sampleUpdatePath, "Authorization", "Bearer expo_alternative_token", "ios")
 	serveThroughRouter(w, r)
 	assert.Equal(t, 401, w.Code, "Expected status code 401")
@@ -66,7 +66,7 @@ func TestRequestUploadUrlWithBadBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error finding project root: %v", err)
 	}
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	w, _, _, r := createUploadRequest(t, projectRoot, "DO_NOT_USE", "1", sampleUpdatePath, "Authorization", "Bearer expo_bad_token", "ios")
 	serveThroughRouter(w, r)
 	assert.Equal(t, 401, w.Code, "Expected status code 401")
@@ -86,7 +86,7 @@ func TestRequestUploadUrlWithoutRuntimeVersion(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	if err != nil {
@@ -155,7 +155,7 @@ func TestRequestUploadUrlRejectsMalformedManifestKey(t *testing.T) {
 		t.Fatalf("Error finding project root: %v", err)
 	}
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
-	sample := filepath.Join(projectRoot, "test", "test-updates", "test-app-id", "branch-4", "1", "1674170952")
+	sample := filepath.Join(projectRoot, "test", "sample-exports", "bundles-layout")
 	body := ComputeUploadRequestsInput(sample, "android")
 	for i := range body.Files {
 		if body.Files[i].Role == services.FileRoleLaunch {
@@ -237,7 +237,7 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-4/1/1674170952")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	if err != nil {
@@ -290,7 +290,7 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 			ws[index] = httptest.NewRecorder()
 			body := &bytes.Buffer{}
 			writer := multipart.NewWriter(body)
-			filePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-4/1/1674170952", uploadReq.FilePath)
+			filePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout", uploadReq.FilePath)
 			fileBuffer, err := os.Open(filePath)
 			if err != nil {
 				errs <- err
@@ -371,7 +371,7 @@ func TestRequestUploadUrlWithValidExpoSession(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("expo-session", "expo_test_session")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	if err != nil {
@@ -409,7 +409,10 @@ func TestShouldPreserveCacheOnUploadRequest(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("expo-session", "expo_test_session")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	// The fixture update now carries an asset mapping, so republishing its own
+	// content would be refused as identical (406); this publish must be
+	// accepted, so it sends different content.
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/expo-static-layout")
 	cache := cache2.GetCache()
 	cacheKey := update.ComputeLastUpdateCacheKey("test-app-id", "branch-1", "1", "android")
 	value := cache.Get(cacheKey)
@@ -441,7 +444,7 @@ func TestRequestUploadUrlWithInvalidExpoSession(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", q, nil)
 	r.Header.Set("expo-session", "invalid_session_token")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951")
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	if err != nil {
@@ -498,8 +501,8 @@ func TestStatelessIdenticalPublishIsRefused(t *testing.T) {
 		path     []string
 		platform types.Platform
 	}{
-		{"legacy bundles layout", []string{"branch-4", "1", "1674170952"}, "android"},
-		{"expo static js layout", []string{"branch-2", "1", "1737455526"}, "ios"},
+		{"legacy bundles layout", []string{"bundles-layout"}, "android"},
+		{"expo static js layout", []string{"expo-static-layout"}, "ios"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			teardown := setup(t)
@@ -511,7 +514,7 @@ func TestStatelessIdenticalPublishIsRefused(t *testing.T) {
 			}
 			basePath := filepath.Join(projectRoot, "updates")
 			os.Setenv("LOCAL_BUCKET_BASE_PATH", basePath)
-			sample := filepath.Join(append([]string{projectRoot, "test", "test-updates", "test-app-id"}, fixture.path...)...)
+			sample := filepath.Join(append([]string{projectRoot, "test", "sample-exports"}, fixture.path...)...)
 
 			first := postRequestUploadUrl(t, "DO_NOT_USE", "1", fixture.platform, sample)
 			assert.Equal(t, http.StatusOK, first.Code)
@@ -535,12 +538,12 @@ func TestStatelessDifferentPublishIsAccepted(t *testing.T) {
 	}
 	basePath := filepath.Join(projectRoot, "updates")
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", basePath)
-	fixtures := filepath.Join(projectRoot, "test", "test-updates", "test-app-id")
+	fixtures := filepath.Join(projectRoot, "test", "sample-exports")
 
-	first := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", filepath.Join(fixtures, "branch-4", "1", "1674170952"))
+	first := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", filepath.Join(fixtures, "bundles-layout"))
 	assert.Equal(t, http.StatusOK, first.Code)
 	markUpdateChecked(t, basePath, "DO_NOT_USE", "1", updateIdFromResponse(t, first))
 
-	second := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", filepath.Join(fixtures, "branch-2", "1", "1737455526"))
+	second := postRequestUploadUrl(t, "DO_NOT_USE", "1", "android", filepath.Join(fixtures, "expo-static-layout"))
 	assert.Equal(t, http.StatusOK, second.Code)
 }

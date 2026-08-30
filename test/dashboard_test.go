@@ -315,7 +315,7 @@ func TestBranches(t *testing.T) {
 	var response []types.BranchMapping
 	err := json.Unmarshal(respRec.Body.Bytes(), &response)
 	assert.Nil(t, err)
-	assert.Equal(t, `[{"branchName":"branch-1","branchId":"branch-1","releaseChannel":"staging","createdAt":null,"protected":false},{"branchName":"branch-2","branchId":"branch-2","releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-3","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-4","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false}]`, strings.TrimSpace(string(respRec.Body.Bytes())))
+	assert.Equal(t, `[{"branchName":"branch-1","branchId":"branch-1","releaseChannel":"staging","createdAt":null,"protected":false},{"branchName":"branch-2","branchId":"branch-2","releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-3","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-4","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false},{"branchName":"branch-legacy","branchId":null,"releaseChannel":null,"createdAt":null,"protected":false}]`, strings.TrimSpace(string(respRec.Body.Bytes())))
 }
 
 func TestBranchesWithoutAuth(t *testing.T) {

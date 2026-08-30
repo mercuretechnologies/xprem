@@ -24,7 +24,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
-	sampleUpdatePath := filepath.Join(projectRoot, "test/test-updates/test-app-id/branch-4/1/1674170952")
+	sampleUpdatePath := filepath.Join(projectRoot, "test/sample-exports/bundles-layout")
 
 	u, _ := url.Parse("http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE")
 	q := u.Query()

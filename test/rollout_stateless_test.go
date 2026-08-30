@@ -33,8 +33,7 @@ func buildRolloutUploadRequest(t *testing.T, projectRoot string, rolloutPercenta
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", requestURL, nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
-	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-4/1/1674170952")
-	// branch-4/1/1674170952 is an android-only export.
+	sampleUpdatePath := filepath.Join(projectRoot, "/test/sample-exports/bundles-layout")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	require.NoError(t, err)
@@ -135,7 +134,7 @@ func TestAssetsIgnoreRolloutHeadersInStatelessMode(t *testing.T) {
 	projectRoot, err := findProjectRoot()
 	require.NoError(t, err)
 
-	assetURL, err := update.BuildFinalManifestAssetUrlURL("http://localhost:3000", "bundles/android-82adadb1fb6e489d04ad95fd79670deb.js", "1", "android", "staging", "1674170951")
+	assetURL, err := update.BuildBlobAssetURL("http://localhost:3000/assets", "t3kWQ00Lhn5qCGGhNNMxiD_pcTO_4d7I_1zO3S5Me5k", ".bundle", "android")
 	require.NoError(t, err)
 
 	requestAsset := func(withRolloutHeaders bool) *httptest.ResponseRecorder {
@@ -158,7 +157,7 @@ func TestAssetsIgnoreRolloutHeadersInStatelessMode(t *testing.T) {
 	assert.Equal(t, "application/javascript", withHeadersResponse.Header().Get("Content-Type"))
 	assert.Equal(t, baselineResponse.Body.String(), withHeadersResponse.Body.String(), "the asset body must be byte-identical with and without rollout headers")
 
-	expectedContent, err := os.ReadFile(filepath.Join(projectRoot, "/test/test-updates/test-app-id/branch-1/1/1674170951/bundles/android-82adadb1fb6e489d04ad95fd79670deb.js"))
+	expectedContent, err := os.ReadFile(filepath.Join(projectRoot, "/test/test-updates/test-app-id/cas/t3kWQ00Lhn5qCGGhNNMxiD_pcTO_4d7I_1zO3S5Me5k"))
 	require.NoError(t, err)
-	assert.Equal(t, string(expectedContent), withHeadersResponse.Body.String(), "the served asset must stay the exact branch-1/1/1674170951 file")
+	assert.Equal(t, string(expectedContent), withHeadersResponse.Body.String(), "the served asset must stay the exact fixture blob")
 }
