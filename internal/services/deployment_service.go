@@ -117,6 +117,7 @@ func shapeAsset(file FileUploadItem, isLaunchAsset bool) types.ShapedAsset {
 		Key:           file.Key,
 		FileExtension: "." + extension,
 		ContentType:   update2.AssetContentType(file.Ext, isLaunchAsset),
+		Path:          file.Path,
 	}
 }
 
