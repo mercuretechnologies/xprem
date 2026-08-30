@@ -95,12 +95,6 @@ export default class Publish extends Command {
       default: true,
       allowNo: true,
     }),
-    expoMetroRequire: Flags.boolean({
-      description:
-        'Pass EXPO_USE_METRO_REQUIRE=1 to the export so Metro derives module ids from file paths instead of discovery order (default: true). Identical code then exports byte-identical bundles, which server-side change detection relies on. Disable with --no-expoMetroRequire if the custom Metro require implementation causes issues in your project.',
-      default: true,
-      allowNo: true,
-    }),
     'rollout-percentage': Flags.integer({
       min: 1,
       max: 99,
@@ -309,7 +303,6 @@ export default class Publish extends Command {
           env: {
             ...process.env,
             EXPO_NO_DOTENV: '1',
-            ...(expoMetroRequire ? { EXPO_USE_METRO_REQUIRE: '1' } : {}),
           },
         }
       );
