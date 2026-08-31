@@ -85,18 +85,34 @@ func MarkUpdateAsChecked(update types.Update) error {
 	if err != nil || storedMetadata == nil {
 		return err
 	}
-	cacheKeys := []string{ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform), branchesCacheKey, runTimeVersionsCacheKey, updatesCacheKey}
-	for _, cacheKey := range cacheKeys {
-		cache.Delete(cacheKey)
-	}
 	resolvedBucket := bucket.GetBucket()
 	err = StoreUpdateUUIDInMetadata(update)
 	if err != nil {
 		return err
 	}
-	reader := strings.NewReader(".check")
-	_ = resolvedBucket.UploadFileIntoUpdate(update, ".check", reader)
-	go PreWarmUpdateManifestCache(update, storedMetadata.Platform)
+	cacheKeys := []string{ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform), branchesCacheKey, runTimeVersionsCacheKey, updatesCacheKey}
+	return finalizeCheckedUpdate(
+		func() error {
+			return resolvedBucket.UploadFileIntoUpdate(update, ".check", strings.NewReader(".check"))
+		},
+		func() {
+			for _, cacheKey := range cacheKeys {
+				cache.Delete(cacheKey)
+			}
+		},
+		func() { PreWarmUpdateManifestCache(update, storedMetadata.Platform) },
+	)
+}
+
+// finalizeCheckedUpdate publishes the validity marker before invalidating the
+// cached latest update. Otherwise a concurrent manifest request can repopulate
+// lastUpdate with the previous update while the new update is still invalid.
+func finalizeCheckedUpdate(uploadCheck func() error, invalidate func(), prewarm func()) error {
+	if err := uploadCheck(); err != nil {
+		return err
+	}
+	invalidate()
+	go prewarm()
 	return nil
 }
 
