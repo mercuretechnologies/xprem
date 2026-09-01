@@ -173,8 +173,17 @@ func awsKeysConfig() config.KeysConfig {
 	}
 }
 
+// The expo provider caches these lookups per credential; every test using the
+// shared "token" credential starts from a cold cache.
+func resetExpoProviderCaches(t *testing.T) {
+	t.Helper()
+	expo.InvalidateAccountApps(expoAuth("token"))
+	expo.InvalidateProjectStructure(expoAuth("token"), importExpoAppID)
+}
+
 func mockExpoProjectStructure(t *testing.T) {
 	t.Helper()
+	resetExpoProviderCaches(t)
 	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 		func(req *http.Request) (*http.Response, error) {
 			switch req.Header.Get("operationName") {
@@ -325,6 +334,7 @@ func TestImportAppSurfacesExpoErrors(t *testing.T) {
 func TestImportAppReportsUnknownProject(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
+	resetExpoProviderCaches(t)
 	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 		func(req *http.Request) (*http.Response, error) {
 			return httpmock.NewJsonResponse(http.StatusOK, map[string]interface{}{
@@ -489,6 +499,7 @@ func TestListImportableApps(t *testing.T) {
 func TestListImportableAppsPaginatesPastFiftyApps(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
+	resetExpoProviderCaches(t)
 	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 		func(req *http.Request) (*http.Response, error) {
 			var body struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"xprem/config"
+	cache2 "xprem/internal/cache"
 	"xprem/internal/types"
 )
 
@@ -62,7 +63,27 @@ const accountAppsPageSize = 50
 const accountAppsMaxPages = 20
 
 // FetchAccountApps lists the apps of every account the token can act for.
+// Cached per credential: large accounts page through the Expo API.
 func FetchAccountApps(ctx context.Context, auth types.Auth) ([]AccountApps, error) {
+	fingerprint := credentialFingerprint(auth)
+	appsCache := cache2.GetCache()
+	if fingerprint != "" {
+		if accounts, ok := cache2.GetJSON[[]AccountApps](appsCache, accountAppsCacheKey(fingerprint)); ok {
+			return accounts, nil
+		}
+	}
+	accounts, err := fetchAccountApps(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint != "" {
+		ttl := accountAppsCacheTTLSeconds
+		cache2.SetJSON(appsCache, accountAppsCacheKey(fingerprint), accounts, &ttl)
+	}
+	return accounts, nil
+}
+
+func fetchAccountApps(ctx context.Context, auth types.Auth) ([]AccountApps, error) {
 	query := `
 		query FetchAccountApps($offset: Int!, $limit: Int!) {
 			me {
@@ -139,7 +160,28 @@ func FetchAccountApps(ctx context.Context, auth types.Auth) ([]AccountApps, erro
 	return accounts, nil
 }
 
+// Cached per (credential, project): PreviewImport and ImportApp both read it,
+// so a preview followed by its import fetches once and plans off one snapshot.
 func FetchProjectStructure(ctx context.Context, auth types.Auth, expoAppId string) (*ProjectStructure, error) {
+	fingerprint := credentialFingerprint(auth)
+	structureCache := cache2.GetCache()
+	if fingerprint != "" {
+		if structure, ok := cache2.GetJSON[ProjectStructure](structureCache, projectStructureCacheKey(expoAppId, fingerprint)); ok {
+			return &structure, nil
+		}
+	}
+	structure, err := fetchProjectStructure(ctx, auth, expoAppId)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint != "" {
+		ttl := projectStructureCacheTTLSeconds
+		cache2.SetJSON(structureCache, projectStructureCacheKey(expoAppId, fingerprint), *structure, &ttl)
+	}
+	return structure, nil
+}
+
+func fetchProjectStructure(ctx context.Context, auth types.Auth, expoAppId string) (*ProjectStructure, error) {
 	query := `
 		query FetchProjectStructure($appId: String!) {
 			app {
