@@ -438,6 +438,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 		// "bundle" is the extension shapeAsset gives a launch asset, so the one
 		// mime table answers for both kinds.
 		ContentType: update2.AssetContentType(params.Extension, params.Extension == "bundle"),
+		Headers:     assets.ExpoProtocolHeaders(),
 		StatusCode:  http.StatusOK,
 	}, nil
 }
