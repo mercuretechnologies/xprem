@@ -23,9 +23,9 @@ import (
 var ErrAlreadyRunning = errors.New("a job of this kind is already running for this scope")
 
 type Client struct {
-	pool    *pgxpool.Pool
-	workers *river.Workers
-	queue   *river.Client[pgx.Tx]
+	pool        *pgxpool.Pool
+	workers     *river.Workers
+	riverClient *river.Client[pgx.Tx]
 }
 
 func NewClient(engine *database.Engine) (*Client, error) {
@@ -66,18 +66,18 @@ func (c *Client) Start(ctx context.Context) error {
 	if err := riverClient.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start the river client: %w", err)
 	}
-	c.queue = riverClient
+	c.riverClient = riverClient
 	log.Println("🛠️  [JOBS] River job client started")
 	return nil
 }
 
 func (c *Client) Stop() {
-	if c == nil || c.queue == nil {
+	if c == nil || c.riverClient == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := c.queue.Stop(ctx); err != nil {
+	if err := c.riverClient.Stop(ctx); err != nil {
 		log.Printf("[jobs] river client did not stop cleanly: %v", err)
 	}
 }
@@ -85,10 +85,10 @@ func (c *Client) Stop() {
 // Enqueue inserts args as a job; ErrAlreadyRunning when a unique constraint
 // skipped the insert.
 func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error) {
-	if c == nil || c.queue == nil {
+	if c == nil || c.riverClient == nil {
 		return "", store.ErrNotSupportedInStatelessMode
 	}
-	inserted, err := c.queue.Insert(ctx, args, nil)
+	inserted, err := c.riverClient.Insert(ctx, args, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to enqueue the job: %w", err)
 	}
@@ -99,14 +99,14 @@ func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error
 }
 
 func (c *Client) Get(ctx context.Context, jobId string) (*rivertype.JobRow, error) {
-	if c == nil || c.queue == nil {
+	if c == nil || c.riverClient == nil {
 		return nil, nil
 	}
 	id, err := strconv.ParseInt(jobId, 10, 64)
 	if err != nil {
 		return nil, nil
 	}
-	job, err := c.queue.JobGet(ctx, id)
+	job, err := c.riverClient.JobGet(ctx, id)
 	if errors.Is(err, rivertype.ErrNotFound) {
 		return nil, nil
 	}
@@ -119,7 +119,7 @@ func (c *Client) Get(ctx context.Context, jobId string) (*rivertype.JobRow, erro
 // LatestByArg returns the newest job of the kind whose args carry the value
 // at the key, or nil.
 func (c *Client) LatestByArg(ctx context.Context, kind string, argKey string, argValue string) (*rivertype.JobRow, error) {
-	if c == nil || c.queue == nil {
+	if c == nil || c.riverClient == nil {
 		return nil, nil
 	}
 	params := river.NewJobListParams().
@@ -127,7 +127,7 @@ func (c *Client) LatestByArg(ctx context.Context, kind string, argKey string, ar
 		Where("args->>@key = @value", river.NamedArgs{"key": argKey, "value": argValue}).
 		OrderBy(river.JobListOrderByID, river.SortOrderDesc).
 		First(1)
-	listed, err := c.queue.JobList(ctx, params)
+	listed, err := c.riverClient.JobList(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list the scope's jobs: %w", err)
 	}
@@ -140,14 +140,14 @@ func (c *Client) LatestByArg(ctx context.Context, kind string, argKey string, ar
 // Cancel stops a job: immediately when it still waits, at its next context
 // check when it runs. False means the job is unknown.
 func (c *Client) Cancel(ctx context.Context, jobId string) (bool, error) {
-	if c == nil || c.queue == nil {
+	if c == nil || c.riverClient == nil {
 		return false, nil
 	}
 	id, err := strconv.ParseInt(jobId, 10, 64)
 	if err != nil {
 		return false, nil
 	}
-	_, err = c.queue.JobCancel(ctx, id)
+	_, err = c.riverClient.JobCancel(ctx, id)
 	if errors.Is(err, rivertype.ErrNotFound) {
 		return false, nil
 	}
