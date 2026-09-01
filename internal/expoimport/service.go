@@ -125,6 +125,8 @@ func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *Plan {
 		item := PlanItem{Name: branchName}
 		if err := validation.Name("branchName", branchName); err != nil {
 			item.SkipReason = validationMessage(err)
+		} else if bucket.ReservedBranchName(branchName) {
+			item.SkipReason = fmt.Sprintf("%q is reserved", branchName)
 		} else {
 			keptBranches[branchName] = true
 		}

@@ -217,9 +217,12 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 	if historyUpdate.BranchName == "" || historyUpdate.RuntimeVersion == "" {
 		return "the update names no branch or no runtime version", nil
 	}
-	// Both names land in bucket paths: the same rule CreateBranch enforces applies.
+	// Both names land in bucket paths: the same rules CreateBranch enforces apply.
 	if err := validation.Name("branchName", historyUpdate.BranchName); err != nil {
 		return fmt.Sprintf("branch %q: %s", historyUpdate.BranchName, validationMessage(err)), nil
+	}
+	if bucket.ReservedBranchName(historyUpdate.BranchName) {
+		return fmt.Sprintf("branch %q is reserved", historyUpdate.BranchName), nil
 	}
 	if err := validation.Name("runtimeVersion", historyUpdate.RuntimeVersion); err != nil {
 		return fmt.Sprintf("runtime version %q: %s", historyUpdate.RuntimeVersion, validationMessage(err)), nil

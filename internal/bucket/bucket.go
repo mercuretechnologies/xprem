@@ -126,7 +126,7 @@ func validateUpdate(u *types.Update) error {
 	if err := validateSegment("appId", u.AppId); err != nil {
 		return err
 	}
-	if err := validateSegment("branch", u.Branch); err != nil {
+	if err := validateBranch(u.Branch); err != nil {
 		return err
 	}
 	if err := validateSegment("runtimeVersion", u.RuntimeVersion); err != nil {
