@@ -1,7 +1,6 @@
-// CI often publishes with `git log --oneline`, so the subject arrives behind the short
-// hash the Commit column already shows. Drop it only when that leading token really is
-// this update's commit: a message that legitimately opens with a hex-looking word is
-// something someone wrote, and a table cell is the wrong place to second-guess it.
+// CI publishes with `git log --oneline`, so the message arrives prefixed with the short
+// hash the Commit column already shows. Drop that prefix only when it really is this
+// update's commit, so a message that happens to start with a hex word is left alone.
 export const updateTitle = (message: string | undefined, commitHash: string) => {
   const raw = message ?? '';
   // A dashboard rollback stores no commit hash, so there is nothing to match against.
@@ -12,9 +11,7 @@ export const updateTitle = (message: string | undefined, commitHash: string) => 
   return commitHash.toLowerCase().startsWith(token.toLowerCase()) ? rest : raw;
 };
 
-// A fingerprint runtime version is the forty-hex hash `expo-updates
-// runtimeversion:resolve` returns, and it says nothing at a glance; the full value stays
-// one hover away. Anything else — a named version ("1.0.0", "exposdk:52.0.0"), or a hex
-// string of another length — is left exactly as it was set.
+// Forty hex characters is the fingerprint `expo-updates runtimeversion:resolve` returns;
+// named versions ("1.0.0", "exposdk:52.0.0") are left as they were set.
 export const shortRuntimeVersion = (value: string) =>
   /^[0-9a-f]{40}$/i.test(value) ? value.slice(0, 8) : value;

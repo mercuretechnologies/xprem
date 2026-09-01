@@ -25,9 +25,6 @@ export function formatTimestamp(
   return `${dateStr} at ${timeStr}`;
 }
 
-// A feed is read against now: on the day something shipped, the date says nothing that
-// "Today" does not. Older rows get the numeric date, in whatever order the reader's
-// locale puts it.
 export function formatCompactTimestamp(
   dateString: string | null | undefined,
   showSeconds: boolean = false

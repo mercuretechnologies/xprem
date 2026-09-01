@@ -5,8 +5,6 @@ import { formatCompactTimestamp, formatTimestamp } from '@/lib/utils';
 type TimestampCellProps = {
   dateString: string | null | undefined;
   showSeconds?: boolean;
-  // For tables read against the present, where the spelled-out date costs a column and
-  // tells you nothing you did not know. The full timestamp stays on hover.
   compact?: boolean;
 };
 
