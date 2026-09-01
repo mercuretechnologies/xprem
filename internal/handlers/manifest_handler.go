@@ -181,7 +181,7 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 	}, nil
 }
 
-func serverDefinedHeaders(params services.ManifestRequestParams, result services.ManifestResult) *services.HeaderDictionary {
+func serverDefinedHeaders(params services.ManifestRequestParams, result services.UpdateDecision) *services.HeaderDictionary {
 	dictionary := services.NewHeaderDictionary()
 	if result.BlockedSurf != nil {
 		services.SetSurfBlocked(dictionary, params.SurfBlockTokens, result.BlockedSurf.Token)
@@ -206,7 +206,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 	}
 	appId := params.AppID
 
-	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(r.Context(), params)
 	if err != nil {
 		var svcErr *services.ExpoProtocolError
 		status := http.StatusInternalServerError

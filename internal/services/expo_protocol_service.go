@@ -51,7 +51,7 @@ type ManifestRequestParams struct {
 	SurfBlockTokens string
 }
 
-type ManifestResult struct {
+type UpdateDecision struct {
 	Update     *types.Update
 	BranchName string
 	UpdateType types.UpdateType
@@ -292,7 +292,7 @@ func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(ctx context.Context
 	s.PutResponse(ctx, w, params, directive, "directive")
 }
 
-func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params ManifestRequestParams) (ManifestResult, error) {
+func (s *ExpoProtocolService) ResolveUpdateForDevice(ctx context.Context, params ManifestRequestParams) (UpdateDecision, error) {
 	// [Stateless mode] Reject unknown app ids at the edge with a clean 404, otherwise
 	// downstream services.FetchExpoChannelMapping → GetExpoAccessToken
 	// returns an empty token for the unknown id and we end up POSTing to
@@ -300,20 +300,20 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	// as an opaque 500 to the client.
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
 	}
 
 	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", params.RequestID, err)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}
 	}
 	if branchMap == nil {
 		log.Printf("[RequestID: %s] No branch mapping found for channel: %s", params.RequestID, params.ChannelName)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
 	}
 
-	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateAcrossBranches(ctx, params.RequestID, &BranchResolutionRequest{
 		AppID:           params.AppID,
 		ChannelName:     params.ChannelName,
 		ClientID:        params.ClientID,
@@ -323,7 +323,7 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 		RequestedBranch: params.XpremBranch,
 	}, params.SurfBlockTokens, params.RecentFailedUpdateIDs)
 	if err != nil {
-		return ManifestResult{}, err
+		return UpdateDecision{}, err
 	}
 
 	// Tracked AFTER resolution with the branch actually served: under a channel
@@ -339,7 +339,7 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	metrics.TrackActiveUser(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 
 	if lastUpdate == nil {
-		return ManifestResult{
+		return UpdateDecision{
 			Update:      nil,
 			BranchName:  servedBranch,
 			BlockedSurf: blockedSurfResult,
@@ -348,19 +348,19 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	updateType, err := s.cachedUpdateType(ctx, *lastUpdate)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error determining update type: %v", params.RequestID, err)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error determining update type"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error determining update type"}
 	}
 
-	return ManifestResult{Update: lastUpdate, BranchName: servedBranch, UpdateType: updateType, BlockedSurf: blockedSurfResult}, nil
+	return UpdateDecision{Update: lastUpdate, BranchName: servedBranch, UpdateType: updateType, BlockedSurf: blockedSurfResult}, nil
 }
 
-// resolveUpdateForDevice runs the branch rule chain, then serves the first candidate
+// resolveUpdateAcrossBranches runs the branch rule chain, then serves the first candidate
 // branch that resolves for the device. A branch "resolves" as soon as it has any
 // checked update for (runtime version, platform), even when the per-device answer is
 // nil (out-of-bucket with no control => noUpdateAvailable, deliberately no fallback to
 // the next candidate). Shared by manifest and asset resolution so the two paths take
 // the same rollout decision for a device.
-func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, req *BranchResolutionRequest, surfBlockTokens string, failedUpdateIDsRaw string) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
+func (s *ExpoProtocolService) resolveUpdateAcrossBranches(ctx context.Context, requestID string, req *BranchResolutionRequest, surfBlockTokens string, failedUpdateIDsRaw string) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
 	if req.RequestedBranch != "" {
 		enabled, pattern := s.branchSurfingEnabled(ctx, req.AppID, req.ChannelName)
 		req.Surfing = types.BranchSurfing{Enabled: enabled, Pattern: pattern}
@@ -443,7 +443,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 	}, nil
 }
 
-func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
+func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
 	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
 	// rather than letting them flow into FetchExpoChannelMapping and
 	// surfacing the upstream 401 as a 500.
@@ -556,7 +556,7 @@ func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params Ass
 			}
 		}
 	}
-	branchName, lastUpdate, _, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+	branchName, lastUpdate, _, err := s.resolveUpdateAcrossBranches(ctx, params.RequestID, &BranchResolutionRequest{
 		AppID:           params.AppID,
 		ChannelName:     params.ChannelName,
 		ClientID:        params.ClientID,

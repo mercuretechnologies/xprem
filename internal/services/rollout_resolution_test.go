@@ -842,7 +842,7 @@ func TestGetLatestUpdateForClientDecisionTree(t *testing.T) {
 	})
 }
 
-func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
+func TestResolveUpdateForDeviceServesRollbackControl(t *testing.T) {
 	ctx := context.Background()
 	h := newRolloutTestHarness(t)
 	h.channelRepo.mappings["production"] = &types.ChannelResolution{Id: "1", BranchName: "main"}
@@ -863,7 +863,7 @@ func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
 	}
 
 	params.ClientID = clientIDInBucket(t, salt, 40, false)
-	outResult, err := h.protocolService.ResolveManifestBundle(ctx, params)
+	outResult, err := h.protocolService.ResolveUpdateForDevice(ctx, params)
 	require.NoError(t, err)
 	require.NotNil(t, outResult.Update)
 	assert.Equal(t, "100", outResult.Update.UpdateId)
@@ -871,14 +871,14 @@ func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
 	assert.Equal(t, "main", outResult.BranchName)
 
 	params.ClientID = clientIDInBucket(t, salt, 40, true)
-	inResult, err := h.protocolService.ResolveManifestBundle(ctx, params)
+	inResult, err := h.protocolService.ResolveUpdateForDevice(ctx, params)
 	require.NoError(t, err)
 	require.NotNil(t, inResult.Update)
 	assert.Equal(t, "200", inResult.Update.UpdateId)
 	assert.Equal(t, types.NormalUpdate, inResult.UpdateType)
 }
 
-func TestResolveManifestBundleChannelRollout(t *testing.T) {
+func TestResolveUpdateForDeviceChannelRollout(t *testing.T) {
 	ctx := context.Background()
 	const channelSalt = "channel-rollout-salt-uuid"
 
@@ -909,7 +909,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 		h := newChannelRolloutHarness(t)
 		h.seed(seedRow{branch: "beta", rtv: "1", platform: "ios", id: 200, checked: true})
 
-		inResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		inResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, inResult.Update)
 		assert.Equal(t, "200", inResult.Update.UpdateId)
@@ -917,13 +917,13 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 		// attribution: it must be the rollout branch for the in-bucket cohort.
 		assert.Equal(t, "beta", inResult.BranchName)
 
-		outResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, false)))
+		outResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, false)))
 		require.NoError(t, err)
 		require.NotNil(t, outResult.Update)
 		assert.Equal(t, "100", outResult.Update.UpdateId)
 		assert.Equal(t, "main", outResult.BranchName)
 
-		anonymousResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, ""))
+		anonymousResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, ""))
 		require.NoError(t, err)
 		require.NotNil(t, anonymousResult.Update)
 		assert.Equal(t, "main", anonymousResult.BranchName)
@@ -931,7 +931,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 
 	t.Run("runtime version fallback when the rollout branch has no update", func(t *testing.T) {
 		h := newChannelRolloutHarness(t)
-		result, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		result, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, result.Update)
 		assert.Equal(t, "100", result.Update.UpdateId)
@@ -941,7 +941,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 	t.Run("unchecked updates on the rollout branch do not count", func(t *testing.T) {
 		h := newChannelRolloutHarness(t)
 		h.seed(seedRow{branch: "beta", rtv: "1", platform: "ios", id: 200, checked: false})
-		result, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		result, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, result.Update)
 		assert.Equal(t, "100", result.Update.UpdateId)

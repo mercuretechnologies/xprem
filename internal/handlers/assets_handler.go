@@ -44,7 +44,7 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 		Extension:         r.URL.Query().Get("ext"),
 	}
 
-	result, err := h.protocolService.ResolveAssetBundle(r.Context(), params)
+	result, err := h.protocolService.ResolveAsset(r.Context(), params)
 	if err != nil {
 		if assetErr := (*services.ExpoAssetError)(nil); errors.As(err, &assetErr) {
 			http.Error(w, assetErr.Message, assetErr.StatusCode)
