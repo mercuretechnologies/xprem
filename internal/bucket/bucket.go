@@ -3,6 +3,7 @@ package bucket
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -90,10 +91,10 @@ func ValidateBlobHash(hash string) error {
 	if len(hash) != blobHashLength {
 		return fmt.Errorf("invalid hash: must be %d characters", blobHashLength)
 	}
-	for _, r := range hash {
-		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
-			return fmt.Errorf("invalid hash: must be base64url")
-		}
+	// Strict rejects spellings with non-zero trailing padding bits, which
+	// decode to the same digest but would mint a second CAS key.
+	if _, err := base64.RawURLEncoding.Strict().DecodeString(hash); err != nil {
+		return fmt.Errorf("invalid hash: must be canonical base64url")
 	}
 	return nil
 }

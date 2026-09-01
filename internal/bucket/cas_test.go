@@ -20,6 +20,8 @@ func TestValidateBlobHash(t *testing.T) {
 	assert.Error(t, ValidateBlobHash(testBlobHash+"x"))
 	assert.Error(t, ValidateBlobHash("LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"))
 	assert.Error(t, ValidateBlobHash("LPJNul/wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"))
+	// Same digest as testBlobHash, non-canonical spelling (trailing bits set).
+	assert.Error(t, ValidateBlobHash("LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCR"))
 }
 
 func TestValidateUploadFile(t *testing.T) {

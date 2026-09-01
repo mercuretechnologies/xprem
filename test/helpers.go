@@ -83,6 +83,7 @@ func testUpdateType(update types.Update) (types.UpdateType, error) {
 // fixtureCasBlobs is the checked-in content of the fixture cas dir, captured
 // before any test writes into it, so cleanup knows which blobs are fixtures.
 var fixtureCasBlobs = map[string]struct{}{}
+var fixtureCasSnapshotOK bool
 var fixtureCasOnce sync.Once
 
 func GlobalBeforeEach() {
@@ -98,6 +99,7 @@ func GlobalBeforeEach() {
 		for _, blob := range blobs {
 			fixtureCasBlobs[blob.Name()] = struct{}{}
 		}
+		fixtureCasSnapshotOK = true
 	})
 	metrics.CleanupMetrics()
 	cache := cache2.GetCache()
@@ -130,9 +132,10 @@ func GlobalAfterEach(t *testing.T) {
 			}
 		}
 		// The fixture cas dir is checked in (the CAS-mode fixtures reference its
-		// blobs), so only blobs a test wrote on top of it are removed.
+		// blobs), so only blobs a test wrote on top of it are removed. Without a
+		// snapshot the filter would treat every checked-in blob as test-written.
 		fixtureCas := filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas")
-		if blobs, err := os.ReadDir(fixtureCas); err == nil {
+		if blobs, err := os.ReadDir(fixtureCas); err == nil && fixtureCasSnapshotOK {
 			for _, blob := range blobs {
 				if _, isFixture := fixtureCasBlobs[blob.Name()]; !isFixture {
 					if err := os.Remove(filepath.Join(fixtureCas, blob.Name())); err != nil {
@@ -484,11 +487,15 @@ func ComputeUploadRequestsInput(dirPath string, platform types.Platform) handler
 		item("expoConfig.json", "json", services.FileRoleConfig),
 	}
 	platformMetadata, err := metadataObject.FileMetadata.PlatformMetadata(platform)
-	if err == nil && platformMetadata.Bundle != "" {
-		files = append(files, item(platformMetadata.Bundle, "hbc", services.FileRoleLaunch))
-		for _, asset := range platformMetadata.Assets {
-			files = append(files, item(asset.Path, asset.Ext, services.FileRoleAsset))
-		}
+	if err != nil {
+		panic(err)
+	}
+	if platformMetadata.Bundle == "" {
+		panic("no bundle declared for platform " + string(platform) + " in " + dirPath)
+	}
+	files = append(files, item(platformMetadata.Bundle, "hbc", services.FileRoleLaunch))
+	for _, asset := range platformMetadata.Assets {
+		files = append(files, item(asset.Path, asset.Ext, services.FileRoleAsset))
 	}
 	return handlers.RequestUploadURLsRequest{Files: files}
 }

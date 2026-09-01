@@ -70,8 +70,10 @@ type fakeUpdateRepo struct {
 func (r *fakeUpdateRepo) setUUID(appId, branchName, updateId, updateUUID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if row := r.findRowLocked(appId, branchName, updateId); row != nil {
-		row.updateUUID = updateUUID
+	for _, row := range r.rows {
+		if row.update.AppId == appId && row.update.Branch == branchName && row.update.UpdateId == updateId {
+			row.updateUUID = updateUUID
+		}
 	}
 }
 
@@ -81,9 +83,10 @@ func (r *fakeUpdateRepo) uuidLookups() int {
 	return r.uuidReads
 }
 
-func (r *fakeUpdateRepo) findRowLocked(appId, branchName, updateId string) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) findRowLocked(appId, branchName, runtimeVersion, updateId string) *fakeStoredUpdate {
 	for _, row := range r.rows {
-		if row.update.AppId == appId && row.update.Branch == branchName && row.update.UpdateId == updateId {
+		if row.update.AppId == appId && row.update.Branch == branchName &&
+			row.update.RuntimeVersion == runtimeVersion && row.update.UpdateId == updateId {
 			return row
 		}
 	}
@@ -131,7 +134,7 @@ func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchNam
 func (r *fakeUpdateRepo) MarkUpdateAsChecked(_ context.Context, update types.Update) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -157,10 +160,10 @@ func (r *fakeUpdateRepo) GetUpdateDetails(_ context.Context, _, _, _, _ string) 
 	return types.UpdateDetails{}, nil
 }
 
-func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, updateId string) (*types.Update, error) {
+func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(appId, branchName, updateId)
+	row := r.findRowLocked(appId, branchName, runtimeVersion, updateId)
 	if row == nil {
 		return nil, nil
 	}
@@ -168,10 +171,10 @@ func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, upda
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) GetCheckedUpdate(_ context.Context, appId, branchName, _, updateId string) (*types.Update, error) {
+func (r *fakeUpdateRepo) GetCheckedUpdate(_ context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(appId, branchName, updateId)
+	row := r.findRowLocked(appId, branchName, runtimeVersion, updateId)
 	if row == nil || !row.checked {
 		return nil, nil
 	}
@@ -203,7 +206,7 @@ func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, br
 		envelope.RolloutPercentage = &pct
 	}
 	if row.controlUpdateId != nil {
-		if control := r.findRowLocked(appId, branchName, *row.controlUpdateId); control != nil {
+		if control := r.findRowLocked(appId, branchName, runtimeVersion, *row.controlUpdateId); control != nil {
 			controlCopy := control.update
 			envelope.Control = &controlCopy
 		}
@@ -239,7 +242,7 @@ func (r *fakeUpdateRepo) HasActiveRolloutUpdate(_ context.Context, appId, branch
 func (r *fakeUpdateRepo) GetUpdateType(_ context.Context, update types.Update) (types.UpdateType, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return types.NormalUpdate, fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -249,7 +252,7 @@ func (r *fakeUpdateRepo) GetUpdateType(_ context.Context, update types.Update) (
 func (r *fakeUpdateRepo) IsUpdateValid(_ context.Context, update types.Update) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	return row != nil && row.checked, nil
 }
 
@@ -338,7 +341,7 @@ func (r *fakeUpdateRepo) GetUpdatesByPublishGroup(_ context.Context, appId, bran
 func (r *fakeUpdateRepo) RetrieveUpdateStoredMetadata(_ context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return nil, fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -348,7 +351,7 @@ func (r *fakeUpdateRepo) RetrieveUpdateStoredMetadata(_ context.Context, update 
 func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update types.Update, updateUUID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId); row != nil {
+	if row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); row != nil {
 		row.updateUUID = updateUUID
 	}
 	return nil
@@ -357,7 +360,7 @@ func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update typ
 func (r *fakeUpdateRepo) GetUpdateAssetMapping(_ context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return nil, nil
 	}
@@ -367,7 +370,7 @@ func (r *fakeUpdateRepo) GetUpdateAssetMapping(_ context.Context, update types.U
 func (r *fakeUpdateRepo) StoreUpdateAssetMapping(_ context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return fmt.Errorf("update %s not found", update.UpdateId)
 	}

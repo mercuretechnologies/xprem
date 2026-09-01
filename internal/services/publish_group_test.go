@@ -23,7 +23,7 @@ func (h *rolloutTestHarness) seedGrouped(row seedRow, publishGroup string) types
 	update := h.seed(row)
 	h.updateRepo.mu.Lock()
 	defer h.updateRepo.mu.Unlock()
-	if stored := h.updateRepo.findRowLocked(h.appId, row.branch, update.UpdateId); stored != nil {
+	if stored := h.updateRepo.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); stored != nil {
 		stored.publishGroup = &publishGroup
 	}
 	return update
