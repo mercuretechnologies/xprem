@@ -203,6 +203,63 @@ func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, up
 	}, nil
 }
 
+// UpdateUUID and AssetMapping stay nil for rollback rows.
+type ImportUpdateParams struct {
+	AppId          string
+	UpdateId       int64
+	BranchName     string
+	RuntimeVersion string
+	UpdateType     types.UpdateType
+	Platform       types.Platform
+	CommitHash     string
+	Message        string
+	CreatedAt      time.Time
+	CheckedAt      time.Time
+	UpdateUUID     *string
+	PublishGroup   *string
+	AssetMapping   *types.UpdateAssetMapping
+}
+
+// ImportUpdate inserts an already-checked row; false when the row already
+// existed and was left untouched.
+func (s *PostgresUpdateStore) ImportUpdate(ctx context.Context, params ImportUpdateParams) (bool, error) {
+	var messagePtr *string
+	if params.Message != "" {
+		messagePtr = &params.Message
+	}
+	rows, err := s.engine.Queries.ImportUpdate(ctx, pgdb.ImportUpdateParams{
+		ID:           params.UpdateId,
+		AppID:        ToPgUUID(params.AppId),
+		Name:         params.BranchName,
+		Version:      params.RuntimeVersion,
+		UpdateType:   int32(params.UpdateType),
+		Platform:     string(params.Platform),
+		CommitHash:   params.CommitHash,
+		Message:      messagePtr,
+		CheckedAt:    pgtype.Timestamptz{Time: params.CheckedAt, Valid: true},
+		UpdateUuid:   ToPgUUIDPtr(params.UpdateUUID),
+		CreatedAt:    pgtype.Timestamptz{Time: params.CreatedAt, Valid: true},
+		PublishGroup: ToPgUUIDPtr(params.PublishGroup),
+		AssetMapping: params.AssetMapping,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to import update into database: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func (s *PostgresUpdateStore) UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error) {
+	exists, err := s.engine.Queries.UpdateExistsOnBranch(ctx, pgdb.UpdateExistsOnBranchParams{
+		AppID: ToPgUUID(appId),
+		Name:  branchName,
+		ID:    updateId,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check for an existing update: %w", err)
+	}
+	return exists, nil
+}
+
 func (s *PostgresUpdateStore) GetUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
 	updateIdInt, err := strconv.ParseInt(updateId, 10, 64)
 	if err != nil {

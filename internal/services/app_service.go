@@ -46,6 +46,15 @@ func (s *AppService) SetOnAuditEvent(record auditlog.RecordFunc) {
 }
 
 func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, uuid.New(), displayName, keysConfig)
+}
+
+// Insert rejects a colliding id.
+func (s *AppService) CreateAppWithId(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, appId, displayName, keysConfig)
+}
+
+func (s *AppService) createApp(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
 	if err := validation.DisplayName("name", displayName); err != nil {
 		return "", err
 	}
@@ -72,7 +81,6 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 		// Surface as a validation error so the handler answers 400, not 500.
 		return "", validation.Errorf("keysConfig", "%v", err)
 	}
-	appId := uuid.New()
 	modeStr := string(keysConfig.Mode)
 	params := store.InsertAppParameters{
 		ID:       appId.String(),
@@ -96,9 +104,9 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 		if err != nil {
 			return "", fmt.Errorf("failed to generate application signing keys: %w", err)
 		}
-		// Sealed under the id minted above, which is also the id the row is
-		// inserted with, so the binding is checked at unseal against the row the
-		// blob was actually read from. See keyStore.AppKeyAAD.
+		// Sealed under this app id, which is also the id the row is inserted
+		// with, so the binding is checked at unseal against the row the blob
+		// was actually read from. See keyStore.AppKeyAAD.
 		sealedPublicKey, err := crypto.SealAESGCM([]byte(pubPEM), masterKeyBytes, keyStore.AppKeyAAD(appId.String(), true))
 		if err != nil {
 			return "", fmt.Errorf("failed to seal public key: %w", err)

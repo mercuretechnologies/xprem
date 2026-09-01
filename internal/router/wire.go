@@ -22,8 +22,10 @@ import (
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/migrations"
+	"xprem/internal/expoimport"
 	"xprem/internal/handlers"
 	dashhandlers "xprem/internal/handlers/dashboard"
+	"xprem/internal/jobs"
 	"xprem/internal/mcp"
 	"xprem/internal/mcptools"
 	"xprem/internal/oauth"
@@ -43,6 +45,7 @@ type AppContainer struct {
 	ApiKeyAccessService         *apikeyrestrictions.ApiKeyAccessService
 	AppHandler                  *dashhandlers.AppHandler
 	AppRepo                     services.AppRepository
+	ExpoImportHandler           *dashhandlers.ExpoImportHandler
 	BranchHandler               *dashhandlers.BranchHandler
 	BranchListHandler           *handlers.BranchListHandler
 	ChannelHandler              *dashhandlers.ChannelHandler
@@ -88,6 +91,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var channelRepo services.ChannelRepository
 	var updateRepo services.UpdateRepository
 	var blobRepo services.BlobRepository
+	// nil in stateless mode: background jobs need the control plane.
+	var jobsClient *jobs.Client
 	// nil in stateless mode: accounts only exist on the control plane.
 	var userRepo services.UserRepository
 	var refreshTokenRepo services.RefreshTokenRepository
@@ -162,6 +167,10 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		channelRepo = store.NewPostgresChannelStore(dbEngine)
 		pgUpdateStore := store.NewPostgresUpdateStore(dbEngine)
 		updateRepo = pgUpdateStore
+		jobsClient, err = jobs.NewClient(dbEngine)
+		if err != nil {
+			log.Fatalf("Job system initialization failed: %v", err)
+		}
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
 
 		// Resolved even when telemetry is off: licensing needs the instance id.
@@ -270,6 +279,14 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	branchService.SetOnAuditEvent(auditService.Record)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
+	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
+	if jobsClient != nil {
+		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
+		if err := jobsClient.Start(ctx); err != nil {
+			log.Fatalf("Job system startup failed: %v", err)
+		}
+		addCleanup(jobsClient.Stop)
+	}
 	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
 	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules())
 	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket)
@@ -330,6 +347,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		BranchProtectionHandler:     branchprotection.NewHandler(branchProtectionService),
 		AppHandler:                  dashhandlers.NewAppHandler(appService, visibleApps),
 		AppRepo:                     appRepo,
+		ExpoImportHandler:           dashhandlers.NewExpoImportHandler(expoImportService),
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
 		BranchListHandler:           handlers.NewBranchListHandler(channelService),
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),

@@ -1,5 +1,5 @@
 # Start with the official Golang base image
-FROM golang:1.25-alpine
+FROM golang:1.26-alpine
 
 # Install necessary packages
 RUN apk add --no-cache git bash curl unzip entr

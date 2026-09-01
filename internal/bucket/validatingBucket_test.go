@@ -240,6 +240,16 @@ func TestValidatingBucket_UploadFileIntoUpdate_RejectsTraversalInFileName(t *tes
 	assert.False(t, stub.called)
 }
 
+func TestValidatingBucket_UploadFileIntoUpdate_RejectsReservedBranch(t *testing.T) {
+	stub := &stubBucket{}
+	v := &validatingBucket{Inner: stub}
+	update := validUpdate()
+	update.Branch = casDir
+	err := v.UploadFileIntoUpdate(update, "metadata.json", bytes.NewReader(nil))
+	assert.Error(t, err)
+	assert.False(t, stub.called, "an update folder under cas/ must never reach the backend")
+}
+
 func TestValidatingBucket_CopyFileIntoUpdate_RejectsTraversalInFileName(t *testing.T) {
 	stub := &stubBucket{}
 	v := &validatingBucket{Inner: stub}

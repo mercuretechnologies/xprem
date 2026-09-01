@@ -56,12 +56,21 @@ func NewBranchService(branchRepo BranchRepository, channelRepo ChannelRepository
 	}
 }
 
-func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchName string) (int64, error) {
+// ValidateBranchName is the one rule for a branch name: a safe path segment
+// that does not shadow the bucket's reserved directories.
+func ValidateBranchName(branchName string) error {
 	if err := validation.Name("branchName", branchName); err != nil {
-		return 0, err
+		return err
 	}
 	if bucket.ReservedBranchName(branchName) {
-		return 0, validation.Errorf("branchName", "%q is reserved", branchName)
+		return validation.Errorf("branchName", "%q is reserved", branchName)
+	}
+	return nil
+}
+
+func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchName string) (int64, error) {
+	if err := ValidateBranchName(branchName); err != nil {
+		return 0, err
 	}
 	branchId, err := s.branchRepo.InsertBranch(ctx, appId, branchName)
 	if err != nil {
@@ -201,11 +210,8 @@ func (s *BranchService) UpdateChannelBranchMapping(ctx context.Context, appId st
 }
 
 func (s *BranchService) UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error {
-	if err := validation.Name("branchName", branchName); err != nil {
+	if err := ValidateBranchName(branchName); err != nil {
 		return err
-	}
-	if bucket.ReservedBranchName(branchName) {
-		return validation.Errorf("branchName", "%q is reserved", branchName)
 	}
 	return s.branchRepo.UpsertBranchAndRuntimeVersion(ctx, appId, branchName, runtimeVersion)
 }

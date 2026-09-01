@@ -379,6 +379,14 @@ func (s *BucketUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId s
 	return nil, ErrNotSupportedInStatelessMode
 }
 
+func (s *BucketUpdateStore) ImportUpdate(ctx context.Context, params ImportUpdateParams) (bool, error) {
+	return false, ErrNotSupportedInStatelessMode
+}
+
+func (s *BucketUpdateStore) UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error) {
+	return false, ErrNotSupportedInStatelessMode
+}
+
 func (s *BucketUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appId string, branchName string, runtimeVersion string, publishGroup string) ([]types.PublishGroupMember, error) {
 	return nil, ErrNotSupportedInStatelessMode
 }

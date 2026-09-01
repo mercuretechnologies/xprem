@@ -23,7 +23,7 @@ func NewDashboardCORSMiddleware() mux.MiddlewareFunc {
 				w.Header().Add("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Use-Cli-Auth")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Use-Cli-Auth, X-Expo-Access-Token")
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

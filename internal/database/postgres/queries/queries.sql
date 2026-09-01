@@ -804,6 +804,47 @@ ON CONFLICT (branch_id, id) DO UPDATE SET
     checked_at = EXCLUDED.checked_at,
     update_uuid = EXCLUDED.update_uuid,
     created_at = EXCLUDED.created_at;
+
+-- name: ImportUpdate :execrows
+INSERT INTO updates (
+    id,
+    branch_id,
+    runtime_version_id,
+    update_type,
+    platform,
+    commit_hash,
+    message,
+    checked_at,
+    update_uuid,
+    created_at,
+    publish_group,
+    asset_mapping
+) VALUES (
+    $1,
+    (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
+    (SELECT id FROM runtime_versions rv WHERE rv.app_id = $2 AND rv.version = $4),
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
+)
+ON CONFLICT (branch_id, id) DO NOTHING;
+
+-- name: UpdateExistsOnBranch :one
+SELECT EXISTS (
+    SELECT 1
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND b.name = $2
+      AND u.id = $3
+);
+
 -- name: GetEnterpriseLicense :one
 SELECT * FROM enterprise_license
 WHERE singleton;

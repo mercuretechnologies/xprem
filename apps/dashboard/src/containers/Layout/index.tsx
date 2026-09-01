@@ -1,4 +1,5 @@
 import { AppSidebar } from '@/components/app-sidebar';
+import { ExpoImportBanner } from '@/components/expo-import-banner';
 import { LicenseGraceBanner } from '@/ee/components/LicenseGraceBanner';
 import { XpremMark } from '@/components/xprem-mark';
 import { useEffect, useState } from 'react';
@@ -35,12 +36,11 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
         <AppSidebar onOpenCommandPalette={openCommandPalette} />
         <main className="min-w-0 flex-1">
           <LicenseGraceBanner />
+          <ExpoImportBanner />
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/80 bg-background/95 px-4 backdrop-blur lg:hidden">
             <div className="flex items-center gap-2.5">
               <XpremMark className="h-8 w-8 rounded-lg" />
-              <span className="font-display text-sm font-semibold text-foreground">
-                xprem
-              </span>
+              <span className="font-display text-sm font-semibold text-foreground">xprem</span>
             </div>
             <Button
               variant="ghost"

@@ -5,7 +5,7 @@ RUN npm ci
 COPY apps/dashboard ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG TARGETARCH
 # Stamped into the binary because every cache key embeds version.Version: without
 # this the released image reports "development" forever, the keys never rotate,

@@ -106,6 +106,64 @@ export type CreateAppPayload = {
   keysConfig: KeysConfig;
 };
 
+export type ExpoImportableApp = {
+  id: string;
+  name: string;
+  fullName: string;
+};
+
+export type ExpoAccountApps = {
+  accountId: string;
+  accountName: string;
+  apps: ExpoImportableApp[];
+};
+
+export type ExpoImportPayload = {
+  expoAppId: string;
+  keysConfig: KeysConfig;
+  // Newest EAS update groups to also copy in a background job; omit for none.
+  historyLimit?: number;
+};
+
+export type ExpoImportResult = {
+  appId: string;
+  name: string;
+  branchCount: number;
+  channelCount: number;
+  skipped?: string[];
+  warnings?: string[];
+  historyJobId?: string;
+};
+
+export type ExpoImportPlanItem = {
+  name: string;
+  // Channels only: the branch the channel will map to.
+  mappedBranch?: string;
+  skipReason?: string;
+  // Set when the entry will be created with a caveat.
+  warning?: string;
+};
+
+export type ExpoImportPlan = {
+  appId: string;
+  name: string;
+  expoName: string;
+  // Set when the import cannot run at all.
+  conflict?: string;
+  branches: ExpoImportPlanItem[];
+  channels: ExpoImportPlanItem[];
+};
+
+export type ExpoHistoryJobStatus = {
+  state: 'running' | 'done' | 'failed' | 'canceled';
+  total: number;
+  processed: number;
+  imported: number;
+  skipped?: string[];
+  error?: string;
+  cancelRequested: boolean;
+};
+
 export type BranchUpdateState = {
   runtimeVersion: string;
   commitHash: string;
@@ -1223,6 +1281,49 @@ export class ApiClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    });
+  }
+
+  // The Expo token rides in a header, never in a URL where proxies and access logs keep it.
+  public async listExpoImportApps(accessToken: string) {
+    return this.request<ExpoAccountApps[]>(`/api/expo-import/apps`, {
+      method: 'GET',
+      headers: { 'X-Expo-Access-Token': accessToken },
+    });
+  }
+
+  public async previewExpoImport(accessToken: string, expoAppId: string) {
+    return this.request<ExpoImportPlan>(
+      `/api/expo-import/preview?expoAppId=${encodeURIComponent(expoAppId)}`,
+      { method: 'GET', headers: { 'X-Expo-Access-Token': accessToken } }
+    );
+  }
+
+  public async importExpoApp(accessToken: string, payload: ExpoImportPayload) {
+    return this.request<ExpoImportResult>(`/api/expo-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Expo-Access-Token': accessToken },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async getExpoImportJob(jobId: string) {
+    return this.request<ExpoHistoryJobStatus>(
+      `/api/expo-import/jobs/${encodeURIComponent(jobId)}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getExpoImportJobForApp(appId: string) {
+    return this.request<{ jobId: string | null; status: ExpoHistoryJobStatus | null }>(
+      `/api/expo-import/apps/${encodeURIComponent(appId)}/job`,
+      { method: 'GET' }
+    );
+  }
+
+  public async cancelExpoImportJob(jobId: string) {
+    return this.request<void>(`/api/expo-import/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
     });
   }
 

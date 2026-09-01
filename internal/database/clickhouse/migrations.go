@@ -15,11 +15,6 @@ import (
 //go:embed migrations/*.sql
 var embedMigrations embed.FS
 
-// Arbitrary app-wide id for the Postgres advisory lock that serializes
-// ClickHouse migrators. Distinct from the Postgres schema migration lock
-// (823672941) and the pgtest package lock (823672942).
-const migrationAdvisoryLockID = 823672943
-
 // RunDBMigrations applies the ClickHouse schema. ClickHouse has no advisory
 // locks, so cross-replica serialization borrows a Postgres one (see
 // postgres.AcquireMigrationLock): the control plane is always configured
@@ -33,7 +28,7 @@ const migrationAdvisoryLockID = 823672943
 // clobbering them here would break any later (or test-parallel) Postgres
 // migration run.
 func RunDBMigrations(dsn string, controlPlaneDBURL string) {
-	release := postgres.AcquireMigrationLock(controlPlaneDBURL, migrationAdvisoryLockID)
+	release := postgres.AcquireMigrationLock(controlPlaneDBURL, postgres.ClickHouseMigrationLockID)
 	defer release()
 
 	db, err := sql.Open("clickhouse", dsn)
