@@ -18,7 +18,7 @@ func TestExportedPayloadCacheKeysEmbedReleaseVersion(t *testing.T) {
 	keys := map[string]string{
 		"lastUpdate":       update.ComputeLastUpdateCacheKey("app", "branch", "rt", "ios"),
 		"metadata":         update.ComputeMetadataCacheKey("app", "branch", "rt", "1"),
-		"updateManifest":   update.ComputeUpdateManifestCacheKey("app", "branch", "rt", "1", "ios"),
+		"manifestResponse": update.ComputeManifestResponseCacheKey("app", "branch", "rt", "1", "ios"),
 		"manifestAsset":    update.ComputeManifestAssetCacheKey("app", u, "bundle.js"),
 		"getApp":           dashboard.ComputeGetAppCacheKey("app"),
 		"getApps":          dashboard.ComputeGetAppsCacheKey(),

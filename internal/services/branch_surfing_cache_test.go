@@ -71,7 +71,7 @@ func TestBranchSurfingCacheIsInvalidatedOnWrite(t *testing.T) {
 	assert.Equal(t, 1, repo.surfingReads)
 
 	surfing["qa"] = &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}
-	invalidateBranchSurfingCache(surfingCacheAppID, "qa")
+	ForgetBranchSurfing(surfingCacheAppID, "qa")
 
 	enabledQA, _ = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
 

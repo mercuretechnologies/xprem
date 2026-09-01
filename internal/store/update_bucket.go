@@ -44,6 +44,7 @@ func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, b
 		if !s.isUpdateValid(updates[i]) {
 			continue
 		}
+		updates[i].UpdateUUID = storedMetadata.UpdateUUID
 		return &updates[i], nil
 	}
 	return nil, nil
@@ -251,27 +252,83 @@ func (s *BucketUpdateStore) GetUpdate(ctx context.Context, appId string, branchN
 	}, nil
 }
 
+func (s *BucketUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	update, err := s.GetUpdate(ctx, appId, branchName, runtimeVersion, updateId)
+	if err != nil {
+		return nil, err
+	}
+	valid, err := s.IsUpdateValid(ctx, *update)
+	if err != nil {
+		return nil, err
+	}
+	if !valid {
+		return nil, nil
+	}
+	return update, nil
+}
+
 func (s *BucketUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	return update2.RetrieveUpdateStoredMetadata(update)
 }
 
+// updateMetadataFile is the on-disk shape of update-metadata.json: the metadata
+// every mode carries, plus the asset mapping only stateless keeps here. The
+// embedded struct flattens, so the file's JSON is unchanged.
+type updateMetadataFile struct {
+	types.UpdateStoredMetadata
+	AssetMapping *types.UpdateAssetMapping `json:"assetMapping,omitempty"`
+}
+
 func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
+	return s.mutateUpdateMetadataFile(update, func(stored *updateMetadataFile) {
+		stored.UpdateUUID = updateUUID
+	})
+}
+
+func (s *BucketUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	stored, err := s.readUpdateMetadataFile(update)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	return stored.AssetMapping, nil
+}
+
+func (s *BucketUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	return s.mutateUpdateMetadataFile(update, func(stored *updateMetadataFile) {
+		stored.AssetMapping = mapping
+	})
+}
+
+func (s *BucketUpdateStore) readUpdateMetadataFile(update types.Update) (*updateMetadataFile, error) {
 	file, err := s.bucket.GetFile(update, "update-metadata.json")
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
 	}
 	defer file.Reader.Close()
-	var storedMetadata types.UpdateStoredMetadata
-	err = json.NewDecoder(file.Reader).Decode(&storedMetadata)
+	var stored updateMetadataFile
+	if err := json.NewDecoder(file.Reader).Decode(&stored); err != nil {
+		return nil, err
+	}
+	return &stored, nil
+}
+
+func (s *BucketUpdateStore) mutateUpdateMetadataFile(update types.Update, apply func(*updateMetadataFile)) error {
+	stored, err := s.readUpdateMetadataFile(update)
 	if err != nil {
 		return err
 	}
-	storedMetadata.UpdateUUID = updateUUID
-	updatedMetadata, err := json.Marshal(storedMetadata)
+	if stored == nil {
+		return fmt.Errorf("update-metadata.json missing for update %s", update.UpdateId)
+	}
+	apply(stored)
+	updated, err := json.Marshal(stored)
 	if err != nil {
 		return err
 	}
-	return s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(updatedMetadata))
+	return s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(updated))
 }
 
 // CreateRollback writes the metadata file and the "rollback" marker file;

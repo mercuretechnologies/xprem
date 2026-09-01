@@ -13,6 +13,7 @@ import (
 	"xprem/config"
 	"xprem/internal/assets"
 	"xprem/internal/branch"
+	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	cdn2 "xprem/internal/cdn"
 	"xprem/internal/crypto"
@@ -50,7 +51,7 @@ type ManifestRequestParams struct {
 	SurfBlockTokens string
 }
 
-type ManifestResult struct {
+type UpdateDecision struct {
 	Update     *types.Update
 	BranchName string
 	UpdateType types.UpdateType
@@ -80,6 +81,11 @@ type AssetResolutionParams struct {
 	// RequestedUpdateID is the Expo-Requested-Update-ID header: the UUID of the
 	// update the client is downloading.
 	RequestedUpdateID string
+	// Hash and Extension are the content-addressed form of an asset URL, baked
+	// into the manifests of updates whose files live in cas/. The hash is the
+	// whole address: no branch, runtime version or update pins it.
+	Hash      string
+	Extension string
 }
 
 type ExpoAssetError struct {
@@ -109,16 +115,12 @@ func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository
 	}
 }
 
-func createMultipartResponse(headers map[string][]string, jsonContent interface{}) (*multipart.Writer, *bytes.Buffer, error) {
+func createMultipartResponse(headers map[string][]string, contentJSON []byte) (*multipart.Writer, *bytes.Buffer, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	field, err := writer.CreatePart(headers)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error creating multipart field: %w", err)
-	}
-	contentJSON, err := json.Marshal(jsonContent)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error marshaling JSON: %w", err)
 	}
 	if _, err := field.Write(contentJSON); err != nil {
 		return nil, nil, fmt.Errorf("error writing JSON content: %w", err)
@@ -126,7 +128,9 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 	return writer, &buf, nil
 }
 
-func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId string, content interface{}, expectSignatureHeader string) (string, error) {
+// signContentBytes signs the exact bytes the response body carries, so the
+// signature can never drift from what is served.
+func (s *ExpoProtocolService) signContentBytes(ctx context.Context, appId string, contentJSON []byte, expectSignatureHeader string) (string, error) {
 	if expectSignatureHeader == "" {
 		return "", nil
 	}
@@ -135,10 +139,6 @@ func (s *ExpoProtocolService) signDirectiveOrManifest(ctx context.Context, appId
 		return "", fmt.Errorf("failed to fetch app config for app ID '%s': %w", appId, err)
 	}
 	privateKey := keyStore.GetPrivateExpoKey(appConfig)
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return "", fmt.Errorf("error stringifying content: %w", err)
-	}
 	// The key fingerprint is part of the cache key so a key rotation misses
 	// the cache instead of serving a signature made with the old key.
 	keyFingerprint, err := crypto.CreateHash([]byte(privateKey), "sha256", "hex")
@@ -179,37 +179,61 @@ func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.B
 }
 
 func (s *ExpoProtocolService) PutUpdateInResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, lastUpdate types.Update, refusedBranch string) {
-	metadata, err := update2.GetMetadata(lastUpdate)
-	if err != nil {
-		log.Printf("[RequestID: %s] Error getting metadata: %v", params.RequestID, err)
-		http.Error(w, "Error getting metadata", http.StatusInternalServerError)
-		return
-	}
-
-	if params.CurrentUpdateID != "" && params.CurrentUpdateID == crypto.ConvertSHA256HashToUUID(metadata.ID) && params.ProtocolVersion == 1 {
+	// Envelope UUID first: the most common poll (device already up to date)
+	// answers without reading the composed manifest. Empty for legacy rows
+	// without a stored UUID; the entry comparison below still covers those.
+	if params.CurrentUpdateID != "" && params.ProtocolVersion == 1 && lastUpdate.UpdateUUID != "" && params.CurrentUpdateID == lastUpdate.UpdateUUID {
 		s.PutNoUpdateAvailableInResponse(ctx, w, params)
 		return
 	}
-	manifest, err := update2.ComposeUpdateManifest(&metadata, lastUpdate, params.Platform)
+	entry, err := s.updateService.cachedManifestResponse(ctx, lastUpdate, params.Platform)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error composing manifest: %v", params.RequestID, err)
 		http.Error(w, "Error composing manifest", http.StatusInternalServerError)
 		return
 	}
-	// Stamped on the copy about to be served, never on the cached manifest: the
-	// cache is keyed by branch, and this is per request. Signing happens
-	// downstream, so it covers the stamp.
-	manifest.Extra.BranchSurfingRefused = refusedBranch
+	if params.CurrentUpdateID != "" && params.CurrentUpdateID == entry.UpdateUUID && params.ProtocolVersion == 1 {
+		s.PutNoUpdateAvailableInResponse(ctx, w, params)
+		return
+	}
+	contentJSON := []byte(entry.ManifestJSON)
+	if refusedBranch != "" {
+		// Per-request stamp on a copy, never on the cached bytes; the rebuilt
+		// content gets its own signature entry by construction.
+		var manifest types.UpdateManifest
+		if err := json.Unmarshal(entry.ManifestJSON, &manifest); err != nil {
+			log.Printf("[RequestID: %s] Error decoding cached manifest: %v", params.RequestID, err)
+			http.Error(w, "Error composing manifest", http.StatusInternalServerError)
+			return
+		}
+		manifest.Extra.BranchSurfingRefused = refusedBranch
+		contentJSON, err = json.Marshal(manifest)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error encoding manifest: %v", params.RequestID, err)
+			http.Error(w, "Error composing manifest", http.StatusInternalServerError)
+			return
+		}
+	}
 	if params.CurrentUpdateID != "" {
-		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, manifest.Id, "update")
+		metrics.TrackUpdateDownload(params.AppID, string(params.Platform), lastUpdate.RuntimeVersion, lastUpdate.Branch, entry.UpdateUUID, "update")
 	}
 	w.Header().Set("expo-manifest-filters", `branch="`+lastUpdate.Branch+`"`)
-	s.PutResponse(ctx, w, params, manifest, "manifest")
+	s.putRawResponse(ctx, w, params, contentJSON, "manifest")
 }
 
 func (s *ExpoProtocolService) PutResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, content interface{}, fieldName string) {
+	contentJSON, err := json.Marshal(content)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error encoding content: %v", params.RequestID, err)
+		http.Error(w, "Error encoding content", http.StatusInternalServerError)
+		return
+	}
+	s.putRawResponse(ctx, w, params, contentJSON, fieldName)
+}
+
+func (s *ExpoProtocolService) putRawResponse(ctx context.Context, w http.ResponseWriter, params ManifestRequestParams, contentJSON []byte, fieldName string) {
 	requestID := params.RequestID
-	signedHash, err := s.signDirectiveOrManifest(ctx, params.AppID, content, params.ExpectSignature)
+	signedHash, err := s.signContentBytes(ctx, params.AppID, contentJSON, params.ExpectSignature)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error signing content: %v", requestID, err)
 		http.Error(w, "Error signing content", http.StatusInternalServerError)
@@ -223,7 +247,7 @@ func (s *ExpoProtocolService) PutResponse(ctx context.Context, w http.ResponseWr
 	if signedHash != "" {
 		headers["expo-signature"] = []string{fmt.Sprintf("sig=\"%s\", keyid=\"main\"", signedHash)}
 	}
-	writer, buf, err := createMultipartResponse(headers, content)
+	writer, buf, err := createMultipartResponse(headers, contentJSON)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error creating multipart response: %v", requestID, err)
 		http.Error(w, "Error creating multipart response", http.StatusInternalServerError)
@@ -268,28 +292,23 @@ func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(ctx context.Context
 	s.PutResponse(ctx, w, params, directive, "directive")
 }
 
-func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params ManifestRequestParams) (ManifestResult, error) {
-	// [Stateless mode] Reject unknown app ids at the edge with a clean 404, otherwise
-	// downstream services.FetchExpoChannelMapping → GetExpoAccessToken
-	// returns an empty token for the unknown id and we end up POSTing to
-	// api.expo.dev with `Bearer ` (no token), surfacing the upstream 401
-	// as an opaque 500 to the client.
+func (s *ExpoProtocolService) ResolveUpdateForDevice(ctx context.Context, params ManifestRequestParams) (UpdateDecision, error) {
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
 	}
 
 	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", params.RequestID, err)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: fmt.Sprintf("Error fetching channel mapping: %v", err)}
 	}
 	if branchMap == nil {
 		log.Printf("[RequestID: %s] No branch mapping found for channel: %s", params.RequestID, params.ChannelName)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "No branch mapping found"}
 	}
 
-	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+	servedBranch, lastUpdate, blockedSurfResult, err := s.resolveUpdateAcrossBranches(ctx, params.RequestID, &BranchResolutionRequest{
 		AppID:           params.AppID,
 		ChannelName:     params.ChannelName,
 		ClientID:        params.ClientID,
@@ -299,12 +318,9 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 		RequestedBranch: params.XpremBranch,
 	}, params.SurfBlockTokens, params.RecentFailedUpdateIDs)
 	if err != nil {
-		return ManifestResult{}, err
+		return UpdateDecision{}, err
 	}
 
-	// Tracked AFTER resolution with the branch actually served: under a channel
-	// rollout, attributing the in-bucket cohort to the default branch would make the
-	// rollout invisible in the metrics it is meant to be judged from.
 	if params.ExpoFatalError != "" {
 		if params.CurrentUpdateID != "" {
 			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
@@ -315,7 +331,7 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	metrics.TrackActiveUser(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
 
 	if lastUpdate == nil {
-		return ManifestResult{
+		return UpdateDecision{
 			Update:      nil,
 			BranchName:  servedBranch,
 			BlockedSurf: blockedSurfResult,
@@ -324,19 +340,19 @@ func (s *ExpoProtocolService) ResolveManifestBundle(ctx context.Context, params 
 	updateType, err := s.cachedUpdateType(ctx, *lastUpdate)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error determining update type: %v", params.RequestID, err)
-		return ManifestResult{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error determining update type"}
+		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error determining update type"}
 	}
 
-	return ManifestResult{Update: lastUpdate, BranchName: servedBranch, UpdateType: updateType, BlockedSurf: blockedSurfResult}, nil
+	return UpdateDecision{Update: lastUpdate, BranchName: servedBranch, UpdateType: updateType, BlockedSurf: blockedSurfResult}, nil
 }
 
-// resolveUpdateForDevice runs the branch rule chain, then serves the first candidate
+// resolveUpdateAcrossBranches runs the branch rule chain, then serves the first candidate
 // branch that resolves for the device. A branch "resolves" as soon as it has any
 // checked update for (runtime version, platform), even when the per-device answer is
 // nil (out-of-bucket with no control => noUpdateAvailable, deliberately no fallback to
 // the next candidate). Shared by manifest and asset resolution so the two paths take
 // the same rollout decision for a device.
-func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, requestID string, req *BranchResolutionRequest, surfBlockTokens string, failedUpdateIDsRaw string) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
+func (s *ExpoProtocolService) resolveUpdateAcrossBranches(ctx context.Context, requestID string, req *BranchResolutionRequest, surfBlockTokens string, failedUpdateIDsRaw string) (servedBranchName string, lastUpdate *types.Update, blocked *BlockedSurf, err error) {
 	if req.RequestedBranch != "" {
 		enabled, pattern := s.branchSurfingEnabled(ctx, req.AppID, req.ChannelName)
 		req.Surfing = types.BranchSurfing{Enabled: enabled, Pattern: pattern}
@@ -346,10 +362,6 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 		log.Printf("[RequestID: %s] Error resolving branch candidates: %v", requestID, err)
 		return "", nil, nil, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error resolving branch"}
 	}
-	// Gated on the rule having honoured the surf, not on the header being present:
-	// a declined request is a plain poll, and refusing one would take a device off
-	// the branch its own channel maps to. It also keeps the lookups below off the
-	// steady-state path, and off every deployment where surfing is disabled.
 	surfing := HonoursSurf(req)
 	var blocks surfBlockSet
 	if surfing && (surfBlockTokens != "" || failedUpdateIDsRaw != "") {
@@ -377,13 +389,56 @@ func (s *ExpoProtocolService) resolveUpdateForDevice(ctx context.Context, reques
 	return servedBranch, nil, blocked, nil
 }
 
-func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
-	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
-	// rather than letting them flow into FetchExpoChannelMapping and
-	// surfacing the upstream 401 as a 500.
+// resolveBlobAsset serves an asset by its content hash. Nothing pins it to a
+// branch or an update: the hash is unguessable and only ever reaches a client
+// that already holds the manifest naming it. The app id still scopes the read,
+// so one tenant cannot address another's blobs.
+func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
+	if err := bucket.ValidateBlobHash(params.Hash); err != nil {
+		log.Printf("[RequestID: %s] %v", params.RequestID, err)
+		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
+	}
+
+	if cdn := cdn2.GetCDN(); cdn != nil {
+		redirectURL, err := cdn.ComputeRedirectionURLForBlob(params.AppID, params.Hash)
+		if err != nil {
+			log.Printf("[RequestID: %s] Error signing blob url: %v", params.RequestID, err)
+			return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+		}
+		return &ExpoAssetResult{RedirectToURL: redirectURL}, nil
+	}
+
+	blob, err := bucket.GetBucket().GetBlob(ctx, params.AppID, params.Hash)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading blob: %v", params.RequestID, err)
+		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+	}
+	if blob == nil {
+		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusNotFound, Message: "Asset not found"}
+	}
+	body, err := bucket.ConvertReadCloserToBytes(blob.Reader)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading blob body: %v", params.RequestID, err)
+		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
+	}
+	return &ExpoAssetResult{
+		Body: body,
+		// "bundle" is the extension shapeAsset gives a launch asset, so the one
+		// mime table answers for both kinds.
+		ContentType: update2.AssetContentType(params.Extension, params.Extension == "bundle"),
+		Headers:     assets.ExpoProtocolHeaders(),
+		StatusCode:  http.StatusOK,
+	}, nil
+}
+
+func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return &ExpoAssetResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
+	}
+
+	if params.Hash != "" {
+		return s.resolveBlobAsset(ctx, params)
 	}
 
 	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
@@ -467,18 +522,11 @@ func (s *ExpoProtocolService) ResolveAssetBundle(ctx context.Context, params Ass
 func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params AssetResolutionParams, branchMap *types.ChannelResolution) (string, *types.Update, error) {
 	if config.IsDBMode() {
 		if params.UpdateID != "" && params.Branch != "" && s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, params.Branch, branchMap) {
-			pinnedUpdate, err := s.updateRepo.GetUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
+			pinnedUpdate, err := s.updateRepo.GetCheckedUpdate(ctx, params.AppID, params.Branch, params.RuntimeVersion, params.UpdateID)
 			if err != nil {
 				log.Printf("[RequestID: %s] Ignoring invalid updateId param %q: %v", params.RequestID, params.UpdateID, err)
 			} else if pinnedUpdate != nil {
-				valid, err := s.updateRepo.IsUpdateValid(ctx, *pinnedUpdate)
-				if err != nil {
-					log.Printf("[RequestID: %s] Error checking update validity: %v", params.RequestID, err)
-					return "", nil, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error getting latest update"}
-				}
-				if valid {
-					return params.Branch, pinnedUpdate, nil
-				}
+				return params.Branch, pinnedUpdate, nil
 			}
 		}
 		if params.RequestedUpdateID != "" {
@@ -493,7 +541,7 @@ func (s *ExpoProtocolService) resolveAssetUpdate(ctx context.Context, params Ass
 			}
 		}
 	}
-	branchName, lastUpdate, _, err := s.resolveUpdateForDevice(ctx, params.RequestID, &BranchResolutionRequest{
+	branchName, lastUpdate, _, err := s.resolveUpdateAcrossBranches(ctx, params.RequestID, &BranchResolutionRequest{
 		AppID:           params.AppID,
 		ChannelName:     params.ChannelName,
 		ClientID:        params.ClientID,

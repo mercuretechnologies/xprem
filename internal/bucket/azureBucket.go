@@ -188,6 +188,66 @@ func (b *AzureBucket) RequestUploadUrlForFileUpdate(appId string, branch string,
 	return url, nil
 }
 
+func (b *AzureBucket) blobKey(appId, hash string) string {
+	return prefixedBlobKey(b.KeyPrefix, appId, hash)
+}
+
+func (b *AzureBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	cc, err := b.containerClient()
+	if err != nil {
+		return false, err
+	}
+	_, err = cc.NewBlobClient(b.blobKey(appId, hash)).GetProperties(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("GetProperties error: %w", err)
+	}
+	return true, nil
+}
+
+func (b *AzureBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	cc, err := b.containerClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cc.NewBlobClient(b.blobKey(appId, hash)).DownloadStream(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("DownloadStream error: %w", err)
+	}
+	var created time.Time
+	if resp.LastModified != nil {
+		created = *resp.LastModified
+	}
+	return &types.BucketFile{Reader: resp.Body, CreatedAt: created}, nil
+}
+
+func (b *AzureBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	cc, err := b.containerClient()
+	if err != nil {
+		return err
+	}
+	if _, err := cc.NewBlockBlobClient(b.blobKey(appId, hash)).UploadStream(ctx, body, nil); err != nil {
+		return fmt.Errorf("error uploading blob: %w", err)
+	}
+	return nil
+}
+
+func (b *AzureBucket) RequestBlobUploadURL(appId, hash, _ string) (string, error) {
+	if b.ContainerName == "" {
+		return "", errors.New("ContainerName not set")
+	}
+	url, err := azure.SignBlobSAS(b.ContainerName, b.blobKey(appId, hash), sas.BlobPermissions{Create: true, Write: true}, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("error generating SAS URL: %w", err)
+	}
+	return url, nil
+}
+
 func (b *AzureBucket) UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error {
 	ctx := context.Background()
 	cc, err := b.containerClient()

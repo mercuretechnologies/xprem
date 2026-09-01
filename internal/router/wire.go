@@ -35,6 +35,7 @@ import (
 
 type AppContainer struct {
 	AuthHandler                 *dashhandlers.AuthHandler
+	BlobService                 *services.BlobService
 	DashboardAuthService        *services.DashboardAuthService
 	CliAuthService              *services.CliAuthService
 	ApiKeyHandler               *dashhandlers.ApiKeyHandler
@@ -88,6 +89,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var branchRepo services.BranchRepository
 	var channelRepo services.ChannelRepository
 	var updateRepo services.UpdateRepository
+	var blobRepo services.BlobRepository
 	// nil in stateless mode: background jobs need the control plane.
 	var jobsClient *jobs.Client
 	// nil in stateless mode: accounts only exist on the control plane.
@@ -148,6 +150,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		postgres.RunDBMigrations(dbUrl)
 
 		authRepo = store.NewPostgresAuthStore(dbEngine)
+		blobRepo = store.NewPostgresBlobStore(dbEngine)
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
@@ -213,6 +216,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		branchRepo = store.NewBucketBranchStore(resolvedBucket)
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
+		blobRepo = store.NewBucketBlobStore(resolvedBucket)
 		if telemetryEnabled {
 			instanceId, instanceIdErr = store.NewBucketServerInstanceStore(resolvedBucket, cache.GetCache()).GetOrCreateInstanceID(ctx)
 			if instanceIdErr != nil {
@@ -335,6 +339,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService, rateLimiter),
 		DashboardAuthService:        dashboardAuthService,
 		CliAuthService:              cliAuthService,
+		BlobService:                 services.NewBlobService(blobRepo),
 		ApiKeyHandler:               dashhandlers.NewApiKeyHandler(cliAuthService),
 		ApiKeyAccessHandler:         apikeyrestrictions.NewApiKeyAccessHandler(apiKeyAccessService),
 		ApiKeyAccessService:         apiKeyAccessService,

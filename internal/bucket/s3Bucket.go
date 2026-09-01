@@ -282,6 +282,98 @@ func (b *S3Bucket) RequestUploadUrlForFileUpdate(appId string, branch string, ru
 	return presignResult.URL, nil
 }
 
+func (b *S3Bucket) blobKey(appId, hash string) string {
+	return prefixedBlobKey(b.KeyPrefix, appId, hash)
+}
+
+func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	if b.BucketName == "" {
+		return false, errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return false, err
+	}
+	_, err = s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.blobKey(appId, hash)),
+	})
+	if err != nil {
+		var notFound *s3types.NotFound
+		var noSuchKey *s3types.NoSuchKey
+		if errors.As(err, &notFound) || errors.As(err, &noSuchKey) {
+			return false, nil
+		}
+		return false, fmt.Errorf("HeadObject error: %w", err)
+	}
+	return true, nil
+}
+
+func (b *S3Bucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	if b.BucketName == "" {
+		return nil, errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.blobKey(appId, hash)),
+	})
+	if err != nil {
+		var noSuchKey *s3types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GetObject error: %w", err)
+	}
+	return &types.BucketFile{
+		Reader:    resp.Body,
+		CreatedAt: *resp.LastModified,
+	}, nil
+}
+
+func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	if b.BucketName == "" {
+		return errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return err
+	}
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.blobKey(appId, hash)),
+		Body:   body,
+	})
+	if err != nil {
+		return fmt.Errorf("PutObject error: %w", err)
+	}
+	return nil
+}
+
+func (b *S3Bucket) RequestBlobUploadURL(appId, hash, _ string) (string, error) {
+	if b.BucketName == "" {
+		return "", errors.New("BucketName not set")
+	}
+	s3Client, err := aws.GetS3Client()
+	if err != nil {
+		return "", fmt.Errorf("error getting S3 client: %w", err)
+	}
+	presignClient := s3.NewPresignClient(s3Client)
+	presignResult, err := presignClient.PresignPutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: awssdk.String(b.BucketName),
+		Key:    awssdk.String(b.blobKey(appId, hash)),
+	}, func(opt *s3.PresignOptions) {
+		opt.Expires = 15 * time.Minute
+	})
+	if err != nil {
+		return "", fmt.Errorf("error presigning URL: %w", err)
+	}
+	return presignResult.URL, nil
+}
+
 func (b *S3Bucket) UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error {
 	if b.BucketName == "" {
 		return errors.New("BucketName not set")

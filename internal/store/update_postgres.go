@@ -282,6 +282,32 @@ func (s *PostgresUpdateStore) GetUpdate(ctx context.Context, appId string, branc
 	}, nil
 }
 
+// GetCheckedUpdate answers in one query what GetUpdate + IsUpdateValid answer
+// in two; it sits on the per-asset-download hot path.
+func (s *PostgresUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	updateIdInt, err := strconv.ParseInt(updateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	update, err := s.GetUpdateByBranchNameAndRuntime(ctx, appId, updateIdInt, branchName, runtimeVersion)
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update by ID from database: %w", err)
+	}
+	if !update.CheckedAt.Valid {
+		return nil, nil
+	}
+	return &types.Update{
+		UpdateId:       strconv.FormatInt(update.ID, 10),
+		Branch:         update.BranchName,
+		RuntimeVersion: update.RuntimeVersion,
+		CreatedAt:      time.Duration(update.CreatedAt.Time.UnixNano()),
+		AppId:          appId,
+	}, nil
+}
+
 func (s *PostgresUpdateStore) GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error) {
 	return s.engine.Queries.GetUpdateByBranchNameAndRuntime(ctx, pgdb.GetUpdateByBranchNameAndRuntimeParams{
 		AppID:   ToPgUUID(appId),
@@ -570,6 +596,45 @@ func (s *PostgresUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, 
 	}, nil
 }
 
+func (s *PostgresUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	mapping, err := s.engine.Queries.GetUpdateAssetMapping(ctx, pgdb.GetUpdateAssetMappingParams{
+		ID:    updateIdInt,
+		AppID: ToPgUUID(update.AppId),
+		Name:  update.Branch,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update asset mapping from database: %w", err)
+	}
+	return mapping, nil
+}
+
+func (s *PostgresUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	commandTag, err := s.engine.Queries.SetUpdateAssetMapping(ctx, pgdb.SetUpdateAssetMappingParams{
+		ID:           updateIdInt,
+		AssetMapping: mapping,
+		AppID:        ToPgUUID(update.AppId),
+		Name:         update.Branch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to store update asset mapping in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return fmt.Errorf("no rows were updated when storing the asset mapping for update ID %s", update.UpdateId)
+	}
+	return nil
+}
+
 func (s *PostgresUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
 	updateIdInt, _ := strconv.ParseInt(update.UpdateId, 10, 64)
 	var uuidToStore pgtype.UUID
@@ -616,6 +681,11 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			AppId:          appId,
 		},
 	}
+	// Legacy rows without a stored UUID leave the field empty; the poll
+	// short-circuit then falls back to the composed manifest's id.
+	if row.UpdateUuid.Valid {
+		result.Update.UpdateUUID = row.UpdateUuid.String()
+	}
 	if row.RolloutPercentage != nil {
 		pct := int(*row.RolloutPercentage)
 		result.RolloutPercentage = &pct
@@ -627,6 +697,9 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			RuntimeVersion: runtimeVersion,
 			CreatedAt:      time.Duration(row.ControlCreatedAt.Time.UnixNano()),
 			AppId:          appId,
+		}
+		if row.ControlUpdateUuid.Valid {
+			result.Control.UpdateUUID = row.ControlUpdateUuid.String()
 		}
 	}
 	return result, nil

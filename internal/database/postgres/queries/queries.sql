@@ -368,6 +368,22 @@ WHERE updates.id = $1 AND branch_id = (
       AND name = $4
 );
 
+-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+);
+
+-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
+
 -- name: GetLatestUpdate :one
 SELECT 
     u.id,
@@ -395,7 +411,7 @@ LIMIT 1;
 -- update id is only unique per branch, and branch names are only unique per app.
 -- Without the app filter the same (id, branch, runtime) triple matches another
 -- tenant's row.
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -1007,7 +1023,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id
@@ -2468,3 +2485,21 @@ INSERT INTO server_instance (id)
 VALUES ($1)
 ON CONFLICT (singleton) DO NOTHING
 RETURNING id;
+
+-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2;
+
+-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY(sqlc.arg('hashes')::text[]);
+
+-- name: InsertBlob :one
+-- ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+-- the caller treats that as "already in cas/".
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at;

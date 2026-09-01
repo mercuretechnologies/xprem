@@ -238,6 +238,70 @@ func (b *GCSBucket) RequestUploadUrlForFileUpdate(appId string, branch string, r
 	return url, nil
 }
 
+func (b *GCSBucket) blobKey(appId, hash string) string {
+	return prefixedBlobKey(b.KeyPrefix, appId, hash)
+}
+
+func (b *GCSBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	bh, err := b.bucketHandle(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, err = bh.Object(b.blobKey(appId, hash)).Attrs(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("Attrs error: %w", err)
+	}
+	return true, nil
+}
+
+func (b *GCSBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	bh, err := b.bucketHandle(ctx)
+	if err != nil {
+		return nil, err
+	}
+	obj := bh.Object(b.blobKey(appId, hash))
+	r, err := obj.NewReader(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GetObject error: %w", err)
+	}
+	attrs, _ := obj.Attrs(ctx)
+	var created time.Time
+	if attrs != nil {
+		created = attrs.Updated
+	}
+	return &types.BucketFile{Reader: r, CreatedAt: created}, nil
+}
+
+func (b *GCSBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	bh, err := b.bucketHandle(ctx)
+	if err != nil {
+		return err
+	}
+	w := bh.Object(b.blobKey(appId, hash)).NewWriter(ctx)
+	if _, err := io.Copy(w, body); err != nil {
+		_ = w.Close()
+		return err
+	}
+	return w.Close()
+}
+
+func (b *GCSBucket) RequestBlobUploadURL(appId, hash, _ string) (string, error) {
+	if b.BucketName == "" {
+		return "", errors.New("BucketName not set")
+	}
+	url, err := gcp.SignedURL(b.BucketName, b.blobKey(appId, hash), "PUT", "", 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("error generating signed URL: %w", err)
+	}
+	return url, nil
+}
+
 func (b *GCSBucket) UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error {
 	ctx := context.Background()
 	bh, err := b.bucketHandle(ctx)

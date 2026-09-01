@@ -97,7 +97,9 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 	return validatedAsset{update: req.Update, isLaunchAsset: isLaunchAsset, assetMetadata: assetMetadata}, nil
 }
 
-func expoProtocolHeaders() map[string]string {
+// ExpoProtocolHeaders are the response headers every served asset carries,
+// blob or legacy.
+func ExpoProtocolHeaders() map[string]string {
 	return map[string]string{
 		"expo-protocol-version": "1",
 		"expo-sfv-version":      "0",
@@ -130,7 +132,7 @@ func HandleAssetsWithFile(req AssetsRequest) (AssetsResponse, error) {
 
 	contentType := update.AssetContentType(string(validated.assetMetadata.Ext), validated.isLaunchAsset)
 
-	headers := expoProtocolHeaders()
+	headers := ExpoProtocolHeaders()
 	headers["Content-Type"] = contentType
 
 	return AssetsResponse{
@@ -154,7 +156,7 @@ func HandleAssetsWithURL(req AssetsRequest, resolvedCDN cdn.CDN) (AssetsResponse
 	}
 	return AssetsResponse{
 		StatusCode: http.StatusOK,
-		Headers:    expoProtocolHeaders(),
+		Headers:    ExpoProtocolHeaders(),
 		URL:        redirectURL,
 	}, nil
 }

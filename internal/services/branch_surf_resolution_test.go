@@ -35,11 +35,11 @@ func surfParams(h *rolloutTestHarness, requested string) ManifestRequestParams {
 	}
 }
 
-func TestResolveManifestBundleServesTheSurfedBranch(t *testing.T) {
+func TestResolveUpdateForDeviceServesTheSurfedBranch(t *testing.T) {
 	h := newSurfHarness(t, &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}, nil)
 	h.seed(seedRow{branch: "pr-482", rtv: "1", platform: "ios", id: 200, checked: true})
 
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, "pr-482"))
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, "pr-482"))
 
 	require.NoError(t, err)
 	require.NotNil(t, result.Update)
@@ -47,21 +47,21 @@ func TestResolveManifestBundleServesTheSurfedBranch(t *testing.T) {
 	assert.Equal(t, "pr-482", result.Update.Branch)
 }
 
-func TestResolveManifestBundleIgnoresTheHeaderWhenSurfingIsOff(t *testing.T) {
+func TestResolveUpdateForDeviceIgnoresTheHeaderWhenSurfingIsOff(t *testing.T) {
 	h := newSurfHarness(t, &types.BranchSurfing{Enabled: false, Pattern: "*"}, nil)
 	h.seed(seedRow{branch: "pr-482", rtv: "1", platform: "ios", id: 200, checked: true})
 
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, "pr-482"))
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, "pr-482"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "staging", result.BranchName)
 }
 
-func TestResolveManifestBundleIgnoresABranchOutsideThePattern(t *testing.T) {
+func TestResolveUpdateForDeviceIgnoresABranchOutsideThePattern(t *testing.T) {
 	h := newSurfHarness(t, &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}, nil)
 	h.seed(seedRow{branch: "secret", rtv: "1", platform: "ios", id: 200, checked: true})
 
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, "secret"))
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, "secret"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "staging", result.BranchName)
@@ -71,11 +71,11 @@ func TestResolveManifestBundleIgnoresABranchOutsideThePattern(t *testing.T) {
 // runtime version falls back to it rather than stranding the device. Deliberately the
 // mapped branch and not whatever the rest of the chain would have picked: a device
 // asking for a branch has no business being drawn into a rollout it did not ask for.
-func TestResolveManifestBundleFallsBackWhenTheSurfedBranchHasNothing(t *testing.T) {
+func TestResolveUpdateForDeviceFallsBackWhenTheSurfedBranchHasNothing(t *testing.T) {
 	h := newSurfHarness(t, &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}, nil)
 	h.seed(seedRow{branch: "pr-482", rtv: "99", platform: "ios", id: 200, checked: true})
 
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, "pr-482"))
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, "pr-482"))
 
 	require.NoError(t, err)
 	require.NotNil(t, result.Update)
@@ -84,7 +84,7 @@ func TestResolveManifestBundleFallsBackWhenTheSurfedBranchHasNothing(t *testing.
 
 // End to end this time, not just the rule: an explicit surf is not re-drawn against
 // the channel rollout, even for a device the rollout would have moved.
-func TestResolveManifestBundleSurfOutranksAnActiveRollout(t *testing.T) {
+func TestResolveUpdateForDeviceSurfOutranksAnActiveRollout(t *testing.T) {
 	const salt = "surf-vs-rollout-salt"
 	h := newSurfHarness(t,
 		&types.BranchSurfing{Enabled: true, Pattern: "pr-*"},
@@ -93,12 +93,12 @@ func TestResolveManifestBundleSurfOutranksAnActiveRollout(t *testing.T) {
 	h.seed(seedRow{branch: "canary", rtv: "1", platform: "ios", id: 200, checked: true})
 	h.seed(seedRow{branch: "pr-482", rtv: "1", platform: "ios", id: 300, checked: true})
 
-	surfed, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, "pr-482"))
+	surfed, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, "pr-482"))
 	require.NoError(t, err)
 	assert.Equal(t, "pr-482", surfed.BranchName)
 
 	// Same channel, same device, no header: the rollout applies as usual.
-	plain, err := h.protocolService.ResolveManifestBundle(context.Background(), surfParams(h, ""))
+	plain, err := h.protocolService.ResolveUpdateForDevice(context.Background(), surfParams(h, ""))
 	require.NoError(t, err)
 	assert.Equal(t, "canary", plain.BranchName)
 }

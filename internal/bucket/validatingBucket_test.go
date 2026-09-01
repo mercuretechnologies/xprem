@@ -2,8 +2,10 @@ package bucket
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"xprem/internal/types"
@@ -57,6 +59,22 @@ func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); re
 func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
 func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
 func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }
+func (s *stubBucket) BlobExists(context.Context, string, string) (bool, error) {
+	s.mark()
+	return false, nil
+}
+func (s *stubBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	s.mark()
+	return nil, nil
+}
+func (s *stubBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	s.mark()
+	return "", nil
+}
 
 func validUpdate() types.Update {
 	return types.Update{AppId: "app-1", Branch: "main", RuntimeVersion: "1.0", UpdateId: "123"}
@@ -297,4 +315,28 @@ func TestValidatingBucket_ValidInputsDelegate(t *testing.T) {
 	_, err := v.GetFile(validUpdate(), "assets/image.png")
 	assert.NoError(t, err)
 	assert.True(t, stub.called)
+}
+
+// The backends list the children of {appId}/, and the cas folder is one of
+// them: without the filter the dashboard renders "cas" as a branch.
+func TestValidatingBucketGetBranchesHidesCas(t *testing.T) {
+	base := t.TempDir()
+	writeFile(t, filepath.Join(base, "app-1", "branch-a", "1.0", "100", ".check"))
+	writeFile(t, filepath.Join(base, "app-1", "cas", "some-blob-hash"))
+
+	b := &validatingBucket{Inner: &LocalBucket{BasePath: base}}
+
+	branches, err := b.GetBranches("app-1")
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"branch-a"}, branches)
+}
+
+func TestValidatingBucketRejectsTheReservedBranchName(t *testing.T) {
+	b := &validatingBucket{Inner: &stubBucket{}}
+
+	_, err := b.GetRuntimeVersions("app-1", casDir)
+	assert.ErrorContains(t, err, "reserved")
+
+	_, err = b.RequestUploadUrlForFileUpdate("app-1", casDir, "1.0", "100", "metadata.json")
+	assert.ErrorContains(t, err, "reserved")
 }

@@ -75,6 +75,21 @@ func TestGetCDNSkipsS3DirectWhenDisabled(t *testing2.T) {
 	}
 }
 
+func TestS3DirectComputeRedirectionURLForBlob(t *testing2.T) {
+	clearCDNEnv(t)
+	setS3CDNEnv(t)
+	t.Setenv("BUCKET_KEY_PREFIX", "prefix")
+	c := &S3DirectCDN{}
+	got, err := c.ComputeRedirectionURLForBlob("app-1", "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantPrefix := "https://test-bucket.s3.us-east-1.amazonaws.com/prefix/app-1/cas/LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ?"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("expected URL to start with %q, got %q", wantPrefix, got)
+	}
+}
+
 func TestS3DirectComputeRedirectionURL(t *testing2.T) {
 	clearCDNEnv(t)
 	setS3CDNEnv(t)
@@ -126,6 +141,21 @@ func TestGetCDNReturnsGenericWithCDNBaseURLOnAzure(t *testing2.T) {
 	c := GetCDN()
 	if _, ok := c.(*GenericCDN); !ok {
 		t.Fatalf("expected *GenericCDN, got %T", c)
+	}
+}
+
+func TestAzureDirectComputeRedirectionURLForBlob(t *testing2.T) {
+	clearCDNEnv(t)
+	setAzureCDNEnv(t)
+	t.Setenv("BUCKET_KEY_PREFIX", "prefix")
+	c := &AzureBlobDirectCDN{}
+	got, err := c.ComputeRedirectionURLForBlob("app-1", "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantPrefix := "https://devstoreaccount1.blob.core.windows.net/updates/prefix/app-1/cas/LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ?"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("expected URL to start with %q, got %q", wantPrefix, got)
 	}
 }
 
@@ -266,6 +296,21 @@ func TestGenericCDNComputeRedirectionURL(t *testing2.T) {
 				t.Fatalf("expected %q, got %q", tc.expected, got)
 			}
 		})
+	}
+}
+
+func TestGenericCDNComputeRedirectionURLForBlob(t *testing2.T) {
+	clearCDNEnv(t)
+	t.Setenv("CDN_BASE_URL", "https://cdn.example.com")
+	t.Setenv("BUCKET_KEY_PREFIX", "prefix")
+	c := &GenericCDN{}
+	got, err := c.ComputeRedirectionURLForBlob("test-app-id", "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "https://cdn.example.com/prefix/test-app-id/cas/LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 

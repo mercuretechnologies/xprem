@@ -173,7 +173,7 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 	})
 	if err != nil {
 		// An unknown channel, or one left unmapped, is a 404 for the caller, not a
-		// server error; match the bucket backend's (nil, nil) so ResolveManifestBundle's
+		// server error; match the bucket backend's (nil, nil) so ResolveUpdateForDevice's
 		// nil-check works in DB mode too.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
