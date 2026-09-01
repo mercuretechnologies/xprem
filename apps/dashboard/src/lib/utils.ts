@@ -26,8 +26,8 @@ export function formatTimestamp(
 }
 
 // A feed is read against now: on the day something shipped, the date says nothing that
-// "Today" does not. Older rows get a fixed dd/mm/yyyy, hand-formatted rather than
-// localised, because toLocaleDateString hands a US browser mm/dd/yyyy instead.
+// "Today" does not. Older rows get the numeric date, in whatever order the reader's
+// locale puts it.
 export function formatCompactTimestamp(
   dateString: string | null | undefined,
   showSeconds: boolean = false
@@ -35,16 +35,21 @@ export function formatCompactTimestamp(
   if (!dateString) return null;
   const d = new Date(dateString);
   if (isNaN(d.getTime())) return null;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}${
-    showSeconds ? `:${pad(d.getSeconds())}` : ''
-  }`;
+  const timeStr = d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(showSeconds && { second: '2-digit' }),
+  });
   const now = new Date();
   const isToday =
     d.getDate() === now.getDate() &&
     d.getMonth() === now.getMonth() &&
     d.getFullYear() === now.getFullYear();
-  return isToday
-    ? `Today ${time}`
-    : `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${time}`;
+  if (isToday) return `Today ${timeStr}`;
+  const dateStr = d.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  return `${dateStr} ${timeStr}`;
 }
