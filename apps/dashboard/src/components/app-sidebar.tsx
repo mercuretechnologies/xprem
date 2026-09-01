@@ -26,7 +26,8 @@ import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { Combobox } from '@/components/Combobox';
-import { XpremMark } from '@/components/xprem-mark';
+import wordmark from '@/assets/xprem-wordmark.svg';
+import wordmarkOnLight from '@/assets/xprem-wordmark-on-light.svg';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { CreateAppModal } from '@/components/app-creation';
 import { useSettings } from '@/lib/SettingsContext';
@@ -279,15 +280,11 @@ export function AppSidebar({
           'h-screen w-64 shrink-0 flex-col border-r border-border/80 bg-card dark:bg-[#09090b]',
           mobile ? 'flex w-full' : 'sticky top-0 hidden lg:flex'
         )}>
-        <div className="flex items-center gap-2.5 px-5 pb-2 pt-5">
-          <XpremMark className="h-8 w-8 rounded-lg" />
-          <span className="font-display text-[15px] font-semibold tracking-tight text-foreground">
-            xprem
-            <span
-              aria-hidden
-              className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary align-baseline"
-            />
-          </span>
+        {/* The wordmark svg carries its own padding, so the container has no px:
+            the mark's internal margin lands where px-5 used to. */}
+        <div className="pb-2 pt-5">
+          <img src={wordmarkOnLight} alt="xprem" className="h-8 w-32 object-cover dark:hidden" />
+          <img src={wordmark} alt="xprem" className="hidden h-8 w-32 object-cover dark:block" />
         </div>
 
         <div className="px-3 pt-3">
