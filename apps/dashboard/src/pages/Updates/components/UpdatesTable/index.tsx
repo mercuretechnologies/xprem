@@ -15,6 +15,7 @@ import { UpdatesBreadcrumb } from '@/pages/Updates/components/UpdatesBreadcrumb'
 import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { Button } from '@/components/ui/button';
+import { updateTitle } from '@/lib/update-format';
 
 const UPDATES_PAGE_SIZE = 20;
 
@@ -144,7 +145,7 @@ export const UpdatesTable = ({
             header: 'Message',
             accessorKey: 'message',
             cell: ({ row }) => {
-              const msg = row.original.message;
+              const msg = updateTitle(row.original.message, row.original.commitHash);
               return msg ? (
                 <span className="block max-w-[200px] truncate text-sm text-muted-foreground">
                   {msg}
