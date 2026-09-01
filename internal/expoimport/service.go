@@ -1,4 +1,4 @@
-package services
+package expoimport
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/jobs"
 	"xprem/internal/providers/expo"
+	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
@@ -17,19 +18,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// ExpoImportService creates a local app from an existing Expo project, under
+// Service creates a local app from an existing Expo project, under
 // the same project UUID. The Expo credential is never stored.
-type ExpoImportService struct {
-	apps       *AppService
-	branches   *BranchService
-	channels   *ChannelService
-	updateRepo UpdateRepository
+type Service struct {
+	apps       *services.AppService
+	branches   *services.BranchService
+	channels   *services.ChannelService
+	updateRepo services.UpdateRepository
 	jobs       *jobs.Client
 	bucket     bucket.Bucket
 }
 
-func NewExpoImportService(apps *AppService, branches *BranchService, channels *ChannelService, updateRepo UpdateRepository, jobsClient *jobs.Client, bucket bucket.Bucket) *ExpoImportService {
-	return &ExpoImportService{
+func NewService(apps *services.AppService, branches *services.BranchService, channels *services.ChannelService, updateRepo services.UpdateRepository, jobsClient *jobs.Client, bucket bucket.Bucket) *Service {
+	return &Service{
 		apps:       apps,
 		branches:   branches,
 		channels:   channels,
@@ -39,7 +40,7 @@ func NewExpoImportService(apps *AppService, branches *BranchService, channels *C
 	}
 }
 
-type ExpoImportResult struct {
+type Result struct {
 	AppId        string   `json:"appId"`
 	Name         string   `json:"name"`
 	BranchCount  int      `json:"branchCount"`
@@ -49,22 +50,22 @@ type ExpoImportResult struct {
 	HistoryJobId string   `json:"historyJobId,omitempty"`
 }
 
-// ExpoImportPlan is the dry run shown before an import; ImportApp executes
+// Plan is the dry run shown before an import; ImportApp executes
 // this exact plan.
-type ExpoImportPlan struct {
+type Plan struct {
 	AppId string `json:"appId"`
 	// Expo's name, or the UUID when that name fails validation.
 	Name     string `json:"name"`
 	ExpoName string `json:"expoName"`
 	// Conflict is why the import cannot run at all; empty when it can.
-	Conflict string               `json:"conflict,omitempty"`
-	Branches []ExpoImportPlanItem `json:"branches"`
-	Channels []ExpoImportPlanItem `json:"channels"`
+	Conflict string     `json:"conflict,omitempty"`
+	Branches []PlanItem `json:"branches"`
+	Channels []PlanItem `json:"channels"`
 }
 
 // SkipReason set means the entry will not be created; Warning means created,
 // with a caveat.
-type ExpoImportPlanItem struct {
+type PlanItem struct {
 	Name         string `json:"name"`
 	MappedBranch string `json:"mappedBranch,omitempty"`
 	SkipReason   string `json:"skipReason,omitempty"`
@@ -78,7 +79,7 @@ func requireExpoAuth(auth types.Auth) error {
 	return nil
 }
 
-func (s *ExpoImportService) ListImportableApps(ctx context.Context, auth types.Auth) ([]expo.AccountApps, error) {
+func (s *Service) ListImportableApps(ctx context.Context, auth types.Auth) ([]expo.AccountApps, error) {
 	if !config.IsDBMode() {
 		return nil, store.ErrNotSupportedInStatelessMode
 	}
@@ -88,7 +89,7 @@ func (s *ExpoImportService) ListImportableApps(ctx context.Context, auth types.A
 	return expo.FetchAccountApps(ctx, auth)
 }
 
-func (s *ExpoImportService) fetchImportStructure(ctx context.Context, auth types.Auth, expoAppId string) (uuid.UUID, *expo.ProjectStructure, error) {
+func (s *Service) fetchImportStructure(ctx context.Context, auth types.Auth, expoAppId string) (uuid.UUID, *expo.ProjectStructure, error) {
 	if !config.IsDBMode() {
 		return uuid.UUID{}, nil, store.ErrNotSupportedInStatelessMode
 	}
@@ -108,20 +109,20 @@ func (s *ExpoImportService) fetchImportStructure(ctx context.Context, auth types
 
 // buildImportPlan applies the same name rules CreateBranch and CreateChannel
 // enforce, so the plan never promises an entry the import would refuse.
-func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImportPlan {
-	plan := &ExpoImportPlan{
+func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *Plan {
+	plan := &Plan{
 		AppId:    appId.String(),
 		Name:     structure.Name,
 		ExpoName: structure.Name,
-		Branches: []ExpoImportPlanItem{},
-		Channels: []ExpoImportPlanItem{},
+		Branches: []PlanItem{},
+		Channels: []PlanItem{},
 	}
 	if validation.DisplayName("name", structure.Name) != nil {
 		plan.Name = appId.String()
 	}
 	keptBranches := make(map[string]bool, len(structure.Branches))
 	for _, branchName := range structure.Branches {
-		item := ExpoImportPlanItem{Name: branchName}
+		item := PlanItem{Name: branchName}
 		if err := validation.Name("branchName", branchName); err != nil {
 			item.SkipReason = validationMessage(err)
 		} else {
@@ -130,7 +131,7 @@ func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImp
 		plan.Branches = append(plan.Branches, item)
 	}
 	for _, channel := range structure.Channels {
-		item := ExpoImportPlanItem{Name: channel.Name}
+		item := PlanItem{Name: channel.Name}
 		if channel.BranchName != nil {
 			item.MappedBranch = *channel.BranchName
 		}
@@ -155,7 +156,7 @@ func validationMessage(err error) string {
 	return err.Error()
 }
 
-func (s *ExpoImportService) PreviewImport(ctx context.Context, auth types.Auth, expoAppId string) (*ExpoImportPlan, error) {
+func (s *Service) PreviewImport(ctx context.Context, auth types.Auth, expoAppId string) (*Plan, error) {
 	parsedId, structure, err := s.fetchImportStructure(ctx, auth, expoAppId)
 	if err != nil {
 		return nil, err
@@ -169,7 +170,7 @@ func (s *ExpoImportService) PreviewImport(ctx context.Context, auth types.Auth, 
 
 // ImportApp executes the plan PreviewImport shows. Any failure past app
 // creation, the job not starting included, rolls the app back.
-func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expoAppId string, keysConfig config.KeysConfig, historyLimit int) (*ExpoImportResult, error) {
+func (s *Service) ImportApp(ctx context.Context, auth types.Auth, expoAppId string, keysConfig config.KeysConfig, historyLimit int) (*Result, error) {
 	if historyLimit < 0 || historyLimit > MaxHistoryImportGroups {
 		return nil, validation.Errorf("historyLimit", "must be between 0 and %d", MaxHistoryImportGroups)
 	}
@@ -184,7 +185,7 @@ func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expo
 		return nil, err
 	}
 
-	result := &ExpoImportResult{AppId: appId, Name: plan.Name}
+	result := &Result{AppId: appId, Name: plan.Name}
 	for _, branch := range plan.Branches {
 		if branch.SkipReason != "" {
 			result.Skipped = append(result.Skipped, fmt.Sprintf("branch %q: %s", branch.Name, branch.SkipReason))
@@ -227,7 +228,7 @@ func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expo
 }
 
 // App deletion cascades to branches and channels.
-func (s *ExpoImportService) rollback(ctx context.Context, appId string, name string) {
+func (s *Service) rollback(ctx context.Context, appId string, name string) {
 	if err := s.apps.DeleteApp(ctx, config.AppConfig{Id: appId, Name: name}); err != nil {
 		log.Printf("[expo-import] failed to roll back app %s after a failed import: %v", appId, err)
 	}

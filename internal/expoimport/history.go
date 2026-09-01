@@ -1,4 +1,4 @@
-package services
+package expoimport
 
 import (
 	"context"
@@ -57,7 +57,7 @@ func (expoHistoryArgs) InsertOpts() river.InsertOpts {
 
 type expoHistoryWorker struct {
 	river.WorkerDefaults[expoHistoryArgs]
-	service *ExpoImportService
+	service *Service
 }
 
 func (w *expoHistoryWorker) Timeout(*river.Job[expoHistoryArgs]) time.Duration {
@@ -68,11 +68,11 @@ func (w *expoHistoryWorker) Work(ctx context.Context, job *river.Job[expoHistory
 	return w.service.copyHistory(ctx, job.Args.AppId, jobs.NewTracker(job.ID), job.Args.Groups)
 }
 
-func RegisterExpoImportWorker(workers *river.Workers, service *ExpoImportService) {
+func RegisterWorker(workers *river.Workers, service *Service) {
 	river.AddWorker(workers, &expoHistoryWorker{service: service})
 }
 
-type ExpoHistoryJobStatus struct {
+type HistoryJobStatus struct {
 	State           string   `json:"state"`
 	Total           int      `json:"total"`
 	Processed       int      `json:"processed"`
@@ -82,11 +82,11 @@ type ExpoHistoryJobStatus struct {
 	CancelRequested bool     `json:"cancelRequested"`
 }
 
-func historyJobStatus(job *rivertype.JobRow) *ExpoHistoryJobStatus {
+func historyJobStatus(job *rivertype.JobRow) *HistoryJobStatus {
 	var args expoHistoryArgs
 	_ = json.Unmarshal(job.EncodedArgs, &args)
 	output := jobs.OutputOf(job)
-	return &ExpoHistoryJobStatus{
+	return &HistoryJobStatus{
 		State:           jobs.UIState(job),
 		Total:           args.Total,
 		Processed:       output.Processed,
@@ -97,7 +97,7 @@ func historyJobStatus(job *rivertype.JobRow) *ExpoHistoryJobStatus {
 	}
 }
 
-func (s *ExpoImportService) StartHistoryImport(ctx context.Context, auth types.Auth, expoAppId string, limit int) (string, error) {
+func (s *Service) StartHistoryImport(ctx context.Context, auth types.Auth, expoAppId string, limit int) (string, error) {
 	if !config.IsDBMode() {
 		return "", store.ErrNotSupportedInStatelessMode
 	}
@@ -132,7 +132,7 @@ func (s *ExpoImportService) StartHistoryImport(ctx context.Context, auth types.A
 	return jobId, err
 }
 
-func (s *ExpoImportService) GetAppHistoryJob(ctx context.Context, appId string) (string, *ExpoHistoryJobStatus, bool) {
+func (s *Service) GetAppHistoryJob(ctx context.Context, appId string) (string, *HistoryJobStatus, bool) {
 	parsed, err := uuid.Parse(strings.TrimSpace(appId))
 	if err != nil {
 		return "", nil, false
@@ -146,7 +146,7 @@ func (s *ExpoImportService) GetAppHistoryJob(ctx context.Context, appId string) 
 
 // The cancel lands once the update being copied is finished; canceling an
 // already finished job is a no-op.
-func (s *ExpoImportService) CancelHistoryJob(ctx context.Context, jobId string) error {
+func (s *Service) CancelHistoryJob(ctx context.Context, jobId string) error {
 	found, err := s.jobs.Cancel(ctx, jobId)
 	if err != nil {
 		return err
@@ -157,7 +157,7 @@ func (s *ExpoImportService) CancelHistoryJob(ctx context.Context, jobId string) 
 	return nil
 }
 
-func (s *ExpoImportService) GetHistoryJobStatus(ctx context.Context, jobId string) (*ExpoHistoryJobStatus, bool) {
+func (s *Service) GetHistoryJobStatus(ctx context.Context, jobId string) (*HistoryJobStatus, bool) {
 	job, err := s.jobs.Get(ctx, jobId)
 	if err != nil || job == nil {
 		return nil, false

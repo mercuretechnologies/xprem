@@ -1,4 +1,4 @@
-package services
+package expoimport
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 	"xprem/internal/crypto"
 	"xprem/internal/jobs"
 	"xprem/internal/providers/expo"
+	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/types"
 
@@ -27,7 +28,7 @@ import (
 
 // The embedded interface panics if the import grows an unexpected repository call.
 type importFakeUpdateImporter struct {
-	UpdateRepository
+	services.UpdateRepository
 	mu        sync.Mutex
 	rows      []store.ImportUpdateParams
 	err       error

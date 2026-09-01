@@ -7,10 +7,10 @@ import (
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
+	"xprem/internal/expoimport"
 	"xprem/internal/handlers"
 	"xprem/internal/helpers"
 	"xprem/internal/providers/expo"
-	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/validation"
 
@@ -18,10 +18,10 @@ import (
 )
 
 type ExpoImportHandler struct {
-	importService *services.ExpoImportService
+	importService *expoimport.Service
 }
 
-func NewExpoImportHandler(importService *services.ExpoImportService) *ExpoImportHandler {
+func NewExpoImportHandler(importService *expoimport.Service) *ExpoImportHandler {
 	return &ExpoImportHandler{importService: importService}
 }
 
@@ -45,7 +45,7 @@ func renderExpoImportError(w http.ResponseWriter, err error) {
 		handlers.RenderError(w, http.StatusBadRequest, "Importing apps requires the control plane (set DB_URL).")
 		return
 	}
-	if errors.Is(err, services.ErrHistoryImportAlreadyRunning) {
+	if errors.Is(err, expoimport.ErrHistoryImportAlreadyRunning) {
 		handlers.RenderError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -118,8 +118,8 @@ func (h *ExpoImportHandler) GetExpoImportJobHandler(w http.ResponseWriter, r *ht
 func (h *ExpoImportHandler) GetExpoImportAppJobHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	response := struct {
-		JobId  *string                        `json:"jobId"`
-		Status *services.ExpoHistoryJobStatus `json:"status"`
+		JobId  *string                      `json:"jobId"`
+		Status *expoimport.HistoryJobStatus `json:"status"`
 	}{}
 	if jobId, status, ok := h.importService.GetAppHistoryJob(r.Context(), appId); ok {
 		response.JobId = &jobId
@@ -134,7 +134,7 @@ func (h *ExpoImportHandler) GetExpoImportAppJobHandler(w http.ResponseWriter, r 
 func (h *ExpoImportHandler) CancelExpoImportJobHandler(w http.ResponseWriter, r *http.Request) {
 	jobId := mux.Vars(r)["JOB_ID"]
 	if err := h.importService.CancelHistoryJob(r.Context(), jobId); err != nil {
-		if errors.Is(err, services.ErrHistoryJobNotFound) {
+		if errors.Is(err, expoimport.ErrHistoryJobNotFound) {
 			handlers.RenderError(w, http.StatusNotFound, "Unknown or expired import job.")
 			return
 		}

@@ -22,6 +22,7 @@ import (
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/migrations"
+	"xprem/internal/expoimport"
 	"xprem/internal/handlers"
 	dashhandlers "xprem/internal/handlers/dashboard"
 	"xprem/internal/jobs"
@@ -278,9 +279,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	branchService.SetOnAuditEvent(auditService.Record)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
-	expoImportService := services.NewExpoImportService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
+	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
 	if jobsClient != nil {
-		services.RegisterExpoImportWorker(jobsClient.Workers(), expoImportService)
+		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
 		if err := jobsClient.Start(ctx); err != nil {
 			log.Fatalf("Job system startup failed: %v", err)
 		}

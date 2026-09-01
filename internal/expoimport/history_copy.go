@@ -1,4 +1,4 @@
-package services
+package expoimport
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ type branchRuntime struct {
 
 // copyHistory copies the oldest fetched group first, so a stopped job leaves
 // a consistent prefix of history.
-func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, tracker *jobs.Tracker, groups [][]expo.HistoryUpdate) error {
+func (s *Service) copyHistory(ctx context.Context, appId string, tracker *jobs.Tracker, groups [][]expo.HistoryUpdate) error {
 	touched := make(map[branchRuntime]bool)
 	defer s.invalidateHistoryServingCaches(appId, touched)
 
@@ -67,7 +67,7 @@ func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, track
 
 // importHistoryUpdate returns a non-empty skip reason for problems scoped to
 // this update, an error for failures that must stop the job.
-func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId string, historyUpdate expo.HistoryUpdate, touched map[branchRuntime]bool) (string, error) {
+func (s *Service) importHistoryUpdate(ctx context.Context, appId string, historyUpdate expo.HistoryUpdate, touched map[branchRuntime]bool) (string, error) {
 	platform, ok := parseHistoryPlatform(historyUpdate.Platform)
 	if !ok {
 		return fmt.Sprintf("platform %q is not supported", historyUpdate.Platform), nil
@@ -185,7 +185,7 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	return "", nil
 }
 
-func (s *ExpoImportService) deleteHistoryUpdateFolder(update types.Update) {
+func (s *Service) deleteHistoryUpdateFolder(update types.Update) {
 	if err := s.bucket.DeleteUpdateFolder(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
 		log.Printf("[expo-import] failed to clean up update folder %s: %v", update.UpdateId, err)
 	}
@@ -213,7 +213,7 @@ func shapeHistoryAsset(asset expo.HistoryAsset, isLaunchAsset bool) types.Shaped
 // returns the update's asset mapping. EAS hashes are base64url SHA-256, the
 // exact cas key format, so a hash already in cas is not even downloaded.
 // Download and integrity problems return a skip reason, cas writes an error.
-func (s *ExpoImportService) storeHistoryBlobs(ctx context.Context, appId string, served *expo.ServedManifest) (*types.UpdateAssetMapping, string, error) {
+func (s *Service) storeHistoryBlobs(ctx context.Context, appId string, served *expo.ServedManifest) (*types.UpdateAssetMapping, string, error) {
 	manifest := &served.Manifest
 	mapping := &types.UpdateAssetMapping{
 		LaunchAsset: shapeHistoryAsset(manifest.LaunchAsset, true),
@@ -267,7 +267,7 @@ func (s *ExpoImportService) storeHistoryBlobs(ctx context.Context, appId string,
 
 // ensureHistoryBlob returns the cas hash of the asset, downloading and storing
 // it only when the blob is not already there.
-func (s *ExpoImportService) ensureHistoryBlob(ctx context.Context, appId string, asset expo.HistoryAsset, headers map[string]string) (string, error) {
+func (s *Service) ensureHistoryBlob(ctx context.Context, appId string, asset expo.HistoryAsset, headers map[string]string) (string, error) {
 	declaredHash := asset.Hash
 	if bucket.ValidateBlobHash(declaredHash) != nil {
 		declaredHash = ""
@@ -301,7 +301,7 @@ func (s *ExpoImportService) ensureHistoryBlob(ctx context.Context, appId string,
 
 // writeHistoryConfigFiles writes the update folder's config files; the assets
 // themselves live in cas/.
-func (s *ExpoImportService) writeHistoryConfigFiles(update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, manifest *expo.HistoryManifest) error {
+func (s *Service) writeHistoryConfigFiles(update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, manifest *expo.HistoryManifest) error {
 	platformMetadata := types.PlatformMetadata{
 		Bundle: "bundles/" + string(platform) + "-" + historyAssetFileName(manifest.LaunchAsset, 0) + ".bundle",
 	}
@@ -361,7 +361,7 @@ func (s *ExpoImportService) writeHistoryConfigFiles(update types.Update, platfor
 	return nil
 }
 
-func (s *ExpoImportService) invalidateHistoryServingCaches(appId string, touched map[branchRuntime]bool) {
+func (s *Service) invalidateHistoryServingCaches(appId string, touched map[branchRuntime]bool) {
 	cache := cache2.GetCache()
 	keys := []string{
 		dashboard.ComputeGetBranchesCacheKey(appId),

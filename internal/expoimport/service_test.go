@@ -1,4 +1,4 @@
-package services
+package expoimport
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/providers/expo"
+	"xprem/internal/services"
 	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
@@ -145,23 +146,23 @@ func (f *importFakeChannelRepo) SetBranchSurfing(_ context.Context, _ string, _ 
 	panic("unused")
 }
 
-func importService(t *testing.T, appRepo *importFakeAppRepo, branchRepo *importFakeBranchRepo, channelRepo *importFakeChannelRepo) *ExpoImportService {
+func importService(t *testing.T, appRepo *importFakeAppRepo, branchRepo *importFakeBranchRepo, channelRepo *importFakeChannelRepo) *Service {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
-	appService := NewAppService(appRepo)
-	branchService := NewBranchService(branchRepo, channelRepo, nil, nil, nil)
-	channelService := NewChannelService(branchRepo, channelRepo)
-	return NewExpoImportService(appService, branchService, channelService, nil, nil, nil)
+	appService := services.NewAppService(appRepo)
+	branchService := services.NewBranchService(branchRepo, channelRepo, nil, nil, nil)
+	channelService := services.NewChannelService(branchRepo, channelRepo)
+	return NewService(appService, branchService, channelService, nil, nil, nil)
 }
 
 // No jobs client: tests run the job body directly or stop before the enqueue.
-func historyImportService(t *testing.T, branchRepo *importFakeBranchRepo, updateRepo UpdateRepository, historyBucket bucket.Bucket) *ExpoImportService {
+func historyImportService(t *testing.T, branchRepo *importFakeBranchRepo, updateRepo services.UpdateRepository, historyBucket bucket.Bucket) *Service {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
-	appService := NewAppService(&importFakeAppRepo{})
-	branchService := NewBranchService(branchRepo, &importFakeChannelRepo{}, nil, nil, nil)
-	channelService := NewChannelService(branchRepo, &importFakeChannelRepo{})
-	return NewExpoImportService(appService, branchService, channelService, updateRepo, nil, historyBucket)
+	appService := services.NewAppService(&importFakeAppRepo{})
+	branchService := services.NewBranchService(branchRepo, &importFakeChannelRepo{}, nil, nil, nil)
+	channelService := services.NewChannelService(branchRepo, &importFakeChannelRepo{})
+	return NewService(appService, branchService, channelService, updateRepo, nil, historyBucket)
 }
 
 func awsKeysConfig() config.KeysConfig {
