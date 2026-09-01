@@ -49,6 +49,7 @@ import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
+import { shortRuntimeVersion, updateTitle } from '@/lib/update-format';
 
 type FeedGroup = {
   key: string;
@@ -147,7 +148,7 @@ const RuntimeLabel = ({ value }: { value: string }) => (
     className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2 py-1 text-xs font-medium text-amber-800 dark:border-amber-300/20 dark:bg-amber-300/[0.07] dark:text-amber-100"
     title={value}>
     <Box className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-300/80" />
-    <span className="truncate">{value}</span>
+    <span className="truncate">{shortRuntimeVersion(value)}</span>
   </span>
 );
 
@@ -600,7 +601,9 @@ export const Updates = () => {
                     </span>
                     <span>{rollout.branch}</span>
                     <span aria-hidden="true">·</span>
-                    <span>{rollout.runtimeVersion}</span>
+                    <span title={rollout.runtimeVersion}>
+                      {shortRuntimeVersion(rollout.runtimeVersion)}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span>{shortId(rollout.commitHash)}</span>
                   </div>
@@ -627,17 +630,17 @@ export const Updates = () => {
       )}
 
       <div className="overflow-hidden rounded-lg border bg-card shadow-card">
-        <Table className="min-w-[1250px] table-fixed">
+        <Table className="min-w-[1150px] table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className={canPublishUpdate ? 'w-[26%]' : 'w-[30%]'}>Update</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[32%]' : 'w-[36%]'}>Update</TableHead>
               <TableHead className="w-[11%]">Branch</TableHead>
-              <TableHead className="w-[12%]">Runtime</TableHead>
+              <TableHead className="w-[8%]">Runtime</TableHead>
               <TableHead className="w-[7%]">Platform</TableHead>
               <TableHead className="w-[8%] text-right">Devices</TableHead>
               <TableHead className="w-[9%]">Health</TableHead>
               <TableHead className="w-[9%]">Commit</TableHead>
-              <TableHead className={canPublishUpdate ? 'w-[12%]' : 'w-[14%]'}>Published</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[10%]' : 'w-[12%]'}>Published</TableHead>
               {canPublishUpdate && <TableHead className="w-[6%]" />}
             </TableRow>
           </TableHeader>
@@ -692,7 +695,8 @@ export const Updates = () => {
                             <p
                               className="block max-w-full truncate font-medium text-foreground"
                               title={primary.message || `Update ${primary.updateId}`}>
-                              {primary.message || `Update ${primary.updateId}`}
+                              {updateTitle(primary.message, primary.commitHash) ||
+                                `Update ${primary.updateId}`}
                             </p>
                             <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                               {isGroup && (
@@ -736,7 +740,7 @@ export const Updates = () => {
                         <CommitLabel value={primary.commitHash} />
                       </TableCell>
                       <TableCell>
-                        <TimestampCell dateString={primary.createdAt} />
+                        <TimestampCell dateString={primary.createdAt} compact />
                       </TableCell>
                       {canPublishUpdate && (
                         <TableCell className="text-right">
@@ -754,7 +758,9 @@ export const Updates = () => {
                                 setRepublishTarget({
                                   branch: primary.branch,
                                   runtimeVersion: primary.runtimeVersion,
-                                  label: primary.message || `Update ${primary.updateId}`,
+                                  label:
+                                    updateTitle(primary.message, primary.commitHash) ||
+                                    `Update ${primary.updateId}`,
                                   platforms,
                                   ...(isGroup
                                     ? { publishGroup: group.publishGroup as string }
@@ -821,7 +827,7 @@ export const Updates = () => {
                             <CommitLabel value={update.commitHash} />
                           </TableCell>
                           <TableCell>
-                            <TimestampCell dateString={update.createdAt} />
+                            <TimestampCell dateString={update.createdAt} compact />
                           </TableCell>
                           {/* No per-member republish: see the group row. */}
                           {canPublishUpdate && <TableCell />}
