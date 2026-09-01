@@ -133,15 +133,10 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 	return updateType, nil
 }
 
-// channelBranchMapping owns the delivery path's mapping cache: no cross-layer
-// invalidation, the TTL is the freshness bound for channel and rollout edits.
-// An unknown or unmapped channel (nil) is never cached.
 func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
 	return cachedChannelMapping(ctx, s.channelRepo, appId, channelName)
 }
 
-// cachedChannelMapping is channelBranchMapping without the service, so the
-// branch list can read the same entry the delivery path already fills.
 func cachedChannelMapping(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (*types.ChannelResolution, error) {
 	if !config.IsDBMode() {
 		// The expo provider keeps its own cached, invalidated-on-remap entry;
