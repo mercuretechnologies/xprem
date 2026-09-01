@@ -321,9 +321,6 @@ func (s *ExpoProtocolService) ResolveUpdateForDevice(ctx context.Context, params
 		return UpdateDecision{}, err
 	}
 
-	// Tracked AFTER resolution with the branch actually served: under a channel
-	// rollout, attributing the in-bucket cohort to the default branch would make the
-	// rollout invisible in the metrics it is meant to be judged from.
 	if params.ExpoFatalError != "" {
 		if params.CurrentUpdateID != "" {
 			metrics.TrackUpdateErrorUsers(params.AppID, params.ClientID, string(params.Platform), params.RuntimeVersion, servedBranch, params.CurrentUpdateID)
@@ -365,10 +362,6 @@ func (s *ExpoProtocolService) resolveUpdateAcrossBranches(ctx context.Context, r
 		log.Printf("[RequestID: %s] Error resolving branch candidates: %v", requestID, err)
 		return "", nil, nil, &ExpoProtocolError{StatusCode: http.StatusInternalServerError, Message: "Error resolving branch"}
 	}
-	// Gated on the rule having honoured the surf, not on the header being present:
-	// a declined request is a plain poll, and refusing one would take a device off
-	// the branch its own channel maps to. It also keeps the lookups below off the
-	// steady-state path, and off every deployment where surfing is disabled.
 	surfing := HonoursSurf(req)
 	var blocks surfBlockSet
 	if surfing && (surfBlockTokens != "" || failedUpdateIDsRaw != "") {
