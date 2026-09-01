@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"xprem/internal/helpers"
 )
 
 // maxAppIdLen caps the app id length. Long enough for UUIDs (36), ULIDs (26),
@@ -76,6 +77,8 @@ type AppConfig struct {
 	AccessToken string        `json:"accessToken,omitempty"`
 	Keys        KeysConfig    `json:"keys"`
 	CreatedAt   time.Duration `json:"createTime,omitempty"`
+	// Display-only, like Name: never participates in routing.
+	RepositoryUrl string `json:"repositoryUrl,omitempty"`
 }
 
 // AppDescriptor is the public-safe view of an AppConfig (no token, no keys)
@@ -84,6 +87,8 @@ type AppConfig struct {
 type AppDescriptor struct {
 	Id   string `json:"id"`
 	Name string `json:"name,omitempty"`
+	// Safe to expose for the same reason Name is: a label, not a credential.
+	RepositoryUrl string `json:"repositoryUrl,omitempty"`
 }
 
 var (
@@ -166,8 +171,9 @@ func LegacyFallbackAppId() string {
 // JSON case.
 func parseFlatEnvApp(appId string) AppConfig {
 	app := AppConfig{
-		Id:          appId,
-		AccessToken: os.Getenv("EXPO_ACCESS_TOKEN"),
+		Id:            appId,
+		AccessToken:   os.Getenv("EXPO_ACCESS_TOKEN"),
+		RepositoryUrl: RepositoryURL(),
 	}
 	switch os.Getenv("KEYS_STORAGE_TYPE") {
 	case "local", "":
@@ -203,6 +209,10 @@ func validateApp(app *AppConfig, index int) error {
 	}
 	if app.AccessToken == "" {
 		return fmt.Errorf("%s.accessToken is required", prefix)
+	}
+	// A typo'd value would silently render dead links, so reject it at boot.
+	if app.RepositoryUrl != "" && !helpers.IsValidURL(app.RepositoryUrl) {
+		return fmt.Errorf("%s.repositoryUrl %q is not a valid URL", prefix, app.RepositoryUrl)
 	}
 	return ValidateKeys(&app.Keys, prefix+".keys")
 }
@@ -346,7 +356,7 @@ func ListApps() []AppDescriptor {
 	defer appsByIdMu.RUnlock()
 	out := make([]AppDescriptor, 0, len(appsById))
 	for _, app := range appsById {
-		out = append(out, AppDescriptor{Id: app.Id, Name: app.Name})
+		out = append(out, AppDescriptor{Id: app.Id, Name: app.Name, RepositoryUrl: app.RepositoryUrl})
 	}
 	return out
 }

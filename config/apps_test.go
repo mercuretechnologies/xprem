@@ -32,6 +32,7 @@ func resetAppsEnv(t *testing.T) {
 		"AWSSM_EXPO_PRIVATE_KEY_SECRET_ID",
 		"PUBLIC_EXPO_KEY_B64",
 		"PRIVATE_EXPO_KEY_B64",
+		"EXPO_APP_REPOSITORY_URL",
 	}
 	for _, v := range vars {
 		os.Unsetenv(v)
@@ -515,6 +516,84 @@ func TestListApps_ReturnsDescriptorsWithName(t *testing.T) {
 func TestListApps_EmptyWhenNoConfigLoaded(t *testing.T) {
 	resetAppsEnv(t)
 	assert.Empty(t, ListApps())
+}
+
+// -----------------------------------------------------------------------------
+// Optional RepositoryUrl. A malformed value must fail at boot rather than render
+// dead links, and the value has to reach the descriptor.
+// -----------------------------------------------------------------------------
+
+func TestLoadAppsFromFlatEnv_CarriesRepositoryUrl(t *testing.T) {
+	resetAppsEnv(t)
+	os.Setenv("EXPO_APP_ID", "solo")
+	os.Setenv("EXPO_ACCESS_TOKEN", "tok")
+	os.Setenv("PUBLIC_LOCAL_EXPO_KEY_PATH", "/k/pub.pem")
+	os.Setenv("PRIVATE_LOCAL_EXPO_KEY_PATH", "/k/priv.pem")
+	os.Setenv("EXPO_APP_REPOSITORY_URL", "https://github.com/acme/mobile-app")
+
+	require.NoError(t, LoadAppsFromFlatEnv())
+	a, err := GetAppConfig("solo")
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/acme/mobile-app", a.RepositoryUrl)
+}
+
+func TestLoadAppsFromFlatEnv_TrimsRepositoryUrlTrailingSlash(t *testing.T) {
+	// The dashboard appends /commit/<sha>, so a trailing slash would double up.
+	resetAppsEnv(t)
+	os.Setenv("EXPO_APP_ID", "solo")
+	os.Setenv("EXPO_ACCESS_TOKEN", "tok")
+	os.Setenv("PUBLIC_LOCAL_EXPO_KEY_PATH", "/k/pub.pem")
+	os.Setenv("PRIVATE_LOCAL_EXPO_KEY_PATH", "/k/priv.pem")
+	os.Setenv("EXPO_APP_REPOSITORY_URL", "  https://github.com/acme/mobile-app/  ")
+
+	require.NoError(t, LoadAppsFromFlatEnv())
+	a, err := GetAppConfig("solo")
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/acme/mobile-app", a.RepositoryUrl)
+}
+
+func TestLoadAppsFromFlatEnv_RepositoryUrlIsOptional(t *testing.T) {
+	resetAppsEnv(t)
+	os.Setenv("EXPO_APP_ID", "solo")
+	os.Setenv("EXPO_ACCESS_TOKEN", "tok")
+	os.Setenv("PUBLIC_LOCAL_EXPO_KEY_PATH", "/k/pub.pem")
+	os.Setenv("PRIVATE_LOCAL_EXPO_KEY_PATH", "/k/priv.pem")
+
+	require.NoError(t, LoadAppsFromFlatEnv())
+	a, err := GetAppConfig("solo")
+	require.NoError(t, err)
+	assert.Empty(t, a.RepositoryUrl)
+}
+
+func TestValidateApp_RejectsMalformedRepositoryUrl(t *testing.T) {
+	app := AppConfig{
+		Id:            "app-1",
+		AccessToken:   "token",
+		RepositoryUrl: "github.com/acme/mobile-app",
+		Keys: KeysConfig{
+			Mode:        KeysModeLocal,
+			PublicPath:  "/p",
+			PrivatePath: "/q",
+		},
+	}
+	err := validateApp(&app, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apps[0].repositoryUrl")
+}
+
+func TestListApps_ReturnsDescriptorsWithRepositoryUrl(t *testing.T) {
+	resetAppsEnv(t)
+	SetAppsForTest([]AppConfig{
+		{Id: "a", RepositoryUrl: "https://github.com/acme/a", AccessToken: "t", Keys: KeysConfig{Mode: KeysModeLocal, PublicPath: "/p", PrivatePath: "/q"}},
+		{Id: "b", AccessToken: "t", Keys: KeysConfig{Mode: KeysModeLocal, PublicPath: "/p", PrivatePath: "/q"}},
+	})
+
+	byId := map[string]AppDescriptor{}
+	for _, d := range ListApps() {
+		byId[d.Id] = d
+	}
+	assert.Equal(t, "https://github.com/acme/a", byId["a"].RepositoryUrl)
+	assert.Equal(t, "", byId["b"].RepositoryUrl)
 }
 
 func TestResetAppsForTest_ClearsRegistry(t *testing.T) {

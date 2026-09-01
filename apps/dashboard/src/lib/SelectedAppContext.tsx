@@ -8,15 +8,10 @@ import {
   ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, type AppDescriptor } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth.ts';
 
 const STORAGE_KEY = 'eoota.selectedAppId';
-
-export type AppDescriptor = {
-  id: string;
-  name?: string;
-};
 
 type SelectedAppContextValue = {
   apps: AppDescriptor[];

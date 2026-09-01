@@ -465,6 +465,12 @@ environment:
     value: ""
     enabled: true
     required: false
+  # Source repository, e.g. "https://github.com/acme/mobile-app". Lets the
+  # dashboard link an update's commit hash and any #123 in its message. GitHub only.
+  - name: "EXPO_APP_REPOSITORY_URL"
+    value: ""
+    enabled: true
+    required: false
   # Control Plane (DB mode). Rendered only when controlPlane="true". Set DB_URL
   # and the master key, whose source is picked by dbKeysMasterKeySource. The
   # master key seals per-app signing keys at rest — generate it with

@@ -35,6 +35,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
+import { UpdateTitle } from '@/components/ui/update-title';
 import { UpdateDetailsRef, UpdateDetailsSheet } from '@/components/UpdateDetailsSheet';
 import {
   ManagedUpdateRollout,
@@ -50,6 +51,7 @@ import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { shortRuntimeVersion, updateTitle } from '@/lib/update-format';
+import { useRepoLinks } from '@/hooks/use-repo-links';
 
 type FeedGroup = {
   key: string;
@@ -152,12 +154,44 @@ const RuntimeLabel = ({ value }: { value: string }) => (
   </span>
 );
 
-const CommitLabel = ({ value }: { value: string }) => (
-  <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/[0.07] px-2 py-1 text-xs font-medium text-link">
-    <GitCommitHorizontal className="h-3 w-3 text-link/80" />
-    {shortId(value)}
-  </span>
-);
+// Unlinked for a rollback (no hash) or an unconfigured repo. The row is
+// clickable, so the anchor stops its click.
+const CommitLabel = ({ value, href }: { value: string; href?: string | null }) => {
+  const chip = (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/[0.07] px-2 py-1 text-xs font-medium text-link"
+      title={value || undefined}>
+      <GitCommitHorizontal className="h-3 w-3 text-link/80" />
+      {shortId(value)}
+    </span>
+  );
+  if (!href) return chip;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex hover:underline"
+      onClick={event => event.stopPropagation()}>
+      {chip}
+    </a>
+  );
+};
+
+// CommitLabel without the chip, for the rollout banner's plain text run.
+const CommitText = ({ value, href }: { value: string; href?: string | null }) =>
+  href ? (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={value}
+      className="text-link hover:underline">
+      {shortId(value)}
+    </a>
+  ) : (
+    <span title={value || undefined}>{shortId(value)}</span>
+  );
 
 const BranchLabel = ({ branch }: { branch: string }) => (
   <span className="inline-flex max-w-full items-center gap-1.5 font-medium text-foreground">
@@ -168,6 +202,7 @@ const BranchLabel = ({ branch }: { branch: string }) => (
 
 export const Updates = () => {
   const { selectedAppId } = useSelectedApp();
+  const repo = useRepoLinks();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
   const canPublishUpdate = useAppPermission('update:publish', 'admin-only');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -605,7 +640,10 @@ export const Updates = () => {
                       {shortRuntimeVersion(rollout.runtimeVersion)}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span>{shortId(rollout.commitHash)}</span>
+                    <CommitText
+                      value={rollout.commitHash}
+                      href={repo?.commitUrl(rollout.commitHash)}
+                    />
                   </div>
                 </div>
               </div>
@@ -695,8 +733,13 @@ export const Updates = () => {
                             <p
                               className="block max-w-full truncate font-medium text-foreground"
                               title={primary.message || `Update ${primary.updateId}`}>
-                              {updateTitle(primary.message, primary.commitHash) ||
-                                `Update ${primary.updateId}`}
+                              <UpdateTitle
+                                title={
+                                  updateTitle(primary.message, primary.commitHash) ||
+                                  `Update ${primary.updateId}`
+                                }
+                                links={repo}
+                              />
                             </p>
                             <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                               {isGroup && (
@@ -737,7 +780,10 @@ export const Updates = () => {
                         <HealthBadge health={groupHealth} />
                       </TableCell>
                       <TableCell>
-                        <CommitLabel value={primary.commitHash} />
+                        <CommitLabel
+                          value={primary.commitHash}
+                          href={repo?.commitUrl(primary.commitHash)}
+                        />
                       </TableCell>
                       <TableCell>
                         <TimestampCell dateString={primary.createdAt} compact />
@@ -824,7 +870,10 @@ export const Updates = () => {
                             <HealthBadge health={healthByUuid[update.updateUUID]} />
                           </TableCell>
                           <TableCell>
-                            <CommitLabel value={update.commitHash} />
+                            <CommitLabel
+                              value={update.commitHash}
+                              href={repo?.commitUrl(update.commitHash)}
+                            />
                           </TableCell>
                           <TableCell>
                             <TimestampCell dateString={update.createdAt} compact />

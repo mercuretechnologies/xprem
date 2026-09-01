@@ -54,6 +54,8 @@ export type KeysConfig = {
 export type AppDescriptor = {
   id: string;
   name?: string;
+  // Drives the commit and pull-request links on the updates screen.
+  repositoryUrl?: string;
 };
 
 // One audit log entry, as served by GET /api/audit/events. Displays are
@@ -841,7 +843,7 @@ export type ServerSettings = {
   CDN_TYPE: '' | 'cloudfront' | 'gcs-direct' | 's3-direct' | 'azure-direct' | 'generic';
   EXPO_ACCOUNT_USERNAME: string;
   SSO_ENABLED: boolean;
-  APPS: { id: string; name?: string }[];
+  APPS: AppDescriptor[];
 };
 
 // All per-app routes (branches, channels, runtime versions, updates,

@@ -160,7 +160,24 @@ func (s *AppService) DeleteApp(ctx context.Context, app config.AppConfig) error 
 }
 
 func (s *AppService) GetApps(ctx context.Context) ([]config.AppDescriptor, error) {
-	return s.appRepo.GetApps(ctx)
+	apps, err := s.appRepo.GetApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range apps {
+		apps[i].RepositoryUrl = resolveRepositoryUrl(apps[i].RepositoryUrl)
+	}
+	return apps, nil
+}
+
+// resolveRepositoryUrl fills in the repository for an app that carries none.
+// The control plane has no apps.repository_url column yet, so its rows fall back
+// to the server-wide env var: right for one repo, wrong for a plane hosting many.
+func resolveRepositoryUrl(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	return config.RepositoryURL()
 }
 
 func (s *AppService) GetAppByID(ctx context.Context, appId string) (config.AppConfig, error) {
@@ -190,6 +207,8 @@ func (s *AppService) PresentApp(ctx context.Context, app config.AppConfig) confi
 		// device-facing OTA path never pays the Expo round-trip.
 		app.Name = expo.FetchAppName(ctx, app.Id)
 	}
+	// Same fallback the listing applies, so /api/apps/{id} and /api/apps agree.
+	app.RepositoryUrl = resolveRepositoryUrl(app.RepositoryUrl)
 	return app
 }
 

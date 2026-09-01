@@ -16,6 +16,8 @@ import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard'
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { Button } from '@/components/ui/button';
 import { updateTitle } from '@/lib/update-format';
+import { UpdateTitle } from '@/components/ui/update-title';
+import { useRepoLinks } from '@/hooks/use-repo-links';
 
 const UPDATES_PAGE_SIZE = 20;
 
@@ -30,6 +32,7 @@ export const UpdatesTable = ({
 }) => {
   const sheetRef = useRef<UpdateDetailsRef>(null);
   const { selectedAppId } = useSelectedApp();
+  const repo = useRepoLinks();
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
   const updatesQuery = useInfiniteQuery({
@@ -148,7 +151,7 @@ export const UpdatesTable = ({
               const msg = updateTitle(row.original.message, row.original.commitHash);
               return msg ? (
                 <span className="block max-w-[200px] truncate text-sm text-muted-foreground">
-                  {msg}
+                  <UpdateTitle title={msg} links={repo} />
                 </span>
               ) : (
                 <span className="text-sm text-muted-foreground/60">No message</span>
@@ -159,10 +162,26 @@ export const UpdatesTable = ({
             header: 'Commit',
             accessorKey: 'commitHash',
             cell: ({ row }) => {
-              return (
-                <Badge variant="outline" className="font-mono text-xs">
+              const badge = (
+                <Badge
+                  variant="outline"
+                  className="font-mono text-xs"
+                  title={row.original.commitHash || undefined}>
                   {row.original.commitHash.slice(0, 7)}
                 </Badge>
+              );
+              const href = repo?.commitUrl(row.original.commitHash);
+              return href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex hover:underline"
+                  onClick={event => event.stopPropagation()}>
+                  {badge}
+                </a>
+              ) : (
+                badge
               );
             },
           },

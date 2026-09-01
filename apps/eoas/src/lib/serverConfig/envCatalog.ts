@@ -416,6 +416,14 @@ export const ENV_SECTIONS: EnvSection[] = [
         comment: 'Key prefix inside the bucket, for a bucket shared with other data.',
       },
       {
+        name: 'EXPO_APP_REPOSITORY_URL',
+        applies: () => true,
+        required: false,
+        value: () => '',
+        comment:
+          "Source repository (e.g. https://github.com/acme/mobile-app). Lets the dashboard link an update's commit hash and any #123 in its message. GitHub only.",
+      },
+      {
         name: 'AZURE_BLOB_ENDPOINT',
         applies: c => c.storage === 'azure',
         required: false,

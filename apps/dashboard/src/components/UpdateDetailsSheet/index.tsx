@@ -15,6 +15,8 @@ import { Badge } from '@/components/ui/badge.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { formatTimestamp } from '@/lib/utils';
+import { UpdateTitle } from '@/components/ui/update-title';
+import { useRepoLinks } from '@/hooks/use-repo-links';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { Check, ChevronDown, ChevronUp, Copy, Package, Split, Undo2 } from 'lucide-react';
 import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
@@ -96,6 +98,7 @@ const UpdateDetailsBody = ({
   runtimeVersion: string;
 }) => {
   const { selectedAppId } = useSelectedApp();
+  const repo = useRepoLinks();
   const [showRawConfig, setShowRawConfig] = useState(false);
   // Keyed on what the fetch actually uses. Never updateUUID: every rollback
   // row shares the literal "Rollback to embedded", so two rollbacks from
@@ -105,6 +108,8 @@ const UpdateDetailsBody = ({
     enabled: !!update.updateId && !!selectedAppId && !!branch && !!runtimeVersion,
     queryFn: () => api.getUpdateDetails(branch, runtimeVersion, update.updateId),
   });
+
+  const commitUrl = data?.commitHash ? repo?.commitUrl(data.commitHash) : null;
 
   const expoConfig = useMemo(() => {
     if (!data?.expoConfig) return null;
@@ -233,13 +238,26 @@ const UpdateDetailsBody = ({
 
         <DetailSection title="Source">
           <DetailRow label="Commit">
-            <MonoValue value={data.commitHash} />
+            {commitUrl ? (
+              // truncate belongs on the anchor: it replaces MonoValue as the flex child.
+              <a
+                href={commitUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="min-w-0 truncate text-link hover:underline">
+                <MonoValue value={data.commitHash} />
+              </a>
+            ) : (
+              <MonoValue value={data.commitHash} />
+            )}
             <CopyButton value={data.commitHash} label="commit hash" />
           </DetailRow>
           {data.message && (
             <div className="space-y-1 px-4 py-2.5">
               <span className="text-sm text-muted-foreground">Message</span>
-              <p className="text-sm font-medium">{data.message}</p>
+              <p className="text-sm font-medium">
+                <UpdateTitle title={data.message} links={repo} />
+              </p>
             </div>
           )}
         </DetailSection>

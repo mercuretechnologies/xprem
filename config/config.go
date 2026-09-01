@@ -135,6 +135,12 @@ func BaseURL() string {
 	return strings.TrimRight(GetEnv("BASE_URL"), "/")
 }
 
+// RepositoryURL is the repository published updates come from, so the dashboard
+// can link a commit hash and any #123 in a message. Empty means unconfigured.
+func RepositoryURL() string {
+	return strings.TrimRight(strings.TrimSpace(GetEnv("EXPO_APP_REPOSITORY_URL")), "/")
+}
+
 // ServeFromSubPath reports whether the server itself serves under BASE_URL's
 // path; when false the reverse proxy is expected to strip the prefix.
 func ServeFromSubPath() bool {
@@ -200,6 +206,11 @@ func LoadConfig() {
 	jwtSecret := GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET not set")
+	}
+	// Checked here rather than only in validateApp, which the control plane
+	// never reaches: both modes read this var, so both must reject a bad one.
+	if repositoryUrl := RepositoryURL(); repositoryUrl != "" && !helpers.IsValidURL(repositoryUrl) {
+		log.Fatalf("Invalid EXPO_APP_REPOSITORY_URL: %s", repositoryUrl)
 	}
 }
 
