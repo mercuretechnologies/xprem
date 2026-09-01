@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://xprem.dev">Website</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@xprem.dev">Contact</a>
+  <a href="https://mercure-technologies.gitbook.io/xprem">Documentation</a> · <a href="#quick-start">Quick start</a> · <a href="https://xprem.dev">Website</a> · <a href="https://discord.gg/TSJgqPyGr4">Discord</a> · <a href="https://github.com/mercuretechnologies/xprem/issues">Issues</a> · <a href="mailto:contact@xprem.dev">Contact</a>
 </p>
 
 <p align="center">
