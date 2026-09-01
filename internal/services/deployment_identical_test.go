@@ -97,9 +97,10 @@ func TestRequestUploadURLs_StoresTheShapedMapping(t *testing.T) {
 	require.NoError(t, err)
 
 	stored, err := h.updateRepo.GetUpdateAssetMapping(ctx, types.Update{
-		AppId:    h.appId,
-		Branch:   "main",
-		UpdateId: strconv.FormatInt(resp.UpdateID, 10),
+		AppId:          h.appId,
+		Branch:         "main",
+		RuntimeVersion: "1",
+		UpdateId:       strconv.FormatInt(resp.UpdateID, 10),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stored)
