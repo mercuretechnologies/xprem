@@ -8,8 +8,10 @@ import mime from 'mime';
 import path from 'path';
 
 import {
+  NoChangesDetectedError,
   RequestUploadUrlItem,
   activeRolloutConflictMessage,
+  buildUploadFiles,
   computeFilesRequests,
   requestUploadUrls,
   resolveUploadRequests,
@@ -89,8 +91,9 @@ export default class Publish extends Command {
     }),
     dumpSourcemap: Flags.boolean({
       description:
-        'Emit Hermes source maps alongside the bundle so the published artifact can be symbolicated by tools like Sentry or PostHog.',
-      default: false,
+        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact; they stay in the output directory and are never uploaded. Disable with --no-dumpSourcemap.',
+      default: true,
+      allowNo: true,
     }),
     'rollout-percentage': Flags.integer({
       min: 1,
@@ -322,7 +325,11 @@ export default class Publish extends Command {
     });
     Log.withInfo(`expoConfig.json file created in ${outputDir} directory`);
     const uploadFilesSpinner = ora('📤 Uploading files...').start();
-    const files = computeFilesRequests(projectDir, outputDir, platform || RequestedPlatform.All);
+    const files = await computeFilesRequests(
+      projectDir,
+      outputDir,
+      platform || RequestedPlatform.All
+    );
     if (!files.length) {
       uploadFilesSpinner.fail('No files to upload');
       process.exit(1);
@@ -338,32 +345,48 @@ export default class Publish extends Command {
     // One group id for the whole run: every platform update of this publish
     // shares it, so control plane servers list them as a single publish.
     const publishGroupId = randomUUID();
+    // Collected rather than logged inline: writing to the terminal under a
+    // running spinner interleaves with its frames.
+    const unchangedPlatforms: string[] = [];
     try {
-      uploadUrls = await Promise.all(
+      const outcomes = await Promise.all(
         runtimeVersions.map(async ({ runtimeVersion, platform }) => {
           if (!runtimeVersion) {
             throw new Error('Runtime version is not resolved');
           }
-          return {
-            ...(await requestUploadUrls({
-              body: {
-                fileNames: files.map(file => file.path),
-              },
-              requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
-              auth: credentials,
+          try {
+            return {
+              ...(await requestUploadUrls({
+                body: { files: buildUploadFiles(files, platform) },
+                requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
+                auth: credentials,
+                runtimeVersion,
+                platform,
+                commitHash,
+                message: resolvedMessage,
+                rolloutPercentage,
+                publishGroup: publishGroupId,
+                branch,
+              })),
               runtimeVersion,
               platform,
-              commitHash,
-              message: resolvedMessage,
-              rolloutPercentage,
-              publishGroup: publishGroupId,
-              branch,
-            })),
-            runtimeVersion,
-            platform,
-          };
+            };
+          } catch (error) {
+            if (error instanceof NoChangesDetectedError) {
+              unchangedPlatforms.push(platform);
+              return null;
+            }
+            throw error;
+          }
         })
       );
+      uploadUrls = outcomes.filter((entry): entry is NonNullable<(typeof outcomes)[number]> => {
+        return entry !== null;
+      });
+      if (!uploadUrls.length) {
+        uploadFilesSpinner.warn('⚠️ No changes found in the update, nothing to deploy');
+        return;
+      }
       // Every path and URL the server handed back is checked here, before a
       // single file is opened. A server that forges a filePath would otherwise
       // make the CLI read arbitrary files off this machine and PUT them wherever
@@ -441,6 +464,16 @@ export default class Publish extends Command {
       );
 
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
+      for (const { platform: uploadedPlatform, uploadRequests } of uploadUrls) {
+        const totalFiles = buildUploadFiles(files, uploadedPlatform).length;
+        const deduplicated = totalFiles - uploadRequests.length;
+        Log.withInfo(
+          `📊 ${uploadedPlatform}: ${uploadRequests.length}/${totalFiles} files uploaded, ${deduplicated} deduplicated (already on the server)`
+        );
+      }
+      for (const skipped of unchangedPlatforms) {
+        Log.withInfo(`⚠️ There is no change in the update for ${skipped}, ignored...`);
+      }
     } catch (e) {
       uploadFilesSpinner.fail('❌ Failed to upload static files');
       Log.error(e);
@@ -519,9 +552,16 @@ export default class Publish extends Command {
     if (hasSuccess) {
       Log.withInfo(`🌿 Branch: \`${branch}\``);
       Log.withInfo(`⏳ Deployed at: \`${new Date().toUTCString()}\`\n`);
+      for (const { platform: publishedPlatform, updateId } of uploadUrls) {
+        Log.withInfo(`🆔 ${publishedPlatform} update id: \`${updateId}\``);
+      }
       const groupAcknowledged = uploadUrls.every(u => u.publishGroup === publishGroupId);
       if (groupAcknowledged) {
-        Log.withInfo(`📦 Publish group: \`${publishGroupId}\``);
+        Log.withInfo(
+          `📦 Publish group: \`${publishGroupId}\` (groups the ${uploadUrls
+            .map(u => u.platform)
+            .join(' + ')} updates of this run)`
+        );
       } else if (uploadUrls.length > 1) {
         // Only worth a note when several platforms were published: a single
         // update has nothing to group anyway.

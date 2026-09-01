@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 	"xprem/config"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -59,7 +60,37 @@ func applyS3ClientOptions(o *s3.Options) {
 	o.UsePathStyle = config.GetEnv("AWS_S3_FORCE_PATH_STYLE") == "true"
 }
 
+// Process-local only: secret values must never reach the shared cache. The
+// TTL bounds how long a rotated secret keeps being served.
+var (
+	secretCache   sync.Map
+	secretCacheMu sync.Mutex
+)
+
+const secretCacheTTL = 5 * time.Minute
+
+type cachedSecret struct {
+	value     string
+	fetchedAt time.Time
+}
+
+// FetchSecret reads one Secrets Manager secret, memoized for secretCacheTTL:
+// signing paths call it per request.
 func FetchSecret(secretName string) string {
+	if entry, ok := secretCache.Load(secretName); ok {
+		if cached := entry.(cachedSecret); time.Since(cached.fetchedAt) < secretCacheTTL {
+			return cached.value
+		}
+	}
+	// One flight per expired secret; concurrent callers wait and reuse it.
+	secretCacheMu.Lock()
+	defer secretCacheMu.Unlock()
+	if entry, ok := secretCache.Load(secretName); ok {
+		if cached := entry.(cachedSecret); time.Since(cached.fetchedAt) < secretCacheTTL {
+			return cached.value
+		}
+	}
+
 	cfg, err := awsconfig.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		log.Fatalf("Failed to load AWS configuration: %v", err)
@@ -78,5 +109,6 @@ func FetchSecret(secretName string) string {
 		log.Fatalf("Secret %s has no SecretString", secretName)
 	}
 
+	secretCache.Store(secretName, cachedSecret{value: *resp.SecretString, fetchedAt: time.Now()})
 	return *resp.SecretString
 }

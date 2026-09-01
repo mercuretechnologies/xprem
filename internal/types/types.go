@@ -1,6 +1,7 @@
 package types
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -202,6 +203,47 @@ type ManifestAsset struct {
 	Url           string `json:"url"`
 }
 
+// UpdateAssetMapping is the shaped launch asset and assets persisted on an
+// update. Url is rebuilt at serve time.
+type UpdateAssetMapping struct {
+	LaunchAsset ShapedAsset   `json:"launchAsset"`
+	Assets      []ShapedAsset `json:"assets"`
+	ConfigFiles []ConfigFile  `json:"configFiles,omitempty"`
+}
+
+type ConfigFile struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
+
+func (m *UpdateAssetMapping) Scan(src any) error {
+	if src == nil {
+		return nil
+	}
+	var data []byte
+	switch v := src.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("cannot scan %T into UpdateAssetMapping", src)
+	}
+	return json.Unmarshal(data, m)
+}
+
+func (m UpdateAssetMapping) Value() (driver.Value, error) {
+	return json.Marshal(m)
+}
+
+// ShapedAsset is a ManifestAsset without Url.
+type ShapedAsset struct {
+	Hash          string `json:"hash"`
+	Key           string `json:"key"`
+	FileExtension string `json:"fileExtension"`
+	ContentType   string `json:"contentType"`
+}
+
 type ExtraManifestData struct {
 	ExpoClient           json.RawMessage `json:"expoClient"`
 	Branch               string          `json:"branch"`
@@ -237,6 +279,10 @@ type Update struct {
 	RuntimeVersion string        `json:"runtimeVersion"`
 	UpdateId       string        `json:"updateId"`
 	CreatedAt      time.Duration `json:"createdAt"`
+	// UpdateUUID is the persistent manifest id, filled only on the lastUpdate
+	// envelope path so the up-to-date poll can short-circuit without reading
+	// the composed manifest. Empty everywhere else.
+	UpdateUUID string `json:"updateUuid,omitempty"`
 }
 
 // UpdateWithRollout is the flat lastUpdate envelope: an update plus its per-update

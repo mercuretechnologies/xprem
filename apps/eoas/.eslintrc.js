@@ -39,6 +39,7 @@ module.exports = {
       parserOptions: {
         // Extends tsconfig.json to also cover __tests__, which the build excludes.
         project: './tsconfig.eslint.json',
+        tsconfigRootDir: __dirname,
       },
       rules: {
         '@typescript-eslint/explicit-function-return-type': [

@@ -45,7 +45,7 @@ func TestSurfIsRefusedWhenTheServedUpdateCrashed(t *testing.T) {
 
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, "staging", result.BranchName)
@@ -70,7 +70,7 @@ func TestTheMappedBranchIsNeverRefused(t *testing.T) {
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `","` + stagingUUID + `"`
 	params.SurfBlockTokens = "cHItNDgyADIwMA,c3RhZ2luZwAxMDA"
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, "staging", result.BranchName)
@@ -89,7 +89,7 @@ func TestSurfIsAllowedAgainOnceTheBranchIsFixed(t *testing.T) {
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
 	params.SurfBlockTokens = "cHItNDgyADIwMA"
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, "pr-482", result.BranchName)
@@ -104,7 +104,7 @@ func TestSurfStaysRefusedFromTheEchoedVerdictAlone(t *testing.T) {
 
 	params := blockParams(h)
 	params.SurfBlockTokens = "cHItNDgyADIwMA"
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, "staging", result.BranchName)
@@ -119,7 +119,7 @@ func TestSurfSurvivesAFailureOnAnotherBranch(t *testing.T) {
 
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
-	result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, "pr-482", result.BranchName)
@@ -201,7 +201,7 @@ func TestRefusalNeverAppliesToADeclinedSurf(t *testing.T) {
 		params := blockParams(h)
 		params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
 		params.SurfBlockTokens = "cHItNDgyADIwMA"
-		result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+		result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 		require.NoError(t, err)
 		assert.Equal(t, "staging", result.BranchName)
@@ -215,7 +215,7 @@ func TestRefusalNeverAppliesToADeclinedSurf(t *testing.T) {
 		params := blockParams(h)
 		params.XpremBranch = "hotfix"
 		params.RecentFailedUpdateIDs = `"` + crashedUUID + `"`
-		result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+		result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 		require.NoError(t, err)
 		assert.Equal(t, "staging", result.BranchName)
@@ -233,7 +233,7 @@ func TestRefusalNeverAppliesToADeclinedSurf(t *testing.T) {
 		params := blockParams(h)
 		params.XpremBranch = "staging"
 		params.RecentFailedUpdateIDs = `"` + stagingUUID + `"`
-		result, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+		result, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 		require.NoError(t, err)
 		assert.Equal(t, "staging", result.BranchName)
@@ -252,7 +252,7 @@ func TestDeclinedSurfCostsNoLookup(t *testing.T) {
 	params := blockParams(h)
 	params.RecentFailedUpdateIDs = `"` + uuid.NewString() + `","` + uuid.NewString() + `"`
 	params.SurfBlockTokens = "YQAx,YgAy,YwAz"
-	_, err := h.protocolService.ResolveManifestBundle(context.Background(), params)
+	_, err := h.protocolService.ResolveUpdateForDevice(context.Background(), params)
 
 	require.NoError(t, err)
 	assert.Equal(t, before, h.updateRepo.uuidLookups(), "no update lookup may run for a declined surf")

@@ -11,6 +11,7 @@ import (
 	"xprem/internal/dashboard"
 	"xprem/internal/store"
 	"xprem/internal/types"
+	update2 "xprem/internal/update"
 	"xprem/internal/validation"
 )
 
@@ -58,6 +59,9 @@ func NewBranchService(branchRepo BranchRepository, channelRepo ChannelRepository
 func (s *BranchService) CreateBranch(ctx context.Context, appId string, branchName string) (int64, error) {
 	if err := validation.Name("branchName", branchName); err != nil {
 		return 0, err
+	}
+	if bucket.ReservedBranchName(branchName) {
+		return 0, validation.Errorf("branchName", "%q is reserved", branchName)
 	}
 	branchId, err := s.branchRepo.InsertBranch(ctx, appId, branchName)
 	if err != nil {
@@ -124,6 +128,19 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 	appCache := cache.GetCache()
 	appCache.Delete(dashboard.ComputeGetBranchesCacheKey(appId))
 	appCache.Delete(dashboard.ComputeGetRuntimeVersionsCacheKey(appId, branchName))
+	// Without this a surfing device could still be handed the deleted branch's
+	// cached envelope while its files are being removed below.
+	purgedRuntimeVersions := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if _, purged := purgedRuntimeVersions[row.RuntimeVersion]; purged {
+			continue
+		}
+		purgedRuntimeVersions[row.RuntimeVersion] = struct{}{}
+		for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
+			appCache.Delete(update2.ComputeLastUpdateCacheKey(appId, branchName, row.RuntimeVersion, platform))
+			ForgetSurfableBranches(appId, row.RuntimeVersion, platform)
+		}
+	}
 	go func(bucketRows []types.UpdateRef) {
 		for _, row := range bucketRows {
 			err := s.bucket.DeleteUpdateFolder(appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))
@@ -184,5 +201,11 @@ func (s *BranchService) UpdateChannelBranchMapping(ctx context.Context, appId st
 }
 
 func (s *BranchService) UpsertBranchAndRuntimeVersion(ctx context.Context, appId string, branchName string, runtimeVersion string) error {
+	if err := validation.Name("branchName", branchName); err != nil {
+		return err
+	}
+	if bucket.ReservedBranchName(branchName) {
+		return validation.Errorf("branchName", "%q is reserved", branchName)
+	}
 	return s.branchRepo.UpsertBranchAndRuntimeVersion(ctx, appId, branchName, runtimeVersion)
 }

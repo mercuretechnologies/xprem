@@ -79,10 +79,12 @@ function writeExport(): void {
 }
 
 function uploadRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const filePath = (overrides.filePath as string | undefined) ?? 'metadata.json';
   return {
     requestUploadUrl: 'https://storage.example.com/upload/metadata.json',
     fileName: 'metadata.json',
-    filePath: 'metadata.json',
+    filePath,
+    originalFileName: filePath,
     ...overrides,
   };
 }

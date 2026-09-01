@@ -5,6 +5,7 @@ import Joi from 'joi';
 import path from 'path';
 
 import { Credentials, getAuthHeaders, missingEooTokenHint } from './auth';
+import { FileDigest, digestFile } from './crypto';
 import { RequestedPlatform } from './expoConfig';
 import { fetchWithRetries } from './fetch';
 import Log from './log';
@@ -37,6 +38,43 @@ export interface AssetToUpload {
   path: string;
   name: string;
   ext: string;
+  hash: string;
+  key: string;
+  // null for metadata.json and expoConfig.json, which belong to no platform.
+  platform: Platform | null;
+  isLaunchAsset: boolean;
+}
+
+// FileRole is what a published file is to the update, as the server reads it:
+// only the launch asset and the assets end up in the manifest.
+export type FileRole = 'launch' | 'asset' | 'config';
+
+export interface FileUploadItem {
+  path: string;
+  hash: string;
+  key?: string;
+  ext?: string;
+  role: FileRole;
+}
+
+// buildUploadFiles is one platform's publish: its launch asset, its assets and
+// the config files, each stamped with its role. This is what tells the server
+// which bundle is which — only the CLI reads metadata.json.
+export function buildUploadFiles(files: AssetToUpload[], platform: string): FileUploadItem[] {
+  return files
+    .filter(file => file.platform === null || file.platform === platform)
+    .map(file => {
+      if (file.platform === null) {
+        return { path: file.path, hash: file.hash, role: 'config' as const };
+      }
+      return {
+        path: file.path,
+        hash: file.hash,
+        key: file.key,
+        ext: file.ext,
+        role: file.isLaunchAsset ? ('launch' as const) : ('asset' as const),
+      };
+    });
 }
 
 function loadMetadata(distRoot: string): Metadata {
@@ -69,33 +107,80 @@ function loadMetadata(distRoot: string): Metadata {
   return metadata;
 }
 
-export function computeFilesRequests(
+async function digestExportFile(exportRoot: string, relativePath: string): Promise<FileDigest> {
+  const absolutePath = path.resolve(exportRoot, relativePath);
+  if (absolutePath !== exportRoot && !absolutePath.startsWith(exportRoot + path.sep)) {
+    throw new Error(
+      `Refusing to hash "${relativePath}": it resolves outside the export directory.`
+    );
+  }
+  return await digestFile(absolutePath);
+}
+
+export async function computeFilesRequests(
   projectDir: string,
   outputDir: string,
   requestedPlatform: RequestedPlatform
-): AssetToUpload[] {
-  const metadata = loadMetadata(path.join(projectDir, outputDir));
-  const assets: AssetToUpload[] = [
-    { path: 'metadata.json', name: 'metadata.json', ext: 'json' },
-    { path: 'expoConfig.json', name: 'expoConfig.json', ext: 'json' },
+): Promise<AssetToUpload[]> {
+  const exportDir = path.join(projectDir, outputDir);
+  let exportRoot: string;
+  try {
+    exportRoot = await fs.realpath(exportDir);
+  } catch {
+    throw new Error(`Export directory ${exportDir} could not be resolved.`);
+  }
+  const metadata = loadMetadata(exportRoot);
+  const pending: Omit<AssetToUpload, 'hash' | 'key'>[] = [
+    {
+      path: 'metadata.json',
+      name: 'metadata.json',
+      ext: 'json',
+      platform: null,
+      isLaunchAsset: false,
+    },
+    {
+      path: 'expoConfig.json',
+      name: 'expoConfig.json',
+      ext: 'json',
+      platform: null,
+      isLaunchAsset: false,
+    },
   ];
   for (const platform of Object.keys(metadata.fileMetadata) as Platform[]) {
     if (requestedPlatform !== RequestedPlatform.All && requestedPlatform !== platform) {
       continue;
     }
     const bundle = metadata.fileMetadata[platform].bundle;
-    assets.push({ path: bundle, name: path.basename(bundle), ext: 'hbc' });
+    pending.push({
+      path: bundle,
+      name: path.basename(bundle),
+      ext: 'hbc',
+      platform,
+      isLaunchAsset: true,
+    });
     for (const asset of metadata.fileMetadata[platform].assets) {
-      assets.push({ path: asset.path, name: path.basename(asset.path), ext: asset.ext });
+      pending.push({
+        path: asset.path,
+        name: path.basename(asset.path),
+        ext: asset.ext,
+        platform,
+        isLaunchAsset: false,
+      });
     }
   }
-  return assets;
+  return await Promise.all(
+    pending.map(async entry => ({
+      ...entry,
+      ...(await digestExportFile(exportRoot, entry.path)),
+    }))
+  );
 }
 
 export interface RequestUploadUrlItem {
   requestUploadUrl: string;
   fileName: string;
   filePath: string;
+  originalFileName: string;
   // Extra headers the server requires on the PUT to requestUploadUrl
   // (e.g. x-ms-blob-type for Azure Blob Storage). Absent on older servers.
   headers?: Record<string, string>;
@@ -129,6 +214,7 @@ const uploadRequestJoi = Joi.object({
     .required(),
   fileName: Joi.string().required(),
   filePath: Joi.string().required(),
+  originalFileName: Joi.string().required(),
   headers: uploadRequestHeadersJoi,
   // Unknown keys are tolerated so a newer server can add fields without
   // breaking older CLIs; nothing reads them.
@@ -242,47 +328,48 @@ export async function resolveUploadRequests({
   const resolved: ResolvedUploadRequest[] = [];
   for (const item of uploadRequests) {
     assertSafeUploadUrl(item.requestUploadUrl);
-    assertRelativePathShape(item.filePath);
+    const exportPath = item.originalFileName;
+    assertRelativePathShape(exportPath);
 
-    const manifestEntry = manifestByPath.get(item.filePath);
+    const manifestEntry = manifestByPath.get(exportPath);
     if (!manifestEntry) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": the server asked for a file that is not part of this export.`
+        `Refusing to upload "${exportPath}": the server asked for a file that is not part of this export.`
       );
     }
-    if (item.fileName !== path.basename(item.filePath)) {
+    if (item.fileName !== path.basename(exportPath)) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": the server returned the mismatched name "${item.fileName}".`
+        `Refusing to upload "${exportPath}": the server returned the mismatched name "${item.fileName}".`
       );
     }
-    if (seen.has(item.filePath)) {
-      throw new Error(`The server requested "${item.filePath}" more than once.`);
+    if (seen.has(exportPath)) {
+      throw new Error(`The server requested "${exportPath}" more than once.`);
     }
-    seen.add(item.filePath);
+    seen.add(exportPath);
 
-    const absolutePath = path.resolve(exportRoot, item.filePath);
+    const absolutePath = path.resolve(exportRoot, exportPath);
     // Unreachable on POSIX: a path with no '..' segment and no leading separator
     // cannot resolve out of the root. Kept for the Windows drive-relative case
     // ("C:file" when the export root sits on another drive) and as a backstop if
     // the checks above are ever relaxed.
     if (absolutePath !== exportRoot && !absolutePath.startsWith(exportRoot + path.sep)) {
       throw new Error(
-        `Refusing to upload "${item.filePath}": it resolves outside the export directory.`
+        `Refusing to upload "${exportPath}": it resolves outside the export directory.`
       );
     }
     let realPath: string;
     try {
       realPath = await fs.realpath(absolutePath);
     } catch {
-      throw new Error(`File ${item.filePath} not found in the export directory.`);
+      throw new Error(`File ${exportPath} not found in the export directory.`);
     }
     // The root is already canonical, so any difference here means a symlink was
     // traversed, either as the file itself or as one of its parent directories.
     if (realPath !== absolutePath) {
-      throw new Error(`Refusing to upload "${item.filePath}": it is or goes through a symlink.`);
+      throw new Error(`Refusing to upload "${exportPath}": it is or goes through a symlink.`);
     }
     if (!(await fs.lstat(absolutePath)).isFile()) {
-      throw new Error(`Refusing to upload "${item.filePath}": it is not a regular file.`);
+      throw new Error(`Refusing to upload "${exportPath}": it is not a regular file.`);
     }
 
     resolved.push({ item, absolutePath, manifestEntry });
@@ -292,6 +379,13 @@ export async function resolveUploadRequests({
 
 export function activeRolloutConflictMessage(branch: string): string {
   return `A progressive rollout is already active for branch "${branch}" on this runtime version. End or revert it from the dashboard before publishing a new update.`;
+}
+
+export class NoChangesDetectedError extends Error {
+  constructor(readonly platform: string) {
+    super(`There is no change in the update for ${platform}`);
+    this.name = 'NoChangesDetectedError';
+  }
 }
 
 export async function requestUploadUrls({
@@ -306,7 +400,7 @@ export async function requestUploadUrls({
   publishGroup,
   branch,
 }: {
-  body: { fileNames: string[] };
+  body: { files: FileUploadItem[] };
   requestUploadUrl: string;
   auth: Credentials;
   runtimeVersion: string;
@@ -331,7 +425,10 @@ export async function requestUploadUrls({
     uploadUrl.searchParams.set('publishGroup', publishGroup);
   }
 
-  const requestBody: { fileNames: string[]; message?: string } = { ...body };
+  const requestBody: {
+    files: FileUploadItem[];
+    message?: string;
+  } = { ...body };
   if (message) {
     requestBody.message = message;
   }
@@ -346,6 +443,9 @@ export async function requestUploadUrls({
   });
   if (response.status === 409) {
     throw new Error(activeRolloutConflictMessage(branch));
+  }
+  if (response.status === 406) {
+    throw new NoChangesDetectedError(platform);
   }
   if (!response.ok) {
     const text = await response.text();

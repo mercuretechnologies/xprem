@@ -2,26 +2,20 @@ package services
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strconv"
+	"strings"
 	"testing"
 	"xprem/internal/bucket"
-	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // newDedupTestHarness wires the rollout harness fakes to the real local bucket,
-// which dedup needs both to read the previous update's metadata.json (through
-// the bucket singleton) and to copy files.
-func newDedupTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness, string) {
+// which dedup needs to answer whether a blob is already in cas/.
+func newDedupTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness) {
 	t.Helper()
-	base := t.TempDir()
 	t.Setenv("STORAGE_MODE", "local")
-	t.Setenv("LOCAL_BUCKET_BASE_PATH", base)
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", t.TempDir())
 	t.Setenv("BASE_URL", "http://localhost:3000")
 	t.Setenv("JWT_SECRET", "test_jwt_secret")
 	bucket.ResetBucketInstance()
@@ -34,21 +28,12 @@ func newDedupTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness,
 		h.updateRepo,
 		bucket.GetBucket(),
 	)
-	return svc, h, base
+	return svc, h
 }
 
-func writePreviousUpdateFiles(t *testing.T, base, appId string, update types.Update, metadata types.MetadataObject, assetContents map[string]string) {
+func storeBlob(t *testing.T, appId string, file FileUploadItem) {
 	t.Helper()
-	dir := filepath.Join(base, appId, update.Branch, update.RuntimeVersion, update.UpdateId)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	raw, err := json.Marshal(metadata)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "metadata.json"), raw, 0o644))
-	for name, content := range assetContents {
-		filePath := filepath.Join(dir, filepath.FromSlash(name))
-		require.NoError(t, os.MkdirAll(filepath.Dir(filePath), 0o755))
-		require.NoError(t, os.WriteFile(filePath, []byte(content), 0o644))
-	}
+	require.NoError(t, bucket.GetBucket().PutBlob(context.Background(), appId, file.Hash, strings.NewReader(file.Path)))
 }
 
 func requestedFilePaths(resp *RequestUploadURLResponse) []string {
@@ -59,26 +44,12 @@ func requestedFilePaths(resp *RequestUploadURLResponse) []string {
 	return paths
 }
 
-func TestRequestUploadURLs_DedupsUnchangedAssets(t *testing.T) {
-	svc, h, base := newDedupTestHarness(t)
+func TestRequestUploadURLs_SkipsBlobsAlreadyStored(t *testing.T) {
+	svc, h := newDedupTestHarness(t)
 	ctx := context.Background()
 
-	prev := h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
-	// "assets/ghost" is listed in the previous metadata but absent from the
-	// bucket: its copy fails, so it must stay in the upload list.
-	writePreviousUpdateFiles(t, base, h.appId, prev, types.MetadataObject{
-		Version: 0,
-		Bundler: "metro",
-		FileMetadata: types.FileMetadata{
-			IOS: types.PlatformMetadata{
-				Bundle: "bundles/ios-old.hbc",
-				Assets: []types.Asset{
-					{Path: "assets/unchanged", Ext: "png"},
-					{Path: "assets/ghost", Ext: "png"},
-				},
-			},
-		},
-	}, map[string]string{"assets/unchanged": "png-bytes"})
+	files := hashedUploads("metadata.json", "assets/unchanged", "assets/new")
+	storeBlob(t, h.appId, files[2])
 
 	resp, err := svc.RequestUploadURLs(ctx, RequestUploadURLParams{
 		RequestID:      "test",
@@ -86,30 +57,35 @@ func TestRequestUploadURLs_DedupsUnchangedAssets(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames: []string{
-			"metadata.json",
-			"expoConfig.json",
-			"bundles/ios-new.hbc",
-			"assets/unchanged",
-			"assets/ghost",
-		},
+		Files:          files,
 	})
 	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{launchAssetPath, "metadata.json", "assets/new"}, requestedFilePaths(resp))
+}
 
-	assert.ElementsMatch(t, []string{
-		"metadata.json",
-		"expoConfig.json",
-		"bundles/ios-new.hbc",
-		"assets/ghost",
-	}, requestedFilePaths(resp))
+// The cas folder is per app, not per branch or platform: a blob uploaded by an
+// ios publish is not uploaded again by an android one on another branch.
+func TestRequestUploadURLs_DedupIsAppWide(t *testing.T) {
+	svc, h := newDedupTestHarness(t)
+	ctx := context.Background()
 
-	copied, err := os.ReadFile(filepath.Join(base, h.appId, "main", "1", strconv.FormatInt(resp.UpdateID, 10), "assets", "unchanged"))
+	shared := hashedUpload("assets/shared")
+	storeBlob(t, h.appId, shared)
+
+	resp, err := svc.RequestUploadURLs(ctx, RequestUploadURLParams{
+		RequestID:      "test",
+		AppID:          h.appId,
+		BranchName:     "other",
+		Platform:       "android",
+		RuntimeVersion: "1",
+		Files:          append(hashedUploads("metadata.json"), shared),
+	})
 	require.NoError(t, err)
-	assert.Equal(t, "png-bytes", string(copied))
+	assert.ElementsMatch(t, []string{launchAssetPath, "metadata.json"}, requestedFilePaths(resp))
 }
 
 func TestRequestUploadURLs_FirstPublishSkipsDedup(t *testing.T) {
-	svc, h, _ := newDedupTestHarness(t)
+	svc, h := newDedupTestHarness(t)
 	ctx := context.Background()
 
 	resp, err := svc.RequestUploadURLs(ctx, RequestUploadURLParams{
@@ -118,38 +94,8 @@ func TestRequestUploadURLs_FirstPublishSkipsDedup(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames:      []string{"metadata.json", "assets/aaa"},
+		Files:          hashedUploads("metadata.json", "assets/aaa"),
 	})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"metadata.json", "assets/aaa"}, requestedFilePaths(resp))
-}
-
-func TestRequestUploadURLs_DedupIgnoresOtherPlatformUpdates(t *testing.T) {
-	svc, h, base := newDedupTestHarness(t)
-	ctx := context.Background()
-
-	prev := h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
-	writePreviousUpdateFiles(t, base, h.appId, prev, types.MetadataObject{
-		Version: 0,
-		Bundler: "metro",
-		FileMetadata: types.FileMetadata{
-			IOS: types.PlatformMetadata{
-				Bundle: "bundles/ios-old.hbc",
-				Assets: []types.Asset{{Path: "assets/shared", Ext: "png"}},
-			},
-		},
-	}, map[string]string{"assets/shared": "png-bytes"})
-
-	// No android update exists yet, so an android publish must upload
-	// everything even though an ios update holds the same asset.
-	resp, err := svc.RequestUploadURLs(ctx, RequestUploadURLParams{
-		RequestID:      "test",
-		AppID:          h.appId,
-		BranchName:     "main",
-		Platform:       "android",
-		RuntimeVersion: "1",
-		FileNames:      []string{"metadata.json", "assets/shared"},
-	})
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"metadata.json", "assets/shared"}, requestedFilePaths(resp))
+	assert.ElementsMatch(t, []string{launchAssetPath, "metadata.json", "assets/aaa"}, requestedFilePaths(resp))
 }

@@ -41,6 +41,9 @@ var (
 	// ErrPublishGroupNotFound refuses a group operation whose target has no
 	// checked member on this branch and runtime version.
 	ErrPublishGroupNotFound = errors.New("no published updates found for this publish group on this branch and runtime version")
+	// ErrLaunchAssetRequired refuses a publish whose file list names no bundle,
+	// or names several: neither can produce a manifest.
+	ErrLaunchAssetRequired = errors.New("expected exactly one launch asset in the file list")
 )
 
 type ProcessUpdateParams struct {
@@ -61,6 +64,64 @@ type RequestLocalFileUploadParams struct {
 	Body       multipart.File
 }
 
+// FileRole is what a published file is to the update. Only the launch asset
+// and the assets end up in the manifest; the config files are stored and
+// served as-is.
+type FileRole string
+
+const (
+	FileRoleLaunch FileRole = "launch"
+	FileRoleAsset  FileRole = "asset"
+	FileRoleConfig FileRole = "config"
+)
+
+// FileUploadItem is one file of one platform's publish. Key and Ext are the
+// manifest data the CLI already computed; the server derives contentType and
+// fileExtension from Ext so a single mime table decides them.
+type FileUploadItem struct {
+	Path string   `json:"path"`
+	Hash string   `json:"hash"`
+	Key  string   `json:"key,omitempty"`
+	Ext  string   `json:"ext,omitempty"`
+	Role FileRole `json:"role"`
+}
+
+// assetMapping is the manifest half of the file list: the roles the CLI stamped
+// on each file are what says which platform's bundle this is, so nothing has to
+// be inferred from a file name.
+func assetMapping(files []FileUploadItem) (*types.UpdateAssetMapping, error) {
+	mapping := types.UpdateAssetMapping{Assets: []types.ShapedAsset{}}
+	launchAssets := 0
+	for _, file := range files {
+		switch file.Role {
+		case FileRoleLaunch:
+			mapping.LaunchAsset = shapeAsset(file, true)
+			launchAssets++
+		case FileRoleAsset:
+			mapping.Assets = append(mapping.Assets, shapeAsset(file, false))
+		case FileRoleConfig:
+			mapping.ConfigFiles = append(mapping.ConfigFiles, types.ConfigFile{Path: file.Path, Hash: file.Hash})
+		}
+	}
+	if launchAssets != 1 {
+		return nil, fmt.Errorf("%w: got %d", ErrLaunchAssetRequired, launchAssets)
+	}
+	return &mapping, nil
+}
+
+func shapeAsset(file FileUploadItem, isLaunchAsset bool) types.ShapedAsset {
+	extension := file.Ext
+	if isLaunchAsset {
+		extension = "bundle"
+	}
+	return types.ShapedAsset{
+		Hash:          file.Hash,
+		Key:           file.Key,
+		FileExtension: "." + extension,
+		ContentType:   update2.AssetContentType(file.Ext, isLaunchAsset),
+	}
+}
+
 type RequestUploadURLParams struct {
 	RequestID      string
 	AppID          string
@@ -68,8 +129,10 @@ type RequestUploadURLParams struct {
 	Platform       types.Platform
 	CommitHash     string
 	RuntimeVersion string
-	FileNames      []string
-	Message        string
+	// Files is one platform's publish: its launch asset, its assets, and the
+	// config files. Never the other platform's.
+	Files   []FileUploadItem
+	Message string
 	// Non-nil publishes the update as a progressive rollout served to this share
 	// of devices (1-99).
 	RolloutPercentage *int
@@ -141,7 +204,12 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 		return err
 	}
 
-	errorVerify := update2.VerifyUploadedUpdate(*currentUpdate)
+	mapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, *currentUpdate)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error getting asset mapping: %v", params.RequestID, err)
+		return err
+	}
+	errorVerify := update2.VerifyUploadedUpdate(ctx, *currentUpdate, mapping)
 	if errorVerify != nil {
 		log.Printf("[RequestID: %s] Invalid update, deleting folder...", params.RequestID)
 		err := s.bucket.DeleteUpdateFolder(params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID)
@@ -152,56 +220,16 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 		log.Printf("[RequestID: %s] Invalid update, folder deleted", params.RequestID)
 		return fmt.Errorf("%w: %s", ErrInvalidUpdate, errorVerify)
 	}
-	latestUpdate, err := s.updateService.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
-	shouldMarkAsChecked := false
 
+	err = s.MarkUpdateAsChecked(ctx, *currentUpdate, types.NormalUpdate)
 	if err != nil {
-		log.Printf("[RequestID: %s] Warning: store.GetLatestUpdate returned error, falling back to checked state: %v", params.RequestID, err)
-		shouldMarkAsChecked = true
-	} else if latestUpdate == nil {
-		log.Printf("[RequestID: %s] No latest update found, marking current update as checked", params.RequestID)
-		shouldMarkAsChecked = true
-	}
-
-	if shouldMarkAsChecked {
-		err = s.MarkUpdateAsChecked(ctx, *currentUpdate, types.NormalUpdate)
-		if err != nil {
-			log.Printf("[RequestID: %s] Error marking update as checked: %v", params.RequestID, err)
-			return err
-		}
-		log.Printf("[RequestID: %s] Latest update evaluation triggered auto-check routine.", params.RequestID)
-		s.recordDeliveryEvent(ctx, auditlog.ActionUpdatePublished, *currentUpdate,
-			map[string]any{"platform": string(params.Platform)})
-		return nil
-	}
-
-	areUpdatesIdentical, err := update2.AreUpdatesIdentical(*currentUpdate, *latestUpdate)
-	if err != nil {
-		log.Printf("[RequestID: %s] Error comparing updates: %v", params.RequestID, err)
+		log.Printf("[RequestID: %s] Error marking update as checked: %v", params.RequestID, err)
 		return err
 	}
-
-	if !areUpdatesIdentical {
-		err = s.MarkUpdateAsChecked(ctx, *currentUpdate, types.NormalUpdate)
-		if err != nil {
-			log.Printf("[RequestID: %s] Error marking update as checked: %v", params.RequestID, err)
-			return err
-		}
-		log.Printf("[RequestID: %s] Updates are not identical, update marked as checked", params.RequestID)
-		s.recordDeliveryEvent(ctx, auditlog.ActionUpdatePublished, *currentUpdate,
-			map[string]any{"platform": string(params.Platform)})
-		return nil
-	}
-
-	log.Printf("[RequestID: %s] Updates are identical, delete folder...", params.RequestID)
-	err = s.bucket.DeleteUpdateFolder(params.AppID, params.BranchName, params.RuntimeVersion, currentUpdate.UpdateId)
-	if err != nil {
-		log.Printf("[RequestID: %s] Error deleting update folder: %v", params.RequestID, err)
-		return err
-	}
-	log.Printf("[RequestID: %s] Updates are identical, folder deleted", params.RequestID)
-
-	return ErrNoChangesDetected
+	log.Printf("[RequestID: %s] Update marked as checked", params.RequestID)
+	s.recordDeliveryEvent(ctx, auditlog.ActionUpdatePublished, *currentUpdate,
+		map[string]any{"platform": string(params.Platform)})
+	return nil
 }
 
 func getUpdateUUIDFromMetadata(update types.Update) string {
@@ -289,56 +317,76 @@ func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params R
 	return nil
 }
 
-// dedupExistingUploadAssets copies the requested files that already exist in
-// the branch's latest update into newUpdate's folder and returns the file
-// names it copied, so the caller can skip requesting uploads for them. Any
-// failure falls back to uploading: the returned slice just omits the file.
-func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, params RequestUploadURLParams, newUpdate types.Update) []string {
-	latestUpdate, err := s.updateService.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
-	if err != nil {
-		log.Printf("[RequestID: %s] Skipping asset dedup: %v", params.RequestID, err)
-		return nil
+// uploadFiles translates the publish's file list for the storage layer: only
+// the config files stay in the update folder.
+func uploadFiles(files []FileUploadItem) []bucket.UploadFile {
+	out := make([]bucket.UploadFile, 0, len(files))
+	for _, file := range files {
+		out = append(out, bucket.UploadFile{
+			Name:           file.Path,
+			Hash:           file.Hash,
+			InUpdateFolder: file.Role == FileRoleConfig,
+		})
 	}
-	if latestUpdate == nil {
-		return nil
-	}
-	latestUpdateMetadata, err := update2.GetMetadata(*latestUpdate)
-	if err != nil {
-		log.Printf("[RequestID: %s] Skipping asset dedup: %v", params.RequestID, err)
-		return nil
-	}
-	previousAssets := latestUpdateMetadata.MetadataJSON.FileMetadata.Android.Assets
-	if params.Platform == types.PlatformIOS {
-		previousAssets = latestUpdateMetadata.MetadataJSON.FileMetadata.IOS.Assets
-	}
+	return out
+}
 
-	var dedupedAssets []string
+// dedupExistingUploadAssets returns the files whose blob is already in cas, so
+// the caller can skip requesting an upload for them. Any failure falls back to
+// uploading: the returned slice just omits the file.
+func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, appId, requestID string, files []bucket.UploadFile) []string {
 	var mu sync.Mutex
+	var dedupedAssets []string
 	var g errgroup.Group
 	g.SetLimit(runtime.NumCPU())
-	// FileNames repeats assets shared by both platforms; copy each once.
-	seen := make(map[string]struct{}, len(params.FileNames))
-	for _, file := range params.FileNames {
-		if _, alreadySeen := seen[file]; alreadySeen {
+	// The list repeats assets shared by both platforms; check each once.
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file.InUpdateFolder {
 			continue
 		}
-		seen[file] = struct{}{}
-		if !slices.ContainsFunc(previousAssets, func(a types.Asset) bool { return a.Path == file }) {
+		if _, alreadySeen := seen[file.Name]; alreadySeen {
 			continue
 		}
+		seen[file.Name] = struct{}{}
 		g.Go(func() error {
-			if err := s.bucket.CopyFileIntoUpdate(*latestUpdate, newUpdate, file); err != nil {
-				log.Printf("[RequestID: %s] Error copying %s into update: %v", params.RequestID, file, err)
+			exists, err := s.bucket.BlobExists(ctx, appId, file.Hash)
+			if err != nil {
+				log.Printf("[RequestID: %s] Error while checking if blob exists, uploading %s: %v", requestID, file.Name, err)
 				return nil
 			}
-			mu.Lock()
-			dedupedAssets = append(dedupedAssets, file)
-			mu.Unlock()
+			if exists {
+				mu.Lock()
+				dedupedAssets = append(dedupedAssets, file.Name)
+				mu.Unlock()
+			}
 			return nil
 		})
 	}
 	_ = g.Wait()
 	return dedupedAssets
+}
+
+// isIdenticalToLatest reports whether this publish would re-ship the content the
+// branch already serves for the platform. A store that cannot answer never
+// blocks the publish.
+func (s *DeploymentService) isIdenticalToLatest(ctx context.Context, params RequestUploadURLParams, incoming *types.UpdateAssetMapping) bool {
+	// Straight to the repo: refusing a publish over a stale cached envelope
+	// would block re-shipping the previous good build after a bad one.
+	latest, err := s.updateRepo.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
+	if err != nil {
+		log.Printf("[RequestID: %s] Warning: GetLatestUpdate returned error, skipping identical check: %v", params.RequestID, err)
+		return false
+	}
+	if latest == nil {
+		return false
+	}
+	stored, err := s.updateRepo.GetUpdateAssetMapping(ctx, *latest)
+	if err != nil {
+		log.Printf("[RequestID: %s] Warning: GetUpdateAssetMapping returned error, skipping identical check: %v", params.RequestID, err)
+		return false
+	}
+	return update2.AreUpdatesIdentical(stored, incoming)
 }
 
 func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params RequestUploadURLParams) (*RequestUploadURLResponse, error) {
@@ -358,21 +406,27 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 		return nil, ErrActiveRolloutBlocksPublish
 	}
 
+	// Refused here rather than at markUpdateAsUploaded, where the same publish
+	// would die on the missing bundle after the CLI uploaded everything.
+	mapping, err := assetMapping(params.Files)
+	if err != nil {
+		log.Printf("[RequestID: %s] %v", params.RequestID, err)
+		return nil, err
+	}
+	if s.isIdenticalToLatest(ctx, params, mapping) {
+		log.Printf("[RequestID: %s] Updates are identical, refusing upload", params.RequestID)
+		return nil, ErrNoChangesDetected
+	}
+
 	updateId := update2.GenerateUpdateTimestamp(params.Platform)
-	updateStr := update2.ConvertUpdateTimestampToString(updateId)
 
-	dedupedAssets := s.dedupExistingUploadAssets(ctx, params, types.Update{
-		AppId:          params.AppID,
-		Branch:         params.BranchName,
-		RuntimeVersion: params.RuntimeVersion,
-		UpdateId:       updateStr,
-	})
+	files := uploadFiles(params.Files)
 
-	filesToUpload := params.FileNames
+	dedupedAssets := s.dedupExistingUploadAssets(ctx, params.AppID, params.RequestID, files)
 	if len(dedupedAssets) > 0 {
-		log.Printf("[RequestID: %s] Reusing %d unchanged assets from the previous update", params.RequestID, len(dedupedAssets))
-		filesToUpload = slices.DeleteFunc(slices.Clone(params.FileNames), func(file string) bool {
-			return slices.Contains(dedupedAssets, file)
+		log.Printf("[RequestID: %s] Reusing %d blobs already in cas", params.RequestID, len(dedupedAssets))
+		files = slices.DeleteFunc(files, func(file bucket.UploadFile) bool {
+			return slices.Contains(dedupedAssets, file.Name)
 		})
 	}
 
@@ -380,8 +434,8 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 		params.AppID,
 		params.BranchName,
 		params.RuntimeVersion,
-		updateStr,
-		filesToUpload,
+		update2.ConvertUpdateTimestampToString(updateId),
+		files,
 	)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error requesting upload urls: %v", params.RequestID, err)
@@ -422,6 +476,13 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	if newUpdate == nil {
 		log.Printf("[RequestID: %s] Error creating update record: no update returned", params.RequestID)
 		return nil, fmt.Errorf("failed to create update record: no update returned")
+	}
+	// Stored before the blobs it names exist. Every reader of a mapping goes
+	// through GetLatestUpdate, which only ever answers a checked update, so an
+	// abandoned publish leaves a mapping nobody can reach.
+	if err := s.updateRepo.StoreUpdateAssetMapping(ctx, *newUpdate, mapping); err != nil {
+		log.Printf("[RequestID: %s] Error storing update asset mapping: %v", params.RequestID, err)
+		return nil, err
 	}
 	updateIdInt, _ := strconv.ParseInt(newUpdate.UpdateId, 10, 64)
 

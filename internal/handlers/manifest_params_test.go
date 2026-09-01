@@ -139,7 +139,7 @@ func TestManifestParamsRejects(t *testing.T) {
 func TestServerDefinedHeadersCarriesTheVerdict(t *testing.T) {
 	// Tokens are opaque on the wire; the encoding is pinned in the services package.
 	params := services.ManifestRequestParams{SurfBlockTokens: "cHItMQAxMDA"}
-	result := services.ManifestResult{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "cHItMgAyMDA"}}
+	result := services.UpdateDecision{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "cHItMgAyMDA"}}
 
 	w := httptest.NewRecorder()
 	writeServerDefinedHeaders(w, serverDefinedHeaders(params, result))
@@ -154,7 +154,7 @@ func TestServerDefinedHeadersIsSilentWithoutARefusal(t *testing.T) {
 	params := services.ManifestRequestParams{SurfBlockTokens: "pr-1@100"}
 
 	w := httptest.NewRecorder()
-	writeServerDefinedHeaders(w, serverDefinedHeaders(params, services.ManifestResult{}))
+	writeServerDefinedHeaders(w, serverDefinedHeaders(params, services.UpdateDecision{}))
 
 	assert.Empty(t, w.Header().Get("expo-server-defined-headers"))
 }

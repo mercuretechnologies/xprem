@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 	"xprem/config"
 	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/cdn"
+	"xprem/internal/crypto"
 	"xprem/internal/handlers"
 	"xprem/internal/metrics"
 	infrastructure "xprem/internal/router"
@@ -78,7 +80,27 @@ func testUpdateType(update types.Update) (types.UpdateType, error) {
 		GetUpdateType(context.Background(), update)
 }
 
+// fixtureCasBlobs is the checked-in content of the fixture cas dir, captured
+// before any test writes into it, so cleanup knows which blobs are fixtures.
+var fixtureCasBlobs = map[string]struct{}{}
+var fixtureCasSnapshotOK bool
+var fixtureCasOnce sync.Once
+
 func GlobalBeforeEach() {
+	fixtureCasOnce.Do(func() {
+		projectRoot, err := findProjectRoot()
+		if err != nil {
+			return
+		}
+		blobs, err := os.ReadDir(filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas"))
+		if err != nil {
+			return
+		}
+		for _, blob := range blobs {
+			fixtureCasBlobs[blob.Name()] = struct{}{}
+		}
+		fixtureCasSnapshotOK = true
+	})
 	metrics.CleanupMetrics()
 	cache := cache2.GetCache()
 	_ = cache.Clear()
@@ -99,6 +121,29 @@ func GlobalAfterEach(t *testing.T) {
 		// Clean both legacy path (./updates/DO_NOT_USE) and v2 multi-app path
 		// (./updates/test-app-id/DO_NOT_USE), tests mix both depending on how
 		// they set LOCAL_BUCKET_BASE_PATH.
+		// The cas folders hold the blobs a presign run wrote: left behind, the
+		// next run sees them as already uploaded and skips the upload requests.
+		for _, casPath := range []string{
+			filepath.Join(projectRoot, "./updates/cas"),
+			filepath.Join(projectRoot, "./updates/test-app-id/cas"),
+		} {
+			if err := os.RemoveAll(casPath); err != nil {
+				t.Errorf("Error removing cas directory: %v", err)
+			}
+		}
+		// The fixture cas dir is checked in (the CAS-mode fixtures reference its
+		// blobs), so only blobs a test wrote on top of it are removed. Without a
+		// snapshot the filter would treat every checked-in blob as test-written.
+		fixtureCas := filepath.Join(projectRoot, "./test/test-updates/test-app-id/cas")
+		if blobs, err := os.ReadDir(fixtureCas); err == nil && fixtureCasSnapshotOK {
+			for _, blob := range blobs {
+				if _, isFixture := fixtureCasBlobs[blob.Name()]; !isFixture {
+					if err := os.Remove(filepath.Join(fixtureCas, blob.Name())); err != nil {
+						t.Errorf("Error removing test-written blob: %v", err)
+					}
+				}
+			}
+		}
 		for _, updatesPath := range []string{
 			filepath.Join(projectRoot, "./updates/DO_NOT_USE"),
 			filepath.Join(projectRoot, "./updates/test-app-id/DO_NOT_USE"),
@@ -400,35 +445,59 @@ func mockExpoForRequestUploadUrlTest(channelName string) {
 		})
 }
 
-func ComputeUploadRequestsInput(dirPath string) handlers.FileNamesRequest {
-	metadataFilePath := filepath.Join(dirPath, "metadata.json")
-	metadataFile, err := os.Open(metadataFilePath)
+// ComputeUploadRequestsInput mirrors what eoas posts for one platform: that
+// platform's launch asset and assets, plus the config files, each stamped with
+// its role.
+func ComputeUploadRequestsInput(dirPath string, platform types.Platform) handlers.RequestUploadURLsRequest {
+	metadataFile, err := os.Open(filepath.Join(dirPath, "metadata.json"))
 	if err != nil {
 		panic(err)
 	}
 	defer metadataFile.Close()
 	var metadataObject types.MetadataObject
-	err = json.NewDecoder(metadataFile).Decode(&metadataObject)
+	if err := json.NewDecoder(metadataFile).Decode(&metadataObject); err != nil {
+		panic(err)
+	}
+	item := func(relativePath, ext string, role services.FileRole) services.FileUploadItem {
+		data, err := os.ReadFile(filepath.Join(dirPath, relativePath))
+		if err != nil {
+			panic(err)
+		}
+		sum, err := crypto.CreateHash(data, "sha256", "base64")
+		if err != nil {
+			panic(err)
+		}
+		file := services.FileUploadItem{
+			Path: relativePath,
+			Hash: crypto.GetBase64URLEncoding(sum),
+			Ext:  ext,
+			Role: role,
+		}
+		if role != services.FileRoleConfig {
+			key, err := crypto.CreateHash(data, "md5", "hex")
+			if err != nil {
+				panic(err)
+			}
+			file.Key = key
+		}
+		return file
+	}
+	files := []services.FileUploadItem{
+		item("metadata.json", "json", services.FileRoleConfig),
+		item("expoConfig.json", "json", services.FileRoleConfig),
+	}
+	platformMetadata, err := metadataObject.FileMetadata.PlatformMetadata(platform)
 	if err != nil {
 		panic(err)
 	}
-	fileNames := make([]string, 0)
-	for _, asset := range metadataObject.FileMetadata.IOS.Assets {
-		fileNames = append(fileNames, asset.Path)
+	if platformMetadata.Bundle == "" {
+		panic("no bundle declared for platform " + string(platform) + " in " + dirPath)
 	}
-	for _, asset := range metadataObject.FileMetadata.Android.Assets {
-		fileNames = append(fileNames, asset.Path)
+	files = append(files, item(platformMetadata.Bundle, "hbc", services.FileRoleLaunch))
+	for _, asset := range platformMetadata.Assets {
+		files = append(files, item(asset.Path, asset.Ext, services.FileRoleAsset))
 	}
-	if metadataObject.FileMetadata.Android.Bundle != "" {
-		fileNames = append(fileNames, metadataObject.FileMetadata.Android.Bundle)
-	}
-	if metadataObject.FileMetadata.IOS.Bundle != "" {
-		fileNames = append(fileNames, metadataObject.FileMetadata.IOS.Bundle)
-	}
-	// Add metadata.json & expoConfig.json
-	fileNames = append(fileNames, "metadata.json")
-	fileNames = append(fileNames, "expoConfig.json")
-	return handlers.FileNamesRequest{FileNames: fileNames}
+	return handlers.RequestUploadURLsRequest{Files: files}
 }
 
 func ChangeModTime(filePath string, newTime time.Time) error {

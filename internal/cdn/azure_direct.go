@@ -32,3 +32,9 @@ func (c *AzureBlobDirectCDN) ComputeRedirectionURLForAsset(appId, branch, runtim
 	key := bucket.ResolveKeyPrefix() + fmt.Sprintf("%s/%s/%s/%s/%s", appId, branch, runtimeVersion, updateId, asset)
 	return azure.SignBlobSAS(containerName, key, sas.BlobPermissions{Read: true}, 15*time.Minute)
 }
+
+func (c *AzureBlobDirectCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
+	containerName := config.GetEnv("AZURE_BLOB_CONTAINER_NAME")
+	key := bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash)
+	return azure.SignBlobSAS(containerName, key, sas.BlobPermissions{Read: true}, 15*time.Minute)
+}

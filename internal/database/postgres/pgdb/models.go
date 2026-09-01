@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 type ApiKey struct {
@@ -64,6 +65,14 @@ type AuditLogEvent struct {
 	Ip            string             `json:"ip"`
 	UserAgent     string             `json:"user_agent"`
 	Metadata      []byte             `json:"metadata"`
+}
+
+type Blob struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	Hash        string             `json:"hash"`
+	Size        int64              `json:"size"`
+	ContentType string             `json:"content_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Branch struct {
@@ -258,19 +267,20 @@ type SsoIdentity struct {
 }
 
 type Update struct {
-	ID                int64              `json:"id"`
-	UpdateUuid        pgtype.UUID        `json:"update_uuid"`
-	BranchID          int64              `json:"branch_id"`
-	RuntimeVersionID  int64              `json:"runtime_version_id"`
-	UpdateType        int32              `json:"update_type"`
-	CommitHash        string             `json:"commit_hash"`
-	Message           *string            `json:"message"`
-	Platform          string             `json:"platform"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
-	RolloutPercentage *int32             `json:"rollout_percentage"`
-	ControlUpdateID   *int64             `json:"control_update_id"`
-	PublishGroup      pgtype.UUID        `json:"publish_group"`
+	ID                int64                     `json:"id"`
+	UpdateUuid        pgtype.UUID               `json:"update_uuid"`
+	BranchID          int64                     `json:"branch_id"`
+	RuntimeVersionID  int64                     `json:"runtime_version_id"`
+	UpdateType        int32                     `json:"update_type"`
+	CommitHash        string                    `json:"commit_hash"`
+	Message           *string                   `json:"message"`
+	Platform          string                    `json:"platform"`
+	CreatedAt         pgtype.Timestamptz        `json:"created_at"`
+	CheckedAt         pgtype.Timestamptz        `json:"checked_at"`
+	RolloutPercentage *int32                    `json:"rollout_percentage"`
+	ControlUpdateID   *int64                    `json:"control_update_id"`
+	PublishGroup      pgtype.UUID               `json:"publish_group"`
+	AssetMapping      *types.UpdateAssetMapping `json:"asset_mapping"`
 }
 
 type User struct {

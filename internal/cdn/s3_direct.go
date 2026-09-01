@@ -37,6 +37,10 @@ func (c *S3DirectCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersio
 	return presignGetObject(key)
 }
 
+func (c *S3DirectCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
+	return presignGetObject(bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash))
+}
+
 func presignGetObject(key string) (string, error) {
 	s3Client, err := aws.GetS3Client()
 	if err != nil {

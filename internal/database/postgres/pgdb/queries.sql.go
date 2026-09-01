@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 const adoptionBreakdown = `-- name: AdoptionBreakdown :many
@@ -1031,6 +1032,67 @@ func (q *Queries) GetAuditExportCursor(ctx context.Context) (int64, error) {
 	return last_exported_id, err
 }
 
+const getBlob = `-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2
+`
+
+type GetBlobParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Hash  string      `json:"hash"`
+}
+
+func (q *Queries) GetBlob(ctx context.Context, arg GetBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, getBlob, arg.AppID, arg.Hash)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getBlobsByHashes = `-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY($2::text[])
+`
+
+type GetBlobsByHashesParams struct {
+	AppID  pgtype.UUID `json:"app_id"`
+	Hashes []string    `json:"hashes"`
+}
+
+func (q *Queries) GetBlobsByHashes(ctx context.Context, arg GetBlobsByHashesParams) ([]Blob, error) {
+	rows, err := q.db.Query(ctx, getBlobsByHashes, arg.AppID, arg.Hashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Blob
+	for rows.Next() {
+		var i Blob
+		if err := rows.Scan(
+			&i.AppID,
+			&i.Hash,
+			&i.Size,
+			&i.ContentType,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getBranchByName = `-- name: GetBranchByName :one
 SELECT id FROM branches
 WHERE name = $1 AND app_id = $2
@@ -1614,7 +1676,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id
@@ -1650,6 +1713,7 @@ type GetLatestUpdateWithRolloutRow struct {
 	ControlID         *int64             `json:"control_id"`
 	ControlCreatedAt  pgtype.Timestamptz `json:"control_created_at"`
 	ControlUpdateType *int32             `json:"control_update_type"`
+	ControlUpdateUuid pgtype.UUID        `json:"control_update_uuid"`
 }
 
 // Latest checked update for (branch, rtv, platform) plus its control, resolved through
@@ -1678,6 +1742,7 @@ func (q *Queries) GetLatestUpdateWithRollout(ctx context.Context, arg GetLatestU
 		&i.ControlID,
 		&i.ControlCreatedAt,
 		&i.ControlUpdateType,
+		&i.ControlUpdateUuid,
 	)
 	return i, err
 }
@@ -2021,8 +2086,28 @@ func (q *Queries) GetSurfableBranches(ctx context.Context, arg GetSurfableBranch
 	return items, nil
 }
 
+const getUpdateAssetMapping = `-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3
+`
+
+type GetUpdateAssetMappingParams struct {
+	ID    int64       `json:"id"`
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) GetUpdateAssetMapping(ctx context.Context, arg GetUpdateAssetMappingParams) (*types.UpdateAssetMapping, error) {
+	row := q.db.QueryRow(ctx, getUpdateAssetMapping, arg.ID, arg.AppID, arg.Name)
+	var asset_mapping *types.UpdateAssetMapping
+	err := row.Scan(&asset_mapping)
+	return asset_mapping, err
+}
+
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -2053,6 +2138,7 @@ type GetUpdateByBranchNameAndRuntimeRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	RolloutPercentage *int32             `json:"rollout_percentage"`
 	ControlUpdateID   *int64             `json:"control_update_id"`
+	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
 }
 
 // app_id is load-bearing, not redundant: pk_updates is (branch_id, id), so an
@@ -2080,6 +2166,7 @@ func (q *Queries) GetUpdateByBranchNameAndRuntime(ctx context.Context, arg GetUp
 		&i.CreatedAt,
 		&i.RolloutPercentage,
 		&i.ControlUpdateID,
+		&i.CheckedAt,
 	)
 	return i, err
 }
@@ -2904,6 +2991,40 @@ func (q *Queries) InsertAuditLogEvent(ctx context.Context, arg InsertAuditLogEve
 		&i.Ip,
 		&i.UserAgent,
 		&i.Metadata,
+	)
+	return i, err
+}
+
+const insertBlob = `-- name: InsertBlob :one
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at
+`
+
+type InsertBlobParams struct {
+	AppID       pgtype.UUID `json:"app_id"`
+	Hash        string      `json:"hash"`
+	Size        int64       `json:"size"`
+	ContentType string      `json:"content_type"`
+}
+
+// ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+// the caller treats that as "already in cas/".
+func (q *Queries) InsertBlob(ctx context.Context, arg InsertBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, insertBlob,
+		arg.AppID,
+		arg.Hash,
+		arg.Size,
+		arg.ContentType,
+	)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -5321,6 +5442,33 @@ func (q *Queries) SetBranchProtected(ctx context.Context, arg SetBranchProtected
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setUpdateAssetMapping = `-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+)
+`
+
+type SetUpdateAssetMappingParams struct {
+	ID           int64                     `json:"id"`
+	AssetMapping *types.UpdateAssetMapping `json:"asset_mapping"`
+	AppID        pgtype.UUID               `json:"app_id"`
+	Name         string                    `json:"name"`
+}
+
+func (q *Queries) SetUpdateAssetMapping(ctx context.Context, arg SetUpdateAssetMappingParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setUpdateAssetMapping,
+		arg.ID,
+		arg.AssetMapping,
+		arg.AppID,
+		arg.Name,
+	)
 }
 
 const setUpdateRolloutPercentage = `-- name: SetUpdateRolloutPercentage :execrows

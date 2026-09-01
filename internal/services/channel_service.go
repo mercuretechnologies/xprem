@@ -92,7 +92,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, appId string, branch
 	// A channel that did not exist is now cached as "no surfing" for the TTL, so
 	// creating one under a name that was ever asked for would answer 404 until
 	// that entry aged out.
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return channelId, nil
 }
 
@@ -116,7 +116,7 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelName string, 
 	// deleted channel would keep answering /branch_lists for the rest of the TTL
 	// — and a channel recreated under the same name would inherit the permission
 	// it was never given.
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (s *ChannelService) SetBranchSurfing(ctx context.Context, appId string, cha
 		},
 	})
 	invalidateChannelCaches(appId)
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return nil
 }
 

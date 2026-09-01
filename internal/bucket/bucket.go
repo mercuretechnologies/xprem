@@ -2,6 +2,8 @@ package bucket
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +22,11 @@ var s3KeyPrefixDeprecationOnce sync.Once
 // updateId, migrationId). Keeps DoS surface small on map keys and
 // filesystem paths while staying comfortably above realistic names
 // (UUIDs are 36, semver+build metadata under 100).
-const maxSegmentLen = 128
+const (
+	maxSegmentLen  = 128
+	casDir         = "cas"
+	blobHashLength = 43
+)
 
 // copyFileTimeout bounds a single CopyFileIntoUpdate provider call, so a
 // stalled copy degrades into a regular upload instead of hanging the publish.
@@ -79,6 +85,38 @@ func validateRelativePath(name, value string) error {
 		}
 	}
 	return nil
+}
+
+func ValidateBlobHash(hash string) error {
+	if len(hash) != blobHashLength {
+		return fmt.Errorf("invalid hash: must be %d characters", blobHashLength)
+	}
+	// Strict rejects spellings with non-zero trailing padding bits, which
+	// decode to the same digest but would mint a second CAS key.
+	if _, err := base64.RawURLEncoding.Strict().DecodeString(hash); err != nil {
+		return fmt.Errorf("invalid hash: must be canonical base64url")
+	}
+	return nil
+}
+
+func ValidateUploadFile(name, hash string) error {
+	if err := validateRelativePath("file name", name); err != nil {
+		return err
+	}
+	return ValidateBlobHash(hash)
+}
+
+func ReservedBranchName(branch string) bool {
+	return branch == casDir
+}
+
+// BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
+func BlobObjectKey(appId, hash string) string {
+	return appId + "/" + casDir + "/" + hash
+}
+
+func prefixedBlobKey(prefix, appId, hash string) string {
+	return prefix + BlobObjectKey(appId, hash)
 }
 
 func validateUpdate(u *types.Update) error {
@@ -159,6 +197,10 @@ type Bucket interface {
 	RemoveMigrationFromHistory(migrationId string) error
 	GetInstanceID() (string, error)
 	PersistInstanceID(id string) error
+	BlobExists(ctx context.Context, appId, hash string) (bool, error)
+	GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error)
+	PutBlob(ctx context.Context, appId, hash string, body io.Reader) error
+	RequestBlobUploadURL(appId, hash, branch string) (string, error)
 }
 
 type BucketType string
@@ -245,6 +287,8 @@ type FileUploadRequest struct {
 	RequestUploadUrl string `json:"requestUploadUrl"`
 	FileName         string `json:"fileName"`
 	FilePath         string `json:"filePath"`
+	OriginalFileName string `json:"originalFileName"`
+	Hash             string `json:"hash"`
 	// Headers must be sent verbatim by the uploader on its PUT to
 	// RequestUploadUrl. Azure Put Blob rejects requests missing
 	// x-ms-blob-type, and carrying the requirement in the response keeps
@@ -252,41 +296,71 @@ type FileUploadRequest struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-func RequestUploadUrlsForFileUpdates(appId string, branch string, runtimeVersion string, updateId string, fileNames []string) ([]FileUploadRequest, error) {
-	uniqueFileNames := make(map[string]struct{})
-	for _, fileName := range fileNames {
-		uniqueFileNames[fileName] = struct{}{}
-	}
+type UploadFile struct {
+	Name string
+	Hash string
+	// InUpdateFolder routes the presign to the update folder instead of
+	// cas/{hash}. metadata.json differs on every publish by construction and
+	// expoConfig.json is a kilobyte, so addressing them by content buys nothing
+	// and would cost the manifest its only way to read them back.
+	InUpdateFolder bool
+}
 
-	bucket := GetBucket()
-	var uploadHeaders map[string]string
+// uploadHeaders are the headers the uploader must send verbatim on its PUT.
+func uploadHeaders(bucket Bucket) map[string]string {
 	if _, ok := UnwrapBucket(bucket).(*AzureBucket); ok {
-		uploadHeaders = map[string]string{"x-ms-blob-type": "BlockBlob"}
+		return map[string]string{"x-ms-blob-type": "BlockBlob"}
+	}
+	return nil
+}
+
+// RequestUploadUrlsForFileUpdates presigns one publish's uploads, routing each
+// file by where it lives: cas/{hash} for content-addressed files, the update
+// folder for the rest.
+func RequestUploadUrlsForFileUpdates(appId, branch, runtimeVersion, updateId string, files []UploadFile) ([]FileUploadRequest, error) {
+	resolvedBucket := GetBucket()
+	headers := uploadHeaders(resolvedBucket)
+
+	// Several files may name the same blob; presign it once.
+	toSign := make([]UploadFile, 0, len(files))
+	seenBlobs := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if !file.InUpdateFolder {
+			if _, dup := seenBlobs[file.Hash]; dup {
+				continue
+			}
+			seenBlobs[file.Hash] = struct{}{}
+		}
+		toSign = append(toSign, file)
 	}
 
-	var requests []FileUploadRequest
-	var mu sync.Mutex
+	requests := make([]FileUploadRequest, len(toSign))
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(uniqueFileNames))
-
-	wg.Add(len(uniqueFileNames))
-	for fileName := range uniqueFileNames {
-		go func(fileName string) {
+	errChan := make(chan error, len(toSign))
+	wg.Add(len(toSign))
+	for i, file := range toSign {
+		go func(index int, file UploadFile) {
 			defer wg.Done()
-			requestUploadUrl, err := bucket.RequestUploadUrlForFileUpdate(appId, branch, runtimeVersion, updateId, fileName)
+			var requestUploadUrl string
+			var err error
+			if file.InUpdateFolder {
+				requestUploadUrl, err = resolvedBucket.RequestUploadUrlForFileUpdate(appId, branch, runtimeVersion, updateId, file.Name)
+			} else {
+				requestUploadUrl, err = resolvedBucket.RequestBlobUploadURL(appId, file.Hash, branch)
+			}
 			if err != nil {
 				errChan <- err
 				return
 			}
-			mu.Lock()
-			requests = append(requests, FileUploadRequest{
+			requests[index] = FileUploadRequest{
 				RequestUploadUrl: requestUploadUrl,
-				FileName:         filepath.Base(fileName),
-				FilePath:         fileName,
-				Headers:          uploadHeaders,
-			})
-			mu.Unlock()
-		}(fileName)
+				FileName:         filepath.Base(file.Name),
+				FilePath:         file.Name,
+				OriginalFileName: file.Name,
+				Hash:             file.Hash,
+				Headers:          headers,
+			}
+		}(i, file)
 	}
 
 	wg.Wait()

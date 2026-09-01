@@ -13,7 +13,7 @@ const credentials = { token: 'test-token', sessionSecret: undefined };
 
 function baseParams(): Parameters<typeof requestUploadUrls>[0] {
   return {
-    body: { fileNames: ['bundle.js'] },
+    body: { files: [{ path: 'bundles/bundle.js', hash: 'bundle-hash', role: 'launch' as const }] },
     requestUploadUrl: 'https://ota.example.com/app-1/requestUploadUrl/main',
     auth: credentials,
     runtimeVersion: '1.0.0',
@@ -65,6 +65,7 @@ describe('requestUploadUrls response schema', () => {
     requestUploadUrl: 'https://storage.example.com/upload/bundle.js',
     fileName: 'bundle.js',
     filePath: 'bundle.js',
+    originalFileName: 'bundle.js',
   };
 
   it('accepts a well-formed response and its optional headers', async () => {
@@ -119,7 +120,19 @@ describe('requestUploadUrls response schema', () => {
     ],
     [
       'a missing requestUploadUrl',
-      { updateId: '1', uploadRequests: [{ fileName: 'bundle.js', filePath: 'bundle.js' }] },
+      {
+        updateId: '1',
+        uploadRequests: [
+          { fileName: 'bundle.js', filePath: 'bundle.js', originalFileName: 'bundle.js' },
+        ],
+      },
+    ],
+    [
+      'a missing originalFileName',
+      {
+        updateId: '1',
+        uploadRequests: [{ ...validItem, originalFileName: undefined }],
+      },
     ],
     [
       'a non-http upload URL',
@@ -146,6 +159,32 @@ describe('requestUploadUrls response schema', () => {
   });
 });
 
+describe('requestUploadUrls file list wire contract', () => {
+  it('sends the roled file list in the body', async () => {
+    respondWith({ updateId: '1', uploadRequests: [] });
+    const files = [
+      { path: 'metadata.json', hash: 'meta-hash', role: 'config' as const },
+      {
+        path: 'bundles/ios.hbc',
+        hash: 'launch-hash',
+        key: 'launch-key',
+        ext: 'hbc',
+        role: 'launch' as const,
+      },
+      {
+        path: 'assets/icon.png',
+        hash: 'asset-hash',
+        key: 'asset-key',
+        ext: 'png',
+        role: 'asset' as const,
+      },
+    ];
+    await requestUploadUrls({ ...baseParams(), body: { files } });
+    const calls = vi.mocked(fetchWithRetries).mock.calls;
+    expect(JSON.parse(String(calls[calls.length - 1][1]?.body)).files).toEqual(files);
+  });
+});
+
 describe('requestUploadUrls rollout guardrails', () => {
   it('aborts when the server does not echo the rollout percentage', async () => {
     respondWith({ updateId: '1', uploadRequests: [] });
@@ -158,6 +197,17 @@ describe('requestUploadUrls rollout guardrails', () => {
     respondWith({ updateId: '1', uploadRequests: [], rolloutPercentage: 10 });
     const result = await requestUploadUrls({ ...baseParams(), rolloutPercentage: 10 });
     expect(result.rolloutPercentage).toBe(10);
+  });
+
+  it('surfaces an identical update as NoChangesDetectedError', async () => {
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
+      ok: false,
+      status: 406,
+      text: async () => 'no changes',
+    } as Response);
+    await expect(requestUploadUrls(baseParams())).rejects.toThrow(
+      'There is no change in the update for ios'
+    );
   });
 
   it('surfaces an active rollout conflict as the dedicated message', async () => {

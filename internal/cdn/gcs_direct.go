@@ -22,3 +22,9 @@ func (c *GCSDirectCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersi
 	key := bucket.ResolveKeyPrefix() + fmt.Sprintf("%s/%s/%s/%s/%s", appId, branch, runtimeVersion, updateId, asset)
 	return gcp.SignedURL(bucketName, key, "GET", "", 15*time.Minute)
 }
+
+func (c *GCSDirectCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
+	bucketName := config.GetEnv("GCS_BUCKET_NAME")
+	key := bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash)
+	return gcp.SignedURL(bucketName, key, "GET", "", 15*time.Minute)
+}

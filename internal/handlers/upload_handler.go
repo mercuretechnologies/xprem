@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"mime/multipart"
 	"net/http"
-	"path/filepath"
+	"regexp"
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/services"
@@ -27,9 +28,35 @@ func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHand
 	}
 }
 
-type FileNamesRequest struct {
-	FileNames []string `json:"fileNames"`
-	Message   string   `json:"message,omitempty"`
+type RequestUploadURLsRequest struct {
+	Files   []services.FileUploadItem `json:"files"`
+	Message string                    `json:"message,omitempty"`
+}
+
+// manifestKeyPattern is the md5 hex expo-updates uses as its on-device cache
+// key. Only its shape can be checked here: the bytes go straight to the bucket,
+// so nothing server-side ever sees what the digest was taken over.
+var manifestKeyPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// validateUploadFiles checks every file names a role and carries the manifest
+// data its role requires. How many of each a publish needs is the service's
+// rule, not the wire's.
+func validateUploadFiles(files []services.FileUploadItem) error {
+	for _, file := range files {
+		if err := bucket.ValidateUploadFile(file.Path, file.Hash); err != nil {
+			return fmt.Errorf("%s: %w", file.Path, err)
+		}
+		switch file.Role {
+		case services.FileRoleLaunch, services.FileRoleAsset:
+			if !manifestKeyPattern.MatchString(file.Key) {
+				return fmt.Errorf("%s: invalid key: must be md5 hex", file.Path)
+			}
+		case services.FileRoleConfig:
+		default:
+			return fmt.Errorf("%s: unknown role %q", file.Path, file.Role)
+		}
+	}
+	return nil
 }
 
 // parsePublishGroup reads the optional CLI-minted id grouping the per-platform
@@ -116,16 +143,6 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if errors.Is(err, services.ErrNoChangesDetected) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotAcceptable)
-
-			response := map[string]string{
-				"error": "You have already uploaded this update, no changes detected",
-			}
-			_ = json.NewEncoder(w).Encode(response)
-			return
-		}
 		if errors.Is(err, services.ErrActiveRolloutBlocksPublish) {
 			log.Printf("[RequestID: %s] Mark-as-uploaded blocked by active rollout: %v", requestID, err)
 			http.Error(w, activeRolloutConflictMessage, http.StatusConflict)
@@ -134,6 +151,10 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		if errors.Is(err, services.ErrRolloutSuperseded) {
 			log.Printf("[RequestID: %s] Rollout activation superseded by newer update: %v", requestID, err)
 			http.Error(w, services.ErrRolloutSuperseded.Error(), http.StatusConflict)
+			return
+		}
+		if validation.IsValidationError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -164,8 +185,7 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 	// No branch check here: the router already judged the branch this token
 	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
 
-	fileName := filepath.Base(filePath)
-	file, _, err := r.FormFile(fileName)
+	file, err := firstMultipartFile(r)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error retrieving file from form: %v", requestID, err)
 		http.Error(w, "Error retrieving file from form", http.StatusBadRequest)
@@ -277,7 +297,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var bodyReq FileNamesRequest
+	var bodyReq RequestUploadURLsRequest
 	if err := json.NewDecoder(r.Body).Decode(&bodyReq); err != nil {
 		log.Printf("[RequestID: %s] Error decoding JSON body: %v", requestID, err)
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
@@ -285,9 +305,14 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 	}
 	defer r.Body.Close()
 
-	if len(bodyReq.FileNames) == 0 {
+	if len(bodyReq.Files) == 0 {
 		log.Printf("[RequestID: %s] No file names provided", requestID)
 		http.Error(w, "No file names provided", http.StatusBadRequest)
+		return
+	}
+	if err := validateUploadFiles(bodyReq.Files); err != nil {
+		log.Printf("[RequestID: %s] Invalid upload file list: %v", requestID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -298,7 +323,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		Platform:          platform,
 		CommitHash:        commitHash,
 		RuntimeVersion:    runtimeVersion,
-		FileNames:         bodyReq.FileNames,
+		Files:             bodyReq.Files,
 		Message:           bodyReq.Message,
 		RolloutPercentage: rolloutPercentage,
 		PublishGroupID:    publishGroup,
@@ -309,6 +334,23 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		if errors.Is(err, services.ErrActiveRolloutBlocksPublish) {
 			log.Printf("[RequestID: %s] Publish blocked by active rollout: %v", requestID, err)
 			http.Error(w, activeRolloutConflictMessage, http.StatusConflict)
+			return
+		}
+		if errors.Is(err, services.ErrLaunchAssetRequired) {
+			log.Printf("[RequestID: %s] Publish refused: %v", requestID, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, services.ErrNoChangesDetected) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotAcceptable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "You have already uploaded this update, no changes detected",
+			})
+			return
+		}
+		if validation.IsValidationError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Error(w, "Internal server error processing payload URLs", http.StatusInternalServerError)
@@ -330,4 +372,16 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		log.Printf("[RequestID: %s] Error encoding response serialization: %v", requestID, err)
 	}
 
+}
+
+func firstMultipartFile(r *http.Request) (multipart.File, error) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		return nil, err
+	}
+	for _, files := range r.MultipartForm.File {
+		if len(files) > 0 {
+			return files[0].Open()
+		}
+	}
+	return nil, http.ErrMissingFile
 }

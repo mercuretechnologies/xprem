@@ -52,6 +52,9 @@ func (r *countingChannelRepo) GetBranchSurfing(ctx context.Context, appId, chann
 }
 
 func TestChannelBranchMappingCache(t *testing.T) {
+	// The service-layer mapping cache only exists on the control plane; in
+	// stateless mode the expo provider's own cache is the single layer.
+	t.Setenv("DB_URL", "postgres://stub")
 	repo := &countingChannelRepo{fakeChannelRepo: &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{
 		"production": {Id: "1", BranchName: "main", Rollout: &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 30}},
 	}}}

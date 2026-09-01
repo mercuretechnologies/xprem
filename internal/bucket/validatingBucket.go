@@ -1,7 +1,10 @@
 package bucket
 
 import (
+	"context"
+	"fmt"
 	"io"
+	"slices"
 	"xprem/internal/types"
 )
 
@@ -15,18 +18,33 @@ type validatingBucket struct {
 	Inner Bucket
 }
 
+func validateBranch(branch string) error {
+	if err := validateSegment("branch", branch); err != nil {
+		return err
+	}
+	if ReservedBranchName(branch) {
+		return fmt.Errorf("invalid branch: %q is reserved", branch)
+	}
+	return nil
+}
+
 func (v *validatingBucket) GetBranches(appId string) ([]string, error) {
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	return v.Inner.GetBranches(appId)
+	branches, err := v.Inner.GetBranches(appId)
+	if err != nil {
+		return nil, err
+	}
+	// The backends list the children of {appId}/, and cas is one of them.
+	return slices.DeleteFunc(branches, func(branch string) bool { return branch == casDir }), nil
 }
 
 func (v *validatingBucket) GetRuntimeVersions(appId, branch string) ([]types.RuntimeVersionWithStats, error) {
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	if err := validateSegment("branch", branch); err != nil {
+	if err := validateBranch(branch); err != nil {
 		return nil, err
 	}
 	return v.Inner.GetRuntimeVersions(appId, branch)
@@ -36,7 +54,7 @@ func (v *validatingBucket) GetUpdates(appId, branch, runtimeVersion string) ([]t
 	if err := validateSegment("appId", appId); err != nil {
 		return nil, err
 	}
-	if err := validateSegment("branch", branch); err != nil {
+	if err := validateBranch(branch); err != nil {
 		return nil, err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -59,7 +77,7 @@ func (v *validatingBucket) RequestUploadUrlForFileUpdate(appId, branch, runtimeV
 	if err := validateSegment("appId", appId); err != nil {
 		return "", err
 	}
-	if err := validateSegment("branch", branch); err != nil {
+	if err := validateBranch(branch); err != nil {
 		return "", err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -101,7 +119,7 @@ func (v *validatingBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, upd
 	if err := validateSegment("appId", appId); err != nil {
 		return err
 	}
-	if err := validateSegment("branch", branch); err != nil {
+	if err := validateBranch(branch); err != nil {
 		return err
 	}
 	if err := validateSegment("runtimeVersion", runtimeVersion); err != nil {
@@ -147,4 +165,47 @@ func (v *validatingBucket) RemoveMigrationFromHistory(migrationId string) error 
 		return err
 	}
 	return v.Inner.RemoveMigrationFromHistory(migrationId)
+}
+
+func (v *validatingBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	if err := validateSegment("appId", appId); err != nil {
+		return false, err
+	}
+	if err := ValidateBlobHash(hash); err != nil {
+		return false, err
+	}
+	return v.Inner.BlobExists(ctx, appId, hash)
+}
+
+func (v *validatingBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	if err := validateSegment("appId", appId); err != nil {
+		return nil, err
+	}
+	if err := ValidateBlobHash(hash); err != nil {
+		return nil, err
+	}
+	return v.Inner.GetBlob(ctx, appId, hash)
+}
+
+func (v *validatingBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	if err := validateSegment("appId", appId); err != nil {
+		return err
+	}
+	if err := ValidateBlobHash(hash); err != nil {
+		return err
+	}
+	return v.Inner.PutBlob(ctx, appId, hash, body)
+}
+
+func (v *validatingBucket) RequestBlobUploadURL(appId, hash, branch string) (string, error) {
+	if err := validateSegment("appId", appId); err != nil {
+		return "", err
+	}
+	if err := ValidateBlobHash(hash); err != nil {
+		return "", err
+	}
+	if err := validateBranch(branch); err != nil {
+		return "", err
+	}
+	return v.Inner.RequestBlobUploadURL(appId, hash, branch)
 }
