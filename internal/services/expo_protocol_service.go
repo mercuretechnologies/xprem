@@ -293,11 +293,6 @@ func (s *ExpoProtocolService) PutNoUpdateAvailableInResponse(ctx context.Context
 }
 
 func (s *ExpoProtocolService) ResolveUpdateForDevice(ctx context.Context, params ManifestRequestParams) (UpdateDecision, error) {
-	// [Stateless mode] Reject unknown app ids at the edge with a clean 404, otherwise
-	// downstream services.FetchExpoChannelMapping → GetExpoAccessToken
-	// returns an empty token for the unknown id and we end up POSTing to
-	// api.expo.dev with `Bearer ` (no token), surfacing the upstream 401
-	// as an opaque 500 to the client.
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return UpdateDecision{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
@@ -444,9 +439,6 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 }
 
 func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
-	// [Stateless mode] Same edge check as ManifestHandler, reject unknown ids with 404
-	// rather than letting them flow into FetchExpoChannelMapping and
-	// surfacing the upstream 401 as a 500.
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
 		return &ExpoAssetResult{}, &ExpoProtocolError{StatusCode: http.StatusNotFound, Message: "Unknown app id"}
