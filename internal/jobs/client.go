@@ -1,8 +1,4 @@
-// Package jobs runs background work on River, a Postgres-backed job queue:
-// the database is the only coordination point, so any replica can work a job,
-// a job whose replica died is retried automatically, and a cancel reaches
-// whichever replica runs the job. A job type is a river.JobArgs struct plus a
-// river.Worker registered on the client's Workers before Start.
+// Package jobs runs background work on River, a Postgres-backed job queue.
 package jobs
 
 import (
@@ -23,16 +19,11 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// ErrAlreadyRunning refuses a job whose unique constraint matched a live job.
 var ErrAlreadyRunning = errors.New("a job of this kind is already running for this scope")
 
 // Serializes rivermigrate.Migrate across replicas; distinct from the goose lock.
 const riverMigrationLockID = 823672942
 
-// Client wraps the River client. A nil Client is the stateless mode stand-in:
-// the job accessors (Enqueue, Get, LatestByArg, Cancel, Stop) are nil-safe,
-// reads answering "no job" and writes refusing; Workers and Start require a
-// client built for the control plane.
 type Client struct {
 	pool    *pgxpool.Pool
 	workers *river.Workers
@@ -52,7 +43,6 @@ func (c *Client) Workers() *river.Workers {
 	return c.workers
 }
 
-// Start migrates River's schema and starts working jobs on this replica.
 func (c *Client) Start(ctx context.Context) error {
 	driver := riverpgxv5.New(c.pool)
 	migrator, err := rivermigrate.New(driver, nil)
@@ -94,7 +84,6 @@ func (c *Client) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop lets running jobs finish, within a grace period.
 func (c *Client) Stop() {
 	if c == nil || c.queue == nil {
 		return
@@ -106,8 +95,8 @@ func (c *Client) Stop() {
 	}
 }
 
-// Enqueue inserts args as a job and returns its id; ErrAlreadyRunning when a
-// unique constraint skipped the insert.
+// Enqueue inserts args as a job; ErrAlreadyRunning when a unique constraint
+// skipped the insert.
 func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error) {
 	if c == nil || c.queue == nil {
 		return "", store.ErrNotSupportedInStatelessMode
@@ -122,7 +111,6 @@ func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error
 	return strconv.FormatInt(inserted.Job.ID, 10), nil
 }
 
-// Get returns the job, or nil when unknown.
 func (c *Client) Get(ctx context.Context, jobId string) (*rivertype.JobRow, error) {
 	if c == nil || c.queue == nil {
 		return nil, nil
@@ -142,7 +130,7 @@ func (c *Client) Get(ctx context.Context, jobId string) (*rivertype.JobRow, erro
 }
 
 // LatestByArg returns the newest job of the kind whose args carry the value
-// at the key, or nil. It is how a scope (say an app) finds its current job.
+// at the key, or nil.
 func (c *Client) LatestByArg(ctx context.Context, kind string, argKey string, argValue string) (*rivertype.JobRow, error) {
 	if c == nil || c.queue == nil {
 		return nil, nil

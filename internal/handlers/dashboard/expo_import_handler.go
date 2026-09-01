@@ -25,8 +25,7 @@ func NewExpoImportHandler(importService *services.ExpoImportService) *ExpoImport
 	return &ExpoImportHandler{importService: importService}
 }
 
-// renderExpoImportError maps import failures onto the status the dashboard
-// should show: caller mistakes are 4xx, Expo being unreachable is 502.
+// Caller mistakes are 4xx, Expo being unreachable is 502.
 func renderExpoImportError(w http.ResponseWriter, err error) {
 	var valErr *validation.Error
 	if errors.As(err, &valErr) {
@@ -114,9 +113,8 @@ func (h *ExpoImportHandler) GetExpoImportJobHandler(w http.ResponseWriter, r *ht
 	w.Write(marshaledResponse)
 }
 
-// GetExpoImportAppJobHandler answers the app's most recent history import
-// job. A null jobId means none: 200 keeps the routine dashboard poll out of
-// the browser's error console.
+// A null jobId means none; 200 rather than 404 keeps the routine dashboard
+// poll out of the browser's error console.
 func (h *ExpoImportHandler) GetExpoImportAppJobHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	response := struct {

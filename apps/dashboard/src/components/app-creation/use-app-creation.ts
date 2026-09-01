@@ -22,8 +22,6 @@ type UseAppCreationParams = {
   onAppCreated?: (appId: string) => void;
 };
 
-// useAppCreation owns the whole modal state machine: the create form, the
-// three-step Expo import and the polling of the background history job.
 export const useAppCreation = ({ onClose, onAppCreated }: UseAppCreationParams) => {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -49,8 +47,6 @@ export const useAppCreation = ({ onClose, onAppCreated }: UseAppCreationParams) 
   const [historyStatus, setHistoryStatus] = useState<ExpoHistoryJobStatus | null>(null);
   const [historyCancelRequested, setHistoryCancelRequested] = useState(false);
 
-  // The job runs server-side; polling only mirrors it, so closing the modal
-  // mid-import is safe.
   useEffect(() => {
     if (!historyJobId) {
       return;
@@ -179,8 +175,7 @@ export const useAppCreation = ({ onClose, onAppCreated }: UseAppCreationParams) 
     }
   };
 
-  // No import without its dry run: the keys step submits here, and the
-  // preview step is what actually launches the import.
+  // The keys step submits the preview; the preview step launches the import.
   const loadPlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedExpoApp) {

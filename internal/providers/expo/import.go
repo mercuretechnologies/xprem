@@ -9,8 +9,8 @@ import (
 	"xprem/internal/types"
 )
 
-// APIError is a failed Expo API call, classified for the import endpoints:
-// StatusHint is the HTTP status the dashboard should answer with.
+// APIError is a failed Expo API call; StatusHint is the HTTP status the
+// dashboard should answer with.
 type APIError struct {
 	StatusHint int
 	Message    string
@@ -29,46 +29,39 @@ func (errs graphQLErrors) toAPIError() *APIError {
 	return &APIError{StatusHint: http.StatusBadRequest, Message: "the Expo API answered: " + errs[0].Message}
 }
 
-// ImportableApp is one Expo project as listed for the dashboard import picker.
 type ImportableApp struct {
 	Id       string `json:"id"`
 	Name     string `json:"name"`
 	FullName string `json:"fullName"`
 }
 
-// AccountApps groups the importable apps of one Expo account.
 type AccountApps struct {
 	AccountId   string          `json:"accountId"`
 	AccountName string          `json:"accountName"`
 	Apps        []ImportableApp `json:"apps"`
 }
 
-// ImportChannel is a channel of an Expo project with the branch its mapping
-// resolves to, nil when unmapped.
 type ImportChannel struct {
-	Name       string
+	Name string
+	// BranchName is nil when the channel is unmapped.
 	BranchName *string
 	// UnresolvedBranchID is a plain mapping whose branch was not in the
 	// project's branch list; the channel is still imported, unmapped.
 	UnresolvedBranchID string
 }
 
-// ProjectStructure is everything the import copies off an Expo project.
 type ProjectStructure struct {
 	Name     string
 	Branches []string
 	Channels []ImportChannel
 }
 
-// accountAppsPageSize is the Expo API's own maximum for the apps field.
+// The Expo API's own maximum for the apps field.
 const accountAppsPageSize = 50
 
-// accountAppsMaxPages caps the pagination loop; past it the picker shows the
-// first thousand apps per account rather than looping forever.
 const accountAppsMaxPages = 20
 
-// FetchAccountApps lists the apps of every account the token can act for,
-// paging through each account's apps.
+// FetchAccountApps lists the apps of every account the token can act for.
 func FetchAccountApps(ctx context.Context, auth types.Auth) ([]AccountApps, error) {
 	query := `
 		query FetchAccountApps($offset: Int!, $limit: Int!) {
@@ -146,8 +139,6 @@ func FetchAccountApps(ctx context.Context, auth types.Auth) ([]AccountApps, erro
 	return accounts, nil
 }
 
-// FetchProjectStructure reads the name, branches and channel mappings of one
-// Expo project.
 func FetchProjectStructure(ctx context.Context, auth types.Auth, expoAppId string) (*ProjectStructure, error) {
 	query := `
 		query FetchProjectStructure($appId: String!) {

@@ -10,8 +10,6 @@ type SelectableCardProps = {
   children: React.ReactNode;
 };
 
-// SelectableCard is the bordered radio/checkbox row used across the modal for
-// keys modes, app picking and the history opt-in.
 export const SelectableCard = ({
   selected,
   onSelect,

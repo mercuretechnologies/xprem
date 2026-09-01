@@ -806,8 +806,6 @@ ON CONFLICT (branch_id, id) DO UPDATE SET
     created_at = EXCLUDED.created_at;
 
 -- name: ImportUpdate :execrows
--- Copies one externally-published update with caller-supplied timeline
--- columns; an existing row is left untouched so re-imports are idempotent.
 INSERT INTO updates (
     id,
     branch_id,
@@ -836,8 +834,6 @@ INSERT INTO updates (
 ON CONFLICT (branch_id, id) DO NOTHING;
 
 -- name: UpdateExistsOnBranch :one
--- Reports whether an update row already occupies this timeline slot on the
--- branch, so a history import never overwrites another update's files.
 SELECT EXISTS (
     SELECT 1
     FROM updates u

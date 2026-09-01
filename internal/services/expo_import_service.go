@@ -17,10 +17,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// ExpoImportService creates a local app from an existing Expo project: same
-// project UUID, a copy of its branches, channels and channel mappings, and
-// optionally its newest updates. The Expo credential is used for the import
-// calls only and never stored.
+// ExpoImportService creates a local app from an existing Expo project, under
+// the same project UUID. The Expo credential is never stored.
 type ExpoImportService struct {
 	apps       *AppService
 	branches   *BranchService
@@ -41,8 +39,6 @@ func NewExpoImportService(apps *AppService, branches *BranchService, channels *C
 	}
 }
 
-// ExpoImportResult summarizes an import for the dashboard. Skipped lists the
-// branches and channels that could not be copied, with the reason.
 type ExpoImportResult struct {
 	AppId        string   `json:"appId"`
 	Name         string   `json:"name"`
@@ -50,17 +46,14 @@ type ExpoImportResult struct {
 	ChannelCount int      `json:"channelCount"`
 	Skipped      []string `json:"skipped,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
-	// HistoryJobId is the background job now copying updates, set when the
-	// import was asked to also copy history.
-	HistoryJobId string `json:"historyJobId,omitempty"`
+	HistoryJobId string   `json:"historyJobId,omitempty"`
 }
 
-// ExpoImportPlan is the dry run shown before an import: what will be created,
-// what will not and why. ImportApp executes this exact plan.
+// ExpoImportPlan is the dry run shown before an import; ImportApp executes
+// this exact plan.
 type ExpoImportPlan struct {
 	AppId string `json:"appId"`
-	// Name the app will be created under: Expo's name, or the UUID when that
-	// name fails validation.
+	// Expo's name, or the UUID when that name fails validation.
 	Name     string `json:"name"`
 	ExpoName string `json:"expoName"`
 	// Conflict is why the import cannot run at all; empty when it can.
@@ -69,8 +62,8 @@ type ExpoImportPlan struct {
 	Channels []ExpoImportPlanItem `json:"channels"`
 }
 
-// ExpoImportPlanItem is one branch or channel of the plan. SkipReason set
-// means it will not be created; Warning means created, with a caveat.
+// SkipReason set means the entry will not be created; Warning means created,
+// with a caveat.
 type ExpoImportPlanItem struct {
 	Name         string `json:"name"`
 	MappedBranch string `json:"mappedBranch,omitempty"`
@@ -80,13 +73,11 @@ type ExpoImportPlanItem struct {
 
 func requireExpoAuth(auth types.Auth) error {
 	if !expo.HasCredential(auth) {
-		return validation.Errorf("accessToken", "provide an Expo access token or expo-cli session")
+		return validation.Errorf("accessToken", "provide an Expo access token")
 	}
 	return nil
 }
 
-// ListImportableApps lists the Expo apps the credential can act for, grouped
-// by account, for the dashboard import picker.
 func (s *ExpoImportService) ListImportableApps(ctx context.Context, auth types.Auth) ([]expo.AccountApps, error) {
 	if !config.IsDBMode() {
 		return nil, store.ErrNotSupportedInStatelessMode
@@ -97,8 +88,6 @@ func (s *ExpoImportService) ListImportableApps(ctx context.Context, auth types.A
 	return expo.FetchAccountApps(ctx, auth)
 }
 
-// fetchImportStructure validates the import inputs and fetches the Expo
-// project structure both PreviewImport and ImportApp plan from.
 func (s *ExpoImportService) fetchImportStructure(ctx context.Context, auth types.Auth, expoAppId string) (uuid.UUID, *expo.ProjectStructure, error) {
 	if !config.IsDBMode() {
 		return uuid.UUID{}, nil, store.ErrNotSupportedInStatelessMode
@@ -118,7 +107,7 @@ func (s *ExpoImportService) fetchImportStructure(ctx context.Context, auth types
 }
 
 // buildImportPlan applies the same name rules CreateBranch and CreateChannel
-// enforce, so the plan never promises an entry the import would then refuse.
+// enforce, so the plan never promises an entry the import would refuse.
 func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImportPlan {
 	plan := &ExpoImportPlan{
 		AppId:    appId.String(),
@@ -158,8 +147,6 @@ func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *ExpoImp
 	return plan
 }
 
-// validationMessage is a validation error without its field prefix, for plan
-// entries whose context already names the field.
 func validationMessage(err error) string {
 	var valErr *validation.Error
 	if errors.As(err, &valErr) {
@@ -168,8 +155,6 @@ func validationMessage(err error) string {
 	return err.Error()
 }
 
-// PreviewImport is the import's dry run: the exact plan ImportApp would
-// execute, without writing anything.
 func (s *ExpoImportService) PreviewImport(ctx context.Context, auth types.Auth, expoAppId string) (*ExpoImportPlan, error) {
 	parsedId, structure, err := s.fetchImportStructure(ctx, auth, expoAppId)
 	if err != nil {
@@ -182,13 +167,8 @@ func (s *ExpoImportService) PreviewImport(ctx context.Context, auth types.Auth, 
 	return plan, nil
 }
 
-// ImportApp creates the app under the Expo project's own UUID and executes
-// the plan PreviewImport shows: kept branches and channels are created, plan
-// skips become result.Skipped and plan warnings become result.Warnings.
-// historyLimit above zero also
-// starts the background job copying that many of the newest update groups.
-// Any failure past app creation, the job not starting included, rolls the app
-// back so the import can be retried.
+// ImportApp executes the plan PreviewImport shows. Any failure past app
+// creation, the job not starting included, rolls the app back.
 func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expoAppId string, keysConfig config.KeysConfig, historyLimit int) (*ExpoImportResult, error) {
 	if historyLimit < 0 || historyLimit > MaxHistoryImportGroups {
 		return nil, validation.Errorf("historyLimit", "must be between 0 and %d", MaxHistoryImportGroups)
@@ -246,8 +226,7 @@ func (s *ExpoImportService) ImportApp(ctx context.Context, auth types.Auth, expo
 	return result, nil
 }
 
-// rollback removes the half-imported app so a failed import can be retried
-// cleanly; app deletion cascades to branches and channels.
+// App deletion cascades to branches and channels.
 func (s *ExpoImportService) rollback(ctx context.Context, appId string, name string) {
 	if err := s.apps.DeleteApp(ctx, config.AppConfig{Id: appId, Name: name}); err != nil {
 		log.Printf("[expo-import] failed to roll back app %s after a failed import: %v", appId, err)

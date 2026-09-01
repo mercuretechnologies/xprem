@@ -130,10 +130,8 @@ export type ExpoImportResult = {
   name: string;
   branchCount: number;
   channelCount: number;
-  // Branches/channels that could not be copied, with the reason.
   skipped?: string[];
   warnings?: string[];
-  // Background job now copying updates, set when history was requested.
   historyJobId?: string;
 };
 
@@ -141,13 +139,11 @@ export type ExpoImportPlanItem = {
   name: string;
   // Channels only: the branch the channel will map to.
   mappedBranch?: string;
-  // Set when the entry will not be created.
   skipReason?: string;
   // Set when the entry will be created with a caveat.
   warning?: string;
 };
 
-// The dry run shown before an import; the import executes this exact plan.
 export type ExpoImportPlan = {
   appId: string;
   name: string;
@@ -163,7 +159,6 @@ export type ExpoHistoryJobStatus = {
   total: number;
   processed: number;
   imported: number;
-  // Updates that could not be copied, with the reason.
   skipped?: string[];
   error?: string;
   cancelRequested: boolean;
@@ -1289,8 +1284,7 @@ export class ApiClient {
     });
   }
 
-  // The Expo access token rides in a header on every import route: never in
-  // a URL or body, where proxies and access logs would keep it.
+  // The Expo token rides in a header, never in a URL where proxies and access logs keep it.
   public async listExpoImportApps(accessToken: string) {
     return this.request<ExpoAccountApps[]>(`/api/expo-import/apps`, {
       method: 'GET',

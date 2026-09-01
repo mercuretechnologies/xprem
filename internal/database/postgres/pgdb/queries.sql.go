@@ -2899,8 +2899,6 @@ type ImportUpdateParams struct {
 	PublishGroup pgtype.UUID        `json:"publish_group"`
 }
 
-// Copies one externally-published update with caller-supplied timeline
-// columns; an existing row is left untouched so re-imports are idempotent.
 func (q *Queries) ImportUpdate(ctx context.Context, arg ImportUpdateParams) (int64, error) {
 	result, err := q.db.Exec(ctx, importUpdate,
 		arg.ID,
@@ -5989,8 +5987,6 @@ type UpdateExistsOnBranchParams struct {
 	ID    int64       `json:"id"`
 }
 
-// Reports whether an update row already occupies this timeline slot on the
-// branch, so a history import never overwrites another update's files.
 func (q *Queries) UpdateExistsOnBranch(ctx context.Context, arg UpdateExistsOnBranchParams) (bool, error) {
 	row := q.db.QueryRow(ctx, updateExistsOnBranch, arg.AppID, arg.Name, arg.ID)
 	var exists bool

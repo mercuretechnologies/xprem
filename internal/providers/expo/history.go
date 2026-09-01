@@ -14,11 +14,9 @@ import (
 	"xprem/internal/types"
 )
 
-// HistoryAsset is one asset entry of an EAS update manifest fragment,
-// downloadable from Expo's CDN. Hash is the base64url SHA-256 the Expo
-// protocol uses.
 type HistoryAsset struct {
-	Key           string `json:"key"`
+	Key string `json:"key"`
+	// Hash is the base64url SHA-256 the Expo protocol uses.
 	Hash          string `json:"hash"`
 	ContentType   string `json:"contentType"`
 	FileExtension string `json:"fileExtension"`
@@ -32,8 +30,6 @@ type HistoryManifest struct {
 	Extra       map[string]interface{} `json:"extra"`
 }
 
-// ExpoClientConfig returns the embedded expo config (extra.expoClient), nil
-// when the manifest carries none.
 func (m *HistoryManifest) ExpoClientConfig() map[string]interface{} {
 	if m.Extra == nil {
 		return nil
@@ -45,7 +41,6 @@ func (m *HistoryManifest) ExpoClientConfig() map[string]interface{} {
 	return expoClient
 }
 
-// HistoryUpdate is one platform update of an EAS update group.
 type HistoryUpdate struct {
 	Id                string
 	Group             string
@@ -60,17 +55,14 @@ type HistoryUpdate struct {
 	ManifestPermalink string
 }
 
-// ServedManifest is a served update manifest plus the per-asset request
-// headers the multipart "extensions" part demands on protected downloads.
 type ServedManifest struct {
 	Manifest HistoryManifest
 	// AssetRequestHeaders is keyed by asset key.
 	AssetRequestHeaders map[string]map[string]string
 }
 
-// FetchServedManifest reads the update's served manifest from its permalink:
-// the multipart body EAS answers, or bare JSON, both carrying the asset URLs.
-// Permalinks are capability URLs, no auth travels with the request.
+// FetchServedManifest reads a permalink; permalinks are capability URLs, no
+// auth travels with the request.
 func FetchServedManifest(ctx context.Context, permalink string) (*ServedManifest, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, permalink, nil)
 	if err != nil {
@@ -133,20 +125,14 @@ func FetchServedManifest(ctx context.Context, permalink string) (*ServedManifest
 	return served, nil
 }
 
-// maxHistoryAssetBytes caps one downloaded asset; anything past it is treated
-// as a corrupt or hostile response, not an OTA asset.
 const maxHistoryAssetBytes = 256 << 20
 
-// maxUpdateGroupsPage is the largest updateGroups(limit:) the Expo API
-// accepts; callers asking for more are clamped.
+// The largest updateGroups(limit:) the Expo API accepts.
 const maxUpdateGroupsPage = 50
 
-// assetHTTPClient deliberately rides http.DefaultTransport so the test mocks
-// intercept it.
+// Deliberately rides http.DefaultTransport so the test mocks intercept it.
 var assetHTTPClient = &http.Client{Timeout: 5 * time.Minute}
 
-// DownloadAsset fetches one update asset from Expo's CDN, carrying the
-// request headers its manifest demanded for it.
 func DownloadAsset(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -173,8 +159,8 @@ func DownloadAsset(ctx context.Context, url string, headers map[string]string) (
 	return data, nil
 }
 
-// FetchUpdateGroups reads the newest update groups of an Expo project, newest
-// first, each group holding one update per published platform.
+// FetchUpdateGroups returns the newest groups first, each holding one update
+// per published platform.
 func FetchUpdateGroups(ctx context.Context, auth types.Auth, expoAppId string, limit int) ([][]HistoryUpdate, error) {
 	query := `
 		query FetchUpdateGroups($appId: String!, $limit: Int!) {

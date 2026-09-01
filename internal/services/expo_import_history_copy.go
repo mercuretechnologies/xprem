@@ -32,21 +32,17 @@ const (
 	historyCacheableAssetSize  = 8 << 20
 )
 
-// skipUpdate is a per-update problem that skips the update instead of
-// failing the job.
+// skipUpdate is a per-update problem: it skips the update instead of failing the job.
 type skipUpdate struct{ reason string }
 
 func (e *skipUpdate) Error() string { return e.reason }
 
-// branchRuntime identifies one (branch, runtime version) pair an import
-// touched, for cache invalidation.
 type branchRuntime struct {
 	branch  string
 	runtime string
 }
 
-// historyAssetCache re-serves verified asset bytes across the updates of one
-// job; EAS asset URLs are content-addressed, so equal URL means equal bytes.
+// EAS asset URLs are content-addressed: equal URL means equal bytes.
 type historyAssetCache struct {
 	mu    sync.Mutex
 	data  map[string][]byte
@@ -80,10 +76,8 @@ func (c *historyAssetCache) put(url string, data []byte) {
 	c.bytes += len(data)
 }
 
-// copyHistory is the job body, copying the oldest fetched group first so a
-// stopped job leaves a consistent prefix of history. Per-update problems
-// (unsupported platform, code signing, a vanished CDN asset) only skip the
-// update; infrastructure failures fail the attempt and River retries it.
+// copyHistory copies the oldest fetched group first, so a stopped job leaves
+// a consistent prefix of history.
 func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, tracker *jobs.Tracker, groups [][]expo.HistoryUpdate) error {
 	touched := make(map[branchRuntime]bool)
 	defer s.invalidateHistoryServingCaches(appId, touched)
@@ -92,8 +86,7 @@ func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, track
 	for groupIndex := len(groups) - 1; groupIndex >= 0; groupIndex-- {
 		for _, historyUpdate := range groups[groupIndex] {
 			skipReason, err := s.importHistoryUpdate(ctx, appId, historyUpdate, touched, assetCache)
-			// A canceled context outranks whatever the update reported: its
-			// skip or error is just the cancellation echoed back.
+			// A canceled context outranks whatever the update reported.
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
@@ -110,9 +103,8 @@ func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, track
 	return nil
 }
 
-// importHistoryUpdate copies one platform update: assets into the bucket, then
-// the already-checked row. It returns a non-empty skip reason for problems
-// scoped to this update, an error for failures that must stop the job.
+// importHistoryUpdate returns a non-empty skip reason for problems scoped to
+// this update, an error for failures that must stop the job.
 func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId string, historyUpdate expo.HistoryUpdate, touched map[branchRuntime]bool, assetCache *historyAssetCache) (string, error) {
 	platform, ok := parseHistoryPlatform(historyUpdate.Platform)
 	if !ok {
@@ -121,8 +113,7 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	if historyUpdate.BranchName == "" || historyUpdate.RuntimeVersion == "" {
 		return "the update names no branch or no runtime version", nil
 	}
-	// Both names land in bucket paths and DB rows: the same rule CreateBranch
-	// enforces applies here, an invalid name only skips the update.
+	// Both names land in bucket paths: the same rule CreateBranch enforces applies.
 	if err := validation.Name("branchName", historyUpdate.BranchName); err != nil {
 		return fmt.Sprintf("branch %q: %s", historyUpdate.BranchName, validationMessage(err)), nil
 	}
@@ -144,8 +135,8 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	// Same id scheme as GenerateUpdateTimestamp, but derived from the original
 	// EAS publication instant so the branch timeline keeps its order.
 	updateId := createdAt.UnixMilli()*10 + historyPlatformDigit(platform)
-	// An occupied slot is an update already imported, or published locally at
-	// this exact instant: writing this update's files would overwrite its own.
+	// An occupied slot: already imported, or published locally at this exact
+	// instant; writing this update's files would overwrite its own.
 	occupied, err := s.updateRepo.UpdateExists(ctx, appId, historyUpdate.BranchName, updateId)
 	if err != nil {
 		return "", err
@@ -186,8 +177,6 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	if historyUpdate.ManifestPermalink == "" {
 		return "the update carries no manifest permalink", nil
 	}
-	// The permalink serves the exact manifest devices received, asset URLs
-	// included; a fetch failure only skips this update.
 	served, err := expo.FetchServedManifest(ctx, historyUpdate.ManifestPermalink)
 	if err != nil {
 		return err.Error(), nil
@@ -216,8 +205,7 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	params.UpdateUUID = &expoUpdateUUIDStr
 	inserted, err := s.updateRepo.ImportUpdate(ctx, params)
 	if err != nil {
-		// Without the row the files are unreachable orphans; the retry
-		// rewrites them anyway.
+		// Without the row the files are unreachable orphans.
 		s.deleteHistoryUpdateFolder(update)
 		return "", err
 	}
@@ -229,16 +217,12 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 	return "", nil
 }
 
-// deleteHistoryUpdateFolder removes a written update folder, best effort;
-// for updates that end up skipped or unrecorded after their files landed.
 func (s *ExpoImportService) deleteHistoryUpdateFolder(update types.Update) {
 	if err := s.bucket.DeleteUpdateFolder(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
 		log.Printf("[expo-import] failed to clean up update folder %s: %v", update.UpdateId, err)
 	}
 }
 
-// writeHistoryUpdateFiles downloads the update's assets and writes the update
-// folder: assets, metadata.json, expoConfig.json and update-metadata.json.
 // Download and integrity problems return a skip reason, bucket writes an error.
 func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, served *expo.ServedManifest, assetCache *historyAssetCache) (string, error) {
 	manifest := &served.Manifest
@@ -248,8 +232,7 @@ func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update 
 	type pendingAsset struct {
 		asset expo.HistoryAsset
 		path  string
-		// Launch assets change on every publish, caching them would only
-		// burn the cache budget shared assets need.
+		// Launch assets change on every publish: caching them only burns budget.
 		cacheable bool
 	}
 	pending := []pendingAsset{{asset: manifest.LaunchAsset, path: bundlePath}}
@@ -267,8 +250,6 @@ func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update 
 		})
 	}
 
-	// Assets are fetched and written concurrently; errgroup keeps the first
-	// error, so the first skipUpdate wins and cancels the rest of the group.
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(historyDownloadConcurrency)
 	for _, entry := range pending {
@@ -391,8 +372,6 @@ func historyPlatformDigit(platform types.Platform) int64 {
 
 var historyAssetKeyPattern = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
-// historyAssetFileName derives a safe bucket file name from an EAS asset key,
-// falling back to the asset's index when the key is unusable.
 func historyAssetFileName(asset expo.HistoryAsset, index int) string {
 	name := historyAssetKeyPattern.ReplaceAllString(asset.Key, "")
 	if strings.Trim(name, "._-") == "" {

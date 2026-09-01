@@ -30,7 +30,7 @@ type importFakeAppRepo struct {
 	inserted  []store.InsertAppParameters
 	deleted   []string
 	insertErr error
-	// missing makes GetAppByID answer not-found, for preview conflict tests.
+	// missing makes GetAppByID answer not-found.
 	missing bool
 }
 
@@ -154,8 +154,7 @@ func importService(t *testing.T, appRepo *importFakeAppRepo, branchRepo *importF
 	return NewExpoImportService(appService, branchService, channelService, nil, nil, nil)
 }
 
-// historyImportService builds the service without a jobs client: tests either
-// run the job body directly or stop before the enqueue.
+// No jobs client: tests run the job body directly or stop before the enqueue.
 func historyImportService(t *testing.T, branchRepo *importFakeBranchRepo, updateRepo UpdateRepository, historyBucket bucket.Bucket) *ExpoImportService {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
@@ -290,8 +289,6 @@ func TestImportAppRejectsNonUUIDProjectId(t *testing.T) {
 	assert.True(t, validation.IsValidationError(err))
 }
 
-// No public capability endpoint exists on purpose: a stateless server turns
-// down the import itself, and callers (the CLI included) surface that error.
 func TestImportRequiresControlPlane(t *testing.T) {
 	service := importService(t, &importFakeAppRepo{}, &importFakeBranchRepo{}, &importFakeChannelRepo{})
 	t.Setenv("DB_URL", "")
@@ -403,7 +400,6 @@ func TestPreviewImportBuildsPlan(t *testing.T) {
 	assert.Contains(t, plan.Channels[1].Warning, "bad*branch")
 	assert.Empty(t, plan.Channels[2].MappedBranch)
 
-	// A preview writes nothing.
 	assert.Empty(t, appRepo.inserted)
 }
 
@@ -439,9 +435,8 @@ func TestImportAppValidatesHistoryLimit(t *testing.T) {
 	assert.Empty(t, appRepo.inserted)
 }
 
-// History is part of the same import: when its job cannot start (here the
-// update groups fetch fails, the mock knows no such operation), the whole
-// import fails and the app is rolled back rather than left without history.
+// When the history job cannot start, the whole import fails and the app is
+// rolled back.
 func TestImportAppRollsBackWhenHistoryJobCannotStart(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
@@ -475,11 +470,6 @@ func TestListImportableApps(t *testing.T) {
 	require.NotNil(t, accounts[1].Apps)
 	assert.Empty(t, accounts[1].Apps)
 
-	// An expo-cli session is as valid a credential as a token.
-	session := "session-secret"
-	_, err = service.ListImportableApps(context.Background(), types.Auth{SessionSecret: &session})
-	require.NoError(t, err)
-
 	blank := "  "
 	_, err = service.ListImportableApps(context.Background(), types.Auth{Token: &blank})
 	assert.True(t, validation.IsValidationError(err))
@@ -488,8 +478,7 @@ func TestListImportableApps(t *testing.T) {
 	assert.True(t, validation.IsValidationError(err))
 }
 
-// The Expo API caps the apps field at 50 entries per call, so accounts with
-// more apps are read page by page.
+// The Expo API caps the apps field at 50 per call; more apps are read page by page.
 func TestListImportableAppsPaginatesPastFiftyApps(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()

@@ -19,21 +19,16 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
-// ErrHistoryImportAlreadyRunning refuses a second concurrent history import
-// for the same app.
 var ErrHistoryImportAlreadyRunning = errors.New("an update history import is already running for this app")
 
-// ErrHistoryJobNotFound reports an unknown history import job.
 var ErrHistoryJobNotFound = errors.New("this history import job does not exist")
 
-// MaxHistoryImportGroups caps how many of the newest EAS update groups one
-// history import may copy.
 const MaxHistoryImportGroups = 50
 
 const expoHistoryJobKind = "expo-history-import"
 
-// expoHistoryArgs is the history import job: the update groups are snapshotted
-// at enqueue time so a retry never needs the Expo token, which is not stored.
+// The update groups are snapshotted at enqueue time so a retry never needs
+// the Expo token, which is not stored.
 type expoHistoryArgs struct {
 	AppId  string                 `json:"appId" river:"unique"`
 	Total  int                    `json:"total"`
@@ -73,12 +68,10 @@ func (w *expoHistoryWorker) Work(ctx context.Context, job *river.Job[expoHistory
 	return w.service.copyHistory(ctx, job.Args.AppId, jobs.NewTracker(job.ID), job.Args.Groups)
 }
 
-// RegisterExpoImportWorker makes this replica able to work history imports.
 func RegisterExpoImportWorker(workers *river.Workers, service *ExpoImportService) {
 	river.AddWorker(workers, &expoHistoryWorker{service: service})
 }
 
-// ExpoHistoryJobStatus is the polled state of one background history import.
 type ExpoHistoryJobStatus struct {
 	State           string   `json:"state"`
 	Total           int      `json:"total"`
@@ -104,9 +97,6 @@ func historyJobStatus(job *rivertype.JobRow) *ExpoHistoryJobStatus {
 	}
 }
 
-// StartHistoryImport fetches the newest EAS update groups of an already
-// imported app and copies them in a background job. It returns the job id the
-// dashboard polls with GetHistoryJobStatus.
 func (s *ExpoImportService) StartHistoryImport(ctx context.Context, auth types.Auth, expoAppId string, limit int) (string, error) {
 	if !config.IsDBMode() {
 		return "", store.ErrNotSupportedInStatelessMode
@@ -142,8 +132,6 @@ func (s *ExpoImportService) StartHistoryImport(ctx context.Context, auth types.A
 	return jobId, err
 }
 
-// GetAppHistoryJob returns the id and status of the app's most recent history
-// import job; false when none is known.
 func (s *ExpoImportService) GetAppHistoryJob(ctx context.Context, appId string) (string, *ExpoHistoryJobStatus, bool) {
 	parsed, err := uuid.Parse(strings.TrimSpace(appId))
 	if err != nil {
@@ -156,8 +144,8 @@ func (s *ExpoImportService) GetAppHistoryJob(ctx context.Context, appId string) 
 	return strconv.FormatInt(job.ID, 10), historyJobStatus(job), true
 }
 
-// CancelHistoryJob asks a running job to stop once the update it is copying
-// is finished; canceling an already finished job is a no-op.
+// The cancel lands once the update being copied is finished; canceling an
+// already finished job is a no-op.
 func (s *ExpoImportService) CancelHistoryJob(ctx context.Context, jobId string) error {
 	found, err := s.jobs.Cancel(ctx, jobId)
 	if err != nil {
@@ -169,8 +157,6 @@ func (s *ExpoImportService) CancelHistoryJob(ctx context.Context, jobId string) 
 	return nil
 }
 
-// GetHistoryJobStatus reads the state of one history import job; false when
-// the job is unknown.
 func (s *ExpoImportService) GetHistoryJobStatus(ctx context.Context, jobId string) (*ExpoHistoryJobStatus, bool) {
 	job, err := s.jobs.Get(ctx, jobId)
 	if err != nil || job == nil {

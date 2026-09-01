@@ -25,17 +25,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// importFakeUpdateImporter fakes the one UpdateRepository method the history
-// import calls; the embedded interface satisfies the rest and panics if the
-// import ever grows an unexpected repository call.
+// The embedded interface panics if the import grows an unexpected repository call.
 type importFakeUpdateImporter struct {
 	UpdateRepository
 	mu        sync.Mutex
 	rows      []store.ImportUpdateParams
 	err       error
 	duplicate bool
-	// exists makes every timeline slot look occupied, so imports skip before
-	// writing any file.
+	// exists makes every timeline slot look occupied.
 	exists bool
 	// hook runs before each insert, letting a test hold the job mid-run.
 	hook func()
@@ -64,9 +61,7 @@ func (f *importFakeUpdateImporter) importedRows() []store.ImportUpdateParams {
 	return append([]store.ImportUpdateParams(nil), f.rows...)
 }
 
-// importFakeBucket fakes the two bucket methods the history import calls; the
-// embedded interface satisfies the rest and panics if the import ever grows
-// an unexpected bucket call.
+// The embedded interface panics if the import grows an unexpected bucket call.
 type importFakeBucket struct {
 	bucket.Bucket
 	mu             sync.Mutex
@@ -155,9 +150,8 @@ func historyServedManifest(t *testing.T, bundleHash string, assetHash string) st
 	return string(manifest)
 }
 
-// historyMultipartResponder wraps a manifest the way EAS permalinks serve it:
-// a multipart/mixed body with a "manifest" part and an "extensions" part
-// carrying the per-asset authorization headers.
+// Serves a manifest the way EAS permalinks do: multipart/mixed with a
+// "manifest" part and an "extensions" part.
 func historyMultipartResponder(t *testing.T, manifestJSON string) httpmock.Responder {
 	t.Helper()
 	extensions, err := json.Marshal(map[string]interface{}{
@@ -188,8 +182,8 @@ func historyMultipartResponder(t *testing.T, manifestJSON string) httpmock.Respo
 	}
 }
 
-// historyProtectedAssetResponder answers like the EAS CDN: 403 unless the
-// request carries the authorization header announced in the extensions part.
+// Answers like the EAS CDN: 403 unless the request carries the authorization
+// header announced in the extensions part.
 func historyProtectedAssetResponder(auth string, data []byte) httpmock.Responder {
 	return func(req *http.Request) (*http.Response, error) {
 		if req.Header.Get("Authorization") != auth {
@@ -199,8 +193,8 @@ func historyProtectedAssetResponder(auth string, data []byte) httpmock.Responder
 	}
 }
 
-// mockExpoUpdateGroups serves three update groups, newest first: a two-platform
-// normal group, a code-signed one, and a rollback.
+// Three update groups, newest first: a two-platform normal group, a
+// code-signed one, and a rollback.
 func mockExpoUpdateGroups(t *testing.T) {
 	t.Helper()
 	manifest := historyServedManifest(t, historyAssetHash(t, historyBundleBytes), historyAssetHash(t, historyAssetBytes))
@@ -263,8 +257,6 @@ func historyUpdateIdFor(t *testing.T, createdAt string, platform types.Platform)
 	return parsed.UnixMilli()*10 + historyPlatformDigit(platform)
 }
 
-// fetchHistoryGroups pulls the mocked update groups the way StartHistoryImport
-// snapshots them into the job's args.
 func fetchHistoryGroups(t *testing.T) [][]expo.HistoryUpdate {
 	t.Helper()
 	token := "token"
@@ -354,8 +346,7 @@ func TestCopyHistoryCopiesUpdates(t *testing.T) {
 	_, ok = historyBucket.file(strconv.FormatInt(rollback.UpdateId, 10), "metadata.json")
 	assert.False(t, ok)
 
-	// The shared asset is downloaded once for the whole job, the launch
-	// asset once per platform update.
+	// The shared asset is downloaded once for the job, the launch asset once per platform.
 	callCounts := httpmock.GetCallCountInfo()
 	assert.Equal(t, 1, callCounts["GET "+historyAssetURL])
 	assert.Equal(t, 2, callCounts["GET "+historyBundleURL])
@@ -366,8 +357,7 @@ func TestCopyHistoryStopsOnCanceledContext(t *testing.T) {
 	defer httpmock.DeactivateAndReset()
 	mockExpoUpdateGroups(t)
 
-	// River delivers a cancel by canceling the worker's context; the first
-	// insert triggers it here, mid-run.
+	// River delivers a cancel by canceling the worker's context; the first insert triggers it mid-run.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	importer := &importFakeUpdateImporter{hook: cancel}
@@ -377,8 +367,6 @@ func TestCopyHistoryStopsOnCanceledContext(t *testing.T) {
 	err := service.copyHistory(ctx, importExpoAppID, tracker, fetchHistoryGroups(t))
 
 	require.ErrorIs(t, err, context.Canceled)
-	// The update underway when the cancel landed is not reported: the job
-	// stops without counting work interrupted halfway.
 	require.Len(t, importer.importedRows(), 1)
 	assert.Equal(t, 0, tracker.Output().Processed)
 }
@@ -433,8 +421,6 @@ func TestHistoryJobStatusMapping(t *testing.T) {
 	assert.Equal(t, "connection lost", status.Error)
 	assert.False(t, status.CancelRequested)
 
-	// A cancel on a running job lands in its metadata; the dashboard shows
-	// the button as pressed on every replica.
 	running := &rivertype.JobRow{
 		State:       rivertype.JobStateRunning,
 		EncodedArgs: []byte(`{"total":4}`),
@@ -445,8 +431,6 @@ func TestHistoryJobStatusMapping(t *testing.T) {
 	assert.True(t, status.CancelRequested)
 	assert.Empty(t, status.Error)
 
-	// A job waiting for its automatic retry reads as still running, and its
-	// transient error stays out of sight.
 	retryable := &rivertype.JobRow{
 		State:       rivertype.JobStateRetryable,
 		EncodedArgs: []byte(`{"total":4}`),

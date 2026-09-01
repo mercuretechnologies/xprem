@@ -203,8 +203,7 @@ func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, up
 	}, nil
 }
 
-// ImportUpdateParams is one update row copied from an external provider,
-// timeline columns included. UpdateUUID stays nil for rollback rows.
+// UpdateUUID stays nil for rollback rows.
 type ImportUpdateParams struct {
 	AppId          string
 	UpdateId       int64
@@ -220,8 +219,8 @@ type ImportUpdateParams struct {
 	PublishGroup   *string
 }
 
-// ImportUpdate inserts an already-checked update row; reports false when the
-// row already existed and was left untouched.
+// ImportUpdate inserts an already-checked row; false when the row already
+// existed and was left untouched.
 func (s *PostgresUpdateStore) ImportUpdate(ctx context.Context, params ImportUpdateParams) (bool, error) {
 	var messagePtr *string
 	if params.Message != "" {
@@ -247,8 +246,6 @@ func (s *PostgresUpdateStore) ImportUpdate(ctx context.Context, params ImportUpd
 	return rows > 0, nil
 }
 
-// UpdateExists reports whether an update row already occupies this timeline
-// slot on the branch.
 func (s *PostgresUpdateStore) UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error) {
 	exists, err := s.engine.Queries.UpdateExistsOnBranch(ctx, pgdb.UpdateExistsOnBranchParams{
 		AppID: ToPgUUID(appId),

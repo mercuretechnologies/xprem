@@ -49,8 +49,7 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 	return s.createApp(ctx, uuid.New(), displayName, keysConfig)
 }
 
-// CreateAppWithId creates the app under a caller-supplied UUID. Insert
-// rejects a collision.
+// Insert rejects a colliding id.
 func (s *AppService) CreateAppWithId(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
 	return s.createApp(ctx, appId, displayName, keysConfig)
 }

@@ -49,8 +49,6 @@ const PlanList = ({ label, items }: { label: string; items: ExpoImportPlanItem[]
   );
 };
 
-// The mandatory dry run: nothing was created yet, the import button executes
-// exactly what this screen shows.
 export const PreviewStep = ({ creation }: { creation: AppCreation }) => {
   const { plan } = creation;
   if (!plan) {

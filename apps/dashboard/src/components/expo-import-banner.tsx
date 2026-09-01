@@ -7,8 +7,6 @@ import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { usePermissions } from '@/ee/lib/PermissionsContext';
 import { useSettings } from '@/lib/SettingsContext';
 
-// App-wide banner: an update history import started from any tab (or any
-// replica) stays visible and cancelable on every page of the app.
 export const ExpoImportBanner = () => {
   const { selectedAppId } = useSelectedApp();
   const { isAdmin } = usePermissions();
@@ -16,9 +14,7 @@ export const ExpoImportBanner = () => {
   const queryClient = useQueryClient();
   const [dismissedJobId, setDismissedJobId] = useState<string | null>(null);
   const [cancelRequestedJobId, setCancelRequestedJobId] = useState<string | null>(null);
-  // Terminal states only matter when this session saw the job run; without
-  // this, a job finished hours ago would greet every page load for its whole
-  // cache lifetime.
+  // Without this, a job finished hours ago would greet every page load.
   const sawRunningJobIdRef = useRef<string | null>(null);
   const invalidatedTerminalJobIdRef = useRef<string | null>(null);
 
@@ -43,9 +39,6 @@ export const ExpoImportBanner = () => {
     if (jobId && status?.state === 'running') {
       sawRunningJobIdRef.current = jobId;
     }
-    // The import writes branches, runtime versions and updates; the pages
-    // listing them refresh once it stops, including when this tab first
-    // sees an already-finished job.
     if (jobId && status && status.state !== 'running' && invalidatedTerminalJobIdRef.current !== jobId) {
       for (const key of ['branches', 'runtimeVersions', 'updates']) {
         queryClient.invalidateQueries({ queryKey: [key, selectedAppId] });
@@ -62,8 +55,6 @@ export const ExpoImportBanner = () => {
   const counts = `${status.processed}/${status.total} processed · ${status.imported} copied${
     status.skipped?.length ? ` · ${status.skipped.length} skipped` : ''
   }`;
-  // The job row carries cancelRequested, so a cancel clicked in another tab
-  // (or another replica) shows here too.
   const cancelRequested = cancelRequestedJobId === jobId || status.cancelRequested;
 
   return (

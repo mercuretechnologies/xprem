@@ -8,11 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetExpoAuthPrefersAccessTokenHeader(t *testing.T) {
+func TestGetExpoAuthReadsAccessTokenHeader(t *testing.T) {
 	req := httptestRequest(http.Header{
 		"Authorization":       []string{"Bearer dashboard-jwt"},
 		"X-Expo-Access-Token": []string{"expo-token"},
-		"expo-session":        []string{"session-secret"},
 	})
 
 	auth := GetExpoAuth(req)
@@ -21,16 +20,15 @@ func TestGetExpoAuthPrefersAccessTokenHeader(t *testing.T) {
 	assert.Nil(t, auth.SessionSecret)
 }
 
-func TestGetExpoAuthFallsBackToExpoSession(t *testing.T) {
+func TestGetExpoAuthIgnoresExpoSession(t *testing.T) {
 	req := httptestRequest(http.Header{
 		"Authorization": []string{"Bearer dashboard-jwt"},
 		"expo-session":  []string{"session-secret"},
 	})
 
 	auth := GetExpoAuth(req)
-	require.NotNil(t, auth.SessionSecret)
-	assert.Equal(t, "session-secret", *auth.SessionSecret)
 	assert.Nil(t, auth.Token)
+	assert.Nil(t, auth.SessionSecret)
 }
 
 func TestGetExpoAuthIgnoresDashboardAuthorization(t *testing.T) {
