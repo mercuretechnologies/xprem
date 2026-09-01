@@ -152,12 +152,9 @@ func (s *PostgresAuditStore) ExportCursor(ctx context.Context) (int64, error) {
 	return cursor, nil
 }
 
-// exportAdvisoryLockID serializes archive exporters across replicas.
-const exportAdvisoryLockID = 823672943
-
 // TryExportLock claims the "one exporter at a time" advisory lock.
 func (s *PostgresAuditStore) TryExportLock(ctx context.Context) (func(), bool, error) {
-	return postgres.TryAdvisoryLock(ctx, s.engine.DB, exportAdvisoryLockID, "audit export")
+	return postgres.TryAdvisoryLock(ctx, s.engine.DB, postgres.AuditExportLockID, "audit export")
 }
 
 func (s *PostgresAuditStore) AdvanceExportCursor(ctx context.Context, from int64, to int64) (bool, error) {
