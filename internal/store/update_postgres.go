@@ -203,7 +203,7 @@ func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, up
 	}, nil
 }
 
-// UpdateUUID stays nil for rollback rows.
+// UpdateUUID and AssetMapping stay nil for rollback rows.
 type ImportUpdateParams struct {
 	AppId          string
 	UpdateId       int64
@@ -217,6 +217,7 @@ type ImportUpdateParams struct {
 	CheckedAt      time.Time
 	UpdateUUID     *string
 	PublishGroup   *string
+	AssetMapping   *types.UpdateAssetMapping
 }
 
 // ImportUpdate inserts an already-checked row; false when the row already
@@ -239,6 +240,7 @@ func (s *PostgresUpdateStore) ImportUpdate(ctx context.Context, params ImportUpd
 		UpdateUuid:   ToPgUUIDPtr(params.UpdateUUID),
 		CreatedAt:    pgtype.Timestamptz{Time: params.CreatedAt, Valid: true},
 		PublishGroup: ToPgUUIDPtr(params.PublishGroup),
+		AssetMapping: params.AssetMapping,
 	})
 	if err != nil {
 		return false, fmt.Errorf("failed to import update into database: %w", err)

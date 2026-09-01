@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xprem/internal/bucket"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/crypto"
 	"xprem/internal/dashboard"
@@ -26,11 +27,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	historyDownloadConcurrency = 8
-	historyAssetCacheMaxBytes  = 64 << 20
-	historyCacheableAssetSize  = 8 << 20
-)
+const historyDownloadConcurrency = 8
 
 // skipUpdate is a per-update problem: it skips the update instead of failing the job.
 type skipUpdate struct{ reason string }
@@ -42,50 +39,15 @@ type branchRuntime struct {
 	runtime string
 }
 
-// EAS asset URLs are content-addressed: equal URL means equal bytes.
-type historyAssetCache struct {
-	mu    sync.Mutex
-	data  map[string][]byte
-	bytes int
-}
-
-func newHistoryAssetCache() *historyAssetCache {
-	return &historyAssetCache{data: map[string][]byte{}}
-}
-
-func (c *historyAssetCache) get(url string) ([]byte, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	data, ok := c.data[url]
-	return data, ok
-}
-
-func (c *historyAssetCache) put(url string, data []byte) {
-	if len(data) > historyCacheableAssetSize {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.data[url]; ok {
-		return
-	}
-	if c.bytes+len(data) > historyAssetCacheMaxBytes {
-		return
-	}
-	c.data[url] = data
-	c.bytes += len(data)
-}
-
 // copyHistory copies the oldest fetched group first, so a stopped job leaves
 // a consistent prefix of history.
 func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, tracker *jobs.Tracker, groups [][]expo.HistoryUpdate) error {
 	touched := make(map[branchRuntime]bool)
 	defer s.invalidateHistoryServingCaches(appId, touched)
-	assetCache := newHistoryAssetCache()
 
 	for groupIndex := len(groups) - 1; groupIndex >= 0; groupIndex-- {
 		for _, historyUpdate := range groups[groupIndex] {
-			skipReason, err := s.importHistoryUpdate(ctx, appId, historyUpdate, touched, assetCache)
+			skipReason, err := s.importHistoryUpdate(ctx, appId, historyUpdate, touched)
 			// A canceled context outranks whatever the update reported.
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -105,7 +67,7 @@ func (s *ExpoImportService) copyHistory(ctx context.Context, appId string, track
 
 // importHistoryUpdate returns a non-empty skip reason for problems scoped to
 // this update, an error for failures that must stop the job.
-func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId string, historyUpdate expo.HistoryUpdate, touched map[branchRuntime]bool, assetCache *historyAssetCache) (string, error) {
+func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId string, historyUpdate expo.HistoryUpdate, touched map[branchRuntime]bool) (string, error) {
 	platform, ok := parseHistoryPlatform(historyUpdate.Platform)
 	if !ok {
 		return fmt.Sprintf("platform %q is not supported", historyUpdate.Platform), nil
@@ -191,21 +153,27 @@ func (s *ExpoImportService) importHistoryUpdate(ctx context.Context, appId strin
 		RuntimeVersion: historyUpdate.RuntimeVersion,
 		UpdateId:       strconv.FormatInt(updateId, 10),
 	}
-	skipReason, err := s.writeHistoryUpdateFiles(ctx, update, platform, historyUpdate, served, assetCache)
+	// Blobs first: on a skip nothing has landed in the update folder yet, and
+	// cas blobs are shared so they are never cleaned up.
+	mapping, skipReason, err := s.storeHistoryBlobs(ctx, appId, served)
 	if err != nil {
 		return "", err
 	}
 	if skipReason != "" {
-		s.deleteHistoryUpdateFolder(update)
 		return skipReason, nil
+	}
+	if err := s.writeHistoryConfigFiles(update, platform, historyUpdate, &served.Manifest); err != nil {
+		s.deleteHistoryUpdateFolder(update)
+		return "", err
 	}
 
 	expoUpdateUUIDStr := expoUpdateUUID.String()
 	params.UpdateType = types.NormalUpdate
 	params.UpdateUUID = &expoUpdateUUIDStr
+	params.AssetMapping = mapping
 	inserted, err := s.updateRepo.ImportUpdate(ctx, params)
 	if err != nil {
-		// Without the row the files are unreachable orphans.
+		// Without the row the config files are unreachable orphans.
 		s.deleteHistoryUpdateFolder(update)
 		return "", err
 	}
@@ -223,72 +191,131 @@ func (s *ExpoImportService) deleteHistoryUpdateFolder(update types.Update) {
 	}
 }
 
-// Download and integrity problems return a skip reason, bucket writes an error.
-func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, served *expo.ServedManifest, assetCache *historyAssetCache) (string, error) {
-	manifest := &served.Manifest
-	bundlePath := "bundles/" + string(platform) + "-" + historyAssetFileName(manifest.LaunchAsset, 0) + ".bundle"
-	platformMetadata := types.PlatformMetadata{Bundle: bundlePath}
-
-	type pendingAsset struct {
-		asset expo.HistoryAsset
-		path  string
-		// Launch assets change on every publish: caching them only burns budget.
-		cacheable bool
+// shapeHistoryAsset mirrors the publish-side shaping: the launch asset serves
+// as .bundle whatever EAS called it.
+func shapeHistoryAsset(asset expo.HistoryAsset, isLaunchAsset bool) types.ShapedAsset {
+	shaped := types.ShapedAsset{
+		Hash:          asset.Hash,
+		Key:           asset.Key,
+		FileExtension: asset.FileExtension,
+		ContentType:   asset.ContentType,
 	}
-	pending := []pendingAsset{{asset: manifest.LaunchAsset, path: bundlePath}}
-	seenPaths := map[string]bool{bundlePath: true}
-	for index, asset := range manifest.Assets {
-		path := "assets/" + historyAssetFileName(asset, index)
-		if seenPaths[path] {
-			continue
+	if isLaunchAsset {
+		shaped.FileExtension = ".bundle"
+		if shaped.ContentType == "" {
+			shaped.ContentType = "application/javascript"
 		}
-		seenPaths[path] = true
-		pending = append(pending, pendingAsset{asset: asset, path: path, cacheable: true})
-		platformMetadata.Assets = append(platformMetadata.Assets, types.Asset{
-			Path: path,
-			Ext:  strings.TrimPrefix(asset.FileExtension, "."),
-		})
+	}
+	return shaped
+}
+
+// storeHistoryBlobs puts every asset of the served manifest in cas/ and
+// returns the update's asset mapping. EAS hashes are base64url SHA-256, the
+// exact cas key format, so a hash already in cas is not even downloaded.
+// Download and integrity problems return a skip reason, cas writes an error.
+func (s *ExpoImportService) storeHistoryBlobs(ctx context.Context, appId string, served *expo.ServedManifest) (*types.UpdateAssetMapping, string, error) {
+	manifest := &served.Manifest
+	mapping := &types.UpdateAssetMapping{
+		LaunchAsset: shapeHistoryAsset(manifest.LaunchAsset, true),
+		Assets:      make([]types.ShapedAsset, len(manifest.Assets)),
+	}
+	sources := []expo.HistoryAsset{manifest.LaunchAsset}
+	for i, asset := range manifest.Assets {
+		mapping.Assets[i] = shapeHistoryAsset(asset, false)
+		sources = append(sources, asset)
 	}
 
+	var mu sync.Mutex
+	hashByURL := make(map[string]string, len(sources))
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(historyDownloadConcurrency)
-	for _, entry := range pending {
+	seenURLs := make(map[string]bool, len(sources))
+	for _, asset := range sources {
+		if asset.Url == "" {
+			return nil, fmt.Sprintf("asset %q carries no download URL", asset.Key), nil
+		}
+		if seenURLs[asset.Url] {
+			continue
+		}
+		seenURLs[asset.Url] = true
 		group.Go(func() error {
-			if entry.asset.Url == "" {
-				return &skipUpdate{reason: fmt.Sprintf("asset %q carries no download URL", entry.asset.Key)}
+			hash, err := s.ensureHistoryBlob(groupCtx, appId, asset, served.AssetRequestHeaders[asset.Key])
+			if err != nil {
+				return err
 			}
-			data, cached := assetCache.get(entry.asset.Url)
-			if !cached {
-				downloaded, err := expo.DownloadAsset(groupCtx, entry.asset.Url, served.AssetRequestHeaders[entry.asset.Key])
-				if err != nil {
-					return &skipUpdate{reason: err.Error()}
-				}
-				if entry.asset.Hash != "" {
-					hash, hashErr := crypto.CreateHash(downloaded, "sha256", "base64")
-					if hashErr != nil {
-						return hashErr
-					}
-					if crypto.GetBase64URLEncoding(hash) != entry.asset.Hash {
-						return &skipUpdate{reason: fmt.Sprintf("asset %q does not match its manifest hash", entry.asset.Key)}
-					}
-				}
-				if entry.cacheable {
-					assetCache.put(entry.asset.Url, downloaded)
-				}
-				data = downloaded
-			}
-			if err := s.bucket.UploadFileIntoUpdate(update, entry.path, bytes.NewReader(data)); err != nil {
-				return fmt.Errorf("failed to write %s into the bucket: %w", entry.path, err)
-			}
+			mu.Lock()
+			hashByURL[asset.Url] = hash
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := group.Wait(); err != nil {
 		var skip *skipUpdate
 		if errors.As(err, &skip) {
-			return skip.reason, nil
+			return nil, skip.reason, nil
 		}
+		return nil, "", err
+	}
+
+	// An asset the manifest did not hash gets the one computed from its bytes.
+	mapping.LaunchAsset.Hash = hashByURL[manifest.LaunchAsset.Url]
+	for i, asset := range manifest.Assets {
+		mapping.Assets[i].Hash = hashByURL[asset.Url]
+	}
+	return mapping, "", nil
+}
+
+// ensureHistoryBlob returns the cas hash of the asset, downloading and storing
+// it only when the blob is not already there.
+func (s *ExpoImportService) ensureHistoryBlob(ctx context.Context, appId string, asset expo.HistoryAsset, headers map[string]string) (string, error) {
+	declaredHash := asset.Hash
+	if bucket.ValidateBlobHash(declaredHash) != nil {
+		declaredHash = ""
+	}
+	if declaredHash != "" {
+		exists, err := s.bucket.BlobExists(ctx, appId, declaredHash)
+		if err != nil {
+			return "", fmt.Errorf("failed to check cas for asset %q: %w", asset.Key, err)
+		}
+		if exists {
+			return declaredHash, nil
+		}
+	}
+	data, err := expo.DownloadAsset(ctx, asset.Url, headers)
+	if err != nil {
+		return "", &skipUpdate{reason: err.Error()}
+	}
+	hash, err := crypto.CreateHash(data, "sha256", "base64")
+	if err != nil {
 		return "", err
+	}
+	computedHash := crypto.GetBase64URLEncoding(hash)
+	if declaredHash != "" && computedHash != declaredHash {
+		return "", &skipUpdate{reason: fmt.Sprintf("asset %q does not match its manifest hash", asset.Key)}
+	}
+	if err := s.bucket.PutBlob(ctx, appId, computedHash, bytes.NewReader(data)); err != nil {
+		return "", fmt.Errorf("failed to write asset %q into cas: %w", asset.Key, err)
+	}
+	return computedHash, nil
+}
+
+// writeHistoryConfigFiles writes the update folder's config files; the assets
+// themselves live in cas/.
+func (s *ExpoImportService) writeHistoryConfigFiles(update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, manifest *expo.HistoryManifest) error {
+	platformMetadata := types.PlatformMetadata{
+		Bundle: "bundles/" + string(platform) + "-" + historyAssetFileName(manifest.LaunchAsset, 0) + ".bundle",
+	}
+	seenPaths := map[string]bool{platformMetadata.Bundle: true}
+	for index, asset := range manifest.Assets {
+		path := "assets/" + historyAssetFileName(asset, index)
+		if seenPaths[path] {
+			continue
+		}
+		seenPaths[path] = true
+		platformMetadata.Assets = append(platformMetadata.Assets, types.Asset{
+			Path: path,
+			Ext:  strings.TrimPrefix(asset.FileExtension, "."),
+		})
 	}
 
 	metadata := types.MetadataObject{Version: 0, Bundler: "metro"}
@@ -299,19 +326,19 @@ func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update 
 	}
 	metadataBytes, err := json.Marshal(metadata)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := s.bucket.UploadFileIntoUpdate(update, "metadata.json", bytes.NewReader(metadataBytes)); err != nil {
-		return "", fmt.Errorf("failed to write metadata.json into the bucket: %w", err)
+		return fmt.Errorf("failed to write metadata.json into the bucket: %w", err)
 	}
 
 	if expoClient := manifest.ExpoClientConfig(); expoClient != nil {
 		expoConfigBytes, err := json.Marshal(expoClient)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if err := s.bucket.UploadFileIntoUpdate(update, "expoConfig.json", bytes.NewReader(expoConfigBytes)); err != nil {
-			return "", fmt.Errorf("failed to write expoConfig.json into the bucket: %w", err)
+			return fmt.Errorf("failed to write expoConfig.json into the bucket: %w", err)
 		}
 	}
 
@@ -326,12 +353,12 @@ func (s *ExpoImportService) writeHistoryUpdateFiles(ctx context.Context, update 
 	}
 	storedMetadataBytes, err := json.Marshal(storedMetadata)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(storedMetadataBytes)); err != nil {
-		return "", fmt.Errorf("failed to write update-metadata.json into the bucket: %w", err)
+		return fmt.Errorf("failed to write update-metadata.json into the bucket: %w", err)
 	}
-	return "", nil
+	return nil
 }
 
 func (s *ExpoImportService) invalidateHistoryServingCaches(appId string, touched map[branchRuntime]bool) {

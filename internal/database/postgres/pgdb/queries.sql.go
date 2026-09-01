@@ -2867,7 +2867,8 @@ INSERT INTO updates (
     checked_at,
     update_uuid,
     created_at,
-    publish_group
+    publish_group,
+    asset_mapping
 ) VALUES (
     $1,
     (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
@@ -2879,24 +2880,26 @@ INSERT INTO updates (
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13
 )
 ON CONFLICT (branch_id, id) DO NOTHING
 `
 
 type ImportUpdateParams struct {
-	ID           int64              `json:"id"`
-	AppID        pgtype.UUID        `json:"app_id"`
-	Name         string             `json:"name"`
-	Version      string             `json:"version"`
-	UpdateType   int32              `json:"update_type"`
-	Platform     string             `json:"platform"`
-	CommitHash   string             `json:"commit_hash"`
-	Message      *string            `json:"message"`
-	CheckedAt    pgtype.Timestamptz `json:"checked_at"`
-	UpdateUuid   pgtype.UUID        `json:"update_uuid"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	PublishGroup pgtype.UUID        `json:"publish_group"`
+	ID           int64                     `json:"id"`
+	AppID        pgtype.UUID               `json:"app_id"`
+	Name         string                    `json:"name"`
+	Version      string                    `json:"version"`
+	UpdateType   int32                     `json:"update_type"`
+	Platform     string                    `json:"platform"`
+	CommitHash   string                    `json:"commit_hash"`
+	Message      *string                   `json:"message"`
+	CheckedAt    pgtype.Timestamptz        `json:"checked_at"`
+	UpdateUuid   pgtype.UUID               `json:"update_uuid"`
+	CreatedAt    pgtype.Timestamptz        `json:"created_at"`
+	PublishGroup pgtype.UUID               `json:"publish_group"`
+	AssetMapping *types.UpdateAssetMapping `json:"asset_mapping"`
 }
 
 func (q *Queries) ImportUpdate(ctx context.Context, arg ImportUpdateParams) (int64, error) {
@@ -2913,6 +2916,7 @@ func (q *Queries) ImportUpdate(ctx context.Context, arg ImportUpdateParams) (int
 		arg.UpdateUuid,
 		arg.CreatedAt,
 		arg.PublishGroup,
+		arg.AssetMapping,
 	)
 	if err != nil {
 		return 0, err

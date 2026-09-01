@@ -817,7 +817,8 @@ INSERT INTO updates (
     checked_at,
     update_uuid,
     created_at,
-    publish_group
+    publish_group,
+    asset_mapping
 ) VALUES (
     $1,
     (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
@@ -829,7 +830,8 @@ INSERT INTO updates (
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13
 )
 ON CONFLICT (branch_id, id) DO NOTHING;
 

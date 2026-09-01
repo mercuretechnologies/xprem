@@ -66,7 +66,36 @@ type importFakeBucket struct {
 	bucket.Bucket
 	mu             sync.Mutex
 	files          map[string][]byte
+	blobs          map[string][]byte
 	deletedFolders []string
+}
+
+func (f *importFakeBucket) BlobExists(_ context.Context, _ string, hash string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.blobs[hash]
+	return ok, nil
+}
+
+func (f *importFakeBucket) PutBlob(_ context.Context, _ string, hash string, body io.Reader) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.blobs == nil {
+		f.blobs = map[string][]byte{}
+	}
+	f.blobs[hash] = data
+	return nil
+}
+
+func (f *importFakeBucket) blob(hash string) ([]byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.blobs[hash]
+	return data, ok
 }
 
 func (f *importFakeBucket) UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error {
@@ -324,12 +353,27 @@ func TestCopyHistoryCopiesUpdates(t *testing.T) {
 	assert.Equal(t, "png", metadata.FileMetadata.IOS.Assets[0].Ext)
 	assert.Empty(t, metadata.FileMetadata.Android.Bundle)
 
-	bundleBytes, ok := historyBucket.file(iosUpdateId, "bundles/ios-bundlekey123.bundle")
+	// The assets live in cas/, keyed by their EAS manifest hash; the update
+	// folder only holds config files.
+	bundleBytes, ok := historyBucket.blob(historyAssetHash(t, historyBundleBytes))
 	require.True(t, ok)
 	assert.Equal(t, historyBundleBytes, bundleBytes)
-	assetBytes, ok := historyBucket.file(iosUpdateId, "assets/assetkey456")
+	assetBytes, ok := historyBucket.blob(historyAssetHash(t, historyAssetBytes))
 	require.True(t, ok)
 	assert.Equal(t, historyAssetBytes, assetBytes)
+	_, ok = historyBucket.file(iosUpdateId, "bundles/ios-bundlekey123.bundle")
+	assert.False(t, ok)
+
+	require.NotNil(t, iosRow.AssetMapping)
+	assert.Equal(t, historyAssetHash(t, historyBundleBytes), iosRow.AssetMapping.LaunchAsset.Hash)
+	assert.Equal(t, "bundlekey123", iosRow.AssetMapping.LaunchAsset.Key)
+	assert.Equal(t, ".bundle", iosRow.AssetMapping.LaunchAsset.FileExtension)
+	require.Len(t, iosRow.AssetMapping.Assets, 1)
+	assert.Equal(t, historyAssetHash(t, historyAssetBytes), iosRow.AssetMapping.Assets[0].Hash)
+	assert.Equal(t, "assetkey456", iosRow.AssetMapping.Assets[0].Key)
+	assert.Equal(t, ".png", iosRow.AssetMapping.Assets[0].FileExtension)
+	assert.Equal(t, "image/png", iosRow.AssetMapping.Assets[0].ContentType)
+	assert.Nil(t, rollback.AssetMapping)
 
 	storedBytes, ok := historyBucket.file(iosUpdateId, "update-metadata.json")
 	require.True(t, ok)
@@ -346,10 +390,11 @@ func TestCopyHistoryCopiesUpdates(t *testing.T) {
 	_, ok = historyBucket.file(strconv.FormatInt(rollback.UpdateId, 10), "metadata.json")
 	assert.False(t, ok)
 
-	// The shared asset is downloaded once for the job, the launch asset once per platform.
+	// cas dedup: a blob already stored by a previous update is not re-downloaded,
+	// so the bundle shared by the ios and android updates travels once.
 	callCounts := httpmock.GetCallCountInfo()
 	assert.Equal(t, 1, callCounts["GET "+historyAssetURL])
-	assert.Equal(t, 2, callCounts["GET "+historyBundleURL])
+	assert.Equal(t, 1, callCounts["GET "+historyBundleURL])
 }
 
 func TestCopyHistoryStopsOnCanceledContext(t *testing.T) {
@@ -474,11 +519,13 @@ func TestImportHistoryUpdateSkipsHashMismatch(t *testing.T) {
 	historyBucket := &importFakeBucket{}
 	service := historyImportService(t, &importFakeBranchRepo{}, &importFakeUpdateImporter{}, historyBucket)
 
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "does not match its manifest hash")
-	require.Len(t, historyBucket.deletedFolders, 1)
+	// The skip lands before any folder write, so there is nothing to sweep.
+	assert.Empty(t, historyBucket.files)
+	assert.Empty(t, historyBucket.deletedFolders)
 }
 
 func TestImportHistoryUpdateSkipsUnsupportedPlatform(t *testing.T) {
@@ -486,7 +533,7 @@ func TestImportHistoryUpdateSkipsUnsupportedPlatform(t *testing.T) {
 
 	update := expoHistoryUpdateFixture("")
 	update.Platform = "web"
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "not supported")
@@ -501,7 +548,7 @@ func TestImportHistoryUpdateSkipsInvalidBranchName(t *testing.T) {
 
 	update := expoHistoryUpdateFixture("")
 	update.BranchName = "bad*branch"
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "bad*branch")
@@ -515,7 +562,7 @@ func TestImportHistoryUpdateSkipsInvalidRuntimeVersion(t *testing.T) {
 
 	update := expoHistoryUpdateFixture("")
 	update.RuntimeVersion = "../escape"
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "runtime version")
@@ -530,7 +577,7 @@ func TestImportHistoryUpdateSkipsOccupiedSlotBeforeWriting(t *testing.T) {
 	historyBucket := &importFakeBucket{}
 	service := historyImportService(t, branchRepo, importer, historyBucket)
 
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "already exists")
@@ -550,7 +597,7 @@ func TestImportHistoryUpdateCleansUpFolderWhenInsertFails(t *testing.T) {
 	historyBucket := &importFakeBucket{}
 	service := historyImportService(t, &importFakeBranchRepo{}, importer, historyBucket)
 
-	_, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{}, newHistoryAssetCache())
+	_, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{})
 
 	require.ErrorContains(t, err, "insert failed")
 	// The files were written, then swept with the folder.
@@ -569,7 +616,7 @@ func TestImportHistoryUpdateSkipsWhenInsertReportsDuplicate(t *testing.T) {
 	historyBucket := &importFakeBucket{}
 	service := historyImportService(t, &importFakeBranchRepo{}, importer, historyBucket)
 
-	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{}, newHistoryAssetCache())
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, expoHistoryUpdateFixture(historyIOSPermalink), map[branchRuntime]bool{})
 
 	require.NoError(t, err)
 	assert.Contains(t, skipReason, "already exists")
