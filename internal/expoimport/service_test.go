@@ -404,6 +404,12 @@ func TestPreviewImportBuildsPlan(t *testing.T) {
 	assert.Empty(t, appRepo.inserted)
 }
 
+func TestBuildImportPlanSkipsReservedBranchName(t *testing.T) {
+	plan := buildImportPlan(uuid.MustParse(importExpoAppID), &expo.ProjectStructure{Name: "App", Branches: []string{"cas"}})
+	require.Len(t, plan.Branches, 1)
+	assert.Contains(t, plan.Branches[0].SkipReason, "reserved")
+}
+
 func TestBuildImportPlanEmptySlices(t *testing.T) {
 	plan := buildImportPlan(uuid.MustParse(importExpoAppID), &expo.ProjectStructure{Name: "Empty"})
 	require.NotNil(t, plan.Branches)

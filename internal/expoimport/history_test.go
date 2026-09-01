@@ -557,6 +557,22 @@ func TestImportHistoryUpdateSkipsInvalidBranchName(t *testing.T) {
 	assert.Empty(t, importer.importedRows())
 }
 
+// A branch named like the cas/ directory must skip the update, not fail the job.
+func TestImportHistoryUpdateSkipsReservedBranchName(t *testing.T) {
+	branchRepo := &importFakeBranchRepo{}
+	importer := &importFakeUpdateImporter{}
+	service := historyImportService(t, branchRepo, importer, &importFakeBucket{})
+
+	update := expoHistoryUpdateFixture("")
+	update.BranchName = "cas"
+	skipReason, err := service.importHistoryUpdate(context.Background(), importExpoAppID, update, map[branchRuntime]bool{})
+
+	require.NoError(t, err)
+	assert.Contains(t, skipReason, "reserved")
+	assert.Empty(t, branchRepo.upserted)
+	assert.Empty(t, importer.importedRows())
+}
+
 func TestImportHistoryUpdateSkipsInvalidRuntimeVersion(t *testing.T) {
 	branchRepo := &importFakeBranchRepo{}
 	service := historyImportService(t, branchRepo, &importFakeUpdateImporter{}, &importFakeBucket{})

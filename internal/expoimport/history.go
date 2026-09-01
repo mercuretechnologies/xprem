@@ -214,16 +214,8 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 	if !ok {
 		return fmt.Sprintf("platform %q is not supported", historyUpdate.Platform), nil
 	}
-	if historyUpdate.BranchName == "" || historyUpdate.RuntimeVersion == "" {
-		return "the update names no branch or no runtime version", nil
-	}
-	// Both names land in bucket paths: the same rules CreateBranch enforces apply.
-	if err := validation.Name("branchName", historyUpdate.BranchName); err != nil {
-		return fmt.Sprintf("branch %q: %s", historyUpdate.BranchName, validationMessage(err)), nil
-	}
-	if bucket.ReservedBranchName(historyUpdate.BranchName) {
-		return fmt.Sprintf("branch %q is reserved", historyUpdate.BranchName), nil
-	}
+	// The branch name is validated by the upsert below; the runtime version has
+	// no other checkpoint before the insert.
 	if err := validation.Name("runtimeVersion", historyUpdate.RuntimeVersion); err != nil {
 		return fmt.Sprintf("runtime version %q: %s", historyUpdate.RuntimeVersion, validationMessage(err)), nil
 	}
@@ -253,6 +245,10 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 	}
 
 	if err := s.branches.UpsertBranchAndRuntimeVersion(ctx, appId, historyUpdate.BranchName, historyUpdate.RuntimeVersion); err != nil {
+		var valErr *validation.Error
+		if errors.As(err, &valErr) {
+			return fmt.Sprintf("branch %q: %s", historyUpdate.BranchName, valErr.Message), nil
+		}
 		return "", fmt.Errorf("failed to upsert branch %q and runtime version %q: %w", historyUpdate.BranchName, historyUpdate.RuntimeVersion, err)
 	}
 

@@ -123,10 +123,8 @@ func buildImportPlan(appId uuid.UUID, structure *expo.ProjectStructure) *Plan {
 	keptBranches := make(map[string]bool, len(structure.Branches))
 	for _, branchName := range structure.Branches {
 		item := PlanItem{Name: branchName}
-		if err := validation.Name("branchName", branchName); err != nil {
+		if err := services.ValidateBranchName(branchName); err != nil {
 			item.SkipReason = validationMessage(err)
-		} else if bucket.ReservedBranchName(branchName) {
-			item.SkipReason = fmt.Sprintf("%q is reserved", branchName)
 		} else {
 			keptBranches[branchName] = true
 		}
