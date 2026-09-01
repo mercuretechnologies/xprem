@@ -601,7 +601,9 @@ export const Updates = () => {
                     </span>
                     <span>{rollout.branch}</span>
                     <span aria-hidden="true">·</span>
-                    <span>{rollout.runtimeVersion}</span>
+                    <span title={rollout.runtimeVersion}>
+                      {shortRuntimeVersion(rollout.runtimeVersion)}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span>{shortId(rollout.commitHash)}</span>
                   </div>

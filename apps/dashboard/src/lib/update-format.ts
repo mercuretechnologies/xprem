@@ -12,8 +12,9 @@ export const updateTitle = (message: string | undefined, commitHash: string) => 
   return commitHash.toLowerCase().startsWith(token.toLowerCase()) ? rest : raw;
 };
 
-// A fingerprint runtime version is forty hex characters that say nothing at a glance,
-// and the full value stays one hover away. A named one ("1.0.0", "exposdk:52.0.0") is
-// already short and must survive intact.
+// A fingerprint runtime version is the forty-hex hash `expo-updates
+// runtimeversion:resolve` returns, and it says nothing at a glance; the full value stays
+// one hover away. Anything else — a named version ("1.0.0", "exposdk:52.0.0"), or a hex
+// string of another length — is left exactly as it was set.
 export const shortRuntimeVersion = (value: string) =>
-  /^[0-9a-f]{16,}$/i.test(value) ? value.slice(0, 8) : value;
+  /^[0-9a-f]{40}$/i.test(value) ? value.slice(0, 8) : value;
