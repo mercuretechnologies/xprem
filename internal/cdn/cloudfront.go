@@ -65,6 +65,10 @@ func (c *CloudfrontCDN) ComputeRedirectionURLForBlob(appId, hash string) (string
 	return c.signObjectKey(bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash))
 }
 
+func (c *CloudfrontCDN) ComputeRedirectionURLForPatch(appId, branch, targetUpdateUUID, sourceUpdateUUID string) (string, error) {
+	return c.signObjectKey(bucket.ResolveKeyPrefix() + bucket.BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
 func (c *CloudfrontCDN) signObjectKey(endpoint string) (string, error) {
 	domain := getCloudfrontDomain()
 	keyPairId := getCloudfrontKeyPairId()

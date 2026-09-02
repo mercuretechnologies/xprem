@@ -293,8 +293,8 @@ func (b *S3Bucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
-func (b *S3Bucket) bsDiffKey(appId, branch, updateId, sourceUpdateId string) string {
-	return b.prefixedKey(BSDiffObjectKey(appId, branch, updateId, sourceUpdateId))
+func (b *S3Bucket) bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
 func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
@@ -309,16 +309,16 @@ func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Read
 	return b.putObject(ctx, b.blobKey(appId, hash), body)
 }
 
-func (b *S3Bucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
-	return b.objectExists(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
+func (b *S3Bucket) BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *S3Bucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.getObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
+func (b *S3Bucket) GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *S3Bucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.putObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId), body)
+func (b *S3Bucket) PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
 }
 
 func (b *S3Bucket) objectExists(ctx context.Context, key string) (bool, error) {

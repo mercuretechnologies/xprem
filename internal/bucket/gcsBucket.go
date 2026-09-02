@@ -249,8 +249,8 @@ func (b *GCSBucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
-func (b *GCSBucket) bsDiffKey(appId, branch, updateId, sourceUpdateId string) string {
-	return b.prefixedKey(BSDiffObjectKey(appId, branch, updateId, sourceUpdateId))
+func (b *GCSBucket) bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
 func (b *GCSBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
@@ -265,16 +265,16 @@ func (b *GCSBucket) PutBlob(ctx context.Context, appId, hash string, body io.Rea
 	return b.putObject(ctx, b.blobKey(appId, hash), body)
 }
 
-func (b *GCSBucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
-	return b.objectExists(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
+func (b *GCSBucket) BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *GCSBucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.getObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
+func (b *GCSBucket) GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *GCSBucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.putObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId), body)
+func (b *GCSBucket) PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
 }
 
 func (b *GCSBucket) objectExists(ctx context.Context, key string) (bool, error) {

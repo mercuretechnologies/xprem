@@ -1,6 +1,13 @@
 package cdn
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrPatchRedirectUnsupported is returned by the direct-to-storage modes: a
+// bare bucket cannot add the response headers a bundle patch needs.
+var ErrPatchRedirectUnsupported = errors.New("this CDN mode cannot serve bundle patches")
 
 type CDN interface {
 	isCDNAvailable() bool
@@ -11,6 +18,17 @@ type CDN interface {
 	ComputeRedirectionURLForAsset(appId, branch, runtimeVersion, updateId, asset string) (string, error)
 	// ComputeRedirectionURLForBlob signs {keyPrefix}{appId}/cas/{hash}.
 	ComputeRedirectionURLForBlob(appId, hash string) (string, error)
+	// ComputeRedirectionURLForPatch signs
+	// {keyPrefix}{appId}/bsDiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}.
+	ComputeRedirectionURLForPatch(appId, branch, targetUpdateUUID, sourceUpdateUUID string) (string, error)
+}
+
+func SupportsPatchRedirect() bool {
+	switch GetCDN().(type) {
+	case *CloudfrontCDN, *GenericCDN:
+		return true
+	}
+	return false
 }
 
 var (

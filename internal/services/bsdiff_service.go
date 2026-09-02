@@ -251,7 +251,7 @@ func (s *BsDiffService) computeBSDiff(ctx context.Context, appId, targetUpdateUU
 		return nil
 	}
 
-	if err := s.bucket.PutBSDiff(ctx, appId, target.Branch, target.UpdateId, source.UpdateId, bytes.NewReader(patch)); err != nil {
+	if err := s.bucket.PutBSDiff(ctx, appId, target.Branch, targetUpdateUUID, sourceUpdateUUID, bytes.NewReader(patch)); err != nil {
 		return fmt.Errorf("storing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err)
 	}
 	log.Printf("[bsdiff] stored patch %s -> %s: %d bytes against a %d byte download", sourceUpdateUUID, targetUpdateUUID, len(patch), fullDownload)

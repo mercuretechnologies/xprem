@@ -387,8 +387,8 @@ func (b *LocalBucket) blobPath(appId, hash string) string {
 	return filepath.Join(b.rootPath(), appId, casDir, hash)
 }
 
-func (b *LocalBucket) bsDiffPath(appId, branch, updateId, sourceUpdateId string) string {
-	return filepath.Join(b.rootPath(), appId, bsDiffDir, branch, updateId, sourceUpdateId)
+func (b *LocalBucket) bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return filepath.Join(b.rootPath(), appId, bsDiffDir, branch, targetUpdateUUID, sourceUpdateUUID)
 }
 
 func (b *LocalBucket) BlobExists(_ context.Context, appId, hash string) (bool, error) {
@@ -403,16 +403,16 @@ func (b *LocalBucket) PutBlob(_ context.Context, appId, hash string, body io.Rea
 	return b.writeFile(b.blobPath(appId, hash), body)
 }
 
-func (b *LocalBucket) BSDiffExists(_ context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
-	return b.fileExists(b.bsDiffPath(appId, branch, updateId, sourceUpdateId))
+func (b *LocalBucket) BSDiffExists(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.fileExists(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *LocalBucket) GetBSDiff(_ context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.openFile(b.bsDiffPath(appId, branch, updateId, sourceUpdateId))
+func (b *LocalBucket) GetBSDiff(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.openFile(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID))
 }
 
-func (b *LocalBucket) PutBSDiff(_ context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.writeFile(b.bsDiffPath(appId, branch, updateId, sourceUpdateId), body)
+func (b *LocalBucket) PutBSDiff(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.writeFile(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
 }
 
 func (b *LocalBucket) DeleteBSDiffs(_ context.Context, appId, branch string) error {

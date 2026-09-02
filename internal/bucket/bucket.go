@@ -122,10 +122,12 @@ func BSDiffBranchPrefix(appId, branch string) string {
 	return appId + "/" + bsDiffDir + "/" + branch + "/"
 }
 
-// BSDiffObjectKey is {appId}/bsDiff/{branch}/{updateId}/{sourceUpdateId}: the
-// patch that turns the source update's bundle into the update's bundle.
-func BSDiffObjectKey(appId, branch, updateId, sourceUpdateId string) string {
-	return BSDiffBranchPrefix(appId, branch) + updateId + "/" + sourceUpdateId
+// BSDiffObjectKey is {appId}/bsDiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}:
+// the patch that turns the source update's bundle into the target's. The
+// source UUID is the last segment so a CDN edge can echo it as the
+// expo-base-update-id header.
+func BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return BSDiffBranchPrefix(appId, branch) + targetUpdateUUID + "/" + sourceUpdateUUID
 }
 
 func prefixedBlobKey(prefix, appId, hash string) string {
@@ -214,9 +216,9 @@ type Bucket interface {
 	GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error)
 	PutBlob(ctx context.Context, appId, hash string, body io.Reader) error
 	RequestBlobUploadURL(appId, hash, branch string) (string, error)
-	BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error)
-	GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error)
-	PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error
+	BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error)
+	GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error)
+	PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error
 	DeleteBSDiffs(ctx context.Context, appId, branch string) error
 }
 

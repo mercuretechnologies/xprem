@@ -65,9 +65,17 @@ func (c *GenericCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersion
 }
 
 func (c *GenericCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
+	return c.objectURL(bucket.BlobObjectKey(appId, hash))
+}
+
+func (c *GenericCDN) ComputeRedirectionURLForPatch(appId, branch, targetUpdateUUID, sourceUpdateUUID string) (string, error) {
+	return c.objectURL(bucket.BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (c *GenericCDN) objectURL(key string) (string, error) {
 	baseURL := ResolveCDNBaseURL()
 	keyPrefix := strings.TrimSuffix(bucket.ResolveKeyPrefix(), "/")
-	elems := []string{bucket.BlobObjectKey(appId, hash)}
+	elems := []string{key}
 	if keyPrefix != "" {
 		elems = append([]string{keyPrefix}, elems...)
 	}

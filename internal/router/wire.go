@@ -18,6 +18,7 @@ import (
 	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
+	"xprem/internal/cdn"
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
@@ -290,6 +291,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		}
 
 		addCleanup(jobsClient.Stop)
+	}
+	if config.IsBundleDiffingCDNRedirect() && !cdn.SupportsPatchRedirect() {
+		log.Fatalf("BUNDLE_DIFFING_CDN_REDIRECT needs a CDN with an edge that can add response headers (CloudFront or CDN_BASE_URL); resolved CDN: %q", cdn.ResolvedType())
 	}
 	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
 	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)

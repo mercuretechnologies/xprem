@@ -32,6 +32,10 @@ const (
 	// a lookup that raced a publish.
 	updateByUUIDCacheTTLSeconds        = update2.ImmutableCacheTTLSeconds
 	unknownUpdateByUUIDCacheTTLSeconds = 60
+	// A patch only disappears with its branch; a missing one is usually being
+	// computed by the job that the publish just enqueued.
+	patchExistsCacheTTLSeconds  = update2.ImmutableCacheTTLSeconds
+	missingPatchCacheTTLSeconds = 60
 	// Unlike its neighbours this key IS invalidated on write, but only where
 	// the cache is shared: with a local cache and several replicas, the write
 	// clears one process and the TTL bounds the rest.
@@ -55,6 +59,10 @@ func updateTypeCacheKey(update types.Update) string {
 
 func updateByUUIDCacheKey(appId string, updateUUID string) string {
 	return cache2.Key("update-by-uuid", version.Version, appId, updateUUID)
+}
+
+func patchExistsCacheKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return cache2.Key("patch-exists", version.Version, appId, branch, targetUpdateUUID, sourceUpdateUUID)
 }
 
 func channelMappingCacheKey(appId string, channelName string) string {
@@ -165,6 +173,24 @@ func (s *ExpoProtocolService) cachedUpdateByUUID(ctx context.Context, appId stri
 	}
 	cache2.SetJSON(updateCache, cacheKey, cachedUpdate{Update: update}, &ttl)
 	return update, nil
+}
+
+func (s *ExpoProtocolService) cachedPatchExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	existsCache := cache2.GetCache()
+	cacheKey := patchExistsCacheKey(appId, branch, targetUpdateUUID, sourceUpdateUUID)
+	if cached := existsCache.Get(cacheKey); cached != "" {
+		return cached == "1", nil
+	}
+	exists, err := s.bucket.BSDiffExists(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
+	if err != nil {
+		return false, err
+	}
+	value, ttl := "0", missingPatchCacheTTLSeconds
+	if exists {
+		value, ttl = "1", patchExistsCacheTTLSeconds
+	}
+	_ = existsCache.Set(cacheKey, value, &ttl)
+	return exists, nil
 }
 
 func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {

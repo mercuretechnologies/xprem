@@ -23,6 +23,10 @@ func (c *GCSDirectCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersi
 	return gcp.SignedURL(bucketName, key, "GET", "", 15*time.Minute)
 }
 
+func (c *GCSDirectCDN) ComputeRedirectionURLForPatch(string, string, string, string) (string, error) {
+	return "", ErrPatchRedirectUnsupported
+}
+
 func (c *GCSDirectCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
 	bucketName := config.GetEnv("GCS_BUCKET_NAME")
 	key := bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash)

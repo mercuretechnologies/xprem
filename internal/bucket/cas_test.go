@@ -116,7 +116,7 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 
 func TestBSDiffObjectKey(t *testing.T) {
 	assert.Equal(t, "app-1/bsDiff/main/", BSDiffBranchPrefix("app-1", "main"))
-	assert.Equal(t, "app-1/bsDiff/main/1700000000001/1690000000001", BSDiffObjectKey("app-1", "main", "1700000000001", "1690000000001"))
+	assert.Equal(t, "app-1/bsDiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", BSDiffObjectKey("app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
 	assert.True(t, ReservedBranchName("bsDiff"))
 }
 
@@ -124,36 +124,36 @@ func TestLocalBucket_BSDiffRoundTrip(t *testing.T) {
 	b := &LocalBucket{BasePath: t.TempDir()}
 	ctx := context.Background()
 
-	exists, err := b.BSDiffExists(ctx, "app-1", "main", "1700000000001", "1690000000001")
+	exists, err := b.BSDiffExists(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.False(t, exists)
-	missing, err := b.GetBSDiff(ctx, "app-1", "main", "1700000000001", "1690000000001")
+	missing, err := b.GetBSDiff(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.Nil(t, missing)
 
-	require.NoError(t, b.PutBSDiff(ctx, "app-1", "main", "1700000000001", "1690000000001", bytes.NewReader([]byte("BSDIFF40 patch"))))
-	exists, err = b.BSDiffExists(ctx, "app-1", "main", "1700000000001", "1690000000001")
+	require.NoError(t, b.PutBSDiff(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", bytes.NewReader([]byte("BSDIFF40 patch"))))
+	exists, err = b.BSDiffExists(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.True(t, exists)
-	got, err := b.GetBSDiff(ctx, "app-1", "main", "1700000000001", "1690000000001")
+	got, err := b.GetBSDiff(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	body, err := ConvertReadCloserToBytes(got.Reader)
 	require.NoError(t, err)
 	assert.Equal(t, "BSDIFF40 patch", string(body))
-	assert.FileExists(t, filepath.Join(b.BasePath, "app-1", "bsDiff", "main", "1700000000001", "1690000000001"))
+	assert.FileExists(t, filepath.Join(b.BasePath, "app-1", "bsDiff", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
 
 	// Same ids on another branch: a separate object.
-	exists, err = b.BSDiffExists(ctx, "app-1", "staging", "1700000000001", "1690000000001")
+	exists, err = b.BSDiffExists(ctx, "app-1", "staging", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.False(t, exists)
 
 	// Deleting a branch's patches leaves the other branches alone.
-	require.NoError(t, b.PutBSDiff(ctx, "app-1", "staging", "1700000000001", "1690000000001", bytes.NewReader([]byte("x"))))
+	require.NoError(t, b.PutBSDiff(ctx, "app-1", "staging", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", bytes.NewReader([]byte("x"))))
 	require.NoError(t, b.DeleteBSDiffs(ctx, "app-1", "main"))
-	exists, err = b.BSDiffExists(ctx, "app-1", "main", "1700000000001", "1690000000001")
+	exists, err = b.BSDiffExists(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.False(t, exists)
-	exists, err = b.BSDiffExists(ctx, "app-1", "staging", "1700000000001", "1690000000001")
+	exists, err = b.BSDiffExists(ctx, "app-1", "staging", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	require.NoError(t, err)
 	assert.True(t, exists)
 	require.NoError(t, b.DeleteBSDiffs(ctx, "app-1", "never-existed"))
@@ -162,13 +162,16 @@ func TestLocalBucket_BSDiffRoundTrip(t *testing.T) {
 func TestValidatingBucket_BSDiff_RejectsBadIds(t *testing.T) {
 	v := &validatingBucket{Inner: &LocalBucket{BasePath: t.TempDir()}}
 	ctx := context.Background()
-	_, err := v.BSDiffExists(ctx, "app-1", "main", "../etc", "1690000000001")
+	_, err := v.BSDiffExists(ctx, "app-1", "main", "../etc", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
 	assert.Error(t, err)
-	_, err = v.GetBSDiff(ctx, "app-1", "main", "1700000000001", "")
+	_, err = v.GetBSDiff(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "")
 	assert.Error(t, err)
-	assert.Error(t, v.PutBSDiff(ctx, "a/b", "main", "1700000000001", "1690000000001", bytes.NewReader(nil)))
-	assert.Error(t, v.PutBSDiff(ctx, "app-1", casDir, "1700000000001", "1690000000001", bytes.NewReader(nil)))
+	// Uppercase spells the same UUID: it would be a second key for one update.
+	_, err = v.GetBSDiff(ctx, "app-1", "main", "6F2B1C4E-1B3A-4B4E-9C1D-0A1B2C3D4E5F", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
+	assert.Error(t, err)
+	assert.Error(t, v.PutBSDiff(ctx, "a/b", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", bytes.NewReader(nil)))
+	assert.Error(t, v.PutBSDiff(ctx, "app-1", casDir, "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", bytes.NewReader(nil)))
 	assert.Error(t, v.DeleteBSDiffs(ctx, "app-1", "../main"))
-	assert.NoError(t, v.PutBSDiff(ctx, "app-1", "main", "1700000000001", "1690000000001", bytes.NewReader([]byte("x"))))
+	assert.NoError(t, v.PutBSDiff(ctx, "app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", bytes.NewReader([]byte("x"))))
 	assert.NoError(t, v.DeleteBSDiffs(ctx, "app-1", "main"))
 }

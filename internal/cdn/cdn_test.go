@@ -314,6 +314,29 @@ func TestGenericCDNComputeRedirectionURLForBlob(t *testing2.T) {
 	}
 }
 
+func TestGenericCDNComputeRedirectionURLForPatch(t *testing2.T) {
+	clearCDNEnv(t)
+	t.Setenv("CDN_BASE_URL", "https://cdn.example.com")
+	t.Setenv("BUCKET_KEY_PREFIX", "prefix")
+	c := &GenericCDN{}
+	got, err := c.ComputeRedirectionURLForPatch("test-app-id", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "https://cdn.example.com/prefix/test-app-id/bsDiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestDirectCDNModesRefusePatchRedirect(t *testing2.T) {
+	for _, c := range []CDN{&S3DirectCDN{}, &GCSDirectCDN{}, &AzureBlobDirectCDN{}} {
+		if _, err := c.ComputeRedirectionURLForPatch("a", "b", "c", "d"); err != ErrPatchRedirectUnsupported {
+			t.Fatalf("%T: expected ErrPatchRedirectUnsupported, got %v", c, err)
+		}
+	}
+}
+
 func TestResolveCDNBaseURLPrefersNewVariable(t *testing2.T) {
 	clearCDNEnv(t)
 	t.Setenv("CDN_BASE_URL", "https://new.example.com")

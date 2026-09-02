@@ -440,6 +440,8 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 	}, nil
 }
 
+// resolveBSDiffAsset answers a launch asset request with the patch from the
+// update the device runs to the one it downloads, or nil for the full bundle.
 func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params AssetResolutionParams) *ExpoAssetResult {
 	if !config.IsBundleDiffingEnabled() || !config.IsDBMode() || !acceptsBSDiff(params.AIM) {
 		return nil
@@ -465,10 +467,31 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 	if current == nil || requested == nil || current.Branch != requested.Branch || current.RuntimeVersion != requested.RuntimeVersion {
 		return nil
 	}
+	branch, target, source := requested.Branch, requestedUUID.String(), currentUUID.String()
 
-	patch, err := s.bucket.GetBSDiff(ctx, params.AppID, requested.Branch, requested.UpdateId, current.UpdateId)
+	// A redirect to a missing object fails the device's download outright, so
+	// the existence check is not optional on that path.
+	exists, err := s.cachedPatchExists(ctx, params.AppID, branch, target, source)
 	if err != nil {
-		log.Printf("[RequestID: %s] Error reading patch %s -> %s: %v", params.RequestID, current.UpdateId, requested.UpdateId, err)
+		log.Printf("[RequestID: %s] Error checking patch %s -> %s: %v", params.RequestID, source, target, err)
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	if config.IsBundleDiffingCDNRedirect() {
+		if cdn := cdn2.GetCDN(); cdn != nil {
+			redirectURL, err := cdn.ComputeRedirectionURLForPatch(params.AppID, branch, target, source)
+			if err == nil {
+				return &ExpoAssetResult{RedirectToURL: redirectURL}
+			}
+			log.Printf("[RequestID: %s] Error signing patch url %s -> %s, serving it directly: %v", params.RequestID, source, target, err)
+		}
+	}
+
+	patch, err := s.bucket.GetBSDiff(ctx, params.AppID, branch, target, source)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading patch %s -> %s: %v", params.RequestID, source, target, err)
 		return nil
 	}
 	if patch == nil {
@@ -476,7 +499,7 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 	}
 	body, err := bucket.ConvertReadCloserToBytes(patch.Reader)
 	if err != nil {
-		log.Printf("[RequestID: %s] Error reading patch body %s -> %s: %v", params.RequestID, current.UpdateId, requested.UpdateId, err)
+		log.Printf("[RequestID: %s] Error reading patch body %s -> %s: %v", params.RequestID, source, target, err)
 		return nil
 	}
 	headers := assets.ExpoProtocolHeaders()
