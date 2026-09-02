@@ -47,6 +47,10 @@ func (fakeReadServices) GetUpdateRollout(_ context.Context, _ string, _ string, 
 	return []types.RolloutUpdate{{UpdateId: "u1", Platform: "ios", Percentage: 50}}, nil
 }
 
+func (fakeReadServices) ListPatches(_ context.Context, _ string, _ string, _ string) ([]types.BundlePatch, error) {
+	return []types.BundlePatch{{TargetUpdateId: "2", SourceUpdateId: "1", Status: types.BundlePatchStored}}, nil
+}
+
 func (fakeReadServices) RetrieveAppCertificate(_ context.Context, _ string) (string, error) {
 	return "-----BEGIN CERTIFICATE-----", nil
 }
@@ -58,6 +62,7 @@ func readDeps() Deps {
 	deps.Channels = fake
 	deps.UpdateFeed = fake
 	deps.UpdateRollouts = fake
+	deps.BundlePatches = fake
 	deps.Certificates = fake
 	deps.SSOEnabled = func(context.Context) bool { return false }
 	return deps
@@ -97,6 +102,10 @@ func TestAppScopedToolsRequireVisibleApp(t *testing.T) {
 		},
 		"get_update_rollout": func(appID string) error {
 			_, _, err := getUpdateRolloutHandler(deps)(ctx, req, GetUpdateRolloutInput{AppId: appID, Branch: "main", RuntimeVersion: "1.0.0"})
+			return err
+		},
+		"get_update_patches": func(appID string) error {
+			_, _, err := getUpdatePatchesHandler(deps)(ctx, req, GetUpdatePatchesInput{AppId: appID, Branch: "main", UpdateId: "2"})
 			return err
 		},
 	}

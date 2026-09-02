@@ -14,7 +14,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api, UpdateFeedRecord } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -35,7 +35,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
-import { UpdateDetailsRef, UpdateDetailsSheet } from '@/components/UpdateDetailsSheet';
 import {
   ManagedUpdateRollout,
   UpdateRolloutManagerSheet,
@@ -49,7 +48,7 @@ import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
-import { shortRuntimeVersion, updateTitle } from '@/lib/update-format';
+import { shortRuntimeVersion, updateDetailsPath, updateTitle } from '@/lib/update-format';
 
 type FeedGroup = {
   key: string;
@@ -58,14 +57,7 @@ type FeedGroup = {
 };
 
 type FeedFilterKey =
-  | 'branch'
-  | 'runtimeVersion'
-  | 'platform'
-  | 'uuid'
-  | 'groupId'
-  | 'commitHash'
-  | 'from'
-  | 'to';
+  'branch' | 'runtimeVersion' | 'platform' | 'uuid' | 'groupId' | 'commitHash' | 'from' | 'to';
 
 type FeedFilters = Record<FeedFilterKey, string>;
 type DebouncedFilterKey = 'uuid' | 'groupId' | 'commitHash';
@@ -175,7 +167,11 @@ export const Updates = () => {
   const [managedRollout, setManagedRollout] = useState<ManagedUpdateRollout | null>(null);
   const [isRollbackOpen, setIsRollbackOpen] = useState(false);
   const [republishTarget, setRepublishTarget] = useState<RepublishTarget | null>(null);
-  const sheetRef = useRef<UpdateDetailsRef>(null);
+  const navigate = useNavigate();
+  // The filters travel in the location state so the update page can bring the
+  // reader back to the same view of the feed.
+  const openUpdate = (update: UpdateFeedRecord) =>
+    navigate(updateDetailsPath(update, 'updates'), { state: { search: searchParams.toString() } });
 
   const filters: FeedFilters = {
     branch: searchParams.get('branch') ?? '',
@@ -429,7 +425,6 @@ export const Updates = () => {
           )
         }
       />
-      <UpdateDetailsSheet ref={sheetRef} />
       <UpdateRolloutManagerSheet
         rollout={managedRollout}
         onClose={() => setManagedRollout(null)}
@@ -675,9 +670,7 @@ export const Updates = () => {
                   <Fragment key={group.key}>
                     <TableRow
                       className="cursor-pointer"
-                      onClick={() =>
-                        isGroup ? toggleGroup(group.key) : sheetRef.current?.openSheet(primary)
-                      }>
+                      onClick={() => (isGroup ? toggleGroup(group.key) : openUpdate(primary))}>
                       <TableCell className="min-w-0 overflow-hidden">
                         <div className="flex min-w-0 items-start gap-2.5">
                           <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground">
@@ -779,7 +772,7 @@ export const Updates = () => {
                         <TableRow
                           key={`${group.key}:${update.updateId}`}
                           className="animate-in cursor-pointer bg-muted/20 fade-in slide-in-from-top-1 duration-150 motion-reduce:animate-none"
-                          onClick={() => sheetRef.current?.openSheet(update)}>
+                          onClick={() => openUpdate(update)}>
                           <TableCell>
                             <div className="ml-9 min-w-0 border-l-2 border-link/40 pl-4">
                               <div className="flex flex-wrap items-center gap-2">

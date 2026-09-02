@@ -292,7 +292,7 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformAndroid)
 	if updateType == types.NormalUpdate {
 		go func(update types.Update, platform types.Platform) {
-			if err := s.bsDiffService.ComputeBSDiffForPreviousUpdates(context.Background(), &update, updateUUID, platform); err != nil {
+			if _, err := s.bsDiffService.ComputeBSDiffForPreviousUpdates(context.Background(), &update, updateUUID, platform); err != nil {
 				log.Printf("[bsdiff] scheduling patches for update %s: %v", update.UpdateId, err)
 			}
 		}(update, storedMetadata.Platform)

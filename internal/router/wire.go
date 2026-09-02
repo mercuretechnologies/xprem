@@ -62,6 +62,7 @@ type AppContainer struct {
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
+	BundlePatchHandler          *dashhandlers.BundlePatchHandler
 	UploadHandler               *handlers.UploadHandler
 	RepublishHandler            *handlers.RepublishHandler
 	UsersHandler                *dashhandlers.UsersHandler
@@ -300,6 +301,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
 	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
+	bsDiffService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
@@ -320,6 +322,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				Channels:            channelService,
 				UpdateFeed:          updateService,
 				UpdateRollouts:      rolloutService,
+				BundlePatches:       bsDiffService,
 				Certificates:        appService,
 				BranchWriter:        branchService,
 				ChannelWriter:       channelService,
@@ -371,6 +374,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
+		BundlePatchHandler:          dashhandlers.NewBundlePatchHandler(bsDiffService),
 		UploadHandler:               handlers.NewUploadHandler(deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,

@@ -213,7 +213,7 @@ func LoadConfig() {
 // publish and served to devices (BUNDLE_DIFFING=true, off by default).
 func IsBundleDiffingEnabled() bool {
 	enabled, _ := strconv.ParseBool(GetEnv("BUNDLE_DIFFING"))
-	return enabled
+	return enabled && IsDBMode()
 }
 
 // IsBundleDiffingCDNRedirect reports whether patch requests are redirected to

@@ -659,6 +659,28 @@ export type UpdateDetailsRecord = {
   controlUpdateId?: string | null;
 };
 
+export type BundlePatchStatus =
+  'pending' | 'running' | 'stored' | 'skipped' | 'failed' | 'cancelled';
+
+// One bsdiff patch planned toward a target update from an earlier source
+// update (control-plane only, when bundle diffing is enabled). Sizes are set
+// once the patch was computed, whether it was stored or judged not worth it.
+export type BundlePatchRecord = {
+  targetUpdateId: string;
+  targetUpdateUUID: string;
+  sourceUpdateId: string;
+  sourceUpdateUUID: string;
+  sourceCommitHash: string;
+  sourceMessage?: string;
+  sourceCreatedAt: string;
+  status: BundlePatchStatus;
+  reason?: string;
+  patchSize?: number;
+  fullDownloadSize?: number;
+  attempts: number;
+  updatedAt: string;
+};
+
 export type ApiKeyRecord = {
   id: string;
   name: string;
@@ -816,6 +838,7 @@ export type ServerSettings = {
   BASE_URL: string;
   SERVER_VERSION: string;
   CONTROL_PLANE_ENABLED: boolean;
+  BUNDLE_DIFFING: boolean;
   CACHE_MODE: string;
   REDIS_HOST: string;
   REDIS_PORT: string;
@@ -1711,6 +1734,21 @@ export class ApiClient {
       {
         method: 'GET',
       }
+    );
+  }
+
+  public async getUpdatePatches(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<BundlePatchRecord[]>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/patches`,
+      { method: 'GET' }
+    );
+  }
+  // Plans the patches toward this update again, as its publish did, and says
+  // how many it scheduled: zero when no earlier update of the platform exists.
+  public async recomputeUpdatePatches(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<{ scheduled: number }>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/patches/recompute`,
+      { method: 'POST' }
     );
   }
 

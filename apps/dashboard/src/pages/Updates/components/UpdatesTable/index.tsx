@@ -5,8 +5,7 @@ import { DataTable } from '@/components/DataTable';
 import { Badge } from '@/components/ui/badge.tsx';
 import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
-import { UpdateDetailsRef, UpdateDetailsSheet } from '@/components/UpdateDetailsSheet';
-import { useRef } from 'react';
+import { useNavigate } from 'react-router';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -15,7 +14,7 @@ import { UpdatesBreadcrumb } from '@/pages/Updates/components/UpdatesBreadcrumb'
 import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { Button } from '@/components/ui/button';
-import { updateTitle } from '@/lib/update-format';
+import { updateDetailsPath, updateTitle } from '@/lib/update-format';
 
 const UPDATES_PAGE_SIZE = 20;
 
@@ -28,7 +27,7 @@ export const UpdatesTable = ({
   runtimeVersion: string;
   showBreadcrumb?: boolean;
 }) => {
-  const sheetRef = useRef<UpdateDetailsRef>(null);
+  const navigate = useNavigate();
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
@@ -107,7 +106,6 @@ export const UpdatesTable = ({
           controlUpdateUUIDs={controlUuids}
         />
       )}
-      <UpdateDetailsSheet ref={sheetRef} branch={branch} runtimeVersion={runtimeVersion} />
       <DataTable
         loading={updatesQuery.isLoading}
         columns={[
@@ -205,9 +203,9 @@ export const UpdatesTable = ({
         data={updates}
         defaultSorting={[{ id: 'createdAt', desc: true }]}
         emptyMessage="No updates published for this runtime version yet."
-        onRowClick={row => {
-          sheetRef?.current?.openSheet(row);
-        }}
+        onRowClick={row =>
+          navigate(updateDetailsPath({ branch, runtimeVersion, updateId: row.updateId }, 'branch'))
+        }
       />
       {updatesQuery.hasNextPage && (
         <div className="mt-4 flex justify-center">

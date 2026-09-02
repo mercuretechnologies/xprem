@@ -438,7 +438,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 // resolveBSDiffAsset answers a launch asset request with the patch from the
 // update the device runs to the one it downloads, or nil for the full bundle.
 func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params AssetResolutionParams) *ExpoAssetResult {
-	if !config.IsBundleDiffingEnabled() || !config.IsDBMode() || !acceptsBSDiff(params.AIM) {
+	if !config.IsBundleDiffingEnabled() || !acceptsBSDiff(params.AIM) {
 		return nil
 	}
 	currentUUID, err := uuid.Parse(params.ExpoCurrentUpdateId)

@@ -11,10 +11,12 @@ import (
 	"strconv"
 	"time"
 	"xprem/config"
+	"xprem/internal/auditlog"
 	"xprem/internal/bsdiff"
 	"xprem/internal/bucket"
 	"xprem/internal/jobs"
 	"xprem/internal/types"
+	"xprem/internal/validation"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -30,12 +32,18 @@ type BundlePatchRepository interface {
 	ListByTarget(ctx context.Context, appId, branch, targetUpdateId string) ([]types.BundlePatch, error)
 }
 
+var (
+	ErrBundleDiffingUnavailable = errors.New("bundle diffing is disabled or needs the control plane")
+	ErrUpdateHasNoBundle        = errors.New("this update is a rollback and has no bundle to patch")
+)
+
 type BsDiffService struct {
 	bucket        bucket.Bucket
 	jobs          *jobs.Client
 	updateService *UpdateService
 	updateRepo    UpdateRepository
 	patches       BundlePatchRepository
+	onAuditEvent  auditlog.RecordFunc
 }
 
 func NewBSDiffService(bucket bucket.Bucket, jobsClient *jobs.Client, updateService *UpdateService, updateRepo UpdateRepository, patches BundlePatchRepository) *BsDiffService {
@@ -46,6 +54,64 @@ func NewBSDiffService(bucket bucket.Bucket, jobsClient *jobs.Client, updateServi
 		updateRepo:    updateRepo,
 		patches:       patches,
 	}
+}
+
+func (s *BsDiffService) SetOnAuditEvent(record auditlog.RecordFunc) {
+	s.onAuditEvent = record
+}
+
+func (s *BsDiffService) available() bool {
+	return config.IsBundleDiffingEnabled() && config.IsDBMode() && s.patches != nil
+}
+
+// ListPatches is the bundle_patches record of one target update.
+func (s *BsDiffService) ListPatches(ctx context.Context, appId, branch, updateId string) ([]types.BundlePatch, error) {
+	if !s.available() {
+		return nil, ErrBundleDiffingUnavailable
+	}
+	if err := validation.Name("branchName", branch); err != nil {
+		return nil, err
+	}
+	if err := validation.Name("updateId", updateId); err != nil {
+		return nil, err
+	}
+	patches, err := s.patches.ListByTarget(ctx, appId, branch, updateId)
+	if err != nil {
+		return nil, err
+	}
+	if patches == nil {
+		patches = []types.BundlePatch{}
+	}
+	return patches, nil
+}
+
+// RecomputePatches plans the patches toward an update again, exactly as its
+// publish did, and returns how many it planned.
+func (s *BsDiffService) RecomputePatches(ctx context.Context, appId, branch, runtimeVersion, updateId string) (int, error) {
+	if !s.available() {
+		return 0, ErrBundleDiffingUnavailable
+	}
+	details, err := s.updateService.GetUpdateDetails(ctx, appId, branch, runtimeVersion, updateId)
+	if err != nil {
+		return 0, err
+	}
+	if details.Type != types.NormalUpdate {
+		return 0, ErrUpdateHasNoBundle
+	}
+	update := types.Update{AppId: appId, Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}
+	planned, err := s.ComputeBSDiffForPreviousUpdates(ctx, &update, details.UpdateUUID, details.Platform)
+	if err != nil {
+		return 0, err
+	}
+	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
+		Action:        auditlog.ActionUpdatePatchesRecomputed,
+		TargetType:    "update",
+		TargetID:      updateId,
+		TargetDisplay: updateId,
+		AppID:         appId,
+		Metadata:      map[string]any{"branch": branch, "runtime_version": runtimeVersion, "scheduled": planned},
+	})
+	return planned, nil
 }
 
 const bsDiffComputeJobKind = "bsdiff-compute"
@@ -101,23 +167,27 @@ func RegisterBSDiffWorker(workers *river.Workers, service *BsDiffService) {
 // maxPatchSources is how many earlier updates of the same platform get a patch toward a freshly published one.
 const maxPatchSources = 5
 
-func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, update *types.Update, updateUUID string, platform types.Platform) error {
+// ComputeBSDiffForPreviousUpdates plans one patch job per earlier update of
+// the same platform, newest first, and returns how many it planned.
+func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, update *types.Update, updateUUID string, platform types.Platform) (int, error) {
 	if !config.IsBundleDiffingEnabled() {
-		return nil
-	}
-	if !config.IsDBMode() {
-		log.Printf("[bsdiff] no patches for update %s: bundle diffing needs the control plane (database mode)", update.UpdateId)
-		return nil
+		return 0, nil
 	}
 	if _, err := uuid.Parse(updateUUID); err != nil {
-		return fmt.Errorf("update %s has no usable UUID: %w", update.UpdateId, err)
+		return 0, fmt.Errorf("update %s has no usable UUID: %w", update.UpdateId, err)
 	}
-	var cursor *int64
+	// The listing pages by id descending, so starting past the target's id
+	// yields only the updates published before it.
+	targetId, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("update id %q is not numeric: %w", update.UpdateId, err)
+	}
+	cursor := &targetId
 	enqueued := 0
 	for page := 0; page < 4 && enqueued < maxPatchSources; page++ {
 		updatesPage, err := s.updateRepo.GetUpdatesByRunTimeVersionAndBranchName(ctx, update.AppId, update.RuntimeVersion, update.Branch, cursor, 2*maxPatchSources)
 		if err != nil {
-			return err
+			return enqueued, err
 		}
 		for _, item := range updatesPage.Items {
 			if enqueued == maxPatchSources {
@@ -127,7 +197,7 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 			if _, err := uuid.Parse(item.UpdateUUID); err != nil {
 				continue
 			}
-			if item.Platform != platform || item.UpdateUUID == updateUUID {
+			if item.Platform != platform {
 				continue
 			}
 			if err := s.enqueuePatch(ctx, bsDiffComputeArgs{
@@ -138,7 +208,7 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 				TargetUpdateId:   update.UpdateId,
 				SourceUpdateId:   item.UpdateId,
 			}); err != nil {
-				return err
+				return enqueued, err
 			}
 			enqueued++
 		}
@@ -147,11 +217,11 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 		}
 		last, err := strconv.ParseInt(*updatesPage.NextCursor, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid updates cursor %q: %w", *updatesPage.NextCursor, err)
+			return enqueued, fmt.Errorf("invalid updates cursor %q: %w", *updatesPage.NextCursor, err)
 		}
 		cursor = &last
 	}
-	return nil
+	return enqueued, nil
 }
 
 // enqueuePatch records the pair as pending, then inserts the job: the worker
