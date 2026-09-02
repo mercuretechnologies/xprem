@@ -61,7 +61,7 @@ func (s *PostgresBundlePatchStore) MarkRunning(ctx context.Context, appId, branc
 	if err != nil {
 		return err
 	}
-	_, err = s.engine.Queries.SetBundlePatchRunning(ctx, pgdb.SetBundlePatchRunningParams{
+	rows, err := s.engine.Queries.SetBundlePatchRunning(ctx, pgdb.SetBundlePatchRunningParams{
 		AppID:          ToPgUUID(appId),
 		BranchName:     branch,
 		TargetUpdateID: targetID,
@@ -69,6 +69,9 @@ func (s *PostgresBundlePatchStore) MarkRunning(ctx context.Context, appId, branc
 	})
 	if err != nil {
 		return fmt.Errorf("failed to mark the bundle patch running in database: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("no bundle patch record for %s -> %s on branch %s", sourceUpdateId, targetUpdateId, branch)
 	}
 	return nil
 }
@@ -87,7 +90,7 @@ func (s *PostgresBundlePatchStore) Finish(ctx context.Context, appId, branch, ta
 	if reason != "" {
 		reasonPtr = &reason
 	}
-	_, err = s.engine.Queries.FinishBundlePatch(ctx, pgdb.FinishBundlePatchParams{
+	rows, err := s.engine.Queries.FinishBundlePatch(ctx, pgdb.FinishBundlePatchParams{
 		Status:           string(status),
 		Reason:           reasonPtr,
 		PatchSize:        patchSize,
@@ -99,6 +102,9 @@ func (s *PostgresBundlePatchStore) Finish(ctx context.Context, appId, branch, ta
 	})
 	if err != nil {
 		return fmt.Errorf("failed to finish the bundle patch in database: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("no bundle patch record for %s -> %s on branch %s", sourceUpdateId, targetUpdateId, branch)
 	}
 	return nil
 }

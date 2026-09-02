@@ -501,6 +501,7 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 	headers["im"] = "bsdiff"
 	headers["expo-base-update-id"] = currentUUID.String()
 	headers["Cache-Control"] = "private, no-store"
+	headers["Vary"] = "A-IM, Expo-Current-Update-ID"
 	return &ExpoAssetResult{
 		Body:         body,
 		ContentType:  "application/octet-stream",
@@ -512,7 +513,9 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 
 func acceptsBSDiff(aim string) bool {
 	for _, item := range strings.Split(aim, ",") {
-		if strings.EqualFold(strings.TrimSpace(item), "bsdiff") {
+		// A token may carry parameters, as in "bsdiff;q=1.0".
+		token, _, _ := strings.Cut(item, ";")
+		if strings.EqualFold(strings.TrimSpace(token), "bsdiff") {
 			return true
 		}
 	}

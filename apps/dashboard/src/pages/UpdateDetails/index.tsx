@@ -80,9 +80,9 @@ const isUuid = (value: string) =>
 export const UpdateDetails = () => {
   const params = useParams();
   const location = useLocation();
-  const branch = decodeURIComponent(params.branchName ?? '');
-  const runtimeVersion = decodeURIComponent(params.runtimeVersion ?? '');
-  const updateId = decodeURIComponent(params.updateId ?? '');
+  const branch = params.branchName ?? '';
+  const runtimeVersion = params.runtimeVersion ?? '';
+  const updateId = params.updateId ?? '';
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED, BUNDLE_DIFFING } = useSettings();
   const [showRawConfig, setShowRawConfig] = useState(false);

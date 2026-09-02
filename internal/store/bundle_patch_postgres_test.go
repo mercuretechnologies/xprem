@@ -69,4 +69,9 @@ func TestBundlePatchLifecyclePostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "100", rows[0].SourceUpdateId)
+	_, err = fixture.pool.Exec(ctx, "DELETE FROM updates WHERE branch_id = $1 AND id = 200", fixture.defaultBranchId)
+	require.NoError(t, err)
+	rows, err = patches.ListByTarget(ctx, fixture.appId, rolloutTestDefaultBranch, "200")
+	require.NoError(t, err)
+	require.Empty(t, rows)
 }

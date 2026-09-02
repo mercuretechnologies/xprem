@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 	"xprem/internal/auditlog"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -290,9 +291,11 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	// No-op unless the checked update activated a per-update rollout.
 	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformIOS)
 	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformAndroid)
-	if updateType == types.NormalUpdate {
+	if updateType == types.NormalUpdate && s.bsDiffService != nil {
 		go func(update types.Update, platform types.Platform) {
-			if _, err := s.bsDiffService.ComputeBSDiffForPreviousUpdates(context.Background(), &update, updateUUID, platform); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if _, err := s.bsDiffService.ComputeBSDiffForPreviousUpdates(ctx, &update, updateUUID, platform); err != nil {
 				log.Printf("[bsdiff] scheduling patches for update %s: %v", update.UpdateId, err)
 			}
 		}(update, storedMetadata.Platform)

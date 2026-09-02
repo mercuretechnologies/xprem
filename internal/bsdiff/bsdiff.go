@@ -38,6 +38,7 @@ func DiffReference(old, new []byte) ([]byte, error) {
 	I := make([]int32, len(old)+1)
 	V := make([]int32, len(old)+1)
 	qsufsort(I, V, old)
+	// V was only qsufsort scratch; release it before the diff loop.
 	V = nil
 	return diff(old, new, func(new []byte, _ int) (int, int) { return search(I, old, new) })
 }

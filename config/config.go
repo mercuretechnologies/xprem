@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -259,8 +260,8 @@ func parseMB(value string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if mb <= 0 {
-		return 0, fmt.Errorf("%d is not a positive number of megabytes", mb)
+	if mb <= 0 || mb > math.MaxInt64>>20 {
+		return 0, fmt.Errorf("%d is not a usable number of megabytes", mb)
 	}
 	return mb << 20, nil
 }
@@ -270,7 +271,7 @@ func parseRatio(value string) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if ratio <= 0 || ratio > 1 {
+	if math.IsNaN(ratio) || ratio <= 0 || ratio > 1 {
 		return 0, fmt.Errorf("%v is not in (0, 1]", ratio)
 	}
 	return ratio, nil
