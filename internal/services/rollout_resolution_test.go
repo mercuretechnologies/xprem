@@ -734,7 +734,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 		channelRepo:       channelRepo,
 		rolloutRepo:       rolloutRepo,
 		updateService:     updateService,
-		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules()),
+		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules(), fakeRolloutBucket{}),
 		deploymentService: deploymentService,
 		rolloutService:    NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService),
 	}

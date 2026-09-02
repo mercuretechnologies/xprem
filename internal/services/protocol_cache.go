@@ -26,6 +26,12 @@ const (
 	// An update's type never changes once published; the TTL only reclaims
 	// storage.
 	updateTypeCacheTTLSeconds = update2.ImmutableCacheTTLSeconds
+	// An update's UUID hashes its id, branch and runtime version, so it can
+	// never designate another row. An unknown UUID is almost always the update
+	// embedded in the binary, which stays unknown; the short TTL only covers
+	// a lookup that raced a publish.
+	updateByUUIDCacheTTLSeconds        = update2.ImmutableCacheTTLSeconds
+	unknownUpdateByUUIDCacheTTLSeconds = 60
 	// Unlike its neighbours this key IS invalidated on write, but only where
 	// the cache is shared: with a local cache and several replicas, the write
 	// clears one process and the TTL bounds the rest.
@@ -45,6 +51,10 @@ func appConfigCacheKey(appId string) string {
 
 func updateTypeCacheKey(update types.Update) string {
 	return cache2.Key("update-type", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+}
+
+func updateByUUIDCacheKey(appId string, updateUUID string) string {
+	return cache2.Key("update-by-uuid", version.Version, appId, updateUUID)
 }
 
 func channelMappingCacheKey(appId string, channelName string) string {
@@ -131,6 +141,30 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 	ttl := updateTypeCacheTTLSeconds
 	_ = typeCache.Set(cacheKey, strconv.Itoa(int(updateType)), &ttl)
 	return updateType, nil
+}
+
+// cachedUpdate is one UUID lookup; a nil Update records that the UUID is
+// unknown, so devices on the embedded update do not hit the repository.
+type cachedUpdate struct {
+	Update *types.Update `json:"update"`
+}
+
+func (s *ExpoProtocolService) cachedUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error) {
+	updateCache := cache2.GetCache()
+	cacheKey := updateByUUIDCacheKey(appId, updateUUID)
+	if entry, ok := cache2.GetJSON[cachedUpdate](updateCache, cacheKey); ok {
+		return entry.Update, nil
+	}
+	update, err := s.updateRepo.GetUpdateByUUID(ctx, appId, updateUUID)
+	if err != nil {
+		return nil, err
+	}
+	ttl := updateByUUIDCacheTTLSeconds
+	if update == nil {
+		ttl = unknownUpdateByUUIDCacheTTLSeconds
+	}
+	cache2.SetJSON(updateCache, cacheKey, cachedUpdate{Update: update}, &ttl)
+	return update, nil
 }
 
 func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {

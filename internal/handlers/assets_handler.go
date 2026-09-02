@@ -30,18 +30,20 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 	}
 
 	params := services.AssetResolutionParams{
-		RequestID:         requestID,
-		AppID:             appId,
-		ChannelName:       channelName,
-		AssetName:         r.URL.Query().Get("asset"),
-		RuntimeVersion:    r.URL.Query().Get("runtimeVersion"),
-		Platform:          platform,
-		ClientID:          r.Header.Get("EAS-Client-ID"),
-		Branch:            r.URL.Query().Get("branch"),
-		UpdateID:          r.URL.Query().Get("updateId"),
-		RequestedUpdateID: r.Header.Get("Expo-Requested-Update-ID"),
-		Hash:              r.URL.Query().Get("h"),
-		Extension:         r.URL.Query().Get("ext"),
+		RequestID:           requestID,
+		AppID:               appId,
+		ChannelName:         channelName,
+		AssetName:           r.URL.Query().Get("asset"),
+		RuntimeVersion:      r.URL.Query().Get("runtimeVersion"),
+		Platform:            platform,
+		ClientID:            r.Header.Get("EAS-Client-ID"),
+		Branch:              r.URL.Query().Get("branch"),
+		UpdateID:            r.URL.Query().Get("updateId"),
+		RequestedUpdateID:   r.Header.Get("Expo-Requested-Update-ID"),
+		Hash:                r.URL.Query().Get("h"),
+		Extension:           r.URL.Query().Get("ext"),
+		ExpoCurrentUpdateId: r.Header.Get("Expo-Current-Update-ID"),
+		AIM:                 r.Header.Get("A-IM"),
 	}
 
 	result, err := h.protocolService.ResolveAsset(r.Context(), params)
@@ -72,5 +74,12 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if result.Uncompressed {
+		w.Header().Set("Content-Type", result.ContentType)
+		if _, err := w.Write(result.Body); err != nil {
+			log.Printf("[RequestID: %s] Error writing response: %v", requestID, err)
+		}
+		return
+	}
 	compression.ServeCompressedAsset(w, r, result.Body, result.ContentType, params.RequestID)
 }

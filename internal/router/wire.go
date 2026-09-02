@@ -291,7 +291,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 
 		addCleanup(jobsClient.Stop)
 	}
-	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules())
+	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
 	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
