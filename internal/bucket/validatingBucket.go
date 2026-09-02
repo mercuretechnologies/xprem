@@ -36,8 +36,9 @@ func (v *validatingBucket) GetBranches(appId string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The backends list the children of {appId}/, and cas is one of them.
-	return slices.DeleteFunc(branches, func(branch string) bool { return branch == casDir }), nil
+	// The backends list the children of {appId}/, and the reserved
+	// directories are among them.
+	return slices.DeleteFunc(branches, ReservedBranchName), nil
 }
 
 func (v *validatingBucket) GetRuntimeVersions(appId, branch string) ([]types.RuntimeVersionWithStats, error) {
@@ -197,8 +198,11 @@ func (v *validatingBucket) PutBlob(ctx context.Context, appId, hash string, body
 	return v.Inner.PutBlob(ctx, appId, hash, body)
 }
 
-func validateBSDiffKey(appId, updateId, sourceUpdateId string) error {
+func validateBSDiffKey(appId, branch, updateId, sourceUpdateId string) error {
 	if err := validateSegment("appId", appId); err != nil {
+		return err
+	}
+	if err := validateBranch(branch); err != nil {
 		return err
 	}
 	if err := validateSegment("updateId", updateId); err != nil {
@@ -207,25 +211,35 @@ func validateBSDiffKey(appId, updateId, sourceUpdateId string) error {
 	return validateSegment("sourceUpdateId", sourceUpdateId)
 }
 
-func (v *validatingBucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
-	if err := validateBSDiffKey(appId, updateId, sourceUpdateId); err != nil {
+func (v *validatingBucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
+	if err := validateBSDiffKey(appId, branch, updateId, sourceUpdateId); err != nil {
 		return false, err
 	}
-	return v.Inner.BSDiffExists(ctx, appId, updateId, sourceUpdateId)
+	return v.Inner.BSDiffExists(ctx, appId, branch, updateId, sourceUpdateId)
 }
 
-func (v *validatingBucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	if err := validateBSDiffKey(appId, updateId, sourceUpdateId); err != nil {
+func (v *validatingBucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	if err := validateBSDiffKey(appId, branch, updateId, sourceUpdateId); err != nil {
 		return nil, err
 	}
-	return v.Inner.GetBSDiff(ctx, appId, updateId, sourceUpdateId)
+	return v.Inner.GetBSDiff(ctx, appId, branch, updateId, sourceUpdateId)
 }
 
-func (v *validatingBucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
-	if err := validateBSDiffKey(appId, updateId, sourceUpdateId); err != nil {
+func (v *validatingBucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
+	if err := validateBSDiffKey(appId, branch, updateId, sourceUpdateId); err != nil {
 		return err
 	}
-	return v.Inner.PutBSDiff(ctx, appId, updateId, sourceUpdateId, body)
+	return v.Inner.PutBSDiff(ctx, appId, branch, updateId, sourceUpdateId, body)
+}
+
+func (v *validatingBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	if err := validateSegment("appId", appId); err != nil {
+		return err
+	}
+	if err := validateBranch(branch); err != nil {
+		return err
+	}
+	return v.Inner.DeleteBSDiffs(ctx, appId, branch)
 }
 
 func (v *validatingBucket) RequestBlobUploadURL(appId, hash, branch string) (string, error) {

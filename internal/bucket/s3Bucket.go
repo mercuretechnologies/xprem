@@ -32,6 +32,15 @@ func (b *S3Bucket) prefixedKey(key string) string {
 }
 
 func (b *S3Bucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
+	return b.deletePrefix(context.Background(), b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId)))
+}
+
+func (b *S3Bucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	return b.deletePrefix(ctx, b.prefixedKey(BSDiffBranchPrefix(appId, branch)))
+}
+
+// deletePrefix removes every object under prefix.
+func (b *S3Bucket) deletePrefix(ctx context.Context, prefix string) error {
 	if b.BucketName == "" {
 		return errors.New("BucketName not set")
 	}
@@ -40,8 +49,6 @@ func (b *S3Bucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId st
 	if err != nil {
 		return fmt.Errorf("error getting S3 client: %w", err)
 	}
-
-	prefix := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId))
 
 	listInput := &s3.ListObjectsV2Input{
 		Bucket: awssdk.String(b.BucketName),
@@ -52,7 +59,7 @@ func (b *S3Bucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId st
 
 	paginator := s3.NewListObjectsV2Paginator(s3Client, listInput)
 	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(context.TODO())
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to list objects: %w", err)
 		}
@@ -83,7 +90,7 @@ func (b *S3Bucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId st
 			},
 		}
 
-		_, err := s3Client.DeleteObjects(context.TODO(), deleteInput)
+		_, err := s3Client.DeleteObjects(ctx, deleteInput)
 		if err != nil {
 			return fmt.Errorf("failed to delete objects: %w", err)
 		}
@@ -286,8 +293,8 @@ func (b *S3Bucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
-func (b *S3Bucket) bsDiffKey(appId, updateId, sourceUpdateId string) string {
-	return b.KeyPrefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+func (b *S3Bucket) bsDiffKey(appId, branch, updateId, sourceUpdateId string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, updateId, sourceUpdateId))
 }
 
 func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
@@ -302,16 +309,16 @@ func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Read
 	return b.putObject(ctx, b.blobKey(appId, hash), body)
 }
 
-func (b *S3Bucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
-	return b.objectExists(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *S3Bucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *S3Bucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.getObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *S3Bucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *S3Bucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.putObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId), body)
+func (b *S3Bucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId), body)
 }
 
 func (b *S3Bucket) objectExists(ctx context.Context, key string) (bool, error) {

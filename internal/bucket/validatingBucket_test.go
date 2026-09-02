@@ -71,15 +71,19 @@ func (s *stubBucket) PutBlob(context.Context, string, string, io.Reader) error {
 	s.mark()
 	return nil
 }
-func (s *stubBucket) BSDiffExists(context.Context, string, string, string) (bool, error) {
+func (s *stubBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
 	s.mark()
 	return false, nil
 }
-func (s *stubBucket) GetBSDiff(context.Context, string, string, string) (*types.BucketFile, error) {
+func (s *stubBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
 	s.mark()
 	return nil, nil
 }
-func (s *stubBucket) PutBSDiff(context.Context, string, string, string, io.Reader) error {
+func (s *stubBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) DeleteBSDiffs(context.Context, string, string) error {
 	s.mark()
 	return nil
 }
@@ -345,6 +349,7 @@ func TestValidatingBucketGetBranchesHidesCas(t *testing.T) {
 	base := t.TempDir()
 	writeFile(t, filepath.Join(base, "app-1", "branch-a", "1.0", "100", ".check"))
 	writeFile(t, filepath.Join(base, "app-1", "cas", "some-blob-hash"))
+	writeFile(t, filepath.Join(base, "app-1", "bsDiff", "branch-a", "200", "100"))
 
 	b := &validatingBucket{Inner: &LocalBucket{BasePath: base}}
 

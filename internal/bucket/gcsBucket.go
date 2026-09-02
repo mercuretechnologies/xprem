@@ -41,12 +41,19 @@ func (b *GCSBucket) bucketHandle(ctx context.Context) (*storage.BucketHandle, er
 }
 
 func (b *GCSBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
-	ctx := context.Background()
+	return b.deletePrefix(context.Background(), b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId)))
+}
+
+func (b *GCSBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	return b.deletePrefix(ctx, b.prefixedKey(BSDiffBranchPrefix(appId, branch)))
+}
+
+// deletePrefix removes every object under prefix.
+func (b *GCSBucket) deletePrefix(ctx context.Context, prefix string) error {
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return err
 	}
-	prefix := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	it := bh.Objects(gctx, &storage.Query{Prefix: prefix})
@@ -242,8 +249,8 @@ func (b *GCSBucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
-func (b *GCSBucket) bsDiffKey(appId, updateId, sourceUpdateId string) string {
-	return b.KeyPrefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+func (b *GCSBucket) bsDiffKey(appId, branch, updateId, sourceUpdateId string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, updateId, sourceUpdateId))
 }
 
 func (b *GCSBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
@@ -258,16 +265,16 @@ func (b *GCSBucket) PutBlob(ctx context.Context, appId, hash string, body io.Rea
 	return b.putObject(ctx, b.blobKey(appId, hash), body)
 }
 
-func (b *GCSBucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
-	return b.objectExists(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *GCSBucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *GCSBucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.getObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *GCSBucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *GCSBucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.putObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId), body)
+func (b *GCSBucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId), body)
 }
 
 func (b *GCSBucket) objectExists(ctx context.Context, key string) (bool, error) {

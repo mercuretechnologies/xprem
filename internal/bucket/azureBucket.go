@@ -192,8 +192,8 @@ func (b *AzureBucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
-func (b *AzureBucket) bsDiffKey(appId, updateId, sourceUpdateId string) string {
-	return b.KeyPrefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+func (b *AzureBucket) bsDiffKey(appId, branch, updateId, sourceUpdateId string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, updateId, sourceUpdateId))
 }
 
 func (b *AzureBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
@@ -208,16 +208,16 @@ func (b *AzureBucket) PutBlob(ctx context.Context, appId, hash string, body io.R
 	return b.putObject(ctx, b.blobKey(appId, hash), body)
 }
 
-func (b *AzureBucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
-	return b.objectExists(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *AzureBucket) BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *AzureBucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
-	return b.getObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+func (b *AzureBucket) GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId))
 }
 
-func (b *AzureBucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
-	return b.putObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId), body)
+func (b *AzureBucket) PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, updateId, sourceUpdateId), body)
 }
 
 func (b *AzureBucket) objectExists(ctx context.Context, key string) (bool, error) {
@@ -303,12 +303,19 @@ func (b *AzureBucket) PutObject(ctx context.Context, key string, body []byte) er
 }
 
 func (b *AzureBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
-	ctx := context.Background()
+	return b.deletePrefix(context.Background(), b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId)))
+}
+
+func (b *AzureBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	return b.deletePrefix(ctx, b.prefixedKey(BSDiffBranchPrefix(appId, branch)))
+}
+
+// deletePrefix removes every blob under prefix.
+func (b *AzureBucket) deletePrefix(ctx context.Context, prefix string) error {
 	cc, err := b.containerClient()
 	if err != nil {
 		return err
 	}
-	prefix := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId))
 	pager := cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: &prefix})
 	sem := make(chan struct{}, runtime.NumCPU())
 	var wg sync.WaitGroup

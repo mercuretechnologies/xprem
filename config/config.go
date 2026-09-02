@@ -201,6 +201,63 @@ func LoadConfig() {
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET not set")
 	}
+	if _, err := parseBSDiffMaxBundleSize(); err != nil {
+		log.Fatalf("Invalid BSDIFF_MAX_BUNDLE_SIZE_MB: %v", err)
+	}
+	if _, err := parseBSDiffPatchMaxRatio(); err != nil {
+		log.Fatalf("Invalid BSDIFF_PATCH_MAX_RATIO: %v", err)
+	}
+}
+
+// BSDiffMaxBundleSize is the largest launch asset, in bytes, the patch job
+// loads in memory (BSDIFF_MAX_BUNDLE_SIZE_MB, default 128).
+func BSDiffMaxBundleSize() int64 {
+	size, err := parseBSDiffMaxBundleSize()
+	if err != nil {
+		size, _ = parseMB(DefaultEnvValues["BSDIFF_MAX_BUNDLE_SIZE_MB"])
+	}
+	return size
+}
+
+// BSDiffPatchMaxRatio is the largest patch worth storing, as a fraction of the
+// gzipped bundle a full download would cost (BSDIFF_PATCH_MAX_RATIO in (0, 1],
+// default 0.6).
+func BSDiffPatchMaxRatio() float64 {
+	ratio, err := parseBSDiffPatchMaxRatio()
+	if err != nil {
+		ratio, _ = parseRatio(DefaultEnvValues["BSDIFF_PATCH_MAX_RATIO"])
+	}
+	return ratio
+}
+
+func parseBSDiffMaxBundleSize() (int64, error) {
+	return parseMB(GetEnv("BSDIFF_MAX_BUNDLE_SIZE_MB"))
+}
+
+func parseBSDiffPatchMaxRatio() (float64, error) {
+	return parseRatio(GetEnv("BSDIFF_PATCH_MAX_RATIO"))
+}
+
+func parseMB(value string) (int64, error) {
+	mb, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if mb <= 0 {
+		return 0, fmt.Errorf("%d is not a positive number of megabytes", mb)
+	}
+	return mb << 20, nil
+}
+
+func parseRatio(value string) (float64, error) {
+	ratio, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	if ratio <= 0 || ratio > 1 {
+		return 0, fmt.Errorf("%v is not in (0, 1]", ratio)
+	}
+	return ratio, nil
 }
 
 var DefaultEnvValues = map[string]string{
@@ -224,6 +281,11 @@ var DefaultEnvValues = map[string]string{
 	// longer lived belongs to the operator's own pipeline (database backups,
 	// the audit stream once enabled).
 	"AUDIT_LOG_RETENTION_DAYS": "550",
+
+	// Bundle patches (bsdiff): the largest launch asset a patch job loads, and
+	// the largest patch worth storing as a fraction of the gzipped bundle.
+	"BSDIFF_MAX_BUNDLE_SIZE_MB": "128",
+	"BSDIFF_PATCH_MAX_RATIO":    "0.6",
 
 	// Database connection defaults
 	"DB_URL":                "",

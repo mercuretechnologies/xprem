@@ -685,15 +685,19 @@ func (fakeRolloutBucket) PutBlob(context.Context, string, string, io.Reader) err
 	return nil
 }
 
-func (fakeRolloutBucket) BSDiffExists(context.Context, string, string, string) (bool, error) {
+func (fakeRolloutBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
 	return false, nil
 }
 
-func (fakeRolloutBucket) GetBSDiff(context.Context, string, string, string) (*types.BucketFile, error) {
+func (fakeRolloutBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
 	return nil, fmt.Errorf("fake bucket stores no files")
 }
 
-func (fakeRolloutBucket) PutBSDiff(context.Context, string, string, string, io.Reader) error {
+func (fakeRolloutBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	return nil
+}
+
+func (fakeRolloutBucket) DeleteBSDiffs(context.Context, string, string) error {
 	return nil
 }
 

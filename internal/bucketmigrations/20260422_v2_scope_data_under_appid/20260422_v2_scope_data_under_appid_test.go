@@ -88,15 +88,19 @@ func (u unreachableBucket) PutBlob(context.Context, string, string, io.Reader) e
 	u.t.Fatal("migration should have skipped")
 	return nil
 }
-func (u unreachableBucket) BSDiffExists(context.Context, string, string, string) (bool, error) {
+func (u unreachableBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
 	u.t.Fatal("migration should have skipped")
 	return false, nil
 }
-func (u unreachableBucket) GetBSDiff(context.Context, string, string, string) (*types.BucketFile, error) {
+func (u unreachableBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
 	u.t.Fatal("migration should have skipped")
 	return nil, nil
 }
-func (u unreachableBucket) PutBSDiff(context.Context, string, string, string, io.Reader) error {
+func (u unreachableBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
+func (u unreachableBucket) DeleteBSDiffs(context.Context, string, string) error {
 	u.t.Fatal("migration should have skipped")
 	return nil
 }

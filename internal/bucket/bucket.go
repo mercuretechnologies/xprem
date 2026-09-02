@@ -116,14 +116,16 @@ func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
 }
 
-// BSDiffObjectKey is {appId}/bsDiff/{updateId}/{sourceUpdateId}: the patch
-// that turns the source update's bundle into the update's bundle.
-func BSDiffObjectKey(appId, updateId, sourceUpdateId string) string {
-	return appId + "/" + bsDiffDir + "/" + updateId + "/" + sourceUpdateId
+// BSDiffBranchPrefix is {appId}/bsDiff/{branch}/, under which every patch of
+// the branch lives. Update ids are only unique within a branch.
+func BSDiffBranchPrefix(appId, branch string) string {
+	return appId + "/" + bsDiffDir + "/" + branch + "/"
 }
 
-func prefixedBSDiffKey(prefix, appId, updateId, sourceUpdateId string) string {
-	return prefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+// BSDiffObjectKey is {appId}/bsDiff/{branch}/{updateId}/{sourceUpdateId}: the
+// patch that turns the source update's bundle into the update's bundle.
+func BSDiffObjectKey(appId, branch, updateId, sourceUpdateId string) string {
+	return BSDiffBranchPrefix(appId, branch) + updateId + "/" + sourceUpdateId
 }
 
 func prefixedBlobKey(prefix, appId, hash string) string {
@@ -212,9 +214,10 @@ type Bucket interface {
 	GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error)
 	PutBlob(ctx context.Context, appId, hash string, body io.Reader) error
 	RequestBlobUploadURL(appId, hash, branch string) (string, error)
-	BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error)
-	GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error)
-	PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error
+	BSDiffExists(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (bool, error)
+	GetBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string) (*types.BucketFile, error)
+	PutBSDiff(ctx context.Context, appId, branch, updateId, sourceUpdateId string, body io.Reader) error
+	DeleteBSDiffs(ctx context.Context, appId, branch string) error
 }
 
 type BucketType string

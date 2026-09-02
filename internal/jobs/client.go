@@ -22,6 +22,10 @@ import (
 
 var ErrAlreadyRunning = errors.New("a job of this kind is already running for this scope")
 
+// QueueBSDiff runs the bundle patch jobs. Each one holds two bundles and the
+// patch in memory, so the queue stays narrow.
+const QueueBSDiff = "bsdiff"
+
 type Client struct {
 	pool        *pgxpool.Pool
 	workers     *river.Workers
@@ -57,7 +61,10 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to migrate the river schema: %w", err)
 	}
 	riverClient, err := river.NewClient(driver, &river.Config{
-		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 10}},
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 10},
+			QueueBSDiff:        {MaxWorkers: 2},
+		},
 		Workers: c.workers,
 	})
 	if err != nil {
