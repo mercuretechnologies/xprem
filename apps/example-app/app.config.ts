@@ -10,6 +10,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "codeSigningMetadata": (process.env.DISABLE_CODE_SIGNING ? undefined : { keyid: 'main', alg: 'rsa-v1_5-sha256' }),
       "codeSigningCertificate": (process.env.DISABLE_CODE_SIGNING ? undefined : './certs/certificate.pem'),
       "enabled": true,
+      // DISABLE_BSDIFF=true builds a client that always downloads full bundles.
+      "enableBsdiffPatchSupport": !process.env.DISABLE_BSDIFF,
 
       "requestHeaders": {
         "expo-channel-name": process.env.RELEASE_CHANNEL,
