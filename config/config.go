@@ -201,41 +201,48 @@ func LoadConfig() {
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET not set")
 	}
-	if _, err := parseBSDiffMaxBundleSize(); err != nil {
-		log.Fatalf("Invalid BSDIFF_MAX_BUNDLE_SIZE_MB: %v", err)
+	if _, err := parseBundleDiffingMaxBundleSize(); err != nil {
+		log.Fatalf("Invalid BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB: %v", err)
 	}
-	if _, err := parseBSDiffPatchMaxRatio(); err != nil {
-		log.Fatalf("Invalid BSDIFF_PATCH_MAX_RATIO: %v", err)
+	if _, err := parseBundleDiffingPatchMaxRatio(); err != nil {
+		log.Fatalf("Invalid BUNDLE_DIFFING_PATCH_MAX_RATIO: %v", err)
 	}
 }
 
-// BSDiffMaxBundleSize is the largest launch asset, in bytes, the patch job
-// loads in memory (BSDIFF_MAX_BUNDLE_SIZE_MB, default 128).
-func BSDiffMaxBundleSize() int64 {
-	size, err := parseBSDiffMaxBundleSize()
+// IsBundleDiffingEnabled reports whether bundle patches are computed at
+// publish and served to devices (BUNDLE_DIFFING=true, off by default).
+func IsBundleDiffingEnabled() bool {
+	enabled, _ := strconv.ParseBool(GetEnv("BUNDLE_DIFFING"))
+	return enabled
+}
+
+// BundleDiffingMaxBundleSize is the largest launch asset, in bytes, a patch
+// job loads in memory (BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB, default 128).
+func BundleDiffingMaxBundleSize() int64 {
+	size, err := parseBundleDiffingMaxBundleSize()
 	if err != nil {
-		size, _ = parseMB(DefaultEnvValues["BSDIFF_MAX_BUNDLE_SIZE_MB"])
+		size, _ = parseMB(DefaultEnvValues["BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB"])
 	}
 	return size
 }
 
-// BSDiffPatchMaxRatio is the largest patch worth storing, as a fraction of the
-// gzipped bundle a full download would cost (BSDIFF_PATCH_MAX_RATIO in (0, 1],
-// default 0.6).
-func BSDiffPatchMaxRatio() float64 {
-	ratio, err := parseBSDiffPatchMaxRatio()
+// BundleDiffingPatchMaxRatio is the largest patch worth storing, as a fraction
+// of the gzipped bundle a full download would cost
+// (BUNDLE_DIFFING_PATCH_MAX_RATIO in (0, 1], default 0.3).
+func BundleDiffingPatchMaxRatio() float64 {
+	ratio, err := parseBundleDiffingPatchMaxRatio()
 	if err != nil {
-		ratio, _ = parseRatio(DefaultEnvValues["BSDIFF_PATCH_MAX_RATIO"])
+		ratio, _ = parseRatio(DefaultEnvValues["BUNDLE_DIFFING_PATCH_MAX_RATIO"])
 	}
 	return ratio
 }
 
-func parseBSDiffMaxBundleSize() (int64, error) {
-	return parseMB(GetEnv("BSDIFF_MAX_BUNDLE_SIZE_MB"))
+func parseBundleDiffingMaxBundleSize() (int64, error) {
+	return parseMB(GetEnv("BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB"))
 }
 
-func parseBSDiffPatchMaxRatio() (float64, error) {
-	return parseRatio(GetEnv("BSDIFF_PATCH_MAX_RATIO"))
+func parseBundleDiffingPatchMaxRatio() (float64, error) {
+	return parseRatio(GetEnv("BUNDLE_DIFFING_PATCH_MAX_RATIO"))
 }
 
 func parseMB(value string) (int64, error) {
@@ -282,10 +289,12 @@ var DefaultEnvValues = map[string]string{
 	// the audit stream once enabled).
 	"AUDIT_LOG_RETENTION_DAYS": "550",
 
-	// Bundle patches (bsdiff): the largest launch asset a patch job loads, and
-	// the largest patch worth storing as a fraction of the gzipped bundle.
-	"BSDIFF_MAX_BUNDLE_SIZE_MB": "128",
-	"BSDIFF_PATCH_MAX_RATIO":    "0.6",
+	// Bundle diffing (bsdiff patches between updates): off by default. Patches
+	// are served by this server, not the CDN, so a patch is only kept when it
+	// beats the gzipped bundle by a wide margin.
+	"BUNDLE_DIFFING":                    "false",
+	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "128",
+	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
 
 	// Database connection defaults
 	"DB_URL":                "",

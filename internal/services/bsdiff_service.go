@@ -86,8 +86,11 @@ func RegisterBSDiffWorker(workers *river.Workers, service *BsDiffService) {
 const maxPatchSources = 5
 
 func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, update *types.Update, updateUUID string, platform types.Platform) error {
+	if !config.IsBundleDiffingEnabled() {
+		return nil
+	}
 	if !config.IsDBMode() {
-		log.Printf("[bsdiff] no patches for update %s: bundle patches need the control plane (database mode)", update.UpdateId)
+		log.Printf("[bsdiff] no patches for update %s: bundle diffing needs the control plane (database mode)", update.UpdateId)
 		return nil
 	}
 	var cursor *int64
@@ -147,7 +150,7 @@ func (s *BsDiffService) readBundle(ctx context.Context, appId string, mapping *t
 		return nil, fmt.Errorf("%w: %s", errBlobMissing, mapping.LaunchAsset.Hash)
 	}
 	defer blob.Reader.Close()
-	maxSize := config.BSDiffMaxBundleSize()
+	maxSize := config.BundleDiffingMaxBundleSize()
 	data, err := io.ReadAll(io.LimitReader(blob.Reader, maxSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading blob %s: %w", mapping.LaunchAsset.Hash, err)
@@ -243,7 +246,7 @@ func (s *BsDiffService) computeBSDiff(ctx context.Context, appId, targetUpdateUU
 	if err != nil {
 		return err
 	}
-	if float64(len(patch)) > config.BSDiffPatchMaxRatio()*float64(fullDownload) {
+	if float64(len(patch)) > config.BundleDiffingPatchMaxRatio()*float64(fullDownload) {
 		log.Printf("[bsdiff] patch %s -> %s not worth serving: %d bytes against a %d byte download", sourceUpdateUUID, targetUpdateUUID, len(patch), fullDownload)
 		return nil
 	}

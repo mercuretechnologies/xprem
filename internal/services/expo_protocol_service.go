@@ -441,7 +441,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 }
 
 func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params AssetResolutionParams) *ExpoAssetResult {
-	if !config.IsDBMode() || !acceptsBSDiff(params.AIM) {
+	if !config.IsBundleDiffingEnabled() || !config.IsDBMode() || !acceptsBSDiff(params.AIM) {
 		return nil
 	}
 	currentUUID, err := uuid.Parse(params.ExpoCurrentUpdateId)
