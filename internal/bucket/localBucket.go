@@ -387,11 +387,39 @@ func (b *LocalBucket) blobPath(appId, hash string) string {
 	return filepath.Join(b.rootPath(), appId, casDir, hash)
 }
 
+func (b *LocalBucket) bsDiffPath(appId, updateId, sourceUpdateId string) string {
+	return filepath.Join(b.rootPath(), appId, bsDiffDir, updateId, sourceUpdateId)
+}
+
 func (b *LocalBucket) BlobExists(_ context.Context, appId, hash string) (bool, error) {
+	return b.fileExists(b.blobPath(appId, hash))
+}
+
+func (b *LocalBucket) GetBlob(_ context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.openFile(b.blobPath(appId, hash))
+}
+
+func (b *LocalBucket) PutBlob(_ context.Context, appId, hash string, body io.Reader) error {
+	return b.writeFile(b.blobPath(appId, hash), body)
+}
+
+func (b *LocalBucket) BSDiffExists(_ context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
+	return b.fileExists(b.bsDiffPath(appId, updateId, sourceUpdateId))
+}
+
+func (b *LocalBucket) GetBSDiff(_ context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.openFile(b.bsDiffPath(appId, updateId, sourceUpdateId))
+}
+
+func (b *LocalBucket) PutBSDiff(_ context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.writeFile(b.bsDiffPath(appId, updateId, sourceUpdateId), body)
+}
+
+func (b *LocalBucket) fileExists(filePath string) (bool, error) {
 	if b.BasePath == "" {
 		return false, errors.New("BasePath not set")
 	}
-	_, err := os.Stat(b.blobPath(appId, hash))
+	_, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -401,11 +429,12 @@ func (b *LocalBucket) BlobExists(_ context.Context, appId, hash string) (bool, e
 	return true, nil
 }
 
-func (b *LocalBucket) GetBlob(_ context.Context, appId, hash string) (*types.BucketFile, error) {
+// openFile returns nil, nil when the file does not exist.
+func (b *LocalBucket) openFile(filePath string) (*types.BucketFile, error) {
 	if b.BasePath == "" {
 		return nil, errors.New("BasePath not set")
 	}
-	file, err := os.Open(b.blobPath(appId, hash))
+	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -423,11 +452,10 @@ func (b *LocalBucket) GetBlob(_ context.Context, appId, hash string) (*types.Buc
 	}, nil
 }
 
-func (b *LocalBucket) PutBlob(_ context.Context, appId, hash string, body io.Reader) error {
+func (b *LocalBucket) writeFile(filePath string, body io.Reader) error {
 	if b.BasePath == "" {
 		return errors.New("BasePath not set")
 	}
-	filePath := b.blobPath(appId, hash)
 	if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
 		return err
 	}

@@ -286,7 +286,35 @@ func (b *S3Bucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
+func (b *S3Bucket) bsDiffKey(appId, updateId, sourceUpdateId string) string {
+	return b.KeyPrefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+}
+
 func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	return b.objectExists(ctx, b.blobKey(appId, hash))
+}
+
+func (b *S3Bucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.blobKey(appId, hash))
+}
+
+func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	return b.putObject(ctx, b.blobKey(appId, hash), body)
+}
+
+func (b *S3Bucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+}
+
+func (b *S3Bucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+}
+
+func (b *S3Bucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId), body)
+}
+
+func (b *S3Bucket) objectExists(ctx context.Context, key string) (bool, error) {
 	if b.BucketName == "" {
 		return false, errors.New("BucketName not set")
 	}
@@ -296,7 +324,7 @@ func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, er
 	}
 	_, err = s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: awssdk.String(b.BucketName),
-		Key:    awssdk.String(b.blobKey(appId, hash)),
+		Key:    awssdk.String(key),
 	})
 	if err != nil {
 		var notFound *s3types.NotFound
@@ -309,7 +337,8 @@ func (b *S3Bucket) BlobExists(ctx context.Context, appId, hash string) (bool, er
 	return true, nil
 }
 
-func (b *S3Bucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+// getObject returns nil, nil when the key does not exist.
+func (b *S3Bucket) getObject(ctx context.Context, key string) (*types.BucketFile, error) {
 	if b.BucketName == "" {
 		return nil, errors.New("BucketName not set")
 	}
@@ -319,7 +348,7 @@ func (b *S3Bucket) GetBlob(ctx context.Context, appId, hash string) (*types.Buck
 	}
 	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: awssdk.String(b.BucketName),
-		Key:    awssdk.String(b.blobKey(appId, hash)),
+		Key:    awssdk.String(key),
 	})
 	if err != nil {
 		var noSuchKey *s3types.NoSuchKey
@@ -334,7 +363,7 @@ func (b *S3Bucket) GetBlob(ctx context.Context, appId, hash string) (*types.Buck
 	}, nil
 }
 
-func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+func (b *S3Bucket) putObject(ctx context.Context, key string, body io.Reader) error {
 	if b.BucketName == "" {
 		return errors.New("BucketName not set")
 	}
@@ -344,7 +373,7 @@ func (b *S3Bucket) PutBlob(ctx context.Context, appId, hash string, body io.Read
 	}
 	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: awssdk.String(b.BucketName),
-		Key:    awssdk.String(b.blobKey(appId, hash)),
+		Key:    awssdk.String(key),
 		Body:   body,
 	})
 	if err != nil {

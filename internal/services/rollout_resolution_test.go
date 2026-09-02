@@ -685,6 +685,18 @@ func (fakeRolloutBucket) PutBlob(context.Context, string, string, io.Reader) err
 	return nil
 }
 
+func (fakeRolloutBucket) BSDiffExists(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (fakeRolloutBucket) GetBSDiff(context.Context, string, string, string) (*types.BucketFile, error) {
+	return nil, fmt.Errorf("fake bucket stores no files")
+}
+
+func (fakeRolloutBucket) PutBSDiff(context.Context, string, string, string, io.Reader) error {
+	return nil
+}
+
 func (fakeRolloutBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
 	return "", nil
 }
@@ -709,7 +721,8 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 	rolloutRepo := &fakeRolloutRepo{updateRepo: updateRepo, events: events}
 	updateService := NewUpdateService(updateRepo, nil)
 	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeRolloutBucket{})
-	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{})
+	bsDiffService := NewBSDiffService(fakeRolloutBucket{}, nil, updateService, updateRepo)
+	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{}, bsDiffService)
 	return &rolloutTestHarness{
 		appId:             uuid.NewString(),
 		events:            events,

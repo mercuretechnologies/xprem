@@ -71,6 +71,18 @@ func (s *stubBucket) PutBlob(context.Context, string, string, io.Reader) error {
 	s.mark()
 	return nil
 }
+func (s *stubBucket) BSDiffExists(context.Context, string, string, string) (bool, error) {
+	s.mark()
+	return false, nil
+}
+func (s *stubBucket) GetBSDiff(context.Context, string, string, string) (*types.BucketFile, error) {
+	s.mark()
+	return nil, nil
+}
+func (s *stubBucket) PutBSDiff(context.Context, string, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
 func (s *stubBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
 	s.mark()
 	return "", nil

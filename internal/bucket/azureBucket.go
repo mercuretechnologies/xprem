@@ -192,12 +192,40 @@ func (b *AzureBucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
+func (b *AzureBucket) bsDiffKey(appId, updateId, sourceUpdateId string) string {
+	return b.KeyPrefix + BSDiffObjectKey(appId, updateId, sourceUpdateId)
+}
+
 func (b *AzureBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	return b.objectExists(ctx, b.blobKey(appId, hash))
+}
+
+func (b *AzureBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.blobKey(appId, hash))
+}
+
+func (b *AzureBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	return b.putObject(ctx, b.blobKey(appId, hash), body)
+}
+
+func (b *AzureBucket) BSDiffExists(ctx context.Context, appId, updateId, sourceUpdateId string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+}
+
+func (b *AzureBucket) GetBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId))
+}
+
+func (b *AzureBucket) PutBSDiff(ctx context.Context, appId, updateId, sourceUpdateId string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, updateId, sourceUpdateId), body)
+}
+
+func (b *AzureBucket) objectExists(ctx context.Context, key string) (bool, error) {
 	cc, err := b.containerClient()
 	if err != nil {
 		return false, err
 	}
-	_, err = cc.NewBlobClient(b.blobKey(appId, hash)).GetProperties(ctx, nil)
+	_, err = cc.NewBlobClient(key).GetProperties(ctx, nil)
 	if err != nil {
 		if bloberror.HasCode(err, bloberror.BlobNotFound) {
 			return false, nil
@@ -207,12 +235,13 @@ func (b *AzureBucket) BlobExists(ctx context.Context, appId, hash string) (bool,
 	return true, nil
 }
 
-func (b *AzureBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+// getObject returns nil, nil when the key does not exist.
+func (b *AzureBucket) getObject(ctx context.Context, key string) (*types.BucketFile, error) {
 	cc, err := b.containerClient()
 	if err != nil {
 		return nil, err
 	}
-	resp, err := cc.NewBlobClient(b.blobKey(appId, hash)).DownloadStream(ctx, nil)
+	resp, err := cc.NewBlobClient(key).DownloadStream(ctx, nil)
 	if err != nil {
 		if bloberror.HasCode(err, bloberror.BlobNotFound) {
 			return nil, nil
@@ -226,12 +255,12 @@ func (b *AzureBucket) GetBlob(ctx context.Context, appId, hash string) (*types.B
 	return &types.BucketFile{Reader: resp.Body, CreatedAt: created}, nil
 }
 
-func (b *AzureBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+func (b *AzureBucket) putObject(ctx context.Context, key string, body io.Reader) error {
 	cc, err := b.containerClient()
 	if err != nil {
 		return err
 	}
-	if _, err := cc.NewBlockBlobClient(b.blobKey(appId, hash)).UploadStream(ctx, body, nil); err != nil {
+	if _, err := cc.NewBlockBlobClient(key).UploadStream(ctx, body, nil); err != nil {
 		return fmt.Errorf("error uploading blob: %w", err)
 	}
 	return nil

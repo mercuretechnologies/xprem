@@ -279,17 +279,20 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	branchService.SetOnAuditEvent(auditService.Record)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
+	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
+	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo)
 	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
 	if jobsClient != nil {
 		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
+		services.RegisterBSDiffWorker(jobsClient.Workers(), bsDiffService)
 		if err := jobsClient.Start(ctx); err != nil {
 			log.Fatalf("Job system startup failed: %v", err)
 		}
+
 		addCleanup(jobsClient.Stop)
 	}
-	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
 	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules())
-	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket)
+	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)

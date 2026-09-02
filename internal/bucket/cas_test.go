@@ -113,3 +113,47 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 	assert.Equal(t, "production", branch)
 	assert.Equal(t, filepath.Join(root, "app-1", casDir, testBlobHash), filePath)
 }
+
+func TestBSDiffObjectKey(t *testing.T) {
+	assert.Equal(t, "app-1/bsDiff/1700000000001/1690000000001", BSDiffObjectKey("app-1", "1700000000001", "1690000000001"))
+	assert.True(t, ReservedBranchName("bsDiff"))
+}
+
+func TestLocalBucket_BSDiffRoundTrip(t *testing.T) {
+	b := &LocalBucket{BasePath: t.TempDir()}
+	ctx := context.Background()
+
+	exists, err := b.BSDiffExists(ctx, "app-1", "1700000000001", "1690000000001")
+	require.NoError(t, err)
+	assert.False(t, exists)
+	missing, err := b.GetBSDiff(ctx, "app-1", "1700000000001", "1690000000001")
+	require.NoError(t, err)
+	assert.Nil(t, missing)
+
+	require.NoError(t, b.PutBSDiff(ctx, "app-1", "1700000000001", "1690000000001", bytes.NewReader([]byte("BSDIFF40 patch"))))
+	exists, err = b.BSDiffExists(ctx, "app-1", "1700000000001", "1690000000001")
+	require.NoError(t, err)
+	assert.True(t, exists)
+	got, err := b.GetBSDiff(ctx, "app-1", "1700000000001", "1690000000001")
+	require.NoError(t, err)
+	body, err := ConvertReadCloserToBytes(got.Reader)
+	require.NoError(t, err)
+	assert.Equal(t, "BSDIFF40 patch", string(body))
+	assert.FileExists(t, filepath.Join(b.BasePath, "app-1", "bsDiff", "1700000000001", "1690000000001"))
+
+	// Same update, other source: a separate object.
+	exists, err = b.BSDiffExists(ctx, "app-1", "1700000000001", "1680000000001")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestValidatingBucket_BSDiff_RejectsBadIds(t *testing.T) {
+	v := &validatingBucket{Inner: &LocalBucket{BasePath: t.TempDir()}}
+	ctx := context.Background()
+	_, err := v.BSDiffExists(ctx, "app-1", "../etc", "1690000000001")
+	assert.Error(t, err)
+	_, err = v.GetBSDiff(ctx, "app-1", "1700000000001", "")
+	assert.Error(t, err)
+	assert.Error(t, v.PutBSDiff(ctx, "a/b", "1700000000001", "1690000000001", bytes.NewReader(nil)))
+	assert.NoError(t, v.PutBSDiff(ctx, "app-1", "1700000000001", "1690000000001", bytes.NewReader([]byte("x"))))
+}
