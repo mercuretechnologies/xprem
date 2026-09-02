@@ -725,7 +725,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 	rolloutRepo := &fakeRolloutRepo{updateRepo: updateRepo, events: events}
 	updateService := NewUpdateService(updateRepo, nil)
 	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeRolloutBucket{})
-	bsDiffService := NewBSDiffService(fakeRolloutBucket{}, nil, updateService, updateRepo)
+	bsDiffService := NewBSDiffService(fakeRolloutBucket{}, nil, updateService, updateRepo, nil)
 	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{}, bsDiffService)
 	return &rolloutTestHarness{
 		appId:             uuid.NewString(),

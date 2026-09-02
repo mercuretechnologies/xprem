@@ -403,11 +403,6 @@ func (s *ExpoProtocolService) resolveUpdateAcrossBranches(ctx context.Context, r
 // that already holds the manifest naming it. The app id still scopes the read,
 // so one tenant cannot address another's blobs.
 func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
-	if err := bucket.ValidateBlobHash(params.Hash); err != nil {
-		log.Printf("[RequestID: %s] %v", params.RequestID, err)
-		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
-	}
-
 	if cdn := cdn2.GetCDN(); cdn != nil {
 		redirectURL, err := cdn.ComputeRedirectionURLForBlob(params.AppID, params.Hash)
 		if err != nil {
@@ -531,6 +526,10 @@ func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetReso
 	}
 
 	if params.Hash != "" {
+		if err := bucket.ValidateBlobHash(params.Hash); err != nil {
+			log.Printf("[RequestID: %s] %v", params.RequestID, err)
+			return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
+		}
 		if patch := s.resolveBSDiffAsset(ctx, params); patch != nil {
 			return patch, nil
 		}

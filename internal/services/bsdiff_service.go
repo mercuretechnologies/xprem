@@ -21,28 +21,44 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// BundlePatchRepository is the durable record of every patch job, the one the
+// dashboard and the MCP read; River's own rows are purged within days.
+type BundlePatchRepository interface {
+	MarkPending(ctx context.Context, appId, branch, targetUpdateId, sourceUpdateId string) error
+	MarkRunning(ctx context.Context, appId, branch, targetUpdateId, sourceUpdateId string) error
+	Finish(ctx context.Context, appId, branch, targetUpdateId, sourceUpdateId string, status types.BundlePatchStatus, reason string, patchSize, fullDownloadSize *int64) error
+	ListByTarget(ctx context.Context, appId, branch, targetUpdateId string) ([]types.BundlePatch, error)
+}
+
 type BsDiffService struct {
 	bucket        bucket.Bucket
 	jobs          *jobs.Client
 	updateService *UpdateService
 	updateRepo    UpdateRepository
+	patches       BundlePatchRepository
 }
 
-func NewBSDiffService(bucket bucket.Bucket, jobsClient *jobs.Client, updateService *UpdateService, updateRepo UpdateRepository) *BsDiffService {
+func NewBSDiffService(bucket bucket.Bucket, jobsClient *jobs.Client, updateService *UpdateService, updateRepo UpdateRepository, patches BundlePatchRepository) *BsDiffService {
 	return &BsDiffService{
 		bucket:        bucket,
 		jobs:          jobsClient,
 		updateService: updateService,
 		updateRepo:    updateRepo,
+		patches:       patches,
 	}
 }
 
 const bsDiffComputeJobKind = "bsdiff-compute"
 
+// bsDiffComputeArgs names the pair by UUID for uniqueness and by row for the
+// bundle_patches record, which stays reachable even when a lookup fails.
 type bsDiffComputeArgs struct {
+	AppId            string `json:"appId" river:"unique"`
 	TargetUpdateUUID string `json:"targetUpdateUUID" river:"unique"`
 	SourceUpdateUUID string `json:"sourceUpdateUUID" river:"unique"`
-	AppId            string `json:"appId" river:"unique"`
+	Branch           string `json:"branch"`
+	TargetUpdateId   string `json:"targetUpdateId"`
+	SourceUpdateId   string `json:"sourceUpdateId"`
 }
 
 func (bsDiffComputeArgs) Kind() string { return bsDiffComputeJobKind }
@@ -75,7 +91,7 @@ func (w *bsDiffComputeWorker) Timeout(*river.Job[bsDiffComputeArgs]) time.Durati
 }
 
 func (w *bsDiffComputeWorker) Work(ctx context.Context, job *river.Job[bsDiffComputeArgs]) error {
-	return w.service.computeBSDiff(ctx, job.Args.AppId, job.Args.TargetUpdateUUID, job.Args.SourceUpdateUUID)
+	return w.service.runPatchJob(ctx, job)
 }
 
 func RegisterBSDiffWorker(workers *river.Workers, service *BsDiffService) {
@@ -92,6 +108,9 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 	if !config.IsDBMode() {
 		log.Printf("[bsdiff] no patches for update %s: bundle diffing needs the control plane (database mode)", update.UpdateId)
 		return nil
+	}
+	if _, err := uuid.Parse(updateUUID); err != nil {
+		return fmt.Errorf("update %s has no usable UUID: %w", update.UpdateId, err)
 	}
 	var cursor *int64
 	enqueued := 0
@@ -111,13 +130,15 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 			if item.Platform != platform || item.UpdateUUID == updateUUID {
 				continue
 			}
-			_, err := s.jobs.Enqueue(ctx, bsDiffComputeArgs{
+			if err := s.enqueuePatch(ctx, bsDiffComputeArgs{
+				AppId:            update.AppId,
 				TargetUpdateUUID: updateUUID,
 				SourceUpdateUUID: item.UpdateUUID,
-				AppId:            update.AppId,
-			})
-			if err != nil && !errors.Is(err, jobs.ErrAlreadyRunning) {
-				return fmt.Errorf("enqueue patch %s -> %s: %w", item.UpdateUUID, updateUUID, err)
+				Branch:           update.Branch,
+				TargetUpdateId:   update.UpdateId,
+				SourceUpdateId:   item.UpdateId,
+			}); err != nil {
+				return err
 			}
 			enqueued++
 		}
@@ -133,11 +154,79 @@ func (s *BsDiffService) ComputeBSDiffForPreviousUpdates(ctx context.Context, upd
 	return nil
 }
 
+// enqueuePatch records the pair as pending, then inserts the job: the worker
+// can start the moment the job exists, and must find the row.
+func (s *BsDiffService) enqueuePatch(ctx context.Context, args bsDiffComputeArgs) error {
+	s.record(ctx, args, func(ctx context.Context) error {
+		return s.patches.MarkPending(ctx, args.AppId, args.Branch, args.TargetUpdateId, args.SourceUpdateId)
+	})
+	_, err := s.jobs.Enqueue(ctx, args)
+	if err != nil && !errors.Is(err, jobs.ErrAlreadyRunning) {
+		return fmt.Errorf("enqueue patch %s -> %s: %w", args.SourceUpdateUUID, args.TargetUpdateUUID, err)
+	}
+	return nil
+}
+
+// patchOutcome is how a job ended without an error: a stored patch, or a
+// documented reason not to store one.
+type patchOutcome struct {
+	status           types.BundlePatchStatus
+	reason           string
+	patchSize        *int64
+	fullDownloadSize *int64
+}
+
+func skipped(reason string) patchOutcome {
+	return patchOutcome{status: types.BundlePatchSkipped, reason: reason}
+}
+
+// runPatchJob wraps computeBSDiff with the bundle_patches bookkeeping.
+func (s *BsDiffService) runPatchJob(ctx context.Context, job *river.Job[bsDiffComputeArgs]) error {
+	args := job.Args
+	s.record(ctx, args, func(ctx context.Context) error {
+		return s.patches.MarkRunning(ctx, args.AppId, args.Branch, args.TargetUpdateId, args.SourceUpdateId)
+	})
+
+	outcome, err := s.computeBSDiff(ctx, args.AppId, args.TargetUpdateUUID, args.SourceUpdateUUID)
+	if err == nil {
+		s.record(ctx, args, func(ctx context.Context) error {
+			return s.patches.Finish(ctx, args.AppId, args.Branch, args.TargetUpdateId, args.SourceUpdateId, outcome.status, outcome.reason, outcome.patchSize, outcome.fullDownloadSize)
+		})
+		return nil
+	}
+
+	var cancel *river.JobCancelError
+	status := types.BundlePatchRunning
+	switch {
+	case errors.As(err, &cancel):
+		status = types.BundlePatchCancelled
+	case job.Attempt >= job.MaxAttempts:
+		status = types.BundlePatchFailed
+	}
+	s.record(ctx, args, func(ctx context.Context) error {
+		return s.patches.Finish(ctx, args.AppId, args.Branch, args.TargetUpdateId, args.SourceUpdateId, status, err.Error(), nil, nil)
+	})
+	return err
+}
+
+// record runs a bookkeeping write and logs its failure: the patch itself is
+// what matters, the record must never fail the job.
+func (s *BsDiffService) record(ctx context.Context, args bsDiffComputeArgs, write func(context.Context) error) {
+	if s.patches == nil {
+		return
+	}
+	if err := write(ctx); err != nil {
+		log.Printf("[bsdiff] cannot record patch %s -> %s: %v", args.SourceUpdateUUID, args.TargetUpdateUUID, err)
+	}
+}
+
 var (
 	errBundleTooLarge = errors.New("bundle exceeds the patch size limit")
 	errBlobMissing    = errors.New("bundle blob is missing from the bucket")
 )
 
+// readBundle loads the launch asset of an update from the CAS. Updates
+// published before the CAS carry no mapping and get nil, nil: no patch.
 func (s *BsDiffService) readBundle(ctx context.Context, appId string, mapping *types.UpdateAssetMapping) ([]byte, error) {
 	if mapping == nil || mapping.LaunchAsset.Hash == "" {
 		return nil, nil
@@ -167,7 +256,7 @@ func (s *BsDiffService) loadUpdate(ctx context.Context, appId, updateUUID string
 		return nil, fmt.Errorf("retrieving update %s: %w", updateUUID, err)
 	}
 	if update == nil {
-		return nil, river.JobCancel(fmt.Errorf("update %s not found", updateUUID))
+		return nil, river.JobCancel(fmt.Errorf("%s: update %s not found", types.BundlePatchReasonUpdateNotFound, updateUUID))
 	}
 	return update, nil
 }
@@ -193,74 +282,80 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (s *BsDiffService) computeBSDiff(ctx context.Context, appId, targetUpdateUUID, sourceUpdateUUID string) error {
+// computeBSDiff builds, verifies and stores the patch from the source
+// update's bundle to the target's. Conditions that a retry cannot fix cancel
+// the job; a missing bundle or a patch not worth serving is a skip.
+func (s *BsDiffService) computeBSDiff(ctx context.Context, appId, targetUpdateUUID, sourceUpdateUUID string) (patchOutcome, error) {
 	target, err := s.loadUpdate(ctx, appId, targetUpdateUUID)
 	if err != nil {
-		return err
+		return patchOutcome{}, err
 	}
 	source, err := s.loadUpdate(ctx, appId, sourceUpdateUUID)
 	if err != nil {
-		return err
+		return patchOutcome{}, err
 	}
 	if source.Branch != target.Branch {
-		return river.JobCancel(fmt.Errorf("source %s and target %s are on different branches", sourceUpdateUUID, targetUpdateUUID))
+		return patchOutcome{}, river.JobCancel(fmt.Errorf("%s: source %s and target %s are on different branches", types.BundlePatchReasonDifferentBranch, sourceUpdateUUID, targetUpdateUUID))
 	}
-	if source.RuntimeVersion != target.RuntimeVersion {
-		return river.JobCancel(fmt.Errorf("source %s and target %s are on different runtime versions", sourceUpdateUUID, targetUpdateUUID))
-	}
+
 	targetMapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, *target)
 	if err != nil {
-		return fmt.Errorf("retrieving asset mapping of %s: %w", targetUpdateUUID, err)
+		return patchOutcome{}, fmt.Errorf("retrieving asset mapping of %s: %w", targetUpdateUUID, err)
 	}
 	targetBundle, err := s.readBundle(ctx, appId, targetMapping)
 	if err != nil {
-		return cancelIfPermanent(err)
+		return patchOutcome{}, cancelIfPermanent(err)
 	}
 	if targetBundle == nil {
-		// Legacy updates (not stored in CAS)
-		return nil
+		return skipped(types.BundlePatchReasonLegacyUpdate), nil
 	}
 	sourceMapping, err := s.updateRepo.GetUpdateAssetMapping(ctx, *source)
 	if err != nil {
-		return fmt.Errorf("retrieving asset mapping of %s: %w", sourceUpdateUUID, err)
+		return patchOutcome{}, fmt.Errorf("retrieving asset mapping of %s: %w", sourceUpdateUUID, err)
 	}
 	sourceBundle, err := s.readBundle(ctx, appId, sourceMapping)
 	if err != nil {
-		return cancelIfPermanent(err)
+		return patchOutcome{}, cancelIfPermanent(err)
 	}
 	if sourceBundle == nil {
-		// Legacy updates (not stored in CAS) or same bundle
-		return nil
+		return skipped(types.BundlePatchReasonLegacyUpdate), nil
+	}
+	if bytes.Equal(sourceBundle, targetBundle) {
+		return skipped(types.BundlePatchReasonIdenticalBundles), nil
 	}
 
 	patch, err := bsdiff.Diff(sourceBundle, targetBundle)
 	if err != nil {
-		return river.JobCancel(fmt.Errorf("computing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err))
+		return patchOutcome{}, river.JobCancel(fmt.Errorf("computing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err))
 	}
 	rebuilt, err := bsdiff.Patch(sourceBundle, patch)
 	if err != nil || !bytes.Equal(rebuilt, targetBundle) {
-		return river.JobCancel(fmt.Errorf("patch %s -> %s does not rebuild the target bundle: %v", sourceUpdateUUID, targetUpdateUUID, err))
+		return patchOutcome{}, river.JobCancel(fmt.Errorf("%s: patch %s -> %s does not rebuild the target bundle: %v", types.BundlePatchReasonVerificationFailed, sourceUpdateUUID, targetUpdateUUID, err))
 	}
 
 	fullDownload, err := gzippedSize(targetBundle)
 	if err != nil {
-		return err
+		return patchOutcome{}, err
 	}
+	patchSize, fullSize := int64(len(patch)), int64(fullDownload)
 	if float64(len(patch)) > config.BundleDiffingPatchMaxRatio()*float64(fullDownload) {
 		log.Printf("[bsdiff] patch %s -> %s not worth serving: %d bytes against a %d byte download", sourceUpdateUUID, targetUpdateUUID, len(patch), fullDownload)
-		return nil
+		return patchOutcome{status: types.BundlePatchSkipped, reason: types.BundlePatchReasonNotWorth, patchSize: &patchSize, fullDownloadSize: &fullSize}, nil
 	}
 
 	if err := s.bucket.PutBSDiff(ctx, appId, target.Branch, targetUpdateUUID, sourceUpdateUUID, bytes.NewReader(patch)); err != nil {
-		return fmt.Errorf("storing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err)
+		return patchOutcome{}, fmt.Errorf("storing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err)
 	}
 	log.Printf("[bsdiff] stored patch %s -> %s: %d bytes against a %d byte download", sourceUpdateUUID, targetUpdateUUID, len(patch), fullDownload)
-	return nil
+	return patchOutcome{status: types.BundlePatchStored, patchSize: &patchSize, fullDownloadSize: &fullSize}, nil
 }
 
 func cancelIfPermanent(err error) error {
-	if errors.Is(err, errBundleTooLarge) || errors.Is(err, errBlobMissing) {
-		return river.JobCancel(err)
+	switch {
+	case errors.Is(err, errBundleTooLarge):
+		return river.JobCancel(fmt.Errorf("%s: %w", types.BundlePatchReasonBundleTooLarge, err))
+	case errors.Is(err, errBlobMissing):
+		return river.JobCancel(fmt.Errorf("%s: %w", types.BundlePatchReasonBlobMissing, err))
 	}
 	return err
 }

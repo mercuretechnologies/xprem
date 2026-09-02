@@ -764,6 +764,49 @@ func (q *Queries) EnsureDeviceIdentity(ctx context.Context, arg EnsureDeviceIden
 	return err
 }
 
+const finishBundlePatch = `-- name: FinishBundlePatch :execrows
+UPDATE bundle_patches bp
+SET status = $1,
+    reason = $2,
+    patch_size = $3,
+    full_download_size = $4,
+    updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = $5
+  AND b.name = $6
+  AND bp.target_update_id = $7
+  AND bp.source_update_id = $8
+`
+
+type FinishBundlePatchParams struct {
+	Status           string      `json:"status"`
+	Reason           *string     `json:"reason"`
+	PatchSize        *int64      `json:"patch_size"`
+	FullDownloadSize *int64      `json:"full_download_size"`
+	AppID            pgtype.UUID `json:"app_id"`
+	BranchName       string      `json:"branch_name"`
+	TargetUpdateID   int64       `json:"target_update_id"`
+	SourceUpdateID   int64       `json:"source_update_id"`
+}
+
+func (q *Queries) FinishBundlePatch(ctx context.Context, arg FinishBundlePatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBundlePatch,
+		arg.Status,
+		arg.Reason,
+		arg.PatchSize,
+		arg.FullDownloadSize,
+		arg.AppID,
+		arg.BranchName,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getActiveRolloutUpdates = `-- name: GetActiveRolloutUpdates :many
 SELECT u.id, u.platform, u.rollout_percentage, u.control_update_id, u.created_at
 FROM updates u
@@ -1188,6 +1231,81 @@ func (q *Queries) GetBranchesByAppID(ctx context.Context, appID pgtype.UUID) ([]
 			&i.CurrentCommitHash,
 			&i.CurrentUpdateCreatedAt,
 			&i.CurrentRolloutPercentage,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getBundlePatchesByTarget = `-- name: GetBundlePatchesByTarget :many
+SELECT bp.target_update_id,
+       t.update_uuid AS target_update_uuid,
+       bp.source_update_id,
+       s.update_uuid AS source_update_uuid,
+       s.commit_hash AS source_commit_hash,
+       s.message AS source_message,
+       s.created_at AS source_created_at,
+       bp.status, bp.reason, bp.patch_size, bp.full_download_size, bp.attempts, bp.updated_at
+FROM bundle_patches bp
+JOIN branches b ON b.id = bp.branch_id
+JOIN updates t ON t.branch_id = bp.branch_id AND t.id = bp.target_update_id
+JOIN updates s ON s.branch_id = bp.branch_id AND s.id = bp.source_update_id
+WHERE b.app_id = $1
+  AND b.name = $2
+  AND bp.target_update_id = $3
+ORDER BY s.id DESC
+`
+
+type GetBundlePatchesByTargetParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+	TargetUpdateID int64       `json:"target_update_id"`
+}
+
+type GetBundlePatchesByTargetRow struct {
+	TargetUpdateID   int64              `json:"target_update_id"`
+	TargetUpdateUuid pgtype.UUID        `json:"target_update_uuid"`
+	SourceUpdateID   int64              `json:"source_update_id"`
+	SourceUpdateUuid pgtype.UUID        `json:"source_update_uuid"`
+	SourceCommitHash string             `json:"source_commit_hash"`
+	SourceMessage    *string            `json:"source_message"`
+	SourceCreatedAt  pgtype.Timestamptz `json:"source_created_at"`
+	Status           string             `json:"status"`
+	Reason           *string            `json:"reason"`
+	PatchSize        *int64             `json:"patch_size"`
+	FullDownloadSize *int64             `json:"full_download_size"`
+	Attempts         int32              `json:"attempts"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetBundlePatchesByTarget(ctx context.Context, arg GetBundlePatchesByTargetParams) ([]GetBundlePatchesByTargetRow, error) {
+	rows, err := q.db.Query(ctx, getBundlePatchesByTarget, arg.AppID, arg.BranchName, arg.TargetUpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetBundlePatchesByTargetRow
+	for rows.Next() {
+		var i GetBundlePatchesByTargetRow
+		if err := rows.Scan(
+			&i.TargetUpdateID,
+			&i.TargetUpdateUuid,
+			&i.SourceUpdateID,
+			&i.SourceUpdateUuid,
+			&i.SourceCommitHash,
+			&i.SourceMessage,
+			&i.SourceCreatedAt,
+			&i.Status,
+			&i.Reason,
+			&i.PatchSize,
+			&i.FullDownloadSize,
+			&i.Attempts,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5513,6 +5631,37 @@ func (q *Queries) SetBranchProtected(ctx context.Context, arg SetBranchProtected
 	return result.RowsAffected(), nil
 }
 
+const setBundlePatchRunning = `-- name: SetBundlePatchRunning :execrows
+UPDATE bundle_patches bp
+SET status = 'running', attempts = bp.attempts + 1, updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = $1
+  AND b.name = $2
+  AND bp.target_update_id = $3
+  AND bp.source_update_id = $4
+`
+
+type SetBundlePatchRunningParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+	TargetUpdateID int64       `json:"target_update_id"`
+	SourceUpdateID int64       `json:"source_update_id"`
+}
+
+func (q *Queries) SetBundlePatchRunning(ctx context.Context, arg SetBundlePatchRunningParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setBundlePatchRunning,
+		arg.AppID,
+		arg.BranchName,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setUpdateAssetMapping = `-- name: SetUpdateAssetMapping :execresult
 UPDATE updates
 SET asset_mapping = $2
@@ -6172,6 +6321,42 @@ type UpdateUserPasswordByIDParams struct {
 // the only thing that ends those sessions.
 func (q *Queries) UpdateUserPasswordByID(ctx context.Context, arg UpdateUserPasswordByIDParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, updateUserPasswordByID, arg.ID, arg.PasswordHash)
+}
+
+const upsertBundlePatchPending = `-- name: UpsertBundlePatchPending :execrows
+INSERT INTO bundle_patches (branch_id, target_update_id, source_update_id, status)
+SELECT b.id, $1, $2, 'pending'
+FROM branches b
+WHERE b.app_id = $3 AND b.name = $4
+ON CONFLICT (branch_id, target_update_id, source_update_id) DO UPDATE
+SET status = 'pending',
+    reason = NULL,
+    patch_size = NULL,
+    full_download_size = NULL,
+    attempts = 0,
+    updated_at = CURRENT_TIMESTAMP
+`
+
+type UpsertBundlePatchPendingParams struct {
+	TargetUpdateID int64       `json:"target_update_id"`
+	SourceUpdateID int64       `json:"source_update_id"`
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+}
+
+// App-scoped: the branch lookup refuses a branch of another app. Re-inserting
+// an existing pair resets it, which is what a recompute wants.
+func (q *Queries) UpsertBundlePatchPending(ctx context.Context, arg UpsertBundlePatchPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertBundlePatchPending,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+		arg.AppID,
+		arg.BranchName,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertDeviceUpdateFailure = `-- name: UpsertDeviceUpdateFailure :exec

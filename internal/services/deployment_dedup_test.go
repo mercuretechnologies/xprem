@@ -27,7 +27,7 @@ func newDedupTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness)
 		h.updateService,
 		h.updateRepo,
 		bucket.GetBucket(),
-		NewBSDiffService(bucket.GetBucket(), nil, h.updateService, h.updateRepo),
+		NewBSDiffService(bucket.GetBucket(), nil, h.updateService, h.updateRepo, nil),
 	)
 	return svc, h
 }

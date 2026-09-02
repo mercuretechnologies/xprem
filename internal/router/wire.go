@@ -101,6 +101,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
+	var bundlePatchRepo services.BundlePatchRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
 	var apiKeyAccessRepo apikeyrestrictions.ApiKeyAccessRepository
@@ -173,6 +174,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			log.Fatalf("Job system initialization failed: %v", err)
 		}
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
+		bundlePatchRepo = store.NewPostgresBundlePatchStore(dbEngine)
 
 		// Resolved even when telemetry is off: licensing needs the instance id.
 		seedInstanceId, _ := resolvedBucket.GetInstanceID()
@@ -281,7 +283,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
 	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
-	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo)
+	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo, bundlePatchRepo)
 	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
 	if jobsClient != nil {
 		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)

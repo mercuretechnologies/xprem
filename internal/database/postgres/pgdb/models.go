@@ -83,6 +83,19 @@ type Branch struct {
 	Protected bool               `json:"protected"`
 }
 
+type BundlePatch struct {
+	BranchID         int64              `json:"branch_id"`
+	TargetUpdateID   int64              `json:"target_update_id"`
+	SourceUpdateID   int64              `json:"source_update_id"`
+	Status           string             `json:"status"`
+	Reason           *string            `json:"reason"`
+	PatchSize        *int64             `json:"patch_size"`
+	FullDownloadSize *int64             `json:"full_download_size"`
+	Attempts         int32              `json:"attempts"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Channel struct {
 	ID                   int64              `json:"id"`
 	AppID                pgtype.UUID        `json:"app_id"`
