@@ -59,6 +59,10 @@ trustProxyDepth: "1"
 # destination. Deploy the same value to every replica; a replica left on
 # "false" purges expired rows by age without waiting for the exporter.
 archiveAuditLogs: "false"
+# Set to "true" to compute bsdiff patches between successive updates at publish
+# and serve them to devices that ask for one, instead of the full bundle. Needs
+# the control plane. Patches are served by the server itself, not the CDN.
+bundleDiffing: "false"
 # Set to "true" to run the server as a Control Plane (DB mode): apps live in
 # Postgres and are created/managed from the dashboard instead of the single
 # flat-env app. Requires DB_URL and exactly one control-plane master key (see
@@ -408,6 +412,24 @@ environment:
     required: false
     enabled:
       - key: "archiveAuditLogs"
+        is: "true"
+  # Bundle diffing. The two tuning values default server-side to 128 MB and
+  # 0.3 when unset.
+  - name: "BUNDLE_DIFFING"
+    key: "bundleDiffing"
+    required: true
+    computed: true
+  - name: "BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB"
+    value: ""
+    required: false
+    enabled:
+      - key: "bundleDiffing"
+        is: "true"
+  - name: "BUNDLE_DIFFING_PATCH_MAX_RATIO"
+    value: ""
+    required: false
+    enabled:
+      - key: "bundleDiffing"
         is: "true"
   - name: "S3_BUCKET_AUDIT_LOGS_NAME"
     value: ""
