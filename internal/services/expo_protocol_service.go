@@ -462,6 +462,10 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 	if current == nil || requested == nil || current.Branch != requested.Branch || current.RuntimeVersion != requested.RuntimeVersion {
 		return nil
 	}
+	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
+	if err != nil || branchMap == nil || !s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, requested.Branch, branchMap) {
+		return nil
+	}
 	branch, target, source := requested.Branch, requestedUUID.String(), currentUUID.String()
 
 	// A redirect to a missing object fails the device's download outright, so

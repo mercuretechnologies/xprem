@@ -28,6 +28,8 @@ const formatDuration = (ms: number) =>
   ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
 const formatTime = (timestamp: number) =>
   new Date(timestamp).toLocaleTimeString([], { hour12: false })
+const logKey = (entry: Updates.UpdatesLogEntry) =>
+  `${entry.timestamp}:${entry.level}:${entry.message}`
 // Newest first.
 const readLogs = async () =>
   [...(await Updates.readLogEntriesAsync())].reverse()
@@ -92,9 +94,17 @@ async function askServerForBundle(
     'expo-protocol-version': '1',
   })
   const started = Date.now()
-  const response = await fetch(launchAsset.url, { headers })
-  // Read the body to measure it: the server streams without a content length.
-  const body = await response.arrayBuffer()
+  const abort = new AbortController()
+  const timeout = setTimeout(() => abort.abort(), 30_000)
+  let response: Response
+  let body: ArrayBuffer
+  try {
+    response = await fetch(launchAsset.url, { headers, signal: abort.signal })
+    // Read the body to measure it: the server streams without a content length.
+    body = await response.arrayBuffer()
+  } finally {
+    clearTimeout(timeout)
+  }
   if (!response.ok && response.status !== 226) {
     throw new Error(`HTTP ${response.status}`)
   }
@@ -272,12 +282,14 @@ export function UpdatesScreen() {
     setFlowMessage(null)
     const started = Date.now()
     try {
+      // Log timestamps are whole seconds, so the entries of this download are
+      // the ones absent from a snapshot taken just before it.
+      const seen = new Set((await Updates.readLogEntriesAsync()).map(logKey))
       await Updates.fetchUpdateAsync()
       // Both platforms log "Applied diff for asset …" on success, and a
       // warning or error before retrying with the full bundle.
-      // Log timestamps are whole seconds, so compare from the start of the second.
       const since = (await Updates.readLogEntriesAsync()).filter(
-        entry => entry.timestamp >= Math.floor(started / 1000) * 1000,
+        entry => !seen.has(logKey(entry)),
       )
       setDownload({
         ms: Date.now() - started,
@@ -317,9 +329,13 @@ export function UpdatesScreen() {
     .filter(({ category }) => !hiddenCategories.has(category))
 
   const copyLog = async (entry: Updates.UpdatesLogEntry, index: number) => {
-    await Clipboard.setStringAsync(JSON.stringify(entry, null, 2))
-    setCopiedLog(index)
-    setTimeout(() => setCopiedLog(null), 1500)
+    try {
+      await Clipboard.setStringAsync(JSON.stringify(entry, null, 2))
+      setCopiedLog(index)
+      setTimeout(() => setCopiedLog(null), 1500)
+    } catch (error) {
+      setFlowMessage(errorMessage(error))
+    }
   }
 
   const flowStatus = isChecking
@@ -415,8 +431,11 @@ export function UpdatesScreen() {
                     : 'Not used'
                 }
               />
-              {download.problems.map(entry => (
-                <ThemedText key={entry.timestamp} style={styles.error}>
+              {download.problems.map((entry, index) => (
+                <ThemedText
+                  key={`${entry.timestamp}-${index}`}
+                  style={styles.error}
+                >
                   {entry.message}
                 </ThemedText>
               ))}
@@ -440,7 +459,11 @@ export function UpdatesScreen() {
             {downloadedUpdate && (
               <Action
                 title="Restart"
-                onPress={() => Updates.reloadAsync()}
+                onPress={() =>
+                  Updates.reloadAsync().catch(error =>
+                    setFlowMessage(errorMessage(error)),
+                  )
+                }
                 disabled={!updatesActive || busy}
               />
             )}
@@ -577,7 +600,11 @@ export function UpdatesScreen() {
             <Action
               title="Clear"
               onPress={async () => {
-                await Updates.clearLogEntriesAsync()
+                try {
+                  await Updates.clearLogEntriesAsync()
+                } catch (error) {
+                  setFlowMessage(errorMessage(error))
+                }
                 await refreshLogs()
               }}
               disabled={!updatesActive}
