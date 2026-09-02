@@ -273,8 +273,9 @@ export function UpdatesScreen() {
       await Updates.fetchUpdateAsync()
       // Both platforms log "Applied diff for asset …" on success, and a
       // warning or error before retrying with the full bundle.
+      // Log timestamps are whole seconds, so compare from the start of the second.
       const since = (await Updates.readLogEntriesAsync()).filter(
-        entry => entry.timestamp >= started,
+        entry => entry.timestamp >= Math.floor(started / 1000) * 1000,
       )
       setDownload({
         ms: Date.now() - started,
