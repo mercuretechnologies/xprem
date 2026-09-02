@@ -115,9 +115,9 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 }
 
 func TestBSDiffObjectKey(t *testing.T) {
-	assert.Equal(t, "app-1/bsDiff/main/", BSDiffBranchPrefix("app-1", "main"))
-	assert.Equal(t, "app-1/bsDiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", BSDiffObjectKey("app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
-	assert.True(t, ReservedBranchName("bsDiff"))
+	assert.Equal(t, "app-1/bsdiff/main/", BSDiffBranchPrefix("app-1", "main"))
+	assert.Equal(t, "app-1/bsdiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", BSDiffObjectKey("app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
+	assert.True(t, ReservedBranchName("bsdiff"))
 }
 
 func TestLocalBucket_BSDiffRoundTrip(t *testing.T) {
@@ -140,7 +140,7 @@ func TestLocalBucket_BSDiffRoundTrip(t *testing.T) {
 	body, err := ConvertReadCloserToBytes(got.Reader)
 	require.NoError(t, err)
 	assert.Equal(t, "BSDIFF40 patch", string(body))
-	assert.FileExists(t, filepath.Join(b.BasePath, "app-1", "bsDiff", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
+	assert.FileExists(t, filepath.Join(b.BasePath, "app-1", "bsdiff", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
 
 	// Same ids on another branch: a separate object.
 	exists, err = b.BSDiffExists(ctx, "app-1", "staging", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d")

@@ -25,7 +25,7 @@ var s3KeyPrefixDeprecationOnce sync.Once
 const (
 	maxSegmentLen  = 128
 	casDir         = "cas"
-	bsDiffDir      = "bsDiff"
+	bsDiffDir      = "bsdiff"
 	blobHashLength = 43
 )
 
@@ -116,13 +116,13 @@ func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
 }
 
-// BSDiffBranchPrefix is {appId}/bsDiff/{branch}/, under which every patch of
+// BSDiffBranchPrefix is {appId}/bsdiff/{branch}/, under which every patch of
 // the branch lives. Update ids are only unique within a branch.
 func BSDiffBranchPrefix(appId, branch string) string {
 	return appId + "/" + bsDiffDir + "/" + branch + "/"
 }
 
-// BSDiffObjectKey is {appId}/bsDiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}:
+// BSDiffObjectKey is {appId}/bsdiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}:
 // the patch that turns the source update's bundle into the target's. The
 // source UUID is the last segment so a CDN edge can echo it as the
 // expo-base-update-id header.

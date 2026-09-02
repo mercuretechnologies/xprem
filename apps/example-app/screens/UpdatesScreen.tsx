@@ -232,12 +232,14 @@ export function UpdatesScreen() {
 
   // expo-updates writes "Applied diff" only after bspatch rebuilt the bundle
   // and its SHA-256 matched the manifest. The log survives a restart.
-  const rebuiltFromPatch = logs.some(
-    entry =>
-      entry.message.startsWith('Applied diff') &&
-      entry.updateId?.toLowerCase() ===
-        currentlyRunning.updateId?.toLowerCase(),
-  )
+  const runningId = currentlyRunning.updateId?.toLowerCase()
+  const rebuiltFromPatch =
+    !!runningId &&
+    logs.some(
+      entry =>
+        entry.message.startsWith('Applied diff') &&
+        entry.updateId?.toLowerCase() === runningId,
+    )
   const newUpdate =
     availableUpdate?.type === Updates.UpdateInfoType.NEW
       ? availableUpdate

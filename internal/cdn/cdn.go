@@ -19,7 +19,7 @@ type CDN interface {
 	// ComputeRedirectionURLForBlob signs {keyPrefix}{appId}/cas/{hash}.
 	ComputeRedirectionURLForBlob(appId, hash string) (string, error)
 	// ComputeRedirectionURLForPatch signs
-	// {keyPrefix}{appId}/bsDiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}.
+	// {keyPrefix}{appId}/bsdiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}.
 	ComputeRedirectionURLForPatch(appId, branch, targetUpdateUUID, sourceUpdateUUID string) (string, error)
 }
 

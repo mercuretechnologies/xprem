@@ -323,7 +323,7 @@ func TestGenericCDNComputeRedirectionURLForPatch(t *testing2.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "https://cdn.example.com/prefix/test-app-id/bsDiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"
+	want := "https://cdn.example.com/prefix/test-app-id/bsdiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}

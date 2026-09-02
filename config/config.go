@@ -220,14 +220,15 @@ func IsBundleDiffingEnabled() bool {
 // IsBundleDiffingCDNRedirect reports whether patch requests are redirected to
 // the CDN instead of served by this server (BUNDLE_DIFFING_CDN_REDIRECT=true).
 // The operator asserts that the CDN edge adds the im and expo-base-update-id
-// response headers on the bsDiff objects; nothing here can check it.
+// response headers on the bsdiff objects; nothing here can check it.
 func IsBundleDiffingCDNRedirect() bool {
 	enabled, _ := strconv.ParseBool(GetEnv("BUNDLE_DIFFING_CDN_REDIRECT"))
 	return enabled
 }
 
 // BundleDiffingMaxBundleSize is the largest launch asset, in bytes, a patch
-// job loads in memory (BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB, default 128).
+// job loads in memory (BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB, default 64). A job
+// peaks at about six times this size, and two jobs run at once.
 func BundleDiffingMaxBundleSize() int64 {
 	size, err := parseBundleDiffingMaxBundleSize()
 	if err != nil {
@@ -304,7 +305,7 @@ var DefaultEnvValues = map[string]string{
 	// beats the gzipped bundle by a wide margin.
 	"BUNDLE_DIFFING":                    "false",
 	"BUNDLE_DIFFING_CDN_REDIRECT":       "false",
-	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "128",
+	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "64",
 	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
 
 	// Database connection defaults
