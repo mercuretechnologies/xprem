@@ -60,7 +60,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
         </main>
       </div>
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="w-72 p-0">
+        <SheetContent side="right" className="w-72 p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <AppSidebar
             mobile
