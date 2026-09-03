@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"xprem/config"
 	"xprem/internal/assets"
@@ -21,6 +22,8 @@ import (
 	"xprem/internal/metrics"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
+
+	"github.com/google/uuid"
 )
 
 type ExpoProtocolService struct {
@@ -29,6 +32,7 @@ type ExpoProtocolService struct {
 	updateRepo    UpdateRepository
 	updateService *UpdateService
 	branchRules   []BranchRule
+	bucket        bucket.Bucket
 }
 
 type ManifestRequestParams struct {
@@ -84,8 +88,10 @@ type AssetResolutionParams struct {
 	// Hash and Extension are the content-addressed form of an asset URL, baked
 	// into the manifests of updates whose files live in cas/. The hash is the
 	// whole address: no branch, runtime version or update pins it.
-	Hash      string
-	Extension string
+	Hash                string
+	Extension           string
+	ExpoCurrentUpdateId string
+	AIM                 string
 }
 
 type ExpoAssetError struct {
@@ -99,19 +105,22 @@ type ExpoAssetResult struct {
 	ContentType   string
 	Headers       map[string]string
 	StatusCode    int
+	// Uncompressed bodies are written as is, whatever Accept-Encoding says.
+	Uncompressed bool
 }
 
 func (e *ExpoProtocolError) Error() string { return e.Message }
 
 func (e *ExpoAssetError) Error() string { return e.Message }
 
-func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, updateService *UpdateService, branchRules []BranchRule) *ExpoProtocolService {
+func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, updateService *UpdateService, branchRules []BranchRule, resolvedBucket bucket.Bucket) *ExpoProtocolService {
 	return &ExpoProtocolService{
 		appRepo:       appRepo,
 		channelRepo:   channelRepo,
 		updateRepo:    updateRepo,
 		updateService: updateService,
 		branchRules:   branchRules,
+		bucket:        resolvedBucket,
 	}
 }
 
@@ -394,11 +403,6 @@ func (s *ExpoProtocolService) resolveUpdateAcrossBranches(ctx context.Context, r
 // that already holds the manifest naming it. The app id still scopes the read,
 // so one tenant cannot address another's blobs.
 func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
-	if err := bucket.ValidateBlobHash(params.Hash); err != nil {
-		log.Printf("[RequestID: %s] %v", params.RequestID, err)
-		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
-	}
-
 	if cdn := cdn2.GetCDN(); cdn != nil {
 		redirectURL, err := cdn.ComputeRedirectionURLForBlob(params.AppID, params.Hash)
 		if err != nil {
@@ -408,7 +412,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 		return &ExpoAssetResult{RedirectToURL: redirectURL}, nil
 	}
 
-	blob, err := bucket.GetBucket().GetBlob(ctx, params.AppID, params.Hash)
+	blob, err := s.bucket.GetBlob(ctx, params.AppID, params.Hash)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading blob: %v", params.RequestID, err)
 		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
@@ -431,6 +435,97 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 	}, nil
 }
 
+// resolveBSDiffAsset answers a launch asset request with the patch from the
+// update the device runs to the one it downloads, or nil for the full bundle.
+func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params AssetResolutionParams) *ExpoAssetResult {
+	if !config.IsBundleDiffingEnabled() || !acceptsBSDiff(params.AIM) {
+		return nil
+	}
+	currentUUID, err := uuid.Parse(params.ExpoCurrentUpdateId)
+	if err != nil {
+		return nil
+	}
+	requestedUUID, err := uuid.Parse(params.RequestedUpdateID)
+	if err != nil || requestedUUID == currentUUID {
+		return nil
+	}
+	current, err := s.cachedUpdateByUUID(ctx, params.AppID, currentUUID.String())
+	if err != nil {
+		log.Printf("[RequestID: %s] Cannot resolve current update %s: %v", params.RequestID, currentUUID, err)
+		return nil
+	}
+	requested, err := s.cachedUpdateByUUID(ctx, params.AppID, requestedUUID.String())
+	if err != nil {
+		log.Printf("[RequestID: %s] Cannot resolve requested update %s: %v", params.RequestID, requestedUUID, err)
+		return nil
+	}
+	if current == nil || requested == nil || current.Branch != requested.Branch || current.RuntimeVersion != requested.RuntimeVersion {
+		return nil
+	}
+	branchMap, err := s.channelBranchMapping(ctx, params.AppID, params.ChannelName)
+	if err != nil || branchMap == nil || !s.isAssetBranchAllowed(ctx, params.AppID, params.ChannelName, requested.Branch, branchMap) {
+		return nil
+	}
+	branch, target, source := requested.Branch, requestedUUID.String(), currentUUID.String()
+
+	// A redirect to a missing object fails the device's download outright, so
+	// the existence check is not optional on that path.
+	exists, err := s.cachedPatchExists(ctx, params.AppID, branch, target, source)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error checking patch %s -> %s: %v", params.RequestID, source, target, err)
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	if config.IsBundleDiffingCDNRedirect() {
+		if cdn := cdn2.GetCDN(); cdn != nil {
+			redirectURL, err := cdn.ComputeRedirectionURLForPatch(params.AppID, branch, target, source)
+			if err == nil {
+				return &ExpoAssetResult{RedirectToURL: redirectURL}
+			}
+			log.Printf("[RequestID: %s] Error signing patch url %s -> %s, serving it directly: %v", params.RequestID, source, target, err)
+		}
+	}
+
+	patch, err := s.bucket.GetBSDiff(ctx, params.AppID, branch, target, source)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading patch %s -> %s: %v", params.RequestID, source, target, err)
+		return nil
+	}
+	if patch == nil {
+		return nil
+	}
+	body, err := bucket.ConvertReadCloserToBytes(patch.Reader)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading patch body %s -> %s: %v", params.RequestID, source, target, err)
+		return nil
+	}
+	headers := assets.ExpoProtocolHeaders()
+	headers["im"] = "bsdiff"
+	headers["expo-base-update-id"] = currentUUID.String()
+	headers["Cache-Control"] = "private, no-store"
+	headers["Vary"] = "A-IM, Expo-Current-Update-ID"
+	return &ExpoAssetResult{
+		Body:         body,
+		ContentType:  "application/octet-stream",
+		Headers:      headers,
+		StatusCode:   http.StatusOK,
+		Uncompressed: true,
+	}
+}
+
+func acceptsBSDiff(aim string) bool {
+	for _, item := range strings.Split(aim, ",") {
+		// A token may carry parameters, as in "bsdiff;q=1.0".
+		token, _, _ := strings.Cut(item, ";")
+		if strings.EqualFold(strings.TrimSpace(token), "bsdiff") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetResolutionParams) (*ExpoAssetResult, error) {
 	if _, err := s.cachedAppConfig(ctx, params.AppID); err != nil {
 		log.Printf("[RequestID: %s] Unknown app id %q", params.RequestID, params.AppID)
@@ -438,6 +533,13 @@ func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetReso
 	}
 
 	if params.Hash != "" {
+		if err := bucket.ValidateBlobHash(params.Hash); err != nil {
+			log.Printf("[RequestID: %s] %v", params.RequestID, err)
+			return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusBadRequest, Message: "Invalid asset hash"}
+		}
+		if patch := s.resolveBSDiffAsset(ctx, params); patch != nil {
+			return patch, nil
+		}
 		return s.resolveBlobAsset(ctx, params)
 	}
 

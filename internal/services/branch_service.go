@@ -157,6 +157,13 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 				fmt.Printf("failed to delete update files for update %d: %v\n", row.ID, err)
 			}
 		}
+		// No updates, no patches.
+		if len(bucketRows) == 0 {
+			return
+		}
+		if err := s.bucket.DeleteBSDiffs(context.Background(), appId, branchName); err != nil {
+			fmt.Printf("failed to delete bundle patches of branch %s: %v\n", branchName, err)
+		}
 	}(rows)
 	return nil
 }

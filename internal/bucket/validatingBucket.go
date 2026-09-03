@@ -3,6 +3,7 @@ package bucket
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"slices"
 	"xprem/internal/types"
@@ -36,8 +37,9 @@ func (v *validatingBucket) GetBranches(appId string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The backends list the children of {appId}/, and cas is one of them.
-	return slices.DeleteFunc(branches, func(branch string) bool { return branch == casDir }), nil
+	// The backends list the children of {appId}/, and the reserved
+	// directories are among them.
+	return slices.DeleteFunc(branches, ReservedBranchName), nil
 }
 
 func (v *validatingBucket) GetRuntimeVersions(appId, branch string) ([]types.RuntimeVersionWithStats, error) {
@@ -195,6 +197,60 @@ func (v *validatingBucket) PutBlob(ctx context.Context, appId, hash string, body
 		return err
 	}
 	return v.Inner.PutBlob(ctx, appId, hash, body)
+}
+
+func validateBSDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) error {
+	if err := validateSegment("appId", appId); err != nil {
+		return err
+	}
+	if err := validateBranch(branch); err != nil {
+		return err
+	}
+	if err := validateUpdateUUID("targetUpdateUUID", targetUpdateUUID); err != nil {
+		return err
+	}
+	return validateUpdateUUID("sourceUpdateUUID", sourceUpdateUUID)
+}
+
+// validateUpdateUUID accepts only the canonical lowercase spelling, so one
+// update cannot own two patch keys.
+func validateUpdateUUID(name, value string) error {
+	parsed, err := uuid.Parse(value)
+	if err != nil || parsed.String() != value {
+		return fmt.Errorf("invalid %s: must be a canonical lowercase UUID", name)
+	}
+	return nil
+}
+
+func (v *validatingBucket) BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	if err := validateBSDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID); err != nil {
+		return false, err
+	}
+	return v.Inner.BSDiffExists(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
+}
+
+func (v *validatingBucket) GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	if err := validateBSDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID); err != nil {
+		return nil, err
+	}
+	return v.Inner.GetBSDiff(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
+}
+
+func (v *validatingBucket) PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	if err := validateBSDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID); err != nil {
+		return err
+	}
+	return v.Inner.PutBSDiff(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID, body)
+}
+
+func (v *validatingBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	if err := validateSegment("appId", appId); err != nil {
+		return err
+	}
+	if err := validateBranch(branch); err != nil {
+		return err
+	}
+	return v.Inner.DeleteBSDiffs(ctx, appId, branch)
 }
 
 func (v *validatingBucket) RequestBlobUploadURL(appId, hash, branch string) (string, error) {

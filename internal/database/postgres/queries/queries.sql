@@ -2501,3 +2501,60 @@ INSERT INTO blobs (app_id, hash, size, content_type)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (app_id, hash) DO NOTHING
 RETURNING app_id, hash, size, content_type, created_at;
+
+-- name: UpsertBundlePatchPending :execrows
+-- App-scoped: the branch lookup refuses a branch of another app. Re-inserting
+-- an existing pair resets it, which is what a recompute wants.
+INSERT INTO bundle_patches (branch_id, target_update_id, source_update_id, status)
+SELECT b.id, sqlc.arg('target_update_id'), sqlc.arg('source_update_id'), 'pending'
+FROM branches b
+WHERE b.app_id = sqlc.arg('app_id') AND b.name = sqlc.arg('branch_name')
+ON CONFLICT (branch_id, target_update_id, source_update_id) DO UPDATE
+SET status = 'pending',
+    reason = NULL,
+    patch_size = NULL,
+    full_download_size = NULL,
+    attempts = 0,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- name: SetBundlePatchRunning :execrows
+UPDATE bundle_patches bp
+SET status = 'running', attempts = bp.attempts + 1, updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+  AND bp.source_update_id = sqlc.arg('source_update_id');
+
+-- name: FinishBundlePatch :execrows
+UPDATE bundle_patches bp
+SET status = sqlc.arg('status'),
+    reason = sqlc.narg('reason'),
+    patch_size = sqlc.narg('patch_size'),
+    full_download_size = sqlc.narg('full_download_size'),
+    updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+  AND bp.source_update_id = sqlc.arg('source_update_id');
+
+-- name: GetBundlePatchesByTarget :many
+SELECT bp.target_update_id,
+       t.update_uuid AS target_update_uuid,
+       bp.source_update_id,
+       s.update_uuid AS source_update_uuid,
+       s.commit_hash AS source_commit_hash,
+       s.message AS source_message,
+       s.created_at AS source_created_at,
+       bp.status, bp.reason, bp.patch_size, bp.full_download_size, bp.attempts, bp.updated_at
+FROM bundle_patches bp
+JOIN branches b ON b.id = bp.branch_id
+JOIN updates t ON t.branch_id = bp.branch_id AND t.id = bp.target_update_id
+JOIN updates s ON s.branch_id = bp.branch_id AND s.id = bp.source_update_id
+WHERE b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+ORDER BY s.id DESC;

@@ -68,6 +68,7 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'channel_rollout.ended',
       'update_rollout.set',
       'update_rollout.reverted',
+      'update_patches.recomputed',
     ],
   },
   {

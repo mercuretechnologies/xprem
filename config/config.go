@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -201,6 +202,80 @@ func LoadConfig() {
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET not set")
 	}
+	if _, err := parseBundleDiffingMaxBundleSize(); err != nil {
+		log.Fatalf("Invalid BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB: %v", err)
+	}
+	if _, err := parseBundleDiffingPatchMaxRatio(); err != nil {
+		log.Fatalf("Invalid BUNDLE_DIFFING_PATCH_MAX_RATIO: %v", err)
+	}
+}
+
+// IsBundleDiffingEnabled reports whether bundle patches are computed at
+// publish and served to devices (BUNDLE_DIFFING=true, off by default).
+func IsBundleDiffingEnabled() bool {
+	enabled, _ := strconv.ParseBool(GetEnv("BUNDLE_DIFFING"))
+	return enabled && IsDBMode()
+}
+
+// IsBundleDiffingCDNRedirect reports whether patch requests are redirected to
+// the CDN instead of served by this server (BUNDLE_DIFFING_CDN_REDIRECT=true).
+// The operator asserts that the CDN edge adds the im and expo-base-update-id
+// response headers on the bsdiff objects; nothing here can check it.
+func IsBundleDiffingCDNRedirect() bool {
+	enabled, _ := strconv.ParseBool(GetEnv("BUNDLE_DIFFING_CDN_REDIRECT"))
+	return enabled
+}
+
+// BundleDiffingMaxBundleSize is the largest launch asset, in bytes, a patch
+// job loads in memory (BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB, default 64). A job
+// peaks at about six times this size, and two jobs run at once.
+func BundleDiffingMaxBundleSize() int64 {
+	size, err := parseBundleDiffingMaxBundleSize()
+	if err != nil {
+		size, _ = parseMB(DefaultEnvValues["BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB"])
+	}
+	return size
+}
+
+// BundleDiffingPatchMaxRatio is the largest patch worth storing, as a fraction
+// of the gzipped bundle a full download would cost
+// (BUNDLE_DIFFING_PATCH_MAX_RATIO in (0, 1], default 0.3).
+func BundleDiffingPatchMaxRatio() float64 {
+	ratio, err := parseBundleDiffingPatchMaxRatio()
+	if err != nil {
+		ratio, _ = parseRatio(DefaultEnvValues["BUNDLE_DIFFING_PATCH_MAX_RATIO"])
+	}
+	return ratio
+}
+
+func parseBundleDiffingMaxBundleSize() (int64, error) {
+	return parseMB(GetEnv("BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB"))
+}
+
+func parseBundleDiffingPatchMaxRatio() (float64, error) {
+	return parseRatio(GetEnv("BUNDLE_DIFFING_PATCH_MAX_RATIO"))
+}
+
+func parseMB(value string) (int64, error) {
+	mb, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if mb <= 0 || mb > math.MaxInt64>>20 {
+		return 0, fmt.Errorf("%d is not a usable number of megabytes", mb)
+	}
+	return mb << 20, nil
+}
+
+func parseRatio(value string) (float64, error) {
+	ratio, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(ratio) || ratio <= 0 || ratio > 1 {
+		return 0, fmt.Errorf("%v is not in (0, 1]", ratio)
+	}
+	return ratio, nil
 }
 
 var DefaultEnvValues = map[string]string{
@@ -224,6 +299,14 @@ var DefaultEnvValues = map[string]string{
 	// longer lived belongs to the operator's own pipeline (database backups,
 	// the audit stream once enabled).
 	"AUDIT_LOG_RETENTION_DAYS": "550",
+
+	// Bundle diffing (bsdiff patches between updates): off by default. Patches
+	// are served by this server, not the CDN, so a patch is only kept when it
+	// beats the gzipped bundle by a wide margin.
+	"BUNDLE_DIFFING":                    "false",
+	"BUNDLE_DIFFING_CDN_REDIRECT":       "false",
+	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "64",
+	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
 
 	// Database connection defaults
 	"DB_URL":                "",

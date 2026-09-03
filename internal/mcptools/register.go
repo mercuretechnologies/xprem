@@ -71,6 +71,10 @@ type UpdateRolloutReader interface {
 	GetUpdateRollout(ctx context.Context, appId string, branchName string, runtimeVersion string) ([]types.RolloutUpdate, error)
 }
 
+type BundlePatchReader interface {
+	ListPatches(ctx context.Context, appId, branch, updateId string) ([]types.BundlePatch, error)
+}
+
 type CertificateReader interface {
 	RetrieveAppCertificate(ctx context.Context, appId string) (string, error)
 }
@@ -102,6 +106,7 @@ type Deps struct {
 	Channels       ChannelLister
 	UpdateFeed     UpdateFeedReader
 	UpdateRollouts UpdateRolloutReader
+	BundlePatches  BundlePatchReader
 	Certificates   CertificateReader
 	BranchWriter   BranchWriter
 	ChannelWriter  ChannelWriter
@@ -137,6 +142,7 @@ var registrations = []struct {
 	{register: registerGetUpdates},
 	{register: registerGetChannelRollouts},
 	{register: registerGetUpdateRollout},
+	{register: registerGetUpdatePatches},
 	{register: registerGetCertificate, access: &certificateAccess},
 	{register: registerGetServerConfig},
 	{register: registerCreateBranch, access: &branchCreateAccess},

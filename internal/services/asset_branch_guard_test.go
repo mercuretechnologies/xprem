@@ -21,7 +21,7 @@ func guardService(t *testing.T, surfing *types.BranchSurfing) *ExpoProtocolServi
 	if surfing != nil {
 		settings["qa"] = surfing
 	}
-	return NewExpoProtocolService(fakeAppRepo{}, &fakeChannelRepo{surfing: settings}, nil, nil, nil)
+	return NewExpoProtocolService(fakeAppRepo{}, &fakeChannelRepo{surfing: settings}, nil, nil, nil, nil)
 }
 
 func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {

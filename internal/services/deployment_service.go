@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 	"xprem/internal/auditlog"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -150,6 +151,7 @@ type DeploymentService struct {
 	branchService *BranchService
 	updateService *UpdateService
 	updateRepo    UpdateRepository
+	bsDiffService *BsDiffService
 	bucket        bucket.Bucket
 	// onAuditEvent is nil in community edition, where publishes, rollbacks and
 	// republishes leave no events.
@@ -181,11 +183,12 @@ func (s *DeploymentService) recordDeliveryEvent(ctx context.Context, action audi
 	})
 }
 
-func NewDeploymentService(branchService *BranchService, updateService *UpdateService, updateRepo UpdateRepository, bucket bucket.Bucket) *DeploymentService {
+func NewDeploymentService(branchService *BranchService, updateService *UpdateService, updateRepo UpdateRepository, bucket bucket.Bucket, bsDiffService *BsDiffService) *DeploymentService {
 	return &DeploymentService{
 		branchService: branchService,
 		updateService: updateService,
 		updateRepo:    updateRepo,
+		bsDiffService: bsDiffService,
 		bucket:        bucket,
 	}
 }
@@ -250,9 +253,10 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	if err != nil || storedMetadata == nil {
 		return err
 	}
+	var updateUUID string
 	if updateType == types.NormalUpdate {
 		// Rollbacks have no stored metadata to derive a UUID from.
-		updateUUID := getUpdateUUIDFromMetadata(update)
+		updateUUID = getUpdateUUIDFromMetadata(update)
 		err = s.updateRepo.StoreUpdateUUIDInMetadata(ctx, update, updateUUID)
 		if err != nil {
 			return err
@@ -287,6 +291,15 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	// No-op unless the checked update activated a per-update rollout.
 	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformIOS)
 	go PreWarmControlManifest(s.updateService, update.AppId, update.Branch, update.RuntimeVersion, types.PlatformAndroid)
+	if updateType == types.NormalUpdate && s.bsDiffService != nil {
+		go func(update types.Update, platform types.Platform) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if _, err := s.bsDiffService.ComputeBSDiffForPreviousUpdates(ctx, &update, updateUUID, platform); err != nil {
+				log.Printf("[bsdiff] scheduling patches for update %s: %v", update.UpdateId, err)
+			}
+		}(update, storedMetadata.Platform)
+	}
 	return nil
 }
 

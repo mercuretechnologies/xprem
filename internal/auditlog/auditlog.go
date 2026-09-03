@@ -80,14 +80,15 @@ const (
 	ActionBranchDeleted        Action = "branch.deleted"
 
 	// Delivery.
-	ActionUpdatePublished       Action = "update.published"
-	ActionUpdateRollback        Action = "update.rollback"
-	ActionUpdateRepublished     Action = "update.republished"
-	ActionChannelRolloutStarted Action = "channel_rollout.started"
-	ActionChannelRolloutUpdated Action = "channel_rollout.updated"
-	ActionChannelRolloutEnded   Action = "channel_rollout.ended"
-	ActionUpdateRolloutSet      Action = "update_rollout.set"
-	ActionUpdateRolloutReverted Action = "update_rollout.reverted"
+	ActionUpdatePublished         Action = "update.published"
+	ActionUpdateRollback          Action = "update.rollback"
+	ActionUpdateRepublished       Action = "update.republished"
+	ActionChannelRolloutStarted   Action = "channel_rollout.started"
+	ActionChannelRolloutUpdated   Action = "channel_rollout.updated"
+	ActionChannelRolloutEnded     Action = "channel_rollout.ended"
+	ActionUpdateRolloutSet        Action = "update_rollout.set"
+	ActionUpdateRolloutReverted   Action = "update_rollout.reverted"
+	ActionUpdatePatchesRecomputed Action = "update_patches.recomputed"
 
 	// Credentials and key material. The api_key prefix matches ActorAPIKey's
 	// value so grouping by resource and by actor type line up.

@@ -414,3 +414,45 @@ type ChannelResolution struct {
 	// Set only by the Postgres channel store when the channel has an active rollout.
 	Rollout *ChannelRolloutInfo `json:"rollout,omitempty"`
 }
+
+// BundlePatchStatus is where a (target, source) bundle patch stands.
+type BundlePatchStatus string
+
+const (
+	BundlePatchPending   BundlePatchStatus = "pending"
+	BundlePatchRunning   BundlePatchStatus = "running"
+	BundlePatchStored    BundlePatchStatus = "stored"
+	BundlePatchSkipped   BundlePatchStatus = "skipped"
+	BundlePatchFailed    BundlePatchStatus = "failed"
+	BundlePatchCancelled BundlePatchStatus = "cancelled"
+)
+
+// Reasons a patch job ends without a stored patch.
+const (
+	BundlePatchReasonLegacyUpdate       = "legacy_update"
+	BundlePatchReasonIdenticalBundles   = "identical_bundles"
+	BundlePatchReasonNotWorth           = "patch_not_worth"
+	BundlePatchReasonBundleTooLarge     = "bundle_too_large"
+	BundlePatchReasonBlobMissing        = "blob_missing"
+	BundlePatchReasonUpdateNotFound     = "update_not_found"
+	BundlePatchReasonDifferentBranch    = "different_branch"
+	BundlePatchReasonVerificationFailed = "verification_failed"
+)
+
+// BundlePatch is one row of the bundle patches of a target update, as the
+// dashboard and the MCP show it.
+type BundlePatch struct {
+	TargetUpdateId   string            `json:"targetUpdateId"`
+	TargetUpdateUUID string            `json:"targetUpdateUUID"`
+	SourceUpdateId   string            `json:"sourceUpdateId"`
+	SourceUpdateUUID string            `json:"sourceUpdateUUID"`
+	SourceCommitHash string            `json:"sourceCommitHash"`
+	SourceMessage    string            `json:"sourceMessage,omitempty"`
+	SourceCreatedAt  string            `json:"sourceCreatedAt"`
+	Status           BundlePatchStatus `json:"status"`
+	Reason           string            `json:"reason,omitempty"`
+	PatchSize        *int64            `json:"patchSize,omitempty"`
+	FullDownloadSize *int64            `json:"fullDownloadSize,omitempty"`
+	Attempts         int               `json:"attempts"`
+	UpdatedAt        string            `json:"updatedAt"`
+}

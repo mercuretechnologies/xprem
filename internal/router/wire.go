@@ -18,6 +18,7 @@ import (
 	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
+	"xprem/internal/cdn"
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
@@ -61,6 +62,7 @@ type AppContainer struct {
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
+	BundlePatchHandler          *dashhandlers.BundlePatchHandler
 	UploadHandler               *handlers.UploadHandler
 	RepublishHandler            *handlers.RepublishHandler
 	UsersHandler                *dashhandlers.UsersHandler
@@ -100,6 +102,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
+	var bundlePatchRepo services.BundlePatchRepository
 	var licenseRepo licensing.LicenseRepository
 	var ssoRepo sso.SSORepository
 	var apiKeyAccessRepo apikeyrestrictions.ApiKeyAccessRepository
@@ -172,6 +175,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			log.Fatalf("Job system initialization failed: %v", err)
 		}
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
+		bundlePatchRepo = store.NewPostgresBundlePatchStore(dbEngine)
 
 		// Resolved even when telemetry is off: licensing needs the instance id.
 		seedInstanceId, _ := resolvedBucket.GetInstanceID()
@@ -279,18 +283,25 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	branchService.SetOnAuditEvent(auditService.Record)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
+	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
+	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo, bundlePatchRepo)
 	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
 	if jobsClient != nil {
 		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
+		services.RegisterBSDiffWorker(jobsClient.Workers(), bsDiffService)
 		if err := jobsClient.Start(ctx); err != nil {
 			log.Fatalf("Job system startup failed: %v", err)
 		}
+
 		addCleanup(jobsClient.Stop)
 	}
-	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
-	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules())
-	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket)
+	if config.IsBundleDiffingCDNRedirect() && !cdn.SupportsPatchRedirect() {
+		log.Fatalf("BUNDLE_DIFFING_CDN_REDIRECT needs a CDN with an edge that can add response headers (CloudFront or CDN_BASE_URL); resolved CDN: %q", cdn.ResolvedType())
+	}
+	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
+	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
+	bsDiffService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 
@@ -311,6 +322,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				Channels:            channelService,
 				UpdateFeed:          updateService,
 				UpdateRollouts:      rolloutService,
+				BundlePatches:       bsDiffService,
 				Certificates:        appService,
 				BranchWriter:        branchService,
 				ChannelWriter:       channelService,
@@ -362,6 +374,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
+		BundlePatchHandler:          dashhandlers.NewBundlePatchHandler(bsDiffService),
 		UploadHandler:               handlers.NewUploadHandler(deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,

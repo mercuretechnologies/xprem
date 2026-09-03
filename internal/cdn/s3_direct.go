@@ -37,6 +37,10 @@ func (c *S3DirectCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersio
 	return presignGetObject(key)
 }
 
+func (c *S3DirectCDN) ComputeRedirectionURLForPatch(string, string, string, string) (string, error) {
+	return "", ErrPatchRedirectUnsupported
+}
+
 func (c *S3DirectCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
 	return presignGetObject(bucket.ResolveKeyPrefix() + bucket.BlobObjectKey(appId, hash))
 }

@@ -41,12 +41,19 @@ func (b *GCSBucket) bucketHandle(ctx context.Context) (*storage.BucketHandle, er
 }
 
 func (b *GCSBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
-	ctx := context.Background()
+	return b.deletePrefix(context.Background(), b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId)))
+}
+
+func (b *GCSBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	return b.deletePrefix(ctx, b.prefixedKey(BSDiffBranchPrefix(appId, branch)))
+}
+
+// deletePrefix removes every object under prefix.
+func (b *GCSBucket) deletePrefix(ctx context.Context, prefix string) error {
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return err
 	}
-	prefix := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	it := bh.Objects(gctx, &storage.Query{Prefix: prefix})
@@ -242,12 +249,40 @@ func (b *GCSBucket) blobKey(appId, hash string) string {
 	return prefixedBlobKey(b.KeyPrefix, appId, hash)
 }
 
+func (b *GCSBucket) bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
 func (b *GCSBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	return b.objectExists(ctx, b.blobKey(appId, hash))
+}
+
+func (b *GCSBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.blobKey(appId, hash))
+}
+
+func (b *GCSBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	return b.putObject(ctx, b.blobKey(appId, hash), body)
+}
+
+func (b *GCSBucket) BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *GCSBucket) GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *GCSBucket) PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
+}
+
+func (b *GCSBucket) objectExists(ctx context.Context, key string) (bool, error) {
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return false, err
 	}
-	_, err = bh.Object(b.blobKey(appId, hash)).Attrs(ctx)
+	_, err = bh.Object(key).Attrs(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
 			return false, nil
@@ -257,12 +292,13 @@ func (b *GCSBucket) BlobExists(ctx context.Context, appId, hash string) (bool, e
 	return true, nil
 }
 
-func (b *GCSBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+// getObject returns nil, nil when the key does not exist.
+func (b *GCSBucket) getObject(ctx context.Context, key string) (*types.BucketFile, error) {
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
-	obj := bh.Object(b.blobKey(appId, hash))
+	obj := bh.Object(key)
 	r, err := obj.NewReader(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
@@ -278,12 +314,12 @@ func (b *GCSBucket) GetBlob(ctx context.Context, appId, hash string) (*types.Buc
 	return &types.BucketFile{Reader: r, CreatedAt: created}, nil
 }
 
-func (b *GCSBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+func (b *GCSBucket) putObject(ctx context.Context, key string, body io.Reader) error {
 	bh, err := b.bucketHandle(ctx)
 	if err != nil {
 		return err
 	}
-	w := bh.Object(b.blobKey(appId, hash)).NewWriter(ctx)
+	w := bh.Object(key).NewWriter(ctx)
 	if _, err := io.Copy(w, body); err != nil {
 		_ = w.Close()
 		return err
