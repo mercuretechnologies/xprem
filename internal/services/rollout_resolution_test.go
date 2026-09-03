@@ -546,6 +546,8 @@ func (fakeAppRepo) GetApps(_ context.Context) ([]config.AppDescriptor, error) { 
 
 func (fakeAppRepo) UpdateAppNameByID(_ context.Context, _, _ string) error { return nil }
 
+func (fakeAppRepo) UpdateAppGitURLByID(_ context.Context, _, _ string) error { return nil }
+
 func (fakeAppRepo) GetAppByID(_ context.Context, _ string) (config.AppConfig, error) {
 	return config.AppConfig{}, nil
 }

@@ -21,6 +21,11 @@ UPDATE apps
 SET name = $2, updated_at = CURRENT_TIMESTAMP
 WHERE id = $1;
 
+-- name: UpdateAppGitURLByID :execresult
+UPDATE apps
+SET git_url = NULLIF(sqlc.arg('git_url')::text, ''), updated_at = CURRENT_TIMESTAMP
+WHERE id = sqlc.arg('id');
+
 -- name: InsertChannel :one
 INSERT INTO channels (app_id, branch_id, name)
 VALUES ($1, $2, $3)

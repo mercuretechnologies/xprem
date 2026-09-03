@@ -30,6 +30,7 @@ type AppRepository interface {
 	DeleteAppByID(ctx context.Context, id string) error
 	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
 	UpdateAppNameByID(ctx context.Context, id string, newName string) error
+	UpdateAppGitURLByID(ctx context.Context, id string, gitURL string) error
 	GetAppByID(ctx context.Context, id string) (config.AppConfig, error)
 }
 
@@ -193,7 +194,7 @@ func (s *AppService) PresentApp(ctx context.Context, app config.AppConfig) confi
 	return app
 }
 
-func (s *AppService) UpdateApp(ctx context.Context, app config.AppConfig, newName string) error {
+func (s *AppService) UpdateAppName(ctx context.Context, app config.AppConfig, newName string) error {
 	if err := validation.DisplayName("name", newName); err != nil {
 		return err
 	}
@@ -211,6 +212,35 @@ func (s *AppService) UpdateApp(ctx context.Context, app config.AppConfig, newNam
 		TargetDisplay: newName,
 		AppID:         app.Id,
 		Metadata:      map[string]any{"name": newName, "previous_name": app.Name},
+	})
+	return nil
+}
+
+func (s *AppService) UpdateAppGitURL(ctx context.Context, app config.AppConfig, gitURL string) error {
+	normalized, err := validation.GitURL("gitUrl", gitURL)
+	if err != nil {
+		return err
+	}
+	if app.GitURL == normalized {
+		return nil
+	}
+	if err := s.appRepo.UpdateAppGitURLByID(ctx, app.Id, normalized); err != nil {
+		return err
+	}
+	displayName := app.Name
+	if displayName == "" {
+		displayName = app.Id
+	}
+	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
+		Action:        auditlog.ActionAppGitURLUpdated,
+		TargetType:    "app",
+		TargetID:      app.Id,
+		TargetDisplay: displayName,
+		AppID:         app.Id,
+		Metadata: map[string]any{
+			"git_url":          normalized,
+			"previous_git_url": app.GitURL,
+		},
 	})
 	return nil
 }

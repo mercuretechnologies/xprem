@@ -98,6 +98,7 @@ export type AuditEventsPage = {
 
 export type AppDetails = AppDescriptor & {
   keys: KeysConfig;
+  gitUrl?: string;
   createdAt?: number;
 };
 
@@ -1368,11 +1369,19 @@ export class ApiClient {
     });
   }
 
-  public async updateApp(payload: { name?: string }) {
-    return this.request<void>(`${this.appScope()}`, {
+  public async updateAppName(name: string) {
+    return this.request<void>(`${this.appScope()}/name`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  public async updateAppGitUrl(gitUrl: string) {
+    return this.request<void>(`${this.appScope()}/git-url`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gitUrl }),
     });
   }
 

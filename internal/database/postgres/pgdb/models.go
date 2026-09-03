@@ -43,6 +43,7 @@ type App struct {
 	AwsSecretIDPrivate *string            `json:"aws_secret_id_private"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	GitUrl             *string            `json:"git_url"`
 }
 
 type AuditExportState struct {

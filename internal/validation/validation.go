@@ -7,6 +7,7 @@ package validation
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -25,6 +26,8 @@ const maxDisplayNameLen = 255
 // api_key_branch_rules.pattern. Wider than maxNameLen so a rule can name a
 // legacy branch that predates the maxNameLen cap.
 const maxPatternLen = 255
+
+const maxGitURLLen = 2048
 
 // Error is a validation failure on user-supplied input. Handlers detect it with
 // errors.As and map it to HTTP 400, surfacing Message to the caller, while
@@ -135,6 +138,42 @@ func DisplayName(field, value string) error {
 		}
 	}
 	return nil
+}
+
+func GitURL(field, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) > maxGitURLLen {
+		return "", fail(field, "exceeds max length %d", maxGitURLLen)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", fail(field, "must not contain control characters")
+		}
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Opaque != "" {
+		return "", fail(field, "must be a valid HTTP(S) repository URL")
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", fail(field, "must use http or https")
+	}
+	if parsed.User != nil {
+		return "", fail(field, "must not contain credentials")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fail(field, "must not contain a query string or fragment")
+	}
+
+	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), ".git")
+	parsed.RawPath = ""
+	if parsed.Path == "" || parsed.Path == "/" {
+		return "", fail(field, "must include a repository path")
+	}
+	return parsed.String(), nil
 }
 
 // RolloutPercentage parses a rollout percentage passed as a string (the

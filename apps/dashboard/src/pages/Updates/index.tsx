@@ -6,7 +6,6 @@ import {
   Box,
   Gauge,
   GitBranch,
-  GitCommitHorizontal,
   Layers3,
   Loader2,
   Search,
@@ -49,6 +48,8 @@ import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { shortRuntimeVersion, updateDetailsPath, updateTitle } from '@/lib/update-format';
+import { GitCommitLink } from '@/components/GitCommitLink';
+import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
 
 type FeedGroup = {
   key: string;
@@ -126,8 +127,6 @@ const PlatformIcon = ({ platform }: { platform: string }) => {
   );
 };
 
-const shortId = (value: string) => (value.length > 10 ? value.slice(0, 8) : value);
-
 const UpdateRolloutBadge = ({ percentage }: { percentage: number }) => (
   <Badge className="h-5 whitespace-nowrap border-emerald-400/25 bg-emerald-400/10 px-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
     <Gauge className="h-2.5 w-2.5" />
@@ -141,13 +140,6 @@ const RuntimeLabel = ({ value }: { value: string }) => (
     title={value}>
     <Box className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-300/80" />
     <span className="truncate">{shortRuntimeVersion(value)}</span>
-  </span>
-);
-
-const CommitLabel = ({ value }: { value: string }) => (
-  <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/[0.07] px-2 py-1 text-xs font-medium text-link">
-    <GitCommitHorizontal className="h-3 w-3 text-link/80" />
-    {shortId(value)}
   </span>
 );
 
@@ -252,6 +244,11 @@ export const Updates = () => {
     queryKey: ['runtimeVersions', selectedAppId, filters.branch],
     queryFn: () => api.getRuntimeVersions(filters.branch),
     enabled: !!selectedAppId && !!filters.branch,
+  });
+  const appDetailsQuery = useQuery({
+    queryKey: ['appDetails', selectedAppId],
+    queryFn: () => api.getApp(selectedAppId!),
+    enabled: !!selectedAppId,
   });
 
   const updates = useMemo(() => query.data?.pages.flatMap(page => page.items) ?? [], [query.data]);
@@ -600,7 +597,10 @@ export const Updates = () => {
                       {shortRuntimeVersion(rollout.runtimeVersion)}
                     </span>
                     <span aria-hidden="true">·</span>
-                    <span>{shortId(rollout.commitHash)}</span>
+                    <GitCommitLink
+                      commitHash={rollout.commitHash}
+                      gitUrl={appDetailsQuery.data?.gitUrl}
+                    />
                   </div>
                 </div>
               </div>
@@ -628,13 +628,13 @@ export const Updates = () => {
         <Table className="min-w-[1150px] table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className={canPublishUpdate ? 'w-[32%]' : 'w-[36%]'}>Update</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[26%]' : 'w-[30%]'}>Update</TableHead>
               <TableHead className="w-[11%]">Branch</TableHead>
               <TableHead className="w-[8%]">Runtime</TableHead>
               <TableHead className="w-[7%]">Platform</TableHead>
               <TableHead className="w-[8%] text-right">Devices</TableHead>
               <TableHead className="w-[9%]">Health</TableHead>
-              <TableHead className="w-[9%]">Commit</TableHead>
+              <TableHead className="w-[15%]">Commit</TableHead>
               <TableHead className={canPublishUpdate ? 'w-[10%]' : 'w-[12%]'}>Published</TableHead>
               {canPublishUpdate && <TableHead className="w-[6%]" />}
             </TableRow>
@@ -688,8 +688,13 @@ export const Updates = () => {
                             <p
                               className="block max-w-full truncate font-medium text-foreground"
                               title={primary.message || `Update ${primary.updateId}`}>
-                              {updateTitle(primary.message, primary.commitHash) ||
-                                `Update ${primary.updateId}`}
+                              <LinkedUpdateTitle
+                                title={
+                                  updateTitle(primary.message, primary.commitHash) ||
+                                  `Update ${primary.updateId}`
+                                }
+                                gitUrl={appDetailsQuery.data?.gitUrl}
+                              />
                             </p>
                             <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                               {isGroup && (
@@ -730,7 +735,10 @@ export const Updates = () => {
                         <HealthBadge health={groupHealth} />
                       </TableCell>
                       <TableCell>
-                        <CommitLabel value={primary.commitHash} />
+                        <GitCommitLink
+                          commitHash={primary.commitHash}
+                          gitUrl={appDetailsQuery.data?.gitUrl}
+                        />
                       </TableCell>
                       <TableCell>
                         <TimestampCell dateString={primary.createdAt} compact />
@@ -817,7 +825,10 @@ export const Updates = () => {
                             <HealthBadge health={healthByUuid[update.updateUUID]} />
                           </TableCell>
                           <TableCell>
-                            <CommitLabel value={update.commitHash} />
+                            <GitCommitLink
+                              commitHash={update.commitHash}
+                              gitUrl={appDetailsQuery.data?.gitUrl}
+                            />
                           </TableCell>
                           <TableCell>
                             <TimestampCell dateString={update.createdAt} compact />

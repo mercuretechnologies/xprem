@@ -1010,7 +1010,7 @@ func (q *Queries) GetApiKeysMetadataByAppID(ctx context.Context, appID pgtype.UU
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, name, keys_mode, sealed_public_key, sealed_private_key, path_public_key, path_private_key, aws_secret_id_public, aws_secret_id_private, created_at, updated_at FROM apps
+SELECT id, name, keys_mode, sealed_public_key, sealed_private_key, path_public_key, path_private_key, aws_secret_id_public, aws_secret_id_private, created_at, updated_at, git_url FROM apps
 WHERE id = $1 LIMIT 1
 `
 
@@ -1029,6 +1029,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id pgtype.UUID) (App, error) {
 		&i.AwsSecretIDPrivate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GitUrl,
 	)
 	return i, err
 }
@@ -5973,6 +5974,21 @@ func (q *Queries) UpdateApiKeyAccess(ctx context.Context, arg UpdateApiKeyAccess
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateAppGitURLByID = `-- name: UpdateAppGitURLByID :execresult
+UPDATE apps
+SET git_url = NULLIF($1::text, ''), updated_at = CURRENT_TIMESTAMP
+WHERE id = $2
+`
+
+type UpdateAppGitURLByIDParams struct {
+	GitUrl string      `json:"git_url"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateAppGitURLByID(ctx context.Context, arg UpdateAppGitURLByIDParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateAppGitURLByID, arg.GitUrl, arg.ID)
 }
 
 const updateAppNameByID = `-- name: UpdateAppNameByID :execresult

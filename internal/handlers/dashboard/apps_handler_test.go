@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"xprem/config"
@@ -29,6 +30,9 @@ func (f *fakeAppRepo) GetApps(_ context.Context) ([]config.AppDescriptor, error)
 	return f.apps, nil
 }
 func (f *fakeAppRepo) UpdateAppNameByID(_ context.Context, _ string, _ string) error {
+	panic("unused")
+}
+func (f *fakeAppRepo) UpdateAppGitURLByID(_ context.Context, _ string, _ string) error {
 	panic("unused")
 }
 func (f *fakeAppRepo) GetAppByID(_ context.Context, _ string) (config.AppConfig, error) {
@@ -89,4 +93,66 @@ func TestGetAppsHandlerFiltersAfterCacheRead(t *testing.T) {
 	status, apps = getApps(t, community)
 	require.Equal(t, http.StatusOK, status)
 	require.Len(t, apps, 2)
+}
+
+type mutableAppRepo struct {
+	app config.AppConfig
+}
+
+func (f *mutableAppRepo) InsertApp(context.Context, store.InsertAppParameters) (string, error) {
+	panic("unused")
+}
+func (f *mutableAppRepo) DeleteAppByID(context.Context, string) error { panic("unused") }
+func (f *mutableAppRepo) GetApps(context.Context) ([]config.AppDescriptor, error) {
+	return nil, nil
+}
+func (f *mutableAppRepo) UpdateAppNameByID(_ context.Context, _ string, name string) error {
+	f.app.Name = name
+	return nil
+}
+func (f *mutableAppRepo) UpdateAppGitURLByID(_ context.Context, _ string, gitURL string) error {
+	f.app.GitURL = gitURL
+	return nil
+}
+func (f *mutableAppRepo) GetAppByID(context.Context, string) (config.AppConfig, error) {
+	return f.app, nil
+}
+
+func updateAppGitURL(t *testing.T, handler *AppHandler, app config.AppConfig, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/apps/"+app.Id+"/git-url", strings.NewReader(body))
+	request = request.WithContext(services.WithApp(request.Context(), app))
+	handler.UpdateAppGitURLHandler(recorder, request)
+	return recorder
+}
+
+func TestUpdateAppGitURLHandlerSavesOrClearsGitURL(t *testing.T) {
+	repo := &mutableAppRepo{app: config.AppConfig{Id: "app-1", Name: "Mobile"}}
+	handler := NewAppHandler(services.NewAppService(repo), nil)
+
+	recorder := updateAppGitURL(t, handler, repo.app, `{"gitUrl":"https://github.com/acme/mobile.git/"}`)
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	require.Equal(t, "https://github.com/acme/mobile", repo.app.GitURL)
+
+	recorder = updateAppGitURL(t, handler, repo.app, `{"gitUrl":""}`)
+	require.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	require.Empty(t, repo.app.GitURL)
+}
+
+func TestUpdateAppGitURLHandlerRejectsInvalidOrMissingGitURL(t *testing.T) {
+	repo := &mutableAppRepo{app: config.AppConfig{Id: "app-1", Name: "Mobile"}}
+	handler := NewAppHandler(services.NewAppService(repo), nil)
+
+	for name, body := range map[string]string{
+		"credentials": `{"gitUrl":"https://user:token@github.com/acme/mobile"}`,
+		"missing":     `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := updateAppGitURL(t, handler, repo.app, body)
+			require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+		})
+	}
+	require.Equal(t, "Mobile", repo.app.Name)
+	require.Empty(t, repo.app.GitURL)
 }

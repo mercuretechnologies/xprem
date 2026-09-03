@@ -177,7 +177,7 @@ func (h *AppHandler) GetAppsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(marshaledResponse)
 }
 
-func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
+func (h *AppHandler) UpdateAppNameHandler(w http.ResponseWriter, r *http.Request) {
 	app := services.AppFromContext(r.Context())
 	if app == nil {
 		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
@@ -191,14 +191,11 @@ func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
 		handlers.RenderError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
-
 	if requestBody.Name == "" {
 		handlers.RenderError(w, http.StatusBadRequest, "Display name cannot be empty")
 		return
 	}
-
-	err := h.appService.UpdateApp(r.Context(), *app, requestBody.Name)
-	if err != nil {
+	if err := h.appService.UpdateAppName(r.Context(), *app, requestBody.Name); err != nil {
 		var valErr *validation.Error
 		if errors.As(err, &valErr) {
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
@@ -214,6 +211,38 @@ func (h *AppHandler) UpdateAppHandler(w http.ResponseWriter, r *http.Request) {
 	cache.Delete(appsCacheKey)
 	cache.Delete(appCacheKey)
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AppHandler) UpdateAppGitURLHandler(w http.ResponseWriter, r *http.Request) {
+	app := services.AppFromContext(r.Context())
+	if app == nil {
+		handlers.RenderError(w, http.StatusInternalServerError, "app not resolved for this route")
+		return
+	}
+
+	var requestBody struct {
+		GitURL *string `json:"gitUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		handlers.RenderError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if requestBody.GitURL == nil {
+		handlers.RenderError(w, http.StatusBadRequest, "gitUrl is required")
+		return
+	}
+	if err := h.appService.UpdateAppGitURL(r.Context(), *app, *requestBody.GitURL); err != nil {
+		var valErr *validation.Error
+		if errors.As(err, &valErr) {
+			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
+			return
+		}
+		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred while updating the repository URL.")
+		return
+	}
+
+	cache2.GetCache().Delete(dashboard.ComputeGetAppCacheKey(app.Id))
 	w.WriteHeader(http.StatusNoContent)
 }
 
