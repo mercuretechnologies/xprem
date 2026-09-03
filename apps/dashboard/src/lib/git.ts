@@ -28,8 +28,9 @@ export const gitRepositoryFor = (gitUrl: string | undefined): GitRepository | nu
     let cursorUrl: string | undefined;
     if (hostname === 'origin.cursor.com') {
       const pathSegments = repositoryUrl.pathname.split('/').filter(Boolean);
-      if (pathSegments.length !== 2) return null;
-      cursorUrl = `https://cursor.com/codebase/${pathSegments.join('/')}`;
+      const repositorySegments = pathSegments[0] === 'git' ? pathSegments.slice(1) : pathSegments;
+      if (repositorySegments.length !== 2) return null;
+      cursorUrl = `https://cursor.com/codebase/${repositorySegments.join('/')}`;
     } else if (hostname === 'cursor.com' || hostname === 'www.cursor.com') {
       const pathSegments = repositoryUrl.pathname.split('/').filter(Boolean);
       if (pathSegments.length !== 3 || pathSegments[0] !== 'codebase') return null;
