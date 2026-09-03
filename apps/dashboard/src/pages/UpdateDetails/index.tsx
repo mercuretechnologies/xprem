@@ -16,8 +16,11 @@ import { api } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { formatTimestamp } from '@/lib/utils';
+import { updateTitle } from '@/lib/update-format';
 import { PageHeader } from '@/components/PageHeader';
 import { ApiError } from '@/components/APIError';
+import { GitCommitLink } from '@/components/GitCommitLink';
+import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -93,6 +96,11 @@ export const UpdateDetails = () => {
     queryKey: ['update-details', selectedAppId, branch, runtimeVersion, updateId],
     enabled: !!updateId && !!selectedAppId && !!branch && !!runtimeVersion,
     queryFn: () => api.getUpdateDetails(branch, runtimeVersion, updateId),
+  });
+  const appDetailsQuery = useQuery({
+    queryKey: ['appDetails', selectedAppId],
+    queryFn: () => api.getApp(selectedAppId!),
+    enabled: !!selectedAppId && CONTROL_PLANE_ENABLED,
   });
 
   const expoConfig = useMemo(() => {
@@ -254,11 +262,21 @@ export const UpdateDetails = () => {
             <DetailRow label="Commit">
               <MonoValue value={data.commitHash} />
               <CopyButton value={data.commitHash} label="commit hash" />
+              <GitCommitLink
+                commitHash={data.commitHash}
+                gitUrl={appDetailsQuery.data?.gitUrl}
+                variant="button"
+              />
             </DetailRow>
             {data.message && (
               <div className="space-y-1 px-4 py-2.5">
                 <span className="text-sm text-muted-foreground">Message</span>
-                <p className="text-sm font-medium">{data.message}</p>
+                <p className="text-sm font-medium">
+                  <LinkedUpdateTitle
+                    title={updateTitle(data.message, data.commitHash)}
+                    gitUrl={appDetailsQuery.data?.gitUrl}
+                  />
+                </p>
               </div>
             )}
           </DetailSection>

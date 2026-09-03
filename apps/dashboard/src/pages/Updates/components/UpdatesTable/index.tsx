@@ -15,6 +15,8 @@ import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard'
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { Button } from '@/components/ui/button';
 import { updateDetailsPath, updateTitle } from '@/lib/update-format';
+import { GitCommitLink } from '@/components/GitCommitLink';
+import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
 
 const UPDATES_PAGE_SIZE = 20;
 
@@ -42,6 +44,11 @@ export const UpdatesTable = ({
     refetchOnWindowFocus: false,
   });
   const updates = updatesQuery.data?.pages.flatMap(page => page.items) ?? [];
+  const appDetailsQuery = useQuery({
+    queryKey: ['appDetails', selectedAppId],
+    queryFn: () => api.getApp(selectedAppId!),
+    enabled: !!selectedAppId && CONTROL_PLANE_ENABLED,
+  });
 
   // Rollout state is read fresh (control-plane only). It drives the card above
   // the table and the "Control" markers in the passive Rollout column.
@@ -146,7 +153,7 @@ export const UpdatesTable = ({
               const msg = updateTitle(row.original.message, row.original.commitHash);
               return msg ? (
                 <span className="block max-w-[200px] truncate text-sm text-muted-foreground">
-                  {msg}
+                  <LinkedUpdateTitle title={msg} gitUrl={appDetailsQuery.data?.gitUrl} />
                 </span>
               ) : (
                 <span className="text-sm text-muted-foreground/60">No message</span>
@@ -156,13 +163,12 @@ export const UpdatesTable = ({
           {
             header: 'Commit',
             accessorKey: 'commitHash',
-            cell: ({ row }) => {
-              return (
-                <Badge variant="outline" className="font-mono text-xs">
-                  {row.original.commitHash.slice(0, 7)}
-                </Badge>
-              );
-            },
+            cell: ({ row }) => (
+              <GitCommitLink
+                commitHash={row.original.commitHash}
+                gitUrl={appDetailsQuery.data?.gitUrl}
+              />
+            ),
           },
           ...(CONTROL_PLANE_ENABLED
             ? [

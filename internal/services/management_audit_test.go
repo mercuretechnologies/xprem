@@ -34,6 +34,12 @@ func (f *fakeMgmtAppRepo) UpdateAppNameByID(_ context.Context, id string, newNam
 	f.apps[id] = app
 	return nil
 }
+func (f *fakeMgmtAppRepo) UpdateAppGitURLByID(_ context.Context, id string, gitURL string) error {
+	app := f.apps[id]
+	app.GitURL = gitURL
+	f.apps[id] = app
+	return nil
+}
 func (f *fakeMgmtAppRepo) GetAppByID(_ context.Context, id string) (config.AppConfig, error) {
 	app, ok := f.apps[id]
 	if !ok {
@@ -127,7 +133,7 @@ func TestAppLifecycleEmitsAuditEvents(t *testing.T) {
 	// The rename carries both names; an idempotent rename emits nothing.
 	app, err := appService.GetAppByID(ctx, appId)
 	require.NoError(t, err)
-	require.NoError(t, appService.UpdateApp(ctx, app, "Renamed App"))
+	require.NoError(t, appService.UpdateAppName(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 	renamed := recorder.events[1]
 	assert.Equal(t, auditlog.ActionAppRenamed, renamed.Action)
@@ -135,16 +141,36 @@ func TestAppLifecycleEmitsAuditEvents(t *testing.T) {
 
 	app, err = appService.GetAppByID(ctx, appId)
 	require.NoError(t, err)
-	require.NoError(t, appService.UpdateApp(ctx, app, "Renamed App"))
+	require.NoError(t, appService.UpdateAppName(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
+
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, "https://github.com/acme/mobile.git/"))
+	require.Len(t, recorder.events, 3)
+	gitURLUpdated := recorder.events[2]
+	assert.Equal(t, auditlog.ActionAppGitURLUpdated, gitURLUpdated.Action)
+	assert.Equal(t, map[string]any{
+		"git_url":          "https://github.com/acme/mobile",
+		"previous_git_url": "",
+	}, gitURLUpdated.Metadata)
+
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, "https://github.com/acme/mobile"))
+	require.Len(t, recorder.events, 3)
+
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, ""))
+	require.Len(t, recorder.events, 4)
+	assert.Equal(t, auditlog.ActionAppGitURLUpdated, recorder.events[3].Action)
 
 	// The deletion entry still names the app.
 	app, err = appService.GetAppByID(ctx, appId)
 	require.NoError(t, err)
 	require.NoError(t, appService.DeleteApp(ctx, app))
-	require.Len(t, recorder.events, 3)
-	assert.Equal(t, auditlog.ActionAppDeleted, recorder.events[2].Action)
-	assert.Equal(t, "Renamed App", recorder.events[2].TargetDisplay)
+	require.Len(t, recorder.events, 5)
+	assert.Equal(t, auditlog.ActionAppDeleted, recorder.events[4].Action)
+	assert.Equal(t, "Renamed App", recorder.events[4].TargetDisplay)
 }
 
 func TestChannelEventsEmitAuditEvents(t *testing.T) {

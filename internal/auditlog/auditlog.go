@@ -71,6 +71,7 @@ const (
 	// App management.
 	ActionAppCreated           Action = "app.created"
 	ActionAppRenamed           Action = "app.renamed"
+	ActionAppGitURLUpdated     Action = "app.git_url_updated"
 	ActionAppDeleted           Action = "app.deleted"
 	ActionChannelCreated       Action = "channel.created"
 	ActionChannelDeleted       Action = "channel.deleted"

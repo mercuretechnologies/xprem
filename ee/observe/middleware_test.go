@@ -45,6 +45,9 @@ func (r *countingAppRepo) InsertApp(context.Context, store.InsertAppParameters) 
 func (r *countingAppRepo) DeleteAppByID(context.Context, string) error             { return nil }
 func (r *countingAppRepo) GetApps(context.Context) ([]config.AppDescriptor, error) { return nil, nil }
 func (r *countingAppRepo) UpdateAppNameByID(context.Context, string, string) error { return nil }
+func (r *countingAppRepo) UpdateAppGitURLByID(context.Context, string, string) error {
+	return nil
+}
 
 var _ services.AppRepository = (*countingAppRepo)(nil)
 

@@ -16,6 +16,23 @@ export const updateTitle = (message: string | undefined, commitHash: string) => 
 export const shortRuntimeVersion = (value: string) =>
   /^[0-9a-f]{40}$/i.test(value) ? value.slice(0, 8) : value;
 
+export type ReviewReferencePart = { text: string } | { number: string };
+
+export const splitReviewReferences = (title: string, marker: '#' | '!'): ReviewReferencePart[] => {
+  const parts: ReviewReferencePart[] = [];
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_#!])\\${marker}(\\d+)(?![A-Za-z0-9_])`, 'g');
+  let cursor = 0;
+
+  for (const match of title.matchAll(pattern)) {
+    const referenceStart = (match.index ?? 0) + match[1].length;
+    if (referenceStart > cursor) parts.push({ text: title.slice(cursor, referenceStart) });
+    parts.push({ number: match[2] });
+    cursor = referenceStart + marker.length + match[2].length;
+  }
+  if (cursor < title.length) parts.push({ text: title.slice(cursor) });
+  return parts;
+};
+
 // The update page lives under the view it was opened from, so the back link
 // and the active sidebar entry follow the reader: the feed or the branch.
 export type UpdateDetailsOrigin = 'updates' | 'branch';

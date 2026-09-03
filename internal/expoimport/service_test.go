@@ -52,6 +52,9 @@ func (f *importFakeAppRepo) GetApps(_ context.Context) ([]config.AppDescriptor, 
 func (f *importFakeAppRepo) UpdateAppNameByID(_ context.Context, _ string, _ string) error {
 	panic("unused")
 }
+func (f *importFakeAppRepo) UpdateAppGitURLByID(_ context.Context, _ string, _ string) error {
+	panic("unused")
+}
 func (f *importFakeAppRepo) GetAppByID(_ context.Context, id string) (config.AppConfig, error) {
 	if f.missing {
 		return config.AppConfig{}, fmt.Errorf("app %s not found", id)

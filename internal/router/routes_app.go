@@ -31,7 +31,9 @@ func registerAppRoutes(
 		AnyViewer())
 	app.route(http.MethodDelete, "", container.AppHandler.DeleteAppHandler,
 		NeedsPermission(rbac.PermAppDelete, rbac.FallbackAdminOnly))
-	app.route(http.MethodPatch, "", container.AppHandler.UpdateAppHandler,
+	app.route(http.MethodPatch, "/name", container.AppHandler.UpdateAppNameHandler,
+		NeedsPermission(rbac.PermAppRename, rbac.FallbackAdminOnly))
+	app.route(http.MethodPatch, "/git-url", container.AppHandler.UpdateAppGitURLHandler,
 		NeedsPermission(rbac.PermAppRename, rbac.FallbackAdminOnly))
 	app.route(http.MethodGet, "/certificate", container.AppHandler.DownloadAppCertificateHandler,
 		NeedsPermission(rbac.PermCertificateRead, rbac.FallbackAdminOnly))

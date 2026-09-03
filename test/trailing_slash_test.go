@@ -31,7 +31,8 @@ func TestTrailingSlashIsRefusedNotRedirected(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		// The app root, where the hazard was worst: these two mutate.
 		{http.MethodDelete, "/api/apps/test-app-id/"},
-		{http.MethodPatch, "/api/apps/test-app-id/"},
+		{http.MethodPatch, "/api/apps/test-app-id/name/"},
+		{http.MethodPatch, "/api/apps/test-app-id/git-url/"},
 		{http.MethodGet, "/api/apps/test-app-id/"},
 		// A collection under it, which StrictSlash also used to redirect on a
 		// non-GET method, from before this change.
@@ -62,7 +63,8 @@ func TestSlashlessFormStillMatches(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/api/apps/test-app-id"},
 		{http.MethodDelete, "/api/apps/test-app-id"},
-		{http.MethodPatch, "/api/apps/test-app-id"},
+		{http.MethodPatch, "/api/apps/test-app-id/name"},
+		{http.MethodPatch, "/api/apps/test-app-id/git-url"},
 		{http.MethodGet, "/api/apps/test-app-id/branches"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -94,7 +96,8 @@ func TestDoubleSlashIsRefusedNotRedirected(t *testing.T) {
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodDelete, "//api/apps/test-app-id"},
-		{http.MethodPatch, "//api/apps/test-app-id"},
+		{http.MethodPatch, "//api/apps/test-app-id/name"},
+		{http.MethodPatch, "//api/apps/test-app-id/git-url"},
 		{http.MethodDelete, "/api/apps//test-app-id"},
 		{http.MethodPost, "//api/apps/test-app-id/branches"},
 		{http.MethodPost, "/api/apps/test-app-id//branches"},
