@@ -59,6 +59,7 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
 
       - name: Checkout ${{ inputs.branch }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
