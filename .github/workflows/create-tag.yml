@@ -25,6 +25,9 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    # The App secrets live in this environment, which only accepts runs from
+    # main: a workflow on any other branch reads them as empty.
+    environment: create-tag
     steps:
       - name: Validate tag name
         env:
