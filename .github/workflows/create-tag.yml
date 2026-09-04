@@ -4,8 +4,8 @@ name: Create tag
 # nothing but the xprem-release GitHub App create, move or delete v* tags, so a
 # leaked user token cannot trigger release.yml. Run it with:
 #
-#   gh workflow run create-tag -f tag=v3.2.0
-#   gh workflow run create-tag -f tag=v2.3.1 -f branch=release/v2.3
+#   gh workflow run create-tag.yml -f tag=v3.2.0
+#   gh workflow run create-tag.yml -f tag=v2.3.1 -f branch=release/v2.3
 #
 # The tag is pushed with an App installation token (not GITHUB_TOKEN, whose
 # pushes never trigger other workflows), so release.yml starts as usual.
