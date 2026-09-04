@@ -73,6 +73,7 @@ type KeysConfig struct {
 type AppConfig struct {
 	Id          string        `json:"id"`
 	Name        string        `json:"name,omitempty"`
+	GitURL      string        `json:"gitUrl,omitempty"`
 	AccessToken string        `json:"accessToken,omitempty"`
 	Keys        KeysConfig    `json:"keys"`
 	CreatedAt   time.Duration `json:"createTime,omitempty"`

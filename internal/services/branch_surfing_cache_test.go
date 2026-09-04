@@ -25,7 +25,7 @@ func surfingCacheService(t *testing.T, surfing map[string]*types.BranchSurfing, 
 	for _, channelName := range []string{"qa", "nope"} {
 		cache.GetCache().Delete(channelBranchSurfingCacheKey(surfingCacheAppID, channelName))
 	}
-	return NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil), repo
+	return NewExpoProtocolService(fakeAppRepo{}, repo, nil, nil, nil, nil), repo
 }
 
 func TestBranchSurfingEnabledCachesTheRead(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBranchSurfingCacheIsInvalidatedOnWrite(t *testing.T) {
 	assert.Equal(t, 1, repo.surfingReads)
 
 	surfing["qa"] = &types.BranchSurfing{Enabled: true, Pattern: "pr-*"}
-	invalidateBranchSurfingCache(surfingCacheAppID, "qa")
+	ForgetBranchSurfing(surfingCacheAppID, "qa")
 
 	enabledQA, _ = service.branchSurfingEnabled(context.Background(), surfingCacheAppID, "qa")
 

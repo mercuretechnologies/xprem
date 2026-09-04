@@ -7,9 +7,6 @@ import (
 	"xprem/config"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
-
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type PostgresAppStore struct {
@@ -20,27 +17,6 @@ func NewPostgresAppStore(engine *database.Engine) *PostgresAppStore {
 	return &PostgresAppStore{
 		engine: engine,
 	}
-}
-
-func ToPgUUID(id string) pgtype.UUID {
-	goUUID, err := uuid.Parse(id)
-	if err != nil {
-		return pgtype.UUID{
-			Valid: false,
-		}
-	}
-	return pgtype.UUID{
-		Bytes: [16]byte(goUUID),
-		Valid: true,
-	}
-}
-
-// ToPgUUIDPtr maps a nil pointer to the SQL NULL uuid.
-func ToPgUUIDPtr(id *string) pgtype.UUID {
-	if id == nil {
-		return pgtype.UUID{}
-	}
-	return ToPgUUID(*id)
 }
 
 type InsertAppParameters struct {
@@ -120,6 +96,21 @@ func (s *PostgresAppStore) UpdateAppNameByID(ctx context.Context, id string, new
 	return nil
 }
 
+func (s *PostgresAppStore) UpdateAppGitURLByID(ctx context.Context, id string, gitURL string) error {
+	pgAppID := ToPgUUID(id)
+	commandTag, err := s.engine.Queries.UpdateAppGitURLByID(ctx, pgdb.UpdateAppGitURLByIDParams{
+		GitUrl: gitURL,
+		ID:     pgAppID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update app git URL in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "app", Identifier: id}
+	}
+	return nil
+}
+
 func safeStr(p *string) string {
 	if p == nil {
 		return ""
@@ -134,8 +125,9 @@ func (s *PostgresAppStore) GetAppByID(ctx context.Context, id string) (config.Ap
 		return config.AppConfig{}, fmt.Errorf("failed to retrieve app from database: %w", err)
 	}
 	return config.AppConfig{
-		Id:   row.ID.String(),
-		Name: row.Name,
+		Id:     row.ID.String(),
+		Name:   row.Name,
+		GitURL: safeStr(row.GitUrl),
 		Keys: config.KeysConfig{
 			Mode: func() config.KeysMode {
 				if row.KeysMode != nil {

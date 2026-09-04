@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 const adoptionBreakdown = `-- name: AdoptionBreakdown :many
@@ -819,6 +820,49 @@ func (q *Queries) EnsureDeviceIdentity(ctx context.Context, arg EnsureDeviceIden
 	return err
 }
 
+const finishBundlePatch = `-- name: FinishBundlePatch :execrows
+UPDATE bundle_patches bp
+SET status = $1,
+    reason = $2,
+    patch_size = $3,
+    full_download_size = $4,
+    updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = $5
+  AND b.name = $6
+  AND bp.target_update_id = $7
+  AND bp.source_update_id = $8
+`
+
+type FinishBundlePatchParams struct {
+	Status           string      `json:"status"`
+	Reason           *string     `json:"reason"`
+	PatchSize        *int64      `json:"patch_size"`
+	FullDownloadSize *int64      `json:"full_download_size"`
+	AppID            pgtype.UUID `json:"app_id"`
+	BranchName       string      `json:"branch_name"`
+	TargetUpdateID   int64       `json:"target_update_id"`
+	SourceUpdateID   int64       `json:"source_update_id"`
+}
+
+func (q *Queries) FinishBundlePatch(ctx context.Context, arg FinishBundlePatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBundlePatch,
+		arg.Status,
+		arg.Reason,
+		arg.PatchSize,
+		arg.FullDownloadSize,
+		arg.AppID,
+		arg.BranchName,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getActiveRolloutUpdates = `-- name: GetActiveRolloutUpdates :many
 SELECT u.id, u.platform, u.rollout_percentage, u.control_update_id, u.created_at
 FROM updates u
@@ -1047,7 +1091,7 @@ func (q *Queries) GetApiKeysMetadataByAppID(ctx context.Context, appID pgtype.UU
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, name, keys_mode, sealed_public_key, sealed_private_key, path_public_key, path_private_key, aws_secret_id_public, aws_secret_id_private, created_at, updated_at FROM apps
+SELECT id, name, keys_mode, sealed_public_key, sealed_private_key, path_public_key, path_private_key, aws_secret_id_public, aws_secret_id_private, created_at, updated_at, git_url FROM apps
 WHERE id = $1 LIMIT 1
 `
 
@@ -1066,6 +1110,7 @@ func (q *Queries) GetAppByID(ctx context.Context, id pgtype.UUID) (App, error) {
 		&i.AwsSecretIDPrivate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GitUrl,
 	)
 	return i, err
 }
@@ -1187,6 +1232,67 @@ func (q *Queries) GetAuditExportCursor(ctx context.Context) (int64, error) {
 	return last_exported_id, err
 }
 
+const getBlob = `-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2
+`
+
+type GetBlobParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Hash  string      `json:"hash"`
+}
+
+func (q *Queries) GetBlob(ctx context.Context, arg GetBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, getBlob, arg.AppID, arg.Hash)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getBlobsByHashes = `-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY($2::text[])
+`
+
+type GetBlobsByHashesParams struct {
+	AppID  pgtype.UUID `json:"app_id"`
+	Hashes []string    `json:"hashes"`
+}
+
+func (q *Queries) GetBlobsByHashes(ctx context.Context, arg GetBlobsByHashesParams) ([]Blob, error) {
+	rows, err := q.db.Query(ctx, getBlobsByHashes, arg.AppID, arg.Hashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Blob
+	for rows.Next() {
+		var i Blob
+		if err := rows.Scan(
+			&i.AppID,
+			&i.Hash,
+			&i.Size,
+			&i.ContentType,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getBranchByName = `-- name: GetBranchByName :one
 SELECT id FROM branches
 WHERE name = $1 AND app_id = $2
@@ -1282,6 +1388,81 @@ func (q *Queries) GetBranchesByAppID(ctx context.Context, appID pgtype.UUID) ([]
 			&i.CurrentCommitHash,
 			&i.CurrentUpdateCreatedAt,
 			&i.CurrentRolloutPercentage,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getBundlePatchesByTarget = `-- name: GetBundlePatchesByTarget :many
+SELECT bp.target_update_id,
+       t.update_uuid AS target_update_uuid,
+       bp.source_update_id,
+       s.update_uuid AS source_update_uuid,
+       s.commit_hash AS source_commit_hash,
+       s.message AS source_message,
+       s.created_at AS source_created_at,
+       bp.status, bp.reason, bp.patch_size, bp.full_download_size, bp.attempts, bp.updated_at
+FROM bundle_patches bp
+JOIN branches b ON b.id = bp.branch_id
+JOIN updates t ON t.branch_id = bp.branch_id AND t.id = bp.target_update_id
+JOIN updates s ON s.branch_id = bp.branch_id AND s.id = bp.source_update_id
+WHERE b.app_id = $1
+  AND b.name = $2
+  AND bp.target_update_id = $3
+ORDER BY s.id DESC
+`
+
+type GetBundlePatchesByTargetParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+	TargetUpdateID int64       `json:"target_update_id"`
+}
+
+type GetBundlePatchesByTargetRow struct {
+	TargetUpdateID   int64              `json:"target_update_id"`
+	TargetUpdateUuid pgtype.UUID        `json:"target_update_uuid"`
+	SourceUpdateID   int64              `json:"source_update_id"`
+	SourceUpdateUuid pgtype.UUID        `json:"source_update_uuid"`
+	SourceCommitHash string             `json:"source_commit_hash"`
+	SourceMessage    *string            `json:"source_message"`
+	SourceCreatedAt  pgtype.Timestamptz `json:"source_created_at"`
+	Status           string             `json:"status"`
+	Reason           *string            `json:"reason"`
+	PatchSize        *int64             `json:"patch_size"`
+	FullDownloadSize *int64             `json:"full_download_size"`
+	Attempts         int32              `json:"attempts"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetBundlePatchesByTarget(ctx context.Context, arg GetBundlePatchesByTargetParams) ([]GetBundlePatchesByTargetRow, error) {
+	rows, err := q.db.Query(ctx, getBundlePatchesByTarget, arg.AppID, arg.BranchName, arg.TargetUpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetBundlePatchesByTargetRow
+	for rows.Next() {
+		var i GetBundlePatchesByTargetRow
+		if err := rows.Scan(
+			&i.TargetUpdateID,
+			&i.TargetUpdateUuid,
+			&i.SourceUpdateID,
+			&i.SourceUpdateUuid,
+			&i.SourceCommitHash,
+			&i.SourceMessage,
+			&i.SourceCreatedAt,
+			&i.Status,
+			&i.Reason,
+			&i.PatchSize,
+			&i.FullDownloadSize,
+			&i.Attempts,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1794,7 +1975,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id
@@ -1830,6 +2012,7 @@ type GetLatestUpdateWithRolloutRow struct {
 	ControlID         *int64             `json:"control_id"`
 	ControlCreatedAt  pgtype.Timestamptz `json:"control_created_at"`
 	ControlUpdateType *int32             `json:"control_update_type"`
+	ControlUpdateUuid pgtype.UUID        `json:"control_update_uuid"`
 }
 
 // Latest checked update for (branch, rtv, platform) plus its control, resolved through
@@ -1858,6 +2041,7 @@ func (q *Queries) GetLatestUpdateWithRollout(ctx context.Context, arg GetLatestU
 		&i.ControlID,
 		&i.ControlCreatedAt,
 		&i.ControlUpdateType,
+		&i.ControlUpdateUuid,
 	)
 	return i, err
 }
@@ -2219,8 +2403,28 @@ func (q *Queries) GetSurfableBranches(ctx context.Context, arg GetSurfableBranch
 	return items, nil
 }
 
+const getUpdateAssetMapping = `-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3
+`
+
+type GetUpdateAssetMappingParams struct {
+	ID    int64       `json:"id"`
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) GetUpdateAssetMapping(ctx context.Context, arg GetUpdateAssetMappingParams) (*types.UpdateAssetMapping, error) {
+	row := q.db.QueryRow(ctx, getUpdateAssetMapping, arg.ID, arg.AppID, arg.Name)
+	var asset_mapping *types.UpdateAssetMapping
+	err := row.Scan(&asset_mapping)
+	return asset_mapping, err
+}
+
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -2251,6 +2455,7 @@ type GetUpdateByBranchNameAndRuntimeRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	RolloutPercentage *int32             `json:"rollout_percentage"`
 	ControlUpdateID   *int64             `json:"control_update_id"`
+	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
 }
 
 // app_id is load-bearing, not redundant: pk_updates is (branch_id, id), so an
@@ -2278,6 +2483,7 @@ func (q *Queries) GetUpdateByBranchNameAndRuntime(ctx context.Context, arg GetUp
 		&i.CreatedAt,
 		&i.RolloutPercentage,
 		&i.ControlUpdateID,
+		&i.CheckedAt,
 	)
 	return i, err
 }
@@ -2966,6 +3172,75 @@ func (q *Queries) HasActiveRolloutUpdate(ctx context.Context, arg HasActiveRollo
 	return exists, err
 }
 
+const importUpdate = `-- name: ImportUpdate :execrows
+INSERT INTO updates (
+    id,
+    branch_id,
+    runtime_version_id,
+    update_type,
+    platform,
+    commit_hash,
+    message,
+    checked_at,
+    update_uuid,
+    created_at,
+    publish_group,
+    asset_mapping
+) VALUES (
+    $1,
+    (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
+    (SELECT id FROM runtime_versions rv WHERE rv.app_id = $2 AND rv.version = $4),
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
+)
+ON CONFLICT (branch_id, id) DO NOTHING
+`
+
+type ImportUpdateParams struct {
+	ID           int64                     `json:"id"`
+	AppID        pgtype.UUID               `json:"app_id"`
+	Name         string                    `json:"name"`
+	Version      string                    `json:"version"`
+	UpdateType   int32                     `json:"update_type"`
+	Platform     string                    `json:"platform"`
+	CommitHash   string                    `json:"commit_hash"`
+	Message      *string                   `json:"message"`
+	CheckedAt    pgtype.Timestamptz        `json:"checked_at"`
+	UpdateUuid   pgtype.UUID               `json:"update_uuid"`
+	CreatedAt    pgtype.Timestamptz        `json:"created_at"`
+	PublishGroup pgtype.UUID               `json:"publish_group"`
+	AssetMapping *types.UpdateAssetMapping `json:"asset_mapping"`
+}
+
+func (q *Queries) ImportUpdate(ctx context.Context, arg ImportUpdateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, importUpdate,
+		arg.ID,
+		arg.AppID,
+		arg.Name,
+		arg.Version,
+		arg.UpdateType,
+		arg.Platform,
+		arg.CommitHash,
+		arg.Message,
+		arg.CheckedAt,
+		arg.UpdateUuid,
+		arg.CreatedAt,
+		arg.PublishGroup,
+		arg.AssetMapping,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertApiKey = `-- name: InsertApiKey :one
 INSERT INTO api_keys (app_id, name, hint, hashed_key)
 VALUES ($1, $2, $3, $4)
@@ -3127,6 +3402,40 @@ func (q *Queries) InsertAuditLogEvent(ctx context.Context, arg InsertAuditLogEve
 		&i.Ip,
 		&i.UserAgent,
 		&i.Metadata,
+	)
+	return i, err
+}
+
+const insertBlob = `-- name: InsertBlob :one
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at
+`
+
+type InsertBlobParams struct {
+	AppID       pgtype.UUID `json:"app_id"`
+	Hash        string      `json:"hash"`
+	Size        int64       `json:"size"`
+	ContentType string      `json:"content_type"`
+}
+
+// ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+// the caller treats that as "already in cas/".
+func (q *Queries) InsertBlob(ctx context.Context, arg InsertBlobParams) (Blob, error) {
+	row := q.db.QueryRow(ctx, insertBlob,
+		arg.AppID,
+		arg.Hash,
+		arg.Size,
+		arg.ContentType,
+	)
+	var i Blob
+	err := row.Scan(
+		&i.AppID,
+		&i.Hash,
+		&i.Size,
+		&i.ContentType,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -5662,6 +5971,64 @@ func (q *Queries) SetBranchProtected(ctx context.Context, arg SetBranchProtected
 	return result.RowsAffected(), nil
 }
 
+const setBundlePatchRunning = `-- name: SetBundlePatchRunning :execrows
+UPDATE bundle_patches bp
+SET status = 'running', attempts = bp.attempts + 1, updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = $1
+  AND b.name = $2
+  AND bp.target_update_id = $3
+  AND bp.source_update_id = $4
+`
+
+type SetBundlePatchRunningParams struct {
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+	TargetUpdateID int64       `json:"target_update_id"`
+	SourceUpdateID int64       `json:"source_update_id"`
+}
+
+func (q *Queries) SetBundlePatchRunning(ctx context.Context, arg SetBundlePatchRunningParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setBundlePatchRunning,
+		arg.AppID,
+		arg.BranchName,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setUpdateAssetMapping = `-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+)
+`
+
+type SetUpdateAssetMappingParams struct {
+	ID           int64                     `json:"id"`
+	AssetMapping *types.UpdateAssetMapping `json:"asset_mapping"`
+	AppID        pgtype.UUID               `json:"app_id"`
+	Name         string                    `json:"name"`
+}
+
+func (q *Queries) SetUpdateAssetMapping(ctx context.Context, arg SetUpdateAssetMappingParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setUpdateAssetMapping,
+		arg.ID,
+		arg.AssetMapping,
+		arg.AppID,
+		arg.Name,
+	)
+}
+
 const setUpdateRolloutPercentage = `-- name: SetUpdateRolloutPercentage :execrows
 UPDATE updates
 SET rollout_percentage = $4
@@ -5948,6 +6315,21 @@ func (q *Queries) UpdateApiKeyAccess(ctx context.Context, arg UpdateApiKeyAccess
 	return result.RowsAffected(), nil
 }
 
+const updateAppGitURLByID = `-- name: UpdateAppGitURLByID :execresult
+UPDATE apps
+SET git_url = NULLIF($1::text, ''), updated_at = CURRENT_TIMESTAMP
+WHERE id = $2
+`
+
+type UpdateAppGitURLByIDParams struct {
+	GitUrl string      `json:"git_url"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateAppGitURLByID(ctx context.Context, arg UpdateAppGitURLByIDParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, updateAppGitURLByID, arg.GitUrl, arg.ID)
+}
+
 const updateAppNameByID = `-- name: UpdateAppNameByID :execresult
 UPDATE apps 
 SET name = $2, updated_at = CURRENT_TIMESTAMP
@@ -6110,6 +6492,30 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.CurrentUpdateArrivedAt,
 	)
 	return i, err
+}
+
+const updateExistsOnBranch = `-- name: UpdateExistsOnBranch :one
+SELECT EXISTS (
+    SELECT 1
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND b.name = $2
+      AND u.id = $3
+)
+`
+
+type UpdateExistsOnBranchParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+	ID    int64       `json:"id"`
+}
+
+func (q *Queries) UpdateExistsOnBranch(ctx context.Context, arg UpdateExistsOnBranchParams) (bool, error) {
+	row := q.db.QueryRow(ctx, updateExistsOnBranch, arg.AppID, arg.Name, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const updateFailureBreakdownByIDs = `-- name: UpdateFailureBreakdownByIDs :many
@@ -6327,6 +6733,42 @@ func (q *Queries) UpsertAndroidCredentials(ctx context.Context, arg UpsertAndroi
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const upsertBundlePatchPending = `-- name: UpsertBundlePatchPending :execrows
+INSERT INTO bundle_patches (branch_id, target_update_id, source_update_id, status)
+SELECT b.id, $1, $2, 'pending'
+FROM branches b
+WHERE b.app_id = $3 AND b.name = $4
+ON CONFLICT (branch_id, target_update_id, source_update_id) DO UPDATE
+SET status = 'pending',
+    reason = NULL,
+    patch_size = NULL,
+    full_download_size = NULL,
+    attempts = 0,
+    updated_at = CURRENT_TIMESTAMP
+`
+
+type UpsertBundlePatchPendingParams struct {
+	TargetUpdateID int64       `json:"target_update_id"`
+	SourceUpdateID int64       `json:"source_update_id"`
+	AppID          pgtype.UUID `json:"app_id"`
+	BranchName     string      `json:"branch_name"`
+}
+
+// App-scoped: the branch lookup refuses a branch of another app. Re-inserting
+// an existing pair resets it, which is what a recompute wants.
+func (q *Queries) UpsertBundlePatchPending(ctx context.Context, arg UpsertBundlePatchPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertBundlePatchPending,
+		arg.TargetUpdateID,
+		arg.SourceUpdateID,
+		arg.AppID,
+		arg.BranchName,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertDeviceUpdateFailure = `-- name: UpsertDeviceUpdateFailure :exec

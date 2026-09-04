@@ -1,6 +1,7 @@
 package _0260422_v2_scope_data_under_appid
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -74,6 +75,38 @@ func (u unreachableBucket) ApplyMigration(string) error {
 func (u unreachableBucket) RemoveMigrationFromHistory(string) error {
 	u.t.Fatal("migration should have skipped")
 	return nil
+}
+func (u unreachableBucket) BlobExists(context.Context, string, string) (bool, error) {
+	u.t.Fatal("migration should have skipped")
+	return false, nil
+}
+func (u unreachableBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	u.t.Fatal("migration should have skipped")
+	return nil, nil
+}
+func (u unreachableBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
+func (u unreachableBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
+	u.t.Fatal("migration should have skipped")
+	return false, nil
+}
+func (u unreachableBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
+	u.t.Fatal("migration should have skipped")
+	return nil, nil
+}
+func (u unreachableBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
+func (u unreachableBucket) DeleteBSDiffs(context.Context, string, string) error {
+	u.t.Fatal("migration should have skipped")
+	return nil
+}
+func (u unreachableBucket) RequestBlobUploadURL(string, string, string) (string, error) {
+	u.t.Fatal("migration should have skipped")
+	return "", nil
 }
 
 // resetEnv unsets every env var up() reads, then restores the previous

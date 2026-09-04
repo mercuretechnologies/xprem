@@ -23,6 +23,13 @@ func GetAuth(r *http.Request) types.Auth {
 	return types.Auth{}
 }
 
+func GetExpoAuth(r *http.Request) types.Auth {
+	if token := r.Header.Get("X-Expo-Access-Token"); token != "" {
+		return types.Auth{Token: &token}
+	}
+	return types.Auth{}
+}
+
 func GetBearerToken(r *http.Request) (string, error) {
 	bearerToken := r.Header.Get("Authorization")
 	if bearerToken == "" {

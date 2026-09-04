@@ -9,7 +9,6 @@ import (
 	"xprem/config"
 	"xprem/internal/branch"
 	bucket2 "xprem/internal/bucket"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 )
@@ -24,19 +23,19 @@ func NewBucketBranchStore(bucket bucket2.Bucket) *BucketBranchStore {
 	}
 }
 
-func (s *BucketBranchStore) InsertBranch(ctx context.Context, branch pgdb.InsertBranchParams) (int64, error) {
+func (s *BucketBranchStore) InsertBranch(ctx context.Context, appId string, branchName string) (int64, error) {
 	return 0, fmt.Errorf("branch creation is only supported in db mode")
 }
 
-func (s *BucketBranchStore) GetUpdatedMetadataByBranchName(ctx context.Context, appId string, branchName string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
-	return nil, fmt.Errorf("getting updated metadata by branch name is only supported in db mode")
+func (s *BucketBranchStore) GetUpdateRefsByBranchName(ctx context.Context, appId string, branchName string) ([]types.UpdateRef, error) {
+	return nil, fmt.Errorf("getting update refs by branch name is only supported in db mode")
 }
 
 func (s *BucketBranchStore) DeleteBranchByName(ctx context.Context, appId string, branchName string) error {
 	return fmt.Errorf("branch deletion is only supported in db mode")
 }
 
-func (s *BucketBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
+func (s *BucketBranchStore) GetSurfableBranches(ctx context.Context, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error) {
 	return nil, ErrNotSupportedInStatelessMode
 }
 

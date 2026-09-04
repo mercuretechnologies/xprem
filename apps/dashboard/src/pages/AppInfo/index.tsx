@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiProblemError } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useToast } from '@/hooks/use-toast';
-import { ShieldAlert, Download, Edit2, Check, X, Trash2, Copy } from 'lucide-react';
+import { ShieldAlert, Download, Edit2, Check, X, Trash2, Copy, GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/PageHeader';
@@ -61,6 +61,8 @@ export const AppInfo = () => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState('');
   const [isUpdatingName, setIsUpdatingName] = useState(false);
+  const [gitUrlValue, setGitUrlValue] = useState('');
+  const [isUpdatingGitUrl, setIsUpdatingGitUrl] = useState(false);
 
   const [showDeleteAppDialog, setShowDeleteAppDialog] = useState(false);
   const [isDeletingApp, setIsDeletingApp] = useState(false);
@@ -79,6 +81,10 @@ export const AppInfo = () => {
       setEditNameValue(appData.name);
     }
   }, [appData?.name]);
+
+  useEffect(() => {
+    setGitUrlValue(appData?.gitUrl ?? '');
+  }, [appData?.gitUrl]);
 
   if (!selectedAppId) {
     return (
@@ -99,7 +105,7 @@ export const AppInfo = () => {
     }
     setIsUpdatingName(true);
     try {
-      await api.updateApp({ name: editNameValue.trim() });
+      await api.updateAppName(editNameValue.trim());
       await queryClient.invalidateQueries({ queryKey: ['appDetails', selectedAppId] });
       toast({ title: 'Name updated', description: 'The app was renamed.' });
       setIsEditingName(false);
@@ -145,6 +151,37 @@ export const AppInfo = () => {
         variant: 'destructive',
       });
       setIsDeletingApp(false);
+    }
+  };
+
+  const handleUpdateGitUrl = async () => {
+    const gitUrl = gitUrlValue.trim();
+    if (gitUrl === (appData?.gitUrl ?? '')) return;
+
+    setIsUpdatingGitUrl(true);
+    try {
+      await api.updateAppGitUrl(gitUrl);
+      await queryClient.invalidateQueries({ queryKey: ['appDetails', selectedAppId] });
+      toast({
+        title: gitUrl ? 'Repository updated' : 'Repository removed',
+        description: gitUrl
+          ? 'Commit hashes now open their source page.'
+          : 'Commit hashes are no longer linked.',
+      });
+    } catch (error) {
+      let errorTitle = 'Error updating repository';
+      let errorMessage = 'An unexpected server error occurred.';
+      if (error instanceof ApiProblemError) {
+        errorTitle = error.title;
+        errorMessage = error.detail;
+      } else if (error instanceof Error) errorMessage = error.message;
+      toast({
+        title: errorTitle,
+        description: errorMessage,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsUpdatingGitUrl(false);
     }
   };
 
@@ -253,6 +290,53 @@ export const AppInfo = () => {
             You do not have permission to rename or delete this app or download its signing
             certificate. Ask an admin to grant you access.
           </AdminOnlyNote>
+        )}
+
+        {CONTROL_PLANE_ENABLED && (
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <div className="space-y-4 p-5">
+              <div className="flex items-start gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  <GitBranch className="h-4 w-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-medium">Source repository</h3>
+                  <p className="mt-0.5 max-w-md text-xs leading-relaxed text-muted-foreground">
+                    Open commit hashes and PR or merge request references in your Git host.
+                  </p>
+                </div>
+              </div>
+
+              <form
+                className="flex flex-col gap-2 sm:flex-row"
+                onSubmit={event => {
+                  event.preventDefault();
+                  void handleUpdateGitUrl();
+                }}>
+                <Input
+                  type="url"
+                  aria-label="Repository URL"
+                  placeholder="https://github.com/organization/repository"
+                  value={gitUrlValue}
+                  maxLength={2048}
+                  disabled={!canRenameApp || isUpdatingGitUrl || appDetailsQuery.isLoading}
+                  onChange={event => setGitUrlValue(event.target.value)}
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={
+                    !canRenameApp ||
+                    isUpdatingGitUrl ||
+                    appDetailsQuery.isLoading ||
+                    gitUrlValue.trim() === (appData?.gitUrl ?? '')
+                  }>
+                  {isUpdatingGitUrl ? 'Saving…' : 'Save'}
+                </Button>
+              </form>
+            </div>
+          </div>
         )}
 
         <KeystoreCard isLoading={appDetailsQuery.isLoading} appData={appData} />

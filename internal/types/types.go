@@ -1,7 +1,9 @@
 package types
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 )
@@ -16,9 +18,38 @@ type PlatformMetadata struct {
 	Assets []Asset `json:"assets"`
 }
 
+// Platform is a client platform an update is built for; a value that went
+// through ParsePlatform is one of the two constants.
+type Platform string
+
+const (
+	PlatformIOS     Platform = "ios"
+	PlatformAndroid Platform = "android"
+)
+
+// ParsePlatform accepts exactly "ios" or "android".
+func ParsePlatform(raw string) (Platform, error) {
+	switch Platform(raw) {
+	case PlatformIOS, PlatformAndroid:
+		return Platform(raw), nil
+	}
+	return "", fmt.Errorf("invalid platform %q", raw)
+}
+
 type FileMetadata struct {
 	Android PlatformMetadata `json:"android"`
 	IOS     PlatformMetadata `json:"ios"`
+}
+
+func (f FileMetadata) PlatformMetadata(platform Platform) (PlatformMetadata, error) {
+	switch platform {
+	case PlatformIOS:
+		return f.IOS, nil
+	case PlatformAndroid:
+		return f.Android, nil
+	default:
+		return PlatformMetadata{}, fmt.Errorf("unsupported platform: %s", platform)
+	}
 }
 
 type MetadataObject struct {
@@ -35,12 +66,12 @@ type UpdateMetadata struct {
 }
 
 type UpdateItem struct {
-	UpdateUUID string `json:"updateUUID"`
-	UpdateId   string `json:"updateId"`
-	CreatedAt  string `json:"createdAt"`
-	CommitHash string `json:"commitHash"`
-	Platform   string `json:"platform"`
-	Message    string `json:"message,omitempty"`
+	UpdateUUID string   `json:"updateUUID"`
+	UpdateId   string   `json:"updateId"`
+	CreatedAt  string   `json:"createdAt"`
+	CommitHash string   `json:"commitHash"`
+	Platform   Platform `json:"platform"`
+	Message    string   `json:"message,omitempty"`
 	// Progressive rollout state (control-plane mode only). Both stay nil in stateless
 	// mode and for non-rollout updates, so listings there serialize byte-identically.
 	RolloutPercentage *int    `json:"rolloutPercentage,omitempty"`
@@ -65,7 +96,7 @@ type UpdateFeedItem struct {
 type UpdateFeedQuery struct {
 	Branch          string
 	RuntimeVersion  string
-	Platform        string
+	Platform        Platform
 	UpdateUUID      string
 	PublishGroup    string
 	CommitHash      string
@@ -88,7 +119,7 @@ type UpdateFeedPage struct {
 // the same path as a single republish.
 type PublishGroupMember struct {
 	UpdateId   string
-	Platform   string
+	Platform   Platform
 	CommitHash string
 }
 
@@ -104,10 +135,10 @@ type PublishGroupItem struct {
 }
 
 type PublishGroupUpdateItem struct {
-	UpdateId   string `json:"updateId"`
-	CreatedAt  string `json:"createdAt"`
-	Platform   string `json:"platform"`
-	CommitHash string `json:"commitHash"`
+	UpdateId   string   `json:"updateId"`
+	CreatedAt  string   `json:"createdAt"`
+	Platform   Platform `json:"platform"`
+	CommitHash string   `json:"commitHash"`
 }
 
 type PublishGroupsPage struct {
@@ -121,10 +152,10 @@ type UpdatesPage struct {
 }
 
 type UpdateStoredMetadata struct {
-	Platform   string `json:"platform"`
-	CommitHash string `json:"commitHash"`
-	UpdateUUID string `json:"updateUUID"`
-	Message    string `json:"message,omitempty"`
+	Platform   Platform `json:"platform"`
+	CommitHash string   `json:"commitHash"`
+	UpdateUUID string   `json:"updateUUID"`
+	Message    string   `json:"message,omitempty"`
 }
 
 type UpdateType int
@@ -139,7 +170,7 @@ type UpdateDetails struct {
 	UpdateId   string     `json:"updateId"`
 	CreatedAt  string     `json:"createdAt"`
 	CommitHash string     `json:"commitHash"`
-	Platform   string     `json:"platform"`
+	Platform   Platform   `json:"platform"`
 	Message    string     `json:"message,omitempty"`
 	Type       UpdateType `json:"type"`
 	ExpoConfig string     `json:"expoConfig"`
@@ -147,6 +178,13 @@ type UpdateDetails struct {
 	// for non-rollout updates.
 	RolloutPercentage *int    `json:"rolloutPercentage,omitempty"`
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
+}
+
+// UpdateRef is the (update id, runtime version) pair that, with a branch,
+// locates an update's folder in the bucket.
+type UpdateRef struct {
+	ID             int64
+	RuntimeVersion string
 }
 
 type ApiKeyMetadata struct {
@@ -163,6 +201,47 @@ type ManifestAsset struct {
 	FileExtension string `json:"fileExtension"`
 	ContentType   string `json:"contentType"`
 	Url           string `json:"url"`
+}
+
+// UpdateAssetMapping is the shaped launch asset and assets persisted on an
+// update. Url is rebuilt at serve time.
+type UpdateAssetMapping struct {
+	LaunchAsset ShapedAsset   `json:"launchAsset"`
+	Assets      []ShapedAsset `json:"assets"`
+	ConfigFiles []ConfigFile  `json:"configFiles,omitempty"`
+}
+
+type ConfigFile struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
+
+func (m *UpdateAssetMapping) Scan(src any) error {
+	if src == nil {
+		return nil
+	}
+	var data []byte
+	switch v := src.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("cannot scan %T into UpdateAssetMapping", src)
+	}
+	return json.Unmarshal(data, m)
+}
+
+func (m UpdateAssetMapping) Value() (driver.Value, error) {
+	return json.Marshal(m)
+}
+
+// ShapedAsset is a ManifestAsset without Url.
+type ShapedAsset struct {
+	Hash          string `json:"hash"`
+	Key           string `json:"key"`
+	FileExtension string `json:"fileExtension"`
+	ContentType   string `json:"contentType"`
 }
 
 type ExtraManifestData struct {
@@ -200,6 +279,10 @@ type Update struct {
 	RuntimeVersion string        `json:"runtimeVersion"`
 	UpdateId       string        `json:"updateId"`
 	CreatedAt      time.Duration `json:"createdAt"`
+	// UpdateUUID is the persistent manifest id, filled only on the lastUpdate
+	// envelope path so the up-to-date poll can short-circuit without reading
+	// the composed manifest. Empty everywhere else.
+	UpdateUUID string `json:"updateUuid,omitempty"`
 }
 
 // UpdateWithRollout is the flat lastUpdate envelope: an update plus its per-update
@@ -227,11 +310,11 @@ type ChannelRollout struct {
 // RolloutUpdate is one active per-update rollout row (one per platform) as returned by
 // the per-update rollout route.
 type RolloutUpdate struct {
-	UpdateId        string  `json:"updateId"`
-	Platform        string  `json:"platform"`
-	Percentage      int     `json:"percentage"`
-	ControlUpdateId *string `json:"controlUpdateId,omitempty"`
-	CreatedAt       string  `json:"createdAt"`
+	UpdateId        string   `json:"updateId"`
+	Platform        Platform `json:"platform"`
+	Percentage      int      `json:"percentage"`
+	ControlUpdateId *string  `json:"controlUpdateId,omitempty"`
+	CreatedAt       string   `json:"createdAt"`
 }
 
 type BranchUpdateState struct {
@@ -315,4 +398,64 @@ type BucketFile struct {
 type Auth struct {
 	Token         *string
 	SessionSecret *string
+}
+
+// ChannelRolloutInfo is the active channel rollout folded into a ChannelResolution in
+// control-plane mode. ID doubles as the bucketing salt. The stateless (Expo) provider
+// never sets it, so rollouts stay a control-plane-only feature.
+type ChannelRolloutInfo struct {
+	ID         string `json:"id"`
+	BranchName string `json:"branchName"`
+	Percentage int    `json:"percentage"`
+}
+
+// ChannelResolution is the branch a channel serves to devices, with its active
+// rollout; the dashboard listing shape is ChannelMapping.
+type ChannelResolution struct {
+	Id         string `json:"id"`
+	BranchName string `json:"branchName"`
+	// Set only by the Postgres channel store when the channel has an active rollout.
+	Rollout *ChannelRolloutInfo `json:"rollout,omitempty"`
+}
+
+// BundlePatchStatus is where a (target, source) bundle patch stands.
+type BundlePatchStatus string
+
+const (
+	BundlePatchPending   BundlePatchStatus = "pending"
+	BundlePatchRunning   BundlePatchStatus = "running"
+	BundlePatchStored    BundlePatchStatus = "stored"
+	BundlePatchSkipped   BundlePatchStatus = "skipped"
+	BundlePatchFailed    BundlePatchStatus = "failed"
+	BundlePatchCancelled BundlePatchStatus = "cancelled"
+)
+
+// Reasons a patch job ends without a stored patch.
+const (
+	BundlePatchReasonLegacyUpdate       = "legacy_update"
+	BundlePatchReasonIdenticalBundles   = "identical_bundles"
+	BundlePatchReasonNotWorth           = "patch_not_worth"
+	BundlePatchReasonBundleTooLarge     = "bundle_too_large"
+	BundlePatchReasonBlobMissing        = "blob_missing"
+	BundlePatchReasonUpdateNotFound     = "update_not_found"
+	BundlePatchReasonDifferentBranch    = "different_branch"
+	BundlePatchReasonVerificationFailed = "verification_failed"
+)
+
+// BundlePatch is one row of the bundle patches of a target update, as the
+// dashboard and the MCP show it.
+type BundlePatch struct {
+	TargetUpdateId   string            `json:"targetUpdateId"`
+	TargetUpdateUUID string            `json:"targetUpdateUUID"`
+	SourceUpdateId   string            `json:"sourceUpdateId"`
+	SourceUpdateUUID string            `json:"sourceUpdateUUID"`
+	SourceCommitHash string            `json:"sourceCommitHash"`
+	SourceMessage    string            `json:"sourceMessage,omitempty"`
+	SourceCreatedAt  string            `json:"sourceCreatedAt"`
+	Status           BundlePatchStatus `json:"status"`
+	Reason           string            `json:"reason,omitempty"`
+	PatchSize        *int64            `json:"patchSize,omitempty"`
+	FullDownloadSize *int64            `json:"fullDownloadSize,omitempty"`
+	Attempts         int               `json:"attempts"`
+	UpdatedAt        string            `json:"updatedAt"`
 }

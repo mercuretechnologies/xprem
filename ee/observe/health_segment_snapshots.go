@@ -17,9 +17,6 @@ const (
 	// healthSegmentBucket is the fixed capture granularity for segment snapshots.
 	healthSegmentBucket = 5 * time.Minute
 
-	// segmentSnapshotAdvisoryLockID elects one replica to run a capture.
-	segmentSnapshotAdvisoryLockID = 745103624
-
 	// segmentCoverageMinPercent is the minimum bucket coverage before a window is served from the counters instead of the grid.
 	segmentCoverageMinPercent = 95
 
@@ -34,7 +31,7 @@ func (h *HealthHistory) captureSegmentSnapshotsAt(ctx context.Context, bucket ti
 	if h.clickhouse == nil {
 		return
 	}
-	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, segmentSnapshotAdvisoryLockID, "health segment snapshot")
+	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, postgres.HealthSegmentSnapshotLockID, "health segment snapshot")
 	if err != nil {
 		log.Printf("observe: taking the segment snapshot lock failed: %v", err)
 		return

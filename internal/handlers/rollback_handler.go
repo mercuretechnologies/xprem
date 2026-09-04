@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -26,9 +27,9 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
-	platform := r.URL.Query().Get("platform")
-	if platform == "" || (platform != "ios" && platform != "android") {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
+	platform, err := types.ParsePlatform(r.URL.Query().Get("platform"))
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, r.URL.Query().Get("platform"))
 		http.Error(w, "Invalid platform", http.StatusBadRequest)
 		return
 	}

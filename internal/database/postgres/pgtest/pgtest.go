@@ -16,13 +16,10 @@ import (
 	"os"
 	"testing"
 	"time"
+	"xprem/internal/database/postgres"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
-
-// Must differ from the migration lock id in the parent package: this lock is
-// held for a whole package run, the migration one only around goose.Up.
-const packageAdvisoryLockID = 823672942
 
 // Upper bound on waiting for the other test packages to finish.
 const packageLockTimeout = 5 * time.Minute
@@ -61,7 +58,7 @@ func RunSerialized(m *testing.M) int {
 	defer conn.Close()
 	if err := waitForPackageLock(ctx, packageLockRetryInterval, func(ctx context.Context) (bool, error) {
 		var acquired bool
-		err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", packageAdvisoryLockID).Scan(&acquired)
+		err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", postgres.TestPackageLockID).Scan(&acquired)
 		return acquired, err
 	}); err != nil {
 		log.Fatalf("pgtest: failed to acquire the package lock: %v", err)

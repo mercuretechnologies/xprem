@@ -50,4 +50,10 @@ func registerAccountRoutes(
 	accountSubrouter.HandleFunc("/apps", container.AppHandler.GetAppsHandler).Methods(http.MethodGet)
 	accountSubrouter.Handle("/apps", adminOnly(http.HandlerFunc(container.AppHandler.CreateAppHandler))).Methods(http.MethodPost)
 
+	accountSubrouter.Handle("/expo-import/apps", adminOnly(http.HandlerFunc(container.ExpoImportHandler.ListExpoAppsHandler))).Methods(http.MethodGet)
+	accountSubrouter.Handle("/expo-import/preview", adminOnly(http.HandlerFunc(container.ExpoImportHandler.PreviewExpoImportHandler))).Methods(http.MethodGet)
+	accountSubrouter.Handle("/expo-import", adminOnly(http.HandlerFunc(container.ExpoImportHandler.ImportExpoAppHandler))).Methods(http.MethodPost)
+	accountSubrouter.Handle("/expo-import/jobs/{JOB_ID}", adminOnly(http.HandlerFunc(container.ExpoImportHandler.GetExpoImportJobHandler))).Methods(http.MethodGet)
+	accountSubrouter.Handle("/expo-import/jobs/{JOB_ID}/cancel", adminOnly(http.HandlerFunc(container.ExpoImportHandler.CancelExpoImportJobHandler))).Methods(http.MethodPost)
+	accountSubrouter.Handle("/expo-import/apps/{APP_ID}/job", adminOnly(http.HandlerFunc(container.ExpoImportHandler.GetExpoImportAppJobHandler))).Methods(http.MethodGet)
 }

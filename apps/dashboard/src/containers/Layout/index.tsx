@@ -1,6 +1,8 @@
 import { AppSidebar } from '@/components/app-sidebar';
+import { ExpoImportBanner } from '@/components/expo-import-banner';
 import { LicenseGraceBanner } from '@/ee/components/LicenseGraceBanner';
-import { XpremMark } from '@/components/xprem-mark';
+import wordmark from '@/assets/xprem-wordmark.svg';
+import wordmarkOnLight from '@/assets/xprem-wordmark-on-light.svg';
 import { useEffect, useState } from 'react';
 import { Menu } from 'lucide-react';
 import { useLocation } from 'react-router';
@@ -35,12 +37,12 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
         <AppSidebar onOpenCommandPalette={openCommandPalette} />
         <main className="min-w-0 flex-1">
           <LicenseGraceBanner />
+          <ExpoImportBanner />
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/80 bg-background/95 px-4 backdrop-blur lg:hidden">
-            <div className="flex items-center gap-2.5">
-              <XpremMark className="h-8 w-8 rounded-lg" />
-              <span className="font-display text-sm font-semibold text-foreground">
-                xprem
-              </span>
+            {/* -ml-5 cancels the wordmark's internal left padding at this scale. */}
+            <div className="-ml-5">
+              <img src={wordmarkOnLight} alt="xprem" className="h-8 w-32 object-cover dark:hidden" />
+              <img src={wordmark} alt="xprem" className="hidden h-8 w-32 object-cover dark:block" />
             </div>
             <Button
               variant="ghost"
@@ -58,7 +60,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
         </main>
       </div>
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="w-72 p-0">
+        <SheetContent side="right" className="w-72 p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <AppSidebar
             mobile

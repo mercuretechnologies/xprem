@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 	"xprem/internal/services"
-	types2 "xprem/internal/types"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -27,27 +27,37 @@ func NewRepublishHandler(deploymentService *services.DeploymentService) *Republi
 // (historical behavior), ?publishGroup=<uuid> republishes every member of that
 // publish group on its own platform, the new rows sharing a new server-minted
 // group returned in the response.
+type republishGroupResponse struct {
+	PublishGroup string         `json:"publishGroup"`
+	Updates      []types.Update `json:"updates"`
+}
+
 func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 	vars := mux.Vars(r)
 	appId := vars["APP_ID"]
 	branchName := vars["BRANCH"]
-	platform := r.URL.Query().Get("platform")
+	rawPlatform := r.URL.Query().Get("platform")
 	publishGroup, err := parsePublishGroupTarget(r)
 	if err != nil {
 		log.Printf("[RequestID: %s] %v", requestID, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if publishGroup != nil && (platform != "" || r.URL.Query().Get("updateId") != "") {
+	if publishGroup != nil && (rawPlatform != "" || r.URL.Query().Get("updateId") != "") {
 		log.Printf("[RequestID: %s] Both updateId/platform and publishGroup provided", requestID)
 		http.Error(w, "Provide either an updateId and platform or a publishGroup, not both", http.StatusBadRequest)
 		return
 	}
-	if publishGroup == nil && (platform == "" || (platform != "ios" && platform != "android")) {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
-		http.Error(w, "Invalid platform", http.StatusBadRequest)
-		return
+	var platform types.Platform
+	if publishGroup == nil {
+		parsed, err := types.ParsePlatform(rawPlatform)
+		if err != nil {
+			log.Printf("[RequestID: %s] Invalid platform: %s", requestID, rawPlatform)
+			http.Error(w, "Invalid platform", http.StatusBadRequest)
+			return
+		}
+		platform = parsed
 	}
 	if branchName == "" {
 		log.Printf("[RequestID: %s] No branch provided", requestID)
@@ -91,10 +101,7 @@ func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("expo-publish-group", result.PublishGroup)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"publishGroup": result.PublishGroup,
-			"updates":      result.Updates,
-		})
+		json.NewEncoder(w).Encode(republishGroupResponse{PublishGroup: result.PublishGroup, Updates: result.Updates})
 		return
 	}
 
@@ -104,7 +111,7 @@ func (h *RepublishHandler) HandleRepublish(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "No updateId provided", http.StatusBadRequest)
 		return
 	}
-	previousUpdate := &types2.Update{
+	previousUpdate := &types.Update{
 		AppId:          appId,
 		Branch:         branchName,
 		RuntimeVersion: runtimeVersion,

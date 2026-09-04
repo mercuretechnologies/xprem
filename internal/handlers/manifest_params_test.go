@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,8 @@ func TestManifestParamsReadsEveryHeader(t *testing.T) {
 	r.Header.Set("xprem-surf-blocked", "pr-482@200")
 	r.Header.Set("EAS-Client-ID", "device-1")
 	r.Header.Set("expo-current-update-id", "11111111-1111-4111-8111-111111111111")
+	r.Header.Set("expo-embedded-update-id", "33333333-3333-4333-8333-333333333333")
+	r.Header.Set("expo-expect-signature", "true")
 	r.Header.Set("expo-fatal-error", "boom")
 	r.Header.Set("Expo-Recent-Failed-Update-Ids", `"22222222-2222-4222-8222-222222222222"`)
 
@@ -41,13 +44,15 @@ func TestManifestParamsReadsEveryHeader(t *testing.T) {
 	assert.Equal(t, "req-1", params.RequestID)
 	assert.Equal(t, paramsTestAppID, params.AppID)
 	assert.Equal(t, "qa", params.ChannelName)
-	assert.Equal(t, "ios", params.Platform)
+	assert.Equal(t, types.PlatformIOS, params.Platform)
 	assert.Equal(t, "3.0.0", params.RuntimeVersion)
 	assert.Equal(t, int64(1), params.ProtocolVersion)
 	assert.Equal(t, "pr-482", params.XpremBranch)
 	assert.Equal(t, "pr-482@200", params.SurfBlockTokens)
 	assert.Equal(t, "device-1", params.ClientID)
 	assert.Equal(t, "11111111-1111-4111-8111-111111111111", params.CurrentUpdateID)
+	assert.Equal(t, "33333333-3333-4333-8333-333333333333", params.EmbeddedUpdateID)
+	assert.Equal(t, "true", params.ExpectSignature)
 	assert.Equal(t, "boom", params.ExpoFatalError)
 	assert.Equal(t, `"22222222-2222-4222-8222-222222222222"`, params.RecentFailedUpdateIDs)
 }
@@ -99,7 +104,7 @@ func TestManifestParamsFallsBackToTheQueryString(t *testing.T) {
 	params, err := manifestParams(r, "req-1")
 
 	require.NoError(t, err)
-	assert.Equal(t, "android", params.Platform)
+	assert.Equal(t, types.PlatformAndroid, params.Platform)
 	assert.Equal(t, "2.0.0", params.RuntimeVersion)
 }
 
@@ -134,7 +139,7 @@ func TestManifestParamsRejects(t *testing.T) {
 func TestServerDefinedHeadersCarriesTheVerdict(t *testing.T) {
 	// Tokens are opaque on the wire; the encoding is pinned in the services package.
 	params := services.ManifestRequestParams{SurfBlockTokens: "cHItMQAxMDA"}
-	result := services.ManifestResult{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "cHItMgAyMDA"}}
+	result := services.UpdateDecision{BlockedSurf: &services.BlockedSurf{BranchName: "pr-2", Token: "cHItMgAyMDA"}}
 
 	w := httptest.NewRecorder()
 	writeServerDefinedHeaders(w, serverDefinedHeaders(params, result))
@@ -149,7 +154,7 @@ func TestServerDefinedHeadersIsSilentWithoutARefusal(t *testing.T) {
 	params := services.ManifestRequestParams{SurfBlockTokens: "pr-1@100"}
 
 	w := httptest.NewRecorder()
-	writeServerDefinedHeaders(w, serverDefinedHeaders(params, services.ManifestResult{}))
+	writeServerDefinedHeaders(w, serverDefinedHeaders(params, services.UpdateDecision{}))
 
 	assert.Empty(t, w.Header().Get("expo-server-defined-headers"))
 }

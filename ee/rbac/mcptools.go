@@ -71,10 +71,6 @@ func MCPAccess(perm Permission) mcptools.Access {
 	return access
 }
 
-func subjectFor(principal *services.DashboardPrincipal) Subject {
-	return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}
-}
-
 // fallbackFor maps the MIT tool vocabulary onto this package's.
 func fallbackFor(fallback mcptools.Fallback) Fallback {
 	if fallback == mcptools.FallbackAnyMember {

@@ -21,6 +21,11 @@ UPDATE apps
 SET name = $2, updated_at = CURRENT_TIMESTAMP
 WHERE id = $1;
 
+-- name: UpdateAppGitURLByID :execresult
+UPDATE apps
+SET git_url = NULLIF(sqlc.arg('git_url')::text, ''), updated_at = CURRENT_TIMESTAMP
+WHERE id = sqlc.arg('id');
+
 -- name: InsertChannel :one
 INSERT INTO channels (app_id, branch_id, name)
 VALUES ($1, $2, $3)
@@ -370,6 +375,22 @@ WHERE updates.id = $1 AND branch_id = (
       AND name = $4
 );
 
+-- name: SetUpdateAssetMapping :execresult
+UPDATE updates
+SET asset_mapping = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+);
+
+-- name: GetUpdateAssetMapping :one
+SELECT u.asset_mapping
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
+
 -- name: GetLatestUpdate :one
 SELECT 
     u.id,
@@ -397,7 +418,7 @@ LIMIT 1;
 -- update id is only unique per branch, and branch names are only unique per app.
 -- Without the app filter the same (id, branch, runtime) triple matches another
 -- tenant's row.
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -790,6 +811,47 @@ ON CONFLICT (branch_id, id) DO UPDATE SET
     checked_at = EXCLUDED.checked_at,
     update_uuid = EXCLUDED.update_uuid,
     created_at = EXCLUDED.created_at;
+
+-- name: ImportUpdate :execrows
+INSERT INTO updates (
+    id,
+    branch_id,
+    runtime_version_id,
+    update_type,
+    platform,
+    commit_hash,
+    message,
+    checked_at,
+    update_uuid,
+    created_at,
+    publish_group,
+    asset_mapping
+) VALUES (
+    $1,
+    (SELECT id FROM branches b WHERE b.app_id = $2 AND b.name = $3),
+    (SELECT id FROM runtime_versions rv WHERE rv.app_id = $2 AND rv.version = $4),
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
+)
+ON CONFLICT (branch_id, id) DO NOTHING;
+
+-- name: UpdateExistsOnBranch :one
+SELECT EXISTS (
+    SELECT 1
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id
+    WHERE b.app_id = $1
+      AND b.name = $2
+      AND u.id = $3
+);
+
 -- name: GetEnterpriseLicense :one
 SELECT * FROM enterprise_license
 WHERE singleton;
@@ -966,7 +1028,8 @@ SELECT
     u.control_update_id,
     c.id AS control_id,
     c.created_at AS control_created_at,
-    c.update_type AS control_update_type
+    c.update_type AS control_update_type,
+    c.update_uuid AS control_update_uuid
 FROM updates u
 JOIN branches b ON u.branch_id = b.id
 JOIN runtime_versions rv ON u.runtime_version_id = rv.id
@@ -2535,3 +2598,78 @@ INSERT INTO server_instance (id)
 VALUES ($1)
 ON CONFLICT (singleton) DO NOTHING
 RETURNING id;
+
+-- name: GetBlob :one
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = $2;
+
+-- name: GetBlobsByHashes :many
+SELECT app_id, hash, size, content_type, created_at
+FROM blobs
+WHERE app_id = $1 AND hash = ANY(sqlc.arg('hashes')::text[]);
+
+-- name: InsertBlob :one
+-- ON CONFLICT DO NOTHING returns no row when the hash is already stored;
+-- the caller treats that as "already in cas/".
+INSERT INTO blobs (app_id, hash, size, content_type)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (app_id, hash) DO NOTHING
+RETURNING app_id, hash, size, content_type, created_at;
+
+-- name: UpsertBundlePatchPending :execrows
+-- App-scoped: the branch lookup refuses a branch of another app. Re-inserting
+-- an existing pair resets it, which is what a recompute wants.
+INSERT INTO bundle_patches (branch_id, target_update_id, source_update_id, status)
+SELECT b.id, sqlc.arg('target_update_id'), sqlc.arg('source_update_id'), 'pending'
+FROM branches b
+WHERE b.app_id = sqlc.arg('app_id') AND b.name = sqlc.arg('branch_name')
+ON CONFLICT (branch_id, target_update_id, source_update_id) DO UPDATE
+SET status = 'pending',
+    reason = NULL,
+    patch_size = NULL,
+    full_download_size = NULL,
+    attempts = 0,
+    updated_at = CURRENT_TIMESTAMP;
+
+-- name: SetBundlePatchRunning :execrows
+UPDATE bundle_patches bp
+SET status = 'running', attempts = bp.attempts + 1, updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+  AND bp.source_update_id = sqlc.arg('source_update_id');
+
+-- name: FinishBundlePatch :execrows
+UPDATE bundle_patches bp
+SET status = sqlc.arg('status'),
+    reason = sqlc.narg('reason'),
+    patch_size = sqlc.narg('patch_size'),
+    full_download_size = sqlc.narg('full_download_size'),
+    updated_at = CURRENT_TIMESTAMP
+FROM branches b
+WHERE b.id = bp.branch_id
+  AND b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+  AND bp.source_update_id = sqlc.arg('source_update_id');
+
+-- name: GetBundlePatchesByTarget :many
+SELECT bp.target_update_id,
+       t.update_uuid AS target_update_uuid,
+       bp.source_update_id,
+       s.update_uuid AS source_update_uuid,
+       s.commit_hash AS source_commit_hash,
+       s.message AS source_message,
+       s.created_at AS source_created_at,
+       bp.status, bp.reason, bp.patch_size, bp.full_download_size, bp.attempts, bp.updated_at
+FROM bundle_patches bp
+JOIN branches b ON b.id = bp.branch_id
+JOIN updates t ON t.branch_id = bp.branch_id AND t.id = bp.target_update_id
+JOIN updates s ON s.branch_id = bp.branch_id AND s.id = bp.source_update_id
+WHERE b.app_id = sqlc.arg('app_id')
+  AND b.name = sqlc.arg('branch_name')
+  AND bp.target_update_id = sqlc.arg('target_update_id')
+ORDER BY s.id DESC;

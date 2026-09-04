@@ -1,4 +1,5 @@
 import { getRefreshToken, getToken, logout, saveReturnTo, setTokens } from '@/lib/auth.ts';
+import { dashboardBasename } from '@/lib/basename.ts';
 
 export type APIProblemPayload = {
   title: string;
@@ -97,12 +98,71 @@ export type AuditEventsPage = {
 
 export type AppDetails = AppDescriptor & {
   keys: KeysConfig;
+  gitUrl?: string;
   createdAt?: number;
 };
 
 export type CreateAppPayload = {
   name: string;
   keysConfig: KeysConfig;
+};
+
+export type ExpoImportableApp = {
+  id: string;
+  name: string;
+  fullName: string;
+};
+
+export type ExpoAccountApps = {
+  accountId: string;
+  accountName: string;
+  apps: ExpoImportableApp[];
+};
+
+export type ExpoImportPayload = {
+  expoAppId: string;
+  keysConfig: KeysConfig;
+  // Newest EAS update groups to also copy in a background job; omit for none.
+  historyLimit?: number;
+};
+
+export type ExpoImportResult = {
+  appId: string;
+  name: string;
+  branchCount: number;
+  channelCount: number;
+  skipped?: string[];
+  warnings?: string[];
+  historyJobId?: string;
+};
+
+export type ExpoImportPlanItem = {
+  name: string;
+  // Channels only: the branch the channel will map to.
+  mappedBranch?: string;
+  skipReason?: string;
+  // Set when the entry will be created with a caveat.
+  warning?: string;
+};
+
+export type ExpoImportPlan = {
+  appId: string;
+  name: string;
+  expoName: string;
+  // Set when the import cannot run at all.
+  conflict?: string;
+  branches: ExpoImportPlanItem[];
+  channels: ExpoImportPlanItem[];
+};
+
+export type ExpoHistoryJobStatus = {
+  state: 'running' | 'done' | 'failed' | 'canceled';
+  total: number;
+  processed: number;
+  imported: number;
+  skipped?: string[];
+  error?: string;
+  cancelRequested: boolean;
 };
 
 export type BranchUpdateState = {
@@ -603,6 +663,28 @@ export type UpdateDetailsRecord = {
   controlUpdateId?: string | null;
 };
 
+export type BundlePatchStatus =
+  'pending' | 'running' | 'stored' | 'skipped' | 'failed' | 'cancelled';
+
+// One bsdiff patch planned toward a target update from an earlier source
+// update (control-plane only, when bundle diffing is enabled). Sizes are set
+// once the patch was computed, whether it was stored or judged not worth it.
+export type BundlePatchRecord = {
+  targetUpdateId: string;
+  targetUpdateUUID: string;
+  sourceUpdateId: string;
+  sourceUpdateUUID: string;
+  sourceCommitHash: string;
+  sourceMessage?: string;
+  sourceCreatedAt: string;
+  status: BundlePatchStatus;
+  reason?: string;
+  patchSize?: number;
+  fullDownloadSize?: number;
+  attempts: number;
+  updatedAt: string;
+};
+
 export type ApiKeyRecord = {
   id: string;
   name: string;
@@ -760,6 +842,7 @@ export type ServerSettings = {
   BASE_URL: string;
   SERVER_VERSION: string;
   CONTROL_PLANE_ENABLED: boolean;
+  BUNDLE_DIFFING: boolean;
   CACHE_MODE: string;
   REDIS_HOST: string;
   REDIS_PORT: string;
@@ -799,7 +882,6 @@ export class ApiClient {
   private appId: string | null = null;
 
   constructor() {
-    // @ts-expect-error window.env is injected at runtime by /env.js
     this.baseUrl = window?.env?.VITE_OTA_API_URL || import.meta.env.VITE_OTA_API_URL;
     if (!this.baseUrl) {
       throw new Error('Missing VITE_OTA_API_URL environment variable');
@@ -944,13 +1026,14 @@ export class ApiClient {
       return;
     }
     logout();
-    // Remember where the session died so the next sign-in resumes there; the
-    // stored path is router-relative, so the /dashboard basename is stripped.
-    const currentPath = window.location.pathname.replace(/^\/dashboard/, '');
+    const basename = dashboardBasename();
+    const currentPath = window.location.pathname.startsWith(basename)
+      ? window.location.pathname.slice(basename.length)
+      : window.location.pathname;
     if (currentPath && currentPath !== '/login') {
       saveReturnTo(currentPath + window.location.search);
     }
-    window.location.assign('/dashboard/login');
+    window.location.assign(`${basename}/login`);
   }
 
   public async login(email: string, password: string) {
@@ -1228,6 +1311,49 @@ export class ApiClient {
     });
   }
 
+  // The Expo token rides in a header, never in a URL where proxies and access logs keep it.
+  public async listExpoImportApps(accessToken: string) {
+    return this.request<ExpoAccountApps[]>(`/api/expo-import/apps`, {
+      method: 'GET',
+      headers: { 'X-Expo-Access-Token': accessToken },
+    });
+  }
+
+  public async previewExpoImport(accessToken: string, expoAppId: string) {
+    return this.request<ExpoImportPlan>(
+      `/api/expo-import/preview?expoAppId=${encodeURIComponent(expoAppId)}`,
+      { method: 'GET', headers: { 'X-Expo-Access-Token': accessToken } }
+    );
+  }
+
+  public async importExpoApp(accessToken: string, payload: ExpoImportPayload) {
+    return this.request<ExpoImportResult>(`/api/expo-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Expo-Access-Token': accessToken },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async getExpoImportJob(jobId: string) {
+    return this.request<ExpoHistoryJobStatus>(
+      `/api/expo-import/jobs/${encodeURIComponent(jobId)}`,
+      { method: 'GET' }
+    );
+  }
+
+  public async getExpoImportJobForApp(appId: string) {
+    return this.request<{ jobId: string | null; status: ExpoHistoryJobStatus | null }>(
+      `/api/expo-import/apps/${encodeURIComponent(appId)}/job`,
+      { method: 'GET' }
+    );
+  }
+
+  public async cancelExpoImportJob(jobId: string) {
+    return this.request<void>(`/api/expo-import/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+    });
+  }
+
   public async getApps() {
     return this.request<AppDescriptor[]>(`/api/apps`, {
       method: 'GET',
@@ -1246,11 +1372,19 @@ export class ApiClient {
     });
   }
 
-  public async updateApp(payload: { name?: string }) {
-    return this.request<void>(`${this.appScope()}`, {
+  public async updateAppName(name: string) {
+    return this.request<void>(`${this.appScope()}/name`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  public async updateAppGitUrl(gitUrl: string) {
+    return this.request<void>(`${this.appScope()}/git-url`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gitUrl }),
     });
   }
 
@@ -1612,6 +1746,21 @@ export class ApiClient {
       {
         method: 'GET',
       }
+    );
+  }
+
+  public async getUpdatePatches(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<BundlePatchRecord[]>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/patches`,
+      { method: 'GET' }
+    );
+  }
+  // Plans the patches toward this update again, as its publish did, and says
+  // how many it scheduled: zero when no earlier update of the platform exists.
+  public async recomputeUpdatePatches(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<{ scheduled: number }>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/patches/recompute`,
+      { method: 'POST' }
     );
   }
 

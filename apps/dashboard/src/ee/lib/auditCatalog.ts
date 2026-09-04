@@ -48,6 +48,7 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
     actions: [
       'app.created',
       'app.renamed',
+      'app.git_url_updated',
       'app.deleted',
       'channel.created',
       'channel.deleted',
@@ -68,6 +69,7 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       'channel_rollout.ended',
       'update_rollout.set',
       'update_rollout.reverted',
+      'update_patches.recomputed',
     ],
   },
   {

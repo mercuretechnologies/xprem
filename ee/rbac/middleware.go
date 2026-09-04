@@ -16,38 +16,35 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// UserLookup is the one read the middlewares need from the users store. It is
-// nil in stateless mode, where the session claim (the single ADMIN_EMAIL
-// account) is authoritative.
+// UserLookup resolves a user id to its row; nil in stateless mode.
 type UserLookup interface {
 	GetUserByID(ctx context.Context, id string) (store.User, error)
 }
 
-// resolveSubject authenticates the request as a dashboard account and
-// resolves its admin flag from a fresh users-table read. On failure it writes
-// the response and returns ok=false.
-func (s *RBACService) resolveSubject(w http.ResponseWriter, r *http.Request) (Subject, bool) {
+// resolveSubject reads the dashboard account the auth middleware resolved. On
+// failure it writes the response and returns ok=false.
+func resolveSubject(w http.ResponseWriter, r *http.Request) (Subject, bool) {
 	principal := services.PrincipalFromContext(r.Context())
 	if principal == nil {
 		handlers.RenderError(w, http.StatusForbidden, "This action requires a dashboard session")
 		return Subject{}, false
 	}
-	if s.userLookup == nil {
-		// Stateless mode: the single ADMIN_EMAIL account is always an admin
-		return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}, true
-	}
-	user, err := s.userLookup.GetUserByID(r.Context(), principal.UserId)
-	if err != nil {
-		// Only a missing row means the account is gone; an infrastructure
-		// failure must not read as a dead session.
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-			handlers.RenderError(w, http.StatusUnauthorized, "Invalid token")
-		} else {
-			handlers.RenderError(w, http.StatusInternalServerError, "Could not verify the account")
-		}
-		return Subject{}, false
-	}
-	return Subject{UserID: principal.UserId, IsAdmin: user.IsAdmin}, true
+	return subjectFor(principal), true
+}
+
+// grantContextKey carries the grant RequireAppVisible loaded so that
+// RequirePermission judges the same row instead of reading it again.
+type grantContextKey struct{}
+
+func withGrant(ctx context.Context, grant *AppGrant) context.Context {
+	return context.WithValue(ctx, grantContextKey{}, grant)
+}
+
+// grantFromContext returns the grant loaded earlier in the request; loaded is
+// false when no middleware stored one (admins and the community fallback).
+func grantFromContext(ctx context.Context) (grant *AppGrant, loaded bool) {
+	grant, loaded = ctx.Value(grantContextKey{}).(*AppGrant)
+	return grant, loaded
 }
 
 // RequirePermission guards one app-scoped dashboard action: admins pass,
@@ -72,7 +69,7 @@ func authorizeRequest(
 	perm Permission,
 	fallback Fallback,
 ) bool {
-	subject, ok := service.resolveSubject(w, r)
+	subject, ok := resolveSubject(w, r)
 	if !ok {
 		return false
 	}
@@ -81,7 +78,13 @@ func authorizeRequest(
 		handlers.RenderError(w, http.StatusBadRequest, "invalid app id")
 		return false
 	}
-	if err := service.Authorize(r.Context(), subject, appId, perm, fallback); err != nil {
+	var err error
+	if grant, loaded := grantFromContext(r.Context()); loaded {
+		err = grantAllows(grant, perm)
+	} else {
+		err = service.Authorize(r.Context(), subject, appId, perm, fallback)
+	}
+	if err != nil {
 		service.recordDenied(r, subject, appId, err, map[string]any{"permission": string(perm)})
 		renderAuthorizeError(w, err)
 		return false
@@ -157,19 +160,23 @@ func RequireAppVisible(service *RBACService) mux.MiddlewareFunc {
 				handlers.RenderError(w, http.StatusForbidden, "This action requires a dashboard session")
 				return
 			}
-			subject, ok := service.resolveSubject(w, r)
+			subject, ok := resolveSubject(w, r)
 			if !ok {
 				return
 			}
-			visible, err := service.CanSeeApp(r.Context(), subject, mux.Vars(r)["APP_ID"])
+			appId := mux.Vars(r)["APP_ID"]
+			visible, grant, err := service.VisibleGrant(r.Context(), subject, appId)
 			if err != nil {
 				handlers.RenderError(w, http.StatusInternalServerError, "Could not verify permissions")
 				return
 			}
 			if !visible {
-				service.recordDenied(r, subject, mux.Vars(r)["APP_ID"], ErrNoAppAccess, map[string]any{})
+				service.recordDenied(r, subject, appId, ErrNoAppAccess, map[string]any{})
 				handlers.RenderError(w, http.StatusNotFound, "app not found")
 				return
+			}
+			if grant != nil {
+				r = r.WithContext(withGrant(r.Context(), grant))
 			}
 			next.ServeHTTP(w, r)
 		})

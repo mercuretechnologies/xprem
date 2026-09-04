@@ -227,6 +227,7 @@ export const UpdateHealthHistory = ({
   renderAnnotationDetails,
   breakdownLabel,
   onBreakdownSelect,
+  devicesLabel,
 }: {
   series: HealthHistorySeries[];
   from?: string;
@@ -239,6 +240,7 @@ export const UpdateHealthHistory = ({
   // nothing to rank, so it leaves this unset and keeps the legend.
   breakdownLabel?: string;
   onBreakdownSelect?: (key: string) => void;
+  devicesLabel?: string;
 }) => {
   const { selectedAppId } = useSelectedApp();
   const [metric, setMetric] = useState<Metric>('health');
@@ -332,6 +334,7 @@ export const UpdateHealthHistory = ({
         pointsByUpdate={query.data.updates}
         annotations={annotations}
         renderAnnotationDetails={renderAnnotationDetails}
+        devicesLabel={devicesLabel}
       />
     );
   }

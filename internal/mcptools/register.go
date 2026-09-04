@@ -71,6 +71,10 @@ type UpdateRolloutReader interface {
 	GetUpdateRollout(ctx context.Context, appId string, branchName string, runtimeVersion string) ([]types.RolloutUpdate, error)
 }
 
+type BundlePatchReader interface {
+	ListPatches(ctx context.Context, appId, branch, updateId string) ([]types.BundlePatch, error)
+}
+
 type CertificateReader interface {
 	RetrieveAppCertificate(ctx context.Context, appId string) (string, error)
 }
@@ -86,7 +90,7 @@ type ChannelWriter interface {
 }
 
 type DeploymentWriter interface {
-	CreateRollback(ctx context.Context, appId, platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
+	CreateRollback(ctx context.Context, appId string, platform types.Platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
 	RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error)
 	RepublishPublishGroup(ctx context.Context, appId, branchName, runtimeVersion, publishGroup string) (*services.GroupOperationResult, error)
 }
@@ -102,6 +106,7 @@ type Deps struct {
 	Channels       ChannelLister
 	UpdateFeed     UpdateFeedReader
 	UpdateRollouts UpdateRolloutReader
+	BundlePatches  BundlePatchReader
 	Certificates   CertificateReader
 	BranchWriter   BranchWriter
 	ChannelWriter  ChannelWriter
@@ -137,6 +142,7 @@ var registrations = []struct {
 	{register: registerGetUpdates},
 	{register: registerGetChannelRollouts},
 	{register: registerGetUpdateRollout},
+	{register: registerGetUpdatePatches},
 	{register: registerGetCertificate, access: &certificateAccess},
 	{register: registerGetServerConfig},
 	{register: registerCreateBranch, access: &branchCreateAccess},

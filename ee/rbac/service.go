@@ -75,11 +75,16 @@ type GrantInput struct {
 }
 
 // Subject is the authenticated account an authorization decision is made for.
-// IsAdmin must come from a fresh users-table read, never the JWT claim alone,
-// so a revoked admin loses access immediately.
+// IsAdmin is the principal's, which the auth layer reads from the users table
+// on every request (services.DashboardAuthService.AuthenticateSession,
+// oauth.OAuthService.AuthenticateMCPToken), never from the JWT claim alone.
 type Subject struct {
 	UserID  string
 	IsAdmin bool
+}
+
+func subjectFor(principal *services.DashboardPrincipal) Subject {
+	return Subject{UserID: principal.UserId, IsAdmin: principal.IsAdmin}
 }
 
 // RBACRepository persists roles and grants. A nil GetUserAppGrant result
@@ -132,7 +137,7 @@ func (e *ValidationError) Error() string {
 // is only consulted while Enabled() is true.
 type RBACService struct {
 	repo RBACRepository
-	// userLookup resolves the fresh admin flag and the grants-endpoint target;
+	// userLookup resolves the grants-endpoint target and audit display names;
 	// nil in stateless mode.
 	userLookup UserLookup
 	// licenseValid reports whether the enterprise license is active.
@@ -374,6 +379,11 @@ func (s *RBACService) Authorize(ctx context.Context, subject Subject, appID stri
 	if err != nil {
 		return err
 	}
+	return grantAllows(grant, perm)
+}
+
+// grantAllows is the member half of Authorize, for a grant already loaded.
+func grantAllows(grant *AppGrant, perm Permission) error {
 	if grant == nil {
 		return ErrNoAppAccess
 	}
@@ -486,17 +496,19 @@ func (s *RBACService) HasPermissionSomewhere(ctx context.Context, subject Subjec
 	return false, nil
 }
 
-// CanSeeApp is the read-path sibling of Authorize: any grant on the app makes
-// it visible to a member; admins see everything.
-func (s *RBACService) CanSeeApp(ctx context.Context, subject Subject, appID string) (bool, error) {
+// VisibleGrant is the read-path sibling of Authorize: any grant on the app
+// makes it visible to a member; admins see everything. The grant is returned
+// so the caller can judge permissions on it without a second read; it is nil
+// whenever visibility did not depend on one.
+func (s *RBACService) VisibleGrant(ctx context.Context, subject Subject, appID string) (visible bool, grant *AppGrant, err error) {
 	if subject.IsAdmin || !s.Enabled() {
-		return true, nil
+		return true, nil, nil
 	}
-	grant, err := s.repo.GetUserAppGrant(ctx, subject.UserID, appID)
+	grant, err = s.repo.GetUserAppGrant(ctx, subject.UserID, appID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return grant != nil, nil
+	return grant != nil, grant, nil
 }
 
 // VisibleApps returns the subject's app scope for list filtering.

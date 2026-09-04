@@ -2,13 +2,12 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
+	update2 "xprem/internal/update"
 	"xprem/internal/version"
 )
 
@@ -24,7 +23,19 @@ const (
 	appConfigCacheTTLSeconds = 10
 	// 5s keeps a channel remap or rollout promote near-instant for devices.
 	channelMappingCacheTTLSeconds = 5
-	updateTypeCacheTTLSeconds     = 10
+	// An update's type never changes once published; the TTL only reclaims
+	// storage.
+	updateTypeCacheTTLSeconds = update2.ImmutableCacheTTLSeconds
+	// An update's UUID hashes its id, branch and runtime version, so it can
+	// never designate another row. An unknown UUID is almost always the update
+	// embedded in the binary, which stays unknown; the short TTL only covers
+	// a lookup that raced a publish.
+	updateByUUIDCacheTTLSeconds        = update2.ImmutableCacheTTLSeconds
+	unknownUpdateByUUIDCacheTTLSeconds = 60
+	// A patch only disappears with its branch; a missing one is usually being
+	// computed by the job that the publish just enqueued.
+	patchExistsCacheTTLSeconds  = update2.ImmutableCacheTTLSeconds
+	missingPatchCacheTTLSeconds = 60
 	// Unlike its neighbours this key IS invalidated on write, but only where
 	// the cache is shared: with a local cache and several replicas, the write
 	// clears one process and the TTL bounds the rest.
@@ -33,33 +44,44 @@ const (
 	// this one absorbs a fleet-wide boot rather than operator edits. Short enough
 	// that a publish shows up the next time a tester opens the panel.
 	surfableBranchesCacheTTLSeconds = 15
+	// Publish and rollout writes do delete this key, but a delete only reaches
+	// the replica that handled the write; the TTL bounds every other one.
+	lastUpdateEnvelopeCacheTTLSeconds = 60
 )
 
 func appConfigCacheKey(appId string) string {
-	return fmt.Sprintf("app-config:%s:%s", version.Version, appId)
+	return cache2.Key("app-config", version.Version, appId)
 }
 
 func updateTypeCacheKey(update types.Update) string {
-	return fmt.Sprintf("update-type:%s:%s:%s:%s:%s", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	return cache2.Key("update-type", version.Version, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+}
+
+func updateByUUIDCacheKey(appId string, updateUUID string) string {
+	return cache2.Key("update-by-uuid", version.Version, appId, updateUUID)
+}
+
+func patchExistsCacheKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return cache2.Key("patch-exists", version.Version, appId, branch, targetUpdateUUID, sourceUpdateUUID)
 }
 
 func channelMappingCacheKey(appId string, channelName string) string {
-	return fmt.Sprintf("channel-mapping:%s:%s:%s", version.Version, appId, channelName)
+	return cache2.Key("channel-mapping", version.Version, appId, channelName)
 }
 
 func channelBranchSurfingCacheKey(appId string, channelName string) string {
-	return fmt.Sprintf("channel-branch-surfing:%s:%s:%s", version.Version, appId, channelName)
+	return cache2.Key("channel-branch-surfing", version.Version, appId, channelName)
 }
 
 // Keyed without the channel: the list is per app, runtime version and platform,
 // and the channel's pattern filters it afterwards, so channels share one entry.
 // The platform belongs in the key, not just the query — an iOS answer served to
 // an Android device would offer branches it cannot be given.
-func surfableBranchesCacheKey(appId string, runtimeVersion string, platform string) string {
-	return fmt.Sprintf("surfable-branches:%s:%s:%s:%s", version.Version, appId, runtimeVersion, platform)
+func surfableBranchesCacheKey(appId string, runtimeVersion string, platform types.Platform) string {
+	return cache2.Key("surfable-branches", version.Version, appId, runtimeVersion, string(platform))
 }
 
-func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform string) ([]types.SurfableBranch, error) {
+func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, appId string, runtimeVersion string, platform types.Platform) ([]types.SurfableBranch, error) {
 	branchCache := cache2.GetCache()
 	cacheKey := surfableBranchesCacheKey(appId, runtimeVersion, platform)
 	if branches, ok := cache2.GetJSON[[]types.SurfableBranch](branchCache, cacheKey); ok {
@@ -77,7 +99,7 @@ func cachedSurfableBranches(ctx context.Context, branchRepo BranchRepository, ap
 }
 
 func signatureCacheKey(appId string, keyFingerprint string, contentHash string) string {
-	return fmt.Sprintf("manifest-signature:%s:%s:%s:%s", version.Version, appId, keyFingerprint, contentHash)
+	return cache2.Key("manifest-signature", version.Version, appId, keyFingerprint, contentHash)
 }
 
 // carriesPlaintextSecret reports whether an app config holds material that
@@ -89,10 +111,13 @@ func carriesPlaintextSecret(appConfig config.AppConfig) bool {
 }
 
 // cachedAppConfig is the hot-path read of an app: manifest and asset requests
-// go through it on every poll. A config carrying a plaintext secret is served
-// but never stored, which costs nothing: those configs come from the flat env,
-// where the underlying read is already an in-memory map lookup.
+// go through it on every poll. Stateless mode skips the cache entirely: the
+// repo read is an in-memory map, and its configs carry plaintext secrets that
+// must never reach a shared cache anyway.
 func (s *ExpoProtocolService) cachedAppConfig(ctx context.Context, appId string) (config.AppConfig, error) {
+	if !config.IsDBMode() {
+		return s.appRepo.GetAppByID(ctx, appId)
+	}
 	appCache := cache2.GetCache()
 	if appConfig, ok := cache2.GetJSON[config.AppConfig](appCache, appConfigCacheKey(appId)); ok {
 		return appConfig, nil
@@ -126,22 +151,61 @@ func (s *ExpoProtocolService) cachedUpdateType(ctx context.Context, update types
 	return updateType, nil
 }
 
-// channelBranchMapping owns the delivery path's mapping cache: no cross-layer
-// invalidation, the TTL is the freshness bound for channel and rollout edits.
-// In stateless mode it stacks on the expo provider's own cache, so an edit
-// made outside the dashboard can take the provider's TTL plus this one to
-// reach devices.
-// An unknown or unmapped channel (nil) is never cached.
-func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
+// cachedUpdate is one UUID lookup; a nil Update records that the UUID is
+// unknown, so devices on the embedded update do not hit the repository.
+type cachedUpdate struct {
+	Update *types.Update `json:"update"`
+}
+
+func (s *ExpoProtocolService) cachedUpdateByUUID(ctx context.Context, appId string, updateUUID string) (*types.Update, error) {
+	updateCache := cache2.GetCache()
+	cacheKey := updateByUUIDCacheKey(appId, updateUUID)
+	if entry, ok := cache2.GetJSON[cachedUpdate](updateCache, cacheKey); ok {
+		return entry.Update, nil
+	}
+	update, err := s.updateRepo.GetUpdateByUUID(ctx, appId, updateUUID)
+	if err != nil {
+		return nil, err
+	}
+	ttl := updateByUUIDCacheTTLSeconds
+	if update == nil {
+		ttl = unknownUpdateByUUIDCacheTTLSeconds
+	}
+	cache2.SetJSON(updateCache, cacheKey, cachedUpdate{Update: update}, &ttl)
+	return update, nil
+}
+
+func (s *ExpoProtocolService) cachedPatchExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	existsCache := cache2.GetCache()
+	cacheKey := patchExistsCacheKey(appId, branch, targetUpdateUUID, sourceUpdateUUID)
+	if cached := existsCache.Get(cacheKey); cached != "" {
+		return cached == "1", nil
+	}
+	exists, err := s.bucket.BSDiffExists(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
+	if err != nil {
+		return false, err
+	}
+	value, ttl := "0", missingPatchCacheTTLSeconds
+	if exists {
+		value, ttl = "1", patchExistsCacheTTLSeconds
+	}
+	_ = existsCache.Set(cacheKey, value, &ttl)
+	return exists, nil
+}
+
+func (s *ExpoProtocolService) channelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
 	return cachedChannelMapping(ctx, s.channelRepo, appId, channelName)
 }
 
-// cachedChannelMapping is channelBranchMapping without the service, so the
-// branch list can read the same entry the delivery path already fills.
-func cachedChannelMapping(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (*expo.ChannelMapping, error) {
+func cachedChannelMapping(ctx context.Context, channelRepo ChannelRepository, appId string, channelName string) (*types.ChannelResolution, error) {
+	if !config.IsDBMode() {
+		// The expo provider keeps its own cached, invalidated-on-remap entry;
+		// a second layer here would only delay remaps by its TTL.
+		return channelRepo.GetChannelBranchMapping(ctx, appId, channelName)
+	}
 	mappingCache := cache2.GetCache()
 	cacheKey := channelMappingCacheKey(appId, channelName)
-	if mapping, ok := cache2.GetJSON[expo.ChannelMapping](mappingCache, cacheKey); ok {
+	if mapping, ok := cache2.GetJSON[types.ChannelResolution](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}
 	mapping, err := channelRepo.GetChannelBranchMapping(ctx, appId, channelName)
@@ -194,17 +258,13 @@ func cachedBranchSurfing(ctx context.Context, channelRepo ChannelRepository, app
 	return surfing.Enabled, surfing.Pattern
 }
 
-// invalidateBranchSurfingCache drops the delivery-path entry a setting write
-// stales. Best effort: see channelBranchSurfingCacheTTLSeconds.
-func invalidateBranchSurfingCache(appId string, channelName string) {
+// ForgetBranchSurfing drops the delivery-path entry a setting write stales.
+// Best effort: see channelBranchSurfingCacheTTLSeconds.
+func ForgetBranchSurfing(appId string, channelName string) {
 	cache2.GetCache().Delete(channelBranchSurfingCacheKey(appId, channelName))
 }
 
-func ForgetBranchSurfing(appId string, channelName string) {
-	invalidateBranchSurfingCache(appId, channelName)
-}
-
-func ForgetSurfableBranches(appId string, runtimeVersion string, platform string) {
+func ForgetSurfableBranches(appId string, runtimeVersion string, platform types.Platform) {
 	cache2.GetCache().Delete(surfableBranchesCacheKey(appId, runtimeVersion, platform))
 }
 

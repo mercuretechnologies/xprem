@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/types"
 )
 
 type AndroidCredential struct {
@@ -54,6 +55,7 @@ type App struct {
 	AwsSecretIDPrivate *string            `json:"aws_secret_id_private"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	GitUrl             *string            `json:"git_url"`
 }
 
 type AppIdentifier struct {
@@ -87,12 +89,33 @@ type AuditLogEvent struct {
 	Metadata      []byte             `json:"metadata"`
 }
 
+type Blob struct {
+	AppID       pgtype.UUID        `json:"app_id"`
+	Hash        string             `json:"hash"`
+	Size        int64              `json:"size"`
+	ContentType string             `json:"content_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type Branch struct {
 	ID        int64              `json:"id"`
 	AppID     pgtype.UUID        `json:"app_id"`
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	Protected bool               `json:"protected"`
+}
+
+type BundlePatch struct {
+	BranchID         int64              `json:"branch_id"`
+	TargetUpdateID   int64              `json:"target_update_id"`
+	SourceUpdateID   int64              `json:"source_update_id"`
+	Status           string             `json:"status"`
+	Reason           *string            `json:"reason"`
+	PatchSize        *int64             `json:"patch_size"`
+	FullDownloadSize *int64             `json:"full_download_size"`
+	Attempts         int32              `json:"attempts"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Channel struct {
@@ -298,19 +321,20 @@ type SsoIdentity struct {
 }
 
 type Update struct {
-	ID                int64              `json:"id"`
-	UpdateUuid        pgtype.UUID        `json:"update_uuid"`
-	BranchID          int64              `json:"branch_id"`
-	RuntimeVersionID  int64              `json:"runtime_version_id"`
-	UpdateType        int32              `json:"update_type"`
-	CommitHash        string             `json:"commit_hash"`
-	Message           *string            `json:"message"`
-	Platform          string             `json:"platform"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
-	RolloutPercentage *int32             `json:"rollout_percentage"`
-	ControlUpdateID   *int64             `json:"control_update_id"`
-	PublishGroup      pgtype.UUID        `json:"publish_group"`
+	ID                int64                     `json:"id"`
+	UpdateUuid        pgtype.UUID               `json:"update_uuid"`
+	BranchID          int64                     `json:"branch_id"`
+	RuntimeVersionID  int64                     `json:"runtime_version_id"`
+	UpdateType        int32                     `json:"update_type"`
+	CommitHash        string                    `json:"commit_hash"`
+	Message           *string                   `json:"message"`
+	Platform          string                    `json:"platform"`
+	CreatedAt         pgtype.Timestamptz        `json:"created_at"`
+	CheckedAt         pgtype.Timestamptz        `json:"checked_at"`
+	RolloutPercentage *int32                    `json:"rollout_percentage"`
+	ControlUpdateID   *int64                    `json:"control_update_id"`
+	PublishGroup      pgtype.UUID               `json:"publish_group"`
+	AssetMapping      *types.UpdateAssetMapping `json:"asset_mapping"`
 }
 
 type User struct {

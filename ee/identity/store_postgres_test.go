@@ -25,6 +25,7 @@ import (
 	"xprem/internal/database"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/pgdb"
+	pgstore "xprem/internal/store"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1145,11 +1146,11 @@ func TestUpdateHealthCounts(t *testing.T) {
 	require.NoError(t, store.TouchDevice(ctx, appID, d4, nil, nil, DeviceInfo{}))
 	require.NoError(t, store.RecordUpdateFailures(ctx, appID, d4, []string{updateB}, "crashed at launch", FailureTypeUpdate))
 
-	appUUID, err := toPgUUID(appID)
+	appUUID, err := pgstore.ParsePgUUID(appID)
 	require.NoError(t, err)
-	updateAUUID, err := toPgUUID(updateA)
+	updateAUUID, err := pgstore.ParsePgUUID(updateA)
 	require.NoError(t, err)
-	updateBUUID, err := toPgUUID(updateB)
+	updateBUUID, err := pgstore.ParsePgUUID(updateB)
 	require.NoError(t, err)
 
 	onA, err := store.engine.CountDevicesOnUpdate(ctx, pgdb.CountDevicesOnUpdateParams{AppID: appUUID, CurrentUpdateID: updateAUUID})

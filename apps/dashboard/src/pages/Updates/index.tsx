@@ -6,7 +6,6 @@ import {
   Box,
   Gauge,
   GitBranch,
-  GitCommitHorizontal,
   Layers3,
   Loader2,
   Search,
@@ -14,7 +13,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api, UpdateFeedRecord } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -35,7 +34,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
-import { UpdateDetailsRef, UpdateDetailsSheet } from '@/components/UpdateDetailsSheet';
 import {
   ManagedUpdateRollout,
   UpdateRolloutManagerSheet,
@@ -49,6 +47,9 @@ import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
 import { HealthBadge } from '@/pages/Updates/components/HealthBadge';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
+import { shortRuntimeVersion, updateDetailsPath, updateTitle } from '@/lib/update-format';
+import { GitCommitLink } from '@/components/GitCommitLink';
+import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
 
 type FeedGroup = {
   key: string;
@@ -57,14 +58,7 @@ type FeedGroup = {
 };
 
 type FeedFilterKey =
-  | 'branch'
-  | 'runtimeVersion'
-  | 'platform'
-  | 'uuid'
-  | 'groupId'
-  | 'commitHash'
-  | 'from'
-  | 'to';
+  'branch' | 'runtimeVersion' | 'platform' | 'uuid' | 'groupId' | 'commitHash' | 'from' | 'to';
 
 type FeedFilters = Record<FeedFilterKey, string>;
 type DebouncedFilterKey = 'uuid' | 'groupId' | 'commitHash';
@@ -133,8 +127,6 @@ const PlatformIcon = ({ platform }: { platform: string }) => {
   );
 };
 
-const shortId = (value: string) => (value.length > 10 ? value.slice(0, 8) : value);
-
 const UpdateRolloutBadge = ({ percentage }: { percentage: number }) => (
   <Badge className="h-5 whitespace-nowrap border-emerald-400/25 bg-emerald-400/10 px-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
     <Gauge className="h-2.5 w-2.5" />
@@ -147,14 +139,7 @@ const RuntimeLabel = ({ value }: { value: string }) => (
     className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2 py-1 text-xs font-medium text-amber-800 dark:border-amber-300/20 dark:bg-amber-300/[0.07] dark:text-amber-100"
     title={value}>
     <Box className="h-3 w-3 shrink-0 text-amber-600 dark:text-amber-300/80" />
-    <span className="truncate">{value}</span>
-  </span>
-);
-
-const CommitLabel = ({ value }: { value: string }) => (
-  <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/20 bg-primary/[0.07] px-2 py-1 text-xs font-medium text-link">
-    <GitCommitHorizontal className="h-3 w-3 text-link/80" />
-    {shortId(value)}
+    <span className="truncate">{shortRuntimeVersion(value)}</span>
   </span>
 );
 
@@ -174,7 +159,11 @@ export const Updates = () => {
   const [managedRollout, setManagedRollout] = useState<ManagedUpdateRollout | null>(null);
   const [isRollbackOpen, setIsRollbackOpen] = useState(false);
   const [republishTarget, setRepublishTarget] = useState<RepublishTarget | null>(null);
-  const sheetRef = useRef<UpdateDetailsRef>(null);
+  const navigate = useNavigate();
+  // The filters travel in the location state so the update page can bring the
+  // reader back to the same view of the feed.
+  const openUpdate = (update: UpdateFeedRecord) =>
+    navigate(updateDetailsPath(update, 'updates'), { state: { search: searchParams.toString() } });
 
   const filters: FeedFilters = {
     branch: searchParams.get('branch') ?? '',
@@ -255,6 +244,11 @@ export const Updates = () => {
     queryKey: ['runtimeVersions', selectedAppId, filters.branch],
     queryFn: () => api.getRuntimeVersions(filters.branch),
     enabled: !!selectedAppId && !!filters.branch,
+  });
+  const appDetailsQuery = useQuery({
+    queryKey: ['appDetails', selectedAppId],
+    queryFn: () => api.getApp(selectedAppId!),
+    enabled: !!selectedAppId,
   });
 
   const updates = useMemo(() => query.data?.pages.flatMap(page => page.items) ?? [], [query.data]);
@@ -428,7 +422,6 @@ export const Updates = () => {
           )
         }
       />
-      <UpdateDetailsSheet ref={sheetRef} />
       <UpdateRolloutManagerSheet
         rollout={managedRollout}
         onClose={() => setManagedRollout(null)}
@@ -600,9 +593,14 @@ export const Updates = () => {
                     </span>
                     <span>{rollout.branch}</span>
                     <span aria-hidden="true">·</span>
-                    <span>{rollout.runtimeVersion}</span>
+                    <span title={rollout.runtimeVersion}>
+                      {shortRuntimeVersion(rollout.runtimeVersion)}
+                    </span>
                     <span aria-hidden="true">·</span>
-                    <span>{shortId(rollout.commitHash)}</span>
+                    <GitCommitLink
+                      commitHash={rollout.commitHash}
+                      gitUrl={appDetailsQuery.data?.gitUrl}
+                    />
                   </div>
                 </div>
               </div>
@@ -627,17 +625,17 @@ export const Updates = () => {
       )}
 
       <div className="overflow-hidden rounded-lg border bg-card shadow-card">
-        <Table className="min-w-[1250px] table-fixed">
+        <Table className="min-w-[1150px] table-fixed">
           <TableHeader>
             <TableRow>
               <TableHead className={canPublishUpdate ? 'w-[26%]' : 'w-[30%]'}>Update</TableHead>
               <TableHead className="w-[11%]">Branch</TableHead>
-              <TableHead className="w-[12%]">Runtime</TableHead>
+              <TableHead className="w-[8%]">Runtime</TableHead>
               <TableHead className="w-[7%]">Platform</TableHead>
               <TableHead className="w-[8%] text-right">Devices</TableHead>
               <TableHead className="w-[9%]">Health</TableHead>
-              <TableHead className="w-[9%]">Commit</TableHead>
-              <TableHead className={canPublishUpdate ? 'w-[12%]' : 'w-[14%]'}>Published</TableHead>
+              <TableHead className="w-[15%]">Commit</TableHead>
+              <TableHead className={canPublishUpdate ? 'w-[10%]' : 'w-[12%]'}>Published</TableHead>
               {canPublishUpdate && <TableHead className="w-[6%]" />}
             </TableRow>
           </TableHeader>
@@ -672,9 +670,7 @@ export const Updates = () => {
                   <Fragment key={group.key}>
                     <TableRow
                       className="cursor-pointer"
-                      onClick={() =>
-                        isGroup ? toggleGroup(group.key) : sheetRef.current?.openSheet(primary)
-                      }>
+                      onClick={() => (isGroup ? toggleGroup(group.key) : openUpdate(primary))}>
                       <TableCell className="min-w-0 overflow-hidden">
                         <div className="flex min-w-0 items-start gap-2.5">
                           <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground">
@@ -692,7 +688,13 @@ export const Updates = () => {
                             <p
                               className="block max-w-full truncate font-medium text-foreground"
                               title={primary.message || `Update ${primary.updateId}`}>
-                              {primary.message || `Update ${primary.updateId}`}
+                              <LinkedUpdateTitle
+                                title={
+                                  updateTitle(primary.message, primary.commitHash) ||
+                                  `Update ${primary.updateId}`
+                                }
+                                gitUrl={appDetailsQuery.data?.gitUrl}
+                              />
                             </p>
                             <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                               {isGroup && (
@@ -733,10 +735,13 @@ export const Updates = () => {
                         <HealthBadge health={groupHealth} />
                       </TableCell>
                       <TableCell>
-                        <CommitLabel value={primary.commitHash} />
+                        <GitCommitLink
+                          commitHash={primary.commitHash}
+                          gitUrl={appDetailsQuery.data?.gitUrl}
+                        />
                       </TableCell>
                       <TableCell>
-                        <TimestampCell dateString={primary.createdAt} />
+                        <TimestampCell dateString={primary.createdAt} compact />
                       </TableCell>
                       {canPublishUpdate && (
                         <TableCell className="text-right">
@@ -754,7 +759,9 @@ export const Updates = () => {
                                 setRepublishTarget({
                                   branch: primary.branch,
                                   runtimeVersion: primary.runtimeVersion,
-                                  label: primary.message || `Update ${primary.updateId}`,
+                                  label:
+                                    updateTitle(primary.message, primary.commitHash) ||
+                                    `Update ${primary.updateId}`,
                                   platforms,
                                   ...(isGroup
                                     ? { publishGroup: group.publishGroup as string }
@@ -773,7 +780,7 @@ export const Updates = () => {
                         <TableRow
                           key={`${group.key}:${update.updateId}`}
                           className="animate-in cursor-pointer bg-muted/20 fade-in slide-in-from-top-1 duration-150 motion-reduce:animate-none"
-                          onClick={() => sheetRef.current?.openSheet(update)}>
+                          onClick={() => openUpdate(update)}>
                           <TableCell>
                             <div className="ml-9 min-w-0 border-l-2 border-link/40 pl-4">
                               <div className="flex flex-wrap items-center gap-2">
@@ -818,10 +825,13 @@ export const Updates = () => {
                             <HealthBadge health={healthByUuid[update.updateUUID]} />
                           </TableCell>
                           <TableCell>
-                            <CommitLabel value={update.commitHash} />
+                            <GitCommitLink
+                              commitHash={update.commitHash}
+                              gitUrl={appDetailsQuery.data?.gitUrl}
+                            />
                           </TableCell>
                           <TableCell>
-                            <TimestampCell dateString={update.createdAt} />
+                            <TimestampCell dateString={update.createdAt} compact />
                           </TableCell>
                           {/* No per-member republish: see the group row. */}
                           {canPublishUpdate && <TableCell />}

@@ -9,7 +9,6 @@ import (
 	"xprem/internal/branch"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 )
@@ -35,7 +34,7 @@ type ChannelRepository interface {
 	DeleteChannel(ctx context.Context, channelName string, appId string) error
 	GetChannelNameByBranchName(ctx context.Context, appId string, branchName string) ([]string, error)
 	GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error)
-	GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error)
+	GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error)
 	// GetBranchSurfing returns nil, nil when the channel does not exist.
 	GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error)
 	SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error
@@ -93,7 +92,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, appId string, branch
 	// A channel that did not exist is now cached as "no surfing" for the TTL, so
 	// creating one under a name that was ever asked for would answer 404 until
 	// that entry aged out.
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return channelId, nil
 }
 
@@ -117,7 +116,7 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelName string, 
 	// deleted channel would keep answering /branch_lists for the rest of the TTL
 	// — and a channel recreated under the same name would inherit the permission
 	// it was never given.
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return nil
 }
 
@@ -157,7 +156,7 @@ func (s *ChannelService) SetBranchSurfing(ctx context.Context, appId string, cha
 		},
 	})
 	invalidateChannelCaches(appId)
-	invalidateBranchSurfingCache(appId, channelName)
+	ForgetBranchSurfing(appId, channelName)
 	return nil
 }
 
@@ -179,7 +178,7 @@ const (
 // returned unless all is set, but Total always counts every match, so a client
 // can tell it is looking at part of the list. It refuses a channel that does not
 // exist or has branch surfing off.
-func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, platform string, all bool) (types.SurfableBranchList, error) {
+func (s *ChannelService) ListSurfableBranches(ctx context.Context, appId string, channelName string, runtimeVersion string, platform types.Platform, all bool) (types.SurfableBranchList, error) {
 	if err := validation.Name("channelName", channelName); err != nil {
 		return types.SurfableBranchList{}, err
 	}

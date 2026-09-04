@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"xprem/internal/services"
 	"xprem/internal/store"
+	"xprem/internal/types"
 	"xprem/internal/validation"
 
 	"github.com/google/uuid"
@@ -64,12 +65,13 @@ func (h *BranchListHandler) HandleBranchList(w http.ResponseWriter, r *http.Requ
 	// Same rule as the manifest route, which resolves per platform: a list built
 	// without it would offer branches whose only update is for the other one, and
 	// picking those would quietly land the device back on its channel's branch.
-	platform := r.Header.Get("expo-platform")
-	if platform == "" {
-		platform = r.URL.Query().Get("platform")
+	rawPlatform := r.Header.Get("expo-platform")
+	if rawPlatform == "" {
+		rawPlatform = r.URL.Query().Get("platform")
 	}
-	if platform != "ios" && platform != "android" {
-		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, platform)
+	platform, err := types.ParsePlatform(rawPlatform)
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, rawPlatform)
 		http.Error(w, "Invalid platform. Expected \"ios\" or \"android\".", http.StatusBadRequest)
 		return
 	}

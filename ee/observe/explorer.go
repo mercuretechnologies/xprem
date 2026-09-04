@@ -19,6 +19,7 @@ import (
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 )
 
 const embeddedUpdateID = "00000000-0000-0000-0000-000000000000"
@@ -195,31 +196,11 @@ func NewExplorer(postgres *database.Engine, clickhouse *clickhouse.Engine) *Expl
 	return &Explorer{postgres: postgres, clickhouse: clickhouse}
 }
 
-func toPGUUID(value string) (pgtype.UUID, error) {
-	parsed, err := uuid.Parse(value)
-	if err != nil {
-		return pgtype.UUID{}, err
-	}
-	return pgtype.UUID{Bytes: parsed, Valid: true}, nil
-}
-
-func toPGUUIDs(values []string) ([]pgtype.UUID, error) {
-	out := make([]pgtype.UUID, 0, len(values))
-	for _, value := range values {
-		parsed, err := toPGUUID(value)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, parsed)
-	}
-	return out, nil
-}
-
 func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince time.Time, filters [][]byte) (context.Context, bool, error) {
 	if len(filters) == 0 {
 		return ctx, false, nil
 	}
-	appUUID, err := toPGUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return ctx, false, err
 	}
@@ -278,13 +259,13 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 	if len(query.UpdateGroupIDs) == 0 {
 		return query, false, nil
 	}
-	appUUID, err := toPGUUID(appID)
+	appUUID, err := store.ParsePgUUID(appID)
 	if err != nil {
 		return query, false, err
 	}
 	members := make([]string, 0, 2*len(query.UpdateGroupIDs))
 	for _, group := range query.UpdateGroupIDs {
-		groupUUID, err := toPGUUID(group)
+		groupUUID, err := store.ParsePgUUID(group)
 		if err != nil {
 			return query, false, err
 		}

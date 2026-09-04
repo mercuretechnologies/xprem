@@ -82,10 +82,10 @@ export const SelectBranch = ({
         isOpen={isCreateOpen}
         onClose={() => setIsCreateOpen(false)}
         onBranchCreated={async ({ branchId, branchName }) => {
-          // Pull the new branch into the list, then select it so it is mapped
-          // right away instead of making the user pick it again.
-          await refetch();
+          // Select the new branch before refreshing so the parent form cannot
+          // be submitted without its mapping if the refetch is slow.
           onChange(branchId, branchName);
+          await refetch();
         }}
       />
     </>
