@@ -23,6 +23,12 @@ on:
 permissions:
   contents: read
 
+# Two runs for the same tag would both pass the "already exists" check before
+# either pushes. Queue them instead.
+concurrency:
+  group: create-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
   tag:
     runs-on: ubuntu-latest
@@ -49,13 +55,13 @@ jobs:
 
       - name: Mint xprem-release App token
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout ${{ inputs.branch }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/heads/${{ inputs.branch }}
           token: ${{ steps.app.outputs.token }}
