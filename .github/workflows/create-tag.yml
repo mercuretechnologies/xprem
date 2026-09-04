@@ -5,6 +5,7 @@ name: Create tag
 # leaked user token cannot trigger release.yml. Run it with:
 #
 #   gh workflow run create-tag -f tag=v3.2.0
+#   gh workflow run create-tag -f tag=v2.3.1 -f branch=release/v2.3
 #
 # The tag is pushed with an App installation token (not GITHUB_TOKEN, whose
 # pushes never trigger other workflows), so release.yml starts as usual.
@@ -14,8 +15,8 @@ on:
       tag:
         description: "Tag to create (vX.Y.Z, or vX.Y.Z-beta1 / -alpha2 / -rc1)"
         required: true
-      ref:
-        description: "Commit or branch to tag"
+      branch:
+        description: "Branch to tag: main or release/*"
         required: false
         default: "main"
 
@@ -29,15 +30,20 @@ jobs:
     # main: a workflow on any other branch reads them as empty.
     environment: create-tag
     steps:
-      - name: Validate tag name
+      - name: Validate inputs
         env:
           TAG: ${{ inputs.tag }}
+          BRANCH: ${{ inputs.branch }}
         run: |
           # Only the suffixes release.yml recognises as pre-releases: anything
           # else (v1.2.3-test) would be published to npm as latest and as a
           # stable GitHub release.
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]*)?$ ]]; then
             echo "::error::Tag must look like v1.2.3, v1.2.3-beta1, v1.2.3-alpha2 or v1.2.3-rc1, got: $TAG"
+            exit 1
+          fi
+          if [[ ! "$BRANCH" =~ ^(main|release/[0-9A-Za-z_-][0-9A-Za-z._-]*(/[0-9A-Za-z_-][0-9A-Za-z._-]*)*)$ ]]; then
+            echo "::error::Only main or a release/* branch can be tagged, got: $BRANCH"
             exit 1
           fi
 
@@ -48,10 +54,10 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      - name: Checkout ${{ inputs.ref }}
+      - name: Checkout ${{ inputs.branch }}
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: refs/heads/${{ inputs.branch }}
           token: ${{ steps.app.outputs.token }}
 
       - name: Create and push tag
