@@ -1,0 +1,82 @@
+name: Create tag
+
+# The only way a v* tag gets created. The "Protect release tags" ruleset lets
+# nothing but the xprem-release GitHub App create, move or delete v* tags, so a
+# leaked user token cannot trigger release.yml. Run it with:
+#
+#   gh workflow run create-tag -f tag=v3.2.0
+#   gh workflow run create-tag -f tag=v2.3.1 -f branch=release/v2.3
+#
+# The tag is pushed with an App installation token (not GITHUB_TOKEN, whose
+# pushes never trigger other workflows), so release.yml starts as usual.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create (vX.Y.Z, or vX.Y.Z-beta1 / -alpha2 / -rc1)"
+        required: true
+      branch:
+        description: "Branch to tag: main or release/*"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+# Two runs for the same tag would both pass the "already exists" check before
+# either pushes. Queue them instead.
+concurrency:
+  group: create-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    # The App secrets live in this environment, which only accepts runs from
+    # main: a workflow on any other branch reads them as empty.
+    environment: create-tag
+    steps:
+      - name: Validate inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          # Only the suffixes release.yml recognises as pre-releases: anything
+          # else (v1.2.3-test) would be published to npm as latest and as a
+          # stable GitHub release.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)[0-9]*)?$ ]]; then
+            echo "::error::Tag must look like v1.2.3, v1.2.3-beta1, v1.2.3-alpha2 or v1.2.3-rc1, got: $TAG"
+            exit 1
+          fi
+          if [[ ! "$BRANCH" =~ ^(main|release/[0-9A-Za-z_-][0-9A-Za-z._-]*(/[0-9A-Za-z_-][0-9A-Za-z._-]*)*)$ ]]; then
+            echo "::error::Only main or a release/* branch can be tagged, got: $BRANCH"
+            exit 1
+          fi
+
+      - name: Mint xprem-release App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout ${{ inputs.branch }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/heads/${{ inputs.branch }}
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists"
+            exit 1
+          fi
+          git config user.name "xprem-release[bot]"
+          git config user.email "324931244+xprem-release[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "refs/tags/$TAG"
+          echo "Tagged $(git rev-parse --short HEAD) as $TAG"
