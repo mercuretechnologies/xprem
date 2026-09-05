@@ -3,8 +3,6 @@ package store_test
 import (
 	"context"
 	"encoding/base64"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +12,9 @@ import (
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/services"
 	"xprem/internal/store"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVaultUUIDAliasesRoundTrip(t *testing.T) {
@@ -25,14 +26,33 @@ func TestVaultUUIDAliasesRoundTrip(t *testing.T) {
 	t.Setenv("AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID", "")
 	t.Setenv("DB_KEYS_MASTER_KEY_B64", base64.StdEncoding.EncodeToString(master))
 	service := services.NewCredentialsService(credentialsStore, identifiers)
-	input := services.AndroidCredentialsInput{KeyAlias: "upload", KeystoreBase64: base64.StdEncoding.EncodeToString(androidtest.JKSKeystore("store-pass", "key-pass", "upload")), KeystorePassword: "store-pass", KeyPassword: "key-pass"}
-	require.NoError(t, service.SaveAndroidCredentials(ctx, appId, strings.ToUpper(identifierId), input))
-	stored, err := credentialsStore.GetAndroidCredentials(ctx, identifierId)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	_, err = crypto.UnsealAESGCM(stored.SealedKeystore, master, []byte(identifierId+"|android_credentials|keystore"))
-	if err != nil {
-		t.Errorf("credential saved through accepted UUID spelling cannot be decrypted with canonical database ID: %v", err)
+	keystore := androidtest.JKSKeystore("store-pass", "key-pass", "upload")
+	input := services.AndroidCredentialsInput{
+		KeyAlias: "upload", KeystoreBase64: base64.StdEncoding.EncodeToString(keystore),
+		KeystorePassword: "store-pass", KeyPassword: "key-pass",
+		GoogleServiceAccountKeyJSON: `{"type":"service_account"}`,
+	}
+	for _, spelling := range []string{strings.ToUpper(identifierId), "{" + identifierId + "}", strings.ReplaceAll(identifierId, "-", "")} {
+		t.Run(spelling, func(t *testing.T) {
+			require.NoError(t, service.SaveAndroidCredentials(ctx, appId, spelling, input))
+			stored, err := credentialsStore.GetAndroidCredentials(ctx, identifierId)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			require.NotNil(t, stored.SealedGoogleServiceAccountKey)
+			for _, field := range []struct {
+				name, sealed string
+				want         []byte
+			}{
+				{"keystore", stored.SealedKeystore, keystore},
+				{"keystore_password", stored.SealedKeystorePassword, []byte(input.KeystorePassword)},
+				{"key_password", stored.SealedKeyPassword, []byte(input.KeyPassword)},
+				{"google_service_account_key", *stored.SealedGoogleServiceAccountKey, []byte(input.GoogleServiceAccountKeyJSON)},
+			} {
+				plain, err := crypto.UnsealAESGCM(field.sealed, master, []byte(identifierId+"|android_credentials|"+field.name))
+				require.NoError(t, err, field.name)
+				require.Equal(t, field.want, plain, field.name)
+			}
+		})
 	}
 }
 
@@ -64,9 +84,9 @@ func TestDeleteIdentifierPreservesConcurrentCredentials(t *testing.T) {
 	var remaining int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM android_credentials WHERE app_identifier_id=$1", identifierId).Scan(&remaining))
 	t.Logf("delete error=%v, credentials remaining=%d", deleteErr, remaining)
-	if deleteErr == nil || remaining != 1 {
-		t.Error("guarded delete erased credentials committed by concurrent upload")
-	}
+	var hasCredentials *store.ErrIdentifierHasCredentials
+	require.ErrorAs(t, deleteErr, &hasCredentials)
+	require.Equal(t, 1, remaining)
 }
 
 func TestDeleteAppWithBoundEnvironment(t *testing.T) {

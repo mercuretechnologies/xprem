@@ -62,7 +62,11 @@ func validJKSStructure(data []byte) bool {
 
 func readJKSBlob(s *cryptobyte.String, out *cryptobyte.String) bool {
 	var length uint32
-	return s.ReadUint32(&length) && uint64(length) <= uint64(len(*s)) && s.ReadBytes((*[]byte)(out), int(length))
+	if !s.ReadUint32(&length) || uint64(length) > uint64(len(*s)) {
+		return false
+	}
+	*out = (*s)[:int(length)]
+	return s.Skip(int(length))
 }
 
 func validJKSKeyEnvelope(key cryptobyte.String) bool {

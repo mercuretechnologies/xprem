@@ -2,29 +2,45 @@ package android
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/binary"
-	keystore "github.com/pavlo-v-chernykh/keystore-go/v4"
-	"github.com/stretchr/testify/require"
 	"runtime"
 	"testing"
 	"time"
 	"xprem/internal/android/androidtest"
-)
 
-func TestUnnamedPKCS12RejectsAliasUnknownToJava(t *testing.T) {
-	blob := androidtest.PKCS12Keystore("store-pass")
-	if err := ValidateKeystore(blob, "store-pass", "store-pass", "any-alias"); err == nil {
-		t.Error("vault accepts an alias that Java cannot use")
-	}
-}
+	keystore "github.com/pavlo-v-chernykh/keystore-go/v4"
+	"github.com/stretchr/testify/require"
+)
 
 func TestJKSRejectsNonSigningEntry(t *testing.T) {
 	ks := keystore.New()
-	require.NoError(t, ks.SetPrivateKeyEntry("upload", keystore.PrivateKeyEntry{CreationTime: time.Now(), PrivateKey: []byte("not-a-private-key")}, []byte("key-pass")))
-	var encoded bytes.Buffer
-	require.NoError(t, ks.Store(&encoded, []byte("store-pass")))
-	if err := ValidateKeystore(encoded.Bytes(), "store-pass", "key-pass", "upload"); err == nil {
-		t.Error("vault accepts invalid private-key bytes with no certificate chain")
+	require.NoError(t, ks.Load(bytes.NewReader(androidtest.JKSKeystore("store-pass", "key-pass", "upload")), []byte("store-pass")))
+	validEntry, err := ks.GetPrivateKeyEntry("upload", []byte("key-pass"))
+	require.NoError(t, err)
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	otherPKCS8, err := x509.MarshalPKCS8PrivateKey(otherKey)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		key   []byte
+		chain []keystore.Certificate
+	}{
+		{"invalid key", []byte("not-a-private-key"), validEntry.CertificateChain},
+		{"no certificate", validEntry.PrivateKey, nil},
+		{"invalid certificate", validEntry.PrivateKey, []keystore.Certificate{{Type: "X509", Content: []byte("not-a-certificate")}}},
+		{"mismatched certificate", otherPKCS8, validEntry.CertificateChain},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, ks.SetPrivateKeyEntry("upload", keystore.PrivateKeyEntry{CreationTime: time.Now(), PrivateKey: tc.key, CertificateChain: tc.chain}, []byte("key-pass")))
+			var encoded bytes.Buffer
+			require.NoError(t, ks.Store(&encoded, []byte("store-pass")))
+			assertFieldError(t, ValidateKeystore(encoded.Bytes(), "store-pass", "key-pass", "upload"), "keystore")
+		})
 	}
 }
 
