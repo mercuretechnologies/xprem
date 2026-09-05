@@ -35,7 +35,14 @@ if ! command -v clickhouse >/dev/null 2>&1; then
   echo "deb [signed-by=/usr/share/keyrings/clickhouse-keyring.gpg arch=${ARCH}] https://packages.clickhouse.com/deb stable main" \
     | sudo tee /etc/apt/sources.list.d/clickhouse.list >/dev/null
   sudo apt-get update -y
-  sudo apt-get install -y clickhouse-server clickhouse-client
+  # The clickhouse-server postinst runs `clickhouse install`, which prompts for
+  # the default user's password whenever it can open a controlling terminal
+  # (DEBIAN_FRONTEND=noninteractive does not suppress it). `setsid --wait ...
+  # < /dev/null` detaches the process from any tty, so the prompt is skipped and
+  # the default user is left with an empty password (fine for local dev). This
+  # keeps the install non-interactive whether or not a tty is attached.
+  sudo DEBIAN_FRONTEND=noninteractive setsid --wait \
+    apt-get install -y clickhouse-server clickhouse-client < /dev/null
 else
   echo "    ClickHouse already installed"
 fi
