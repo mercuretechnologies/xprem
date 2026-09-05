@@ -38,12 +38,12 @@ type PublishedUpdate struct {
 	CreatedAt      string `json:"createdAt" jsonschema:"RFC3339 timestamp"`
 }
 
-func publishedUpdate(update types.Update, platform string) PublishedUpdate {
+func publishedUpdate(update types.Update, platform types.Platform) PublishedUpdate {
 	return PublishedUpdate{
 		UpdateId:       update.UpdateId,
 		Branch:         update.Branch,
 		RuntimeVersion: update.RuntimeVersion,
-		Platform:       platform,
+		Platform:       string(platform),
 		CreatedAt:      time.Unix(0, int64(update.CreatedAt)).UTC().Format(time.RFC3339),
 	}
 }
@@ -72,12 +72,13 @@ func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolR
 		if err := requireBranchRuntimeVersion(ctx, deps, input.AppId, input.Branch, input.RuntimeVersion); err != nil {
 			return nil, PublishOutput{}, err
 		}
-		platforms := []string{"ios", "android"}
+		platforms := []types.Platform{types.PlatformIOS, types.PlatformAndroid}
 		if input.Platform != "" {
-			if input.Platform != "ios" && input.Platform != "android" {
+			platform, err := types.ParsePlatform(input.Platform)
+			if err != nil {
 				return nil, PublishOutput{}, errors.New("platform must be ios or android")
 			}
-			platforms = []string{input.Platform}
+			platforms = []types.Platform{platform}
 		}
 
 		output := PublishOutput{Updates: []PublishedUpdate{}}
@@ -93,11 +94,11 @@ func rollbackHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToolR
 					log.Printf("mcp rollback_branch partially failed for user %s on app %s (%s/%s): rolled back %s, then %s failed: %v",
 						principal.UserId, input.AppId, input.Branch, input.RuntimeVersion, strings.Join(rolledBack, " and "), platform, err)
 					return nil, PublishOutput{}, errors.New("rolled back " + strings.Join(rolledBack, " and ") +
-						" but " + platform + " failed and is still serving the update; retry with platform=" + platform)
+						" but " + string(platform) + " failed and is still serving the update; retry with platform=" + string(platform))
 				}
 				return nil, PublishOutput{}, writeError(err, "roll back the branch", "mcp rollback_branch", principal, input.AppId)
 			}
-			rolledBack = append(rolledBack, platform)
+			rolledBack = append(rolledBack, string(platform))
 			output.Updates = append(output.Updates, publishedUpdate(*update, platform))
 		}
 		log.Printf("mcp rollback_branch: user %s rolled back %s/%s of app %s", principal.UserId, input.Branch, input.RuntimeVersion, input.AppId)

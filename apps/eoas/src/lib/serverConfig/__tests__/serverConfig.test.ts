@@ -68,6 +68,20 @@ describe('renderEnvFile', () => {
     expect(content).not.toContain('TRUST_GEOIP_HEADERS');
   });
 
+  it('writes SERVE_FROM_SUB_PATH only when pass-through routing was chosen', () => {
+    expect(renderEnvFile(baseChoices)).not.toContain('SERVE_FROM_SUB_PATH');
+    const env = parseEnvFile(
+      renderEnvFile({
+        ...baseChoices,
+        baseUrl: 'https://api.example.com/ota',
+        serveFromSubPath: true,
+      })
+    );
+    expect(env.SERVE_FROM_SUB_PATH).toBe('true');
+    // Inference keeps the var applicable on re-validation of the same file.
+    expect(validateEnvMap(env)).toEqual([]);
+  });
+
   it('renders optional vars commented out', () => {
     const content = renderEnvFile(baseChoices);
     expect(content).toContain('# PROMETHEUS_ENABLED=true');

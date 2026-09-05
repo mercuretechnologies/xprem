@@ -63,3 +63,25 @@ func (c *GenericCDN) ComputeRedirectionURLForAsset(appId, branch, runtimeVersion
 	}
 	return cdnUrl, nil
 }
+
+func (c *GenericCDN) ComputeRedirectionURLForBlob(appId, hash string) (string, error) {
+	return c.objectURL(bucket.BlobObjectKey(appId, hash))
+}
+
+func (c *GenericCDN) ComputeRedirectionURLForPatch(appId, branch, targetUpdateUUID, sourceUpdateUUID string) (string, error) {
+	return c.objectURL(bucket.BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (c *GenericCDN) objectURL(key string) (string, error) {
+	baseURL := ResolveCDNBaseURL()
+	keyPrefix := strings.TrimSuffix(bucket.ResolveKeyPrefix(), "/")
+	elems := []string{key}
+	if keyPrefix != "" {
+		elems = append([]string{keyPrefix}, elems...)
+	}
+	cdnUrl, err := url.JoinPath(baseURL, elems...)
+	if err != nil {
+		return "", err
+	}
+	return cdnUrl, nil
+}

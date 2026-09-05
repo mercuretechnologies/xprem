@@ -13,6 +13,7 @@ import (
 	"xprem/internal/database"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/store"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -66,13 +67,6 @@ func eventFromRow(row pgdb.AuditLogEvent) Event {
 	return event
 }
 
-func toPgTimestamptz(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
-}
-
 func (s *PostgresAuditStore) Insert(ctx context.Context, event Event) (Event, error) {
 	var appID *string
 	if event.AppID != "" {
@@ -104,8 +98,8 @@ func (s *PostgresAuditStore) List(ctx context.Context, params ListParams) ([]Eve
 		Action:       params.Action,
 		AppID:        params.AppID,
 		Outcome:      params.Outcome,
-		OccurredFrom: toPgTimestamptz(params.From),
-		OccurredTo:   toPgTimestamptz(params.To),
+		OccurredFrom: store.ToPgTimestamptz(params.From),
+		OccurredTo:   store.ToPgTimestamptz(params.To),
 		BeforeID:     params.BeforeID,
 		RowLimit:     int32(params.Limit),
 	})
@@ -158,12 +152,9 @@ func (s *PostgresAuditStore) ExportCursor(ctx context.Context) (int64, error) {
 	return cursor, nil
 }
 
-// exportAdvisoryLockID serializes archive exporters across replicas.
-const exportAdvisoryLockID = 823672943
-
 // TryExportLock claims the "one exporter at a time" advisory lock.
 func (s *PostgresAuditStore) TryExportLock(ctx context.Context) (func(), bool, error) {
-	return postgres.TryAdvisoryLock(ctx, s.engine.DB, exportAdvisoryLockID, "audit export")
+	return postgres.TryAdvisoryLock(ctx, s.engine.DB, postgres.AuditExportLockID, "audit export")
 }
 
 func (s *PostgresAuditStore) AdvanceExportCursor(ctx context.Context, from int64, to int64) (bool, error) {
@@ -183,8 +174,8 @@ func (s *PostgresAuditStore) Count(ctx context.Context, filters ListFilters) (in
 		Action:       filters.Action,
 		AppID:        filters.AppID,
 		Outcome:      filters.Outcome,
-		OccurredFrom: toPgTimestamptz(filters.From),
-		OccurredTo:   toPgTimestamptz(filters.To),
+		OccurredFrom: store.ToPgTimestamptz(filters.From),
+		OccurredTo:   store.ToPgTimestamptz(filters.To),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to count audit events in database: %w", err)

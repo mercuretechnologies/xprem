@@ -97,6 +97,18 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+/** The path of the URL without trailing slash; '' when at the root or invalid. */
+function pathPrefix(baseUrl: string | undefined): string {
+  if (!baseUrl) {
+    return '';
+  }
+  try {
+    return new URL(baseUrl).pathname.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
 function shortPasswordHint(missing: string[]): string {
   const short = missing.map(rule =>
     rule
@@ -156,6 +168,7 @@ const DELIVERY_CHOICES: Record<string, { title: string; description: string }> =
 
 type WizardState = {
   baseUrl?: string;
+  serveFromSubPath?: boolean;
   jwtSecret?: string;
   dbUrl?: string;
   awsAuth?: AwsAuth;
@@ -192,8 +205,21 @@ function summaryLines(state: WizardState): string {
   const storageChoice = STORAGE_CHOICES.find(choice => choice.value === state.storagePick);
   const set = ACCENT;
   const later = chalk.dim('to fill later');
+  const prefix = pathPrefix(state.baseUrl);
   const rows: [string, string][] = [
     ['Base URL', state.baseUrl ? set(state.baseUrl) : later],
+    ...(prefix
+      ? ([
+          [
+            'Path prefix',
+            set(
+              state.serveFromSubPath
+                ? `${prefix} · routed by the server`
+                : `${prefix} · stripped by the proxy`
+            ),
+          ],
+        ] as [string, string][])
+      : []),
     ['JWT secret', state.jwtSecret ? set('generated') : later],
     ['PostgreSQL', state.dbUrl ? set(state.dbUrl) : later],
     ['Master key', set('generated, keep a backup')],
@@ -249,16 +275,43 @@ export default class ServerInit extends Command {
       {
         id: 'base-url',
         run: async () => {
-          const value = await textStep('Public HTTPS URL of the server', {
-            optional: true,
-            initial: state.baseUrl,
-            validate: v => isHttpUrl(v) || 'Must be a valid http(s) URL',
-          });
-          if (value === BACK) {
-            return 'back';
+          while (true) {
+            const value = await textStep('Public HTTPS URL of the server', {
+              optional: true,
+              initial: state.baseUrl,
+              validate: v => isHttpUrl(v) || 'Must be a valid http(s) URL',
+            });
+            if (value === BACK) {
+              return 'back';
+            }
+            state.baseUrl = value;
+            const prefix = pathPrefix(value);
+            if (!prefix) {
+              state.serveFromSubPath = undefined;
+              return 'next';
+            }
+            const passthrough = await selectStep<boolean>(
+              `How does your proxy forward the ${prefix} prefix?`,
+              [
+                {
+                  title: 'It strips it',
+                  value: false,
+                  description: `${prefix}/manifest reaches the server as /manifest`,
+                },
+                {
+                  title: 'It passes it through',
+                  value: true,
+                  description: `the server routes under ${prefix} itself`,
+                },
+              ],
+              { allowBack: true, initial: state.serveFromSubPath ?? false }
+            );
+            if (passthrough === BACK) {
+              continue;
+            }
+            state.serveFromSubPath = passthrough;
+            return 'next';
           }
-          state.baseUrl = value;
-          return 'next';
         },
       },
       {
@@ -672,6 +725,7 @@ export default class ServerInit extends Command {
 
     const choices: ServerChoices = {
       baseUrl: state.baseUrl,
+      serveFromSubPath: state.serveFromSubPath,
       jwtSecret: state.jwtSecret,
       dbUrl: state.dbUrl,
       // The wizard always seals the master key in the env; storing it in AWS

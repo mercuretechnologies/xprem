@@ -1,6 +1,7 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,23 +32,30 @@ func GetUpdateCheckStatus(update types.Update) time.Time {
 	return file.CreatedAt.UTC()
 }
 
-func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform string) string {
-	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, platform)
+// ImmutableCacheTTLSeconds bounds the entries whose keyed content never
+// changes (a published update is immutable): the TTL only reclaims storage.
+const ImmutableCacheTTLSeconds = 7 * 24 * 3600
+
+func ComputeLastUpdateCacheKey(appId string, branch string, runtimeVersion string, platform types.Platform) string {
+	return cache2.Key("lastUpdate", version.Version, appId, branch, runtimeVersion, string(platform))
 }
 
 func ComputeMetadataCacheKey(appId string, branch string, runtimeVersion string, updateId string) string {
-	return fmt.Sprintf("metadata:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId)
+	return cache2.Key("metadata", version.Version, appId, branch, runtimeVersion, updateId)
 }
 
-func ComputeUpdateManifestCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform string) string {
-	return fmt.Sprintf("manifest:%s:%s:%s:%s:%s:%s", appId, version.Version, branch, runtimeVersion, updateId, platform)
+func ComputeManifestResponseCacheKey(appId string, branch string, runtimeVersion string, updateId string, platform types.Platform) string {
+	return cache2.Key("manifest-response", version.Version, appId, branch, runtimeVersion, updateId, string(platform))
 }
 
 func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath string) string {
-	return fmt.Sprintf("asset:%s:%s:%s:%s:%s:%s", appId, version.Version, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
+	return cache2.Key("asset", version.Version, appId, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
-func VerifyUploadedUpdate(update types.Update) error {
+// VerifyUploadedUpdate reports whether every file the update announces actually
+// made it to storage. mapping is nil for an update published before the files
+// moved to cas/, whose assets are then looked for in the update folder.
+func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
 	metadata, errMetadata := GetMetadata(update)
 	if errMetadata != nil {
 		return errMetadata
@@ -55,51 +63,94 @@ func VerifyUploadedUpdate(update types.Update) error {
 	if metadata.MetadataJSON.FileMetadata.IOS.Bundle == "" && metadata.MetadataJSON.FileMetadata.Android.Bundle == "" {
 		return fmt.Errorf("missing bundle path in metadata")
 	}
-	files := []string{}
-	if metadata.MetadataJSON.FileMetadata.IOS.Bundle != "" {
-		files = append(files, metadata.MetadataJSON.FileMetadata.IOS.Bundle)
-		for _, asset := range metadata.MetadataJSON.FileMetadata.IOS.Assets {
-			files = append(files, asset.Path)
-		}
+	if mapping == nil {
+		return verifyFolderUploaded(update, metadata)
 	}
-	if metadata.MetadataJSON.FileMetadata.Android.Bundle != "" {
-		files = append(files, metadata.MetadataJSON.FileMetadata.Android.Bundle)
-		for _, asset := range metadata.MetadataJSON.FileMetadata.Android.Assets {
-			files = append(files, asset.Path)
-		}
-	}
+	return verifyBlobsUploaded(ctx, update.AppId, mapping)
+}
 
+func verifyFolderUploaded(update types.Update, metadata types.UpdateMetadata) error {
+	var files []string
+	for _, platformMetadata := range []types.PlatformMetadata{metadata.MetadataJSON.FileMetadata.IOS, metadata.MetadataJSON.FileMetadata.Android} {
+		if platformMetadata.Bundle == "" {
+			continue
+		}
+		files = append(files, platformMetadata.Bundle)
+		for _, asset := range platformMetadata.Assets {
+			files = append(files, asset.Path)
+		}
+	}
 	resolvedBucket := bucket.GetBucket()
 	for _, file := range files {
 		f, err := resolvedBucket.GetFile(update, file)
 		if err != nil {
+			return fmt.Errorf("checking file %s: %w", file, err)
+		}
+		if f == nil {
 			return fmt.Errorf("missing file: %s in update", file)
 		}
-		if f != nil {
-			f.Reader.Close()
+		f.Reader.Close()
+	}
+	return nil
+}
+
+func verifyBlobsUploaded(ctx context.Context, appId string, mapping *types.UpdateAssetMapping) error {
+	resolvedBucket := bucket.GetBucket()
+	shaped := append([]types.ShapedAsset{mapping.LaunchAsset}, mapping.Assets...)
+	for _, asset := range shaped {
+		exists, err := resolvedBucket.BlobExists(ctx, appId, asset.Hash)
+		if err != nil {
+			return fmt.Errorf("checking blob %s: %w", asset.Hash, err)
+		}
+		if !exists {
+			return fmt.Errorf("missing blob %s in update", asset.Hash)
 		}
 	}
 	return nil
 }
 
-func AreUpdatesIdentical(update1, update2 types.Update) (bool, error) {
-	// An update without metadata (a rollback folder, a partial upload) can
-	// never be identical to another update; comparing must not fail on it.
-	metadata1, errMetadata1 := GetMetadata(update1)
-	if errors.Is(errMetadata1, ErrUpdateMetadataMissing) {
-		return false, nil
+// AreUpdatesIdentical reports whether an incoming publish carries exactly the
+// content the stored update already serves. Both mappings are per-platform, so
+// no file has to be attributed to a platform here.
+func AreUpdatesIdentical(stored, incoming *types.UpdateAssetMapping) bool {
+	if stored == nil || incoming == nil {
+		return false
 	}
-	if errMetadata1 != nil {
-		return false, errMetadata1
+	if stored.LaunchAsset.Hash == "" || stored.LaunchAsset.Hash != incoming.LaunchAsset.Hash {
+		return false
 	}
-	metadata2, errMetadata2 := GetMetadata(update2)
-	if errors.Is(errMetadata2, ErrUpdateMetadataMissing) {
-		return false, nil
+	if len(stored.Assets) != len(incoming.Assets) {
+		return false
 	}
-	if errMetadata2 != nil {
-		return false, errMetadata2
+	// Counted, not a set: two assets can share a hash (identical content at two paths).
+	storedHashes := make(map[string]int, len(stored.Assets))
+	for _, asset := range stored.Assets {
+		storedHashes[asset.Hash]++
 	}
-	return metadata1.Fingerprint == metadata2.Fingerprint, nil
+	for _, asset := range incoming.Assets {
+		if storedHashes[asset.Hash] == 0 {
+			return false
+		}
+		storedHashes[asset.Hash]--
+	}
+	return sameConfigFiles(stored.ConfigFiles, incoming.ConfigFiles)
+}
+
+func sameConfigFiles(stored, incoming []types.ConfigFile) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	storedByPath := make(map[string]string, len(stored))
+	for _, file := range stored {
+		storedByPath[file.Path] = file.Hash
+	}
+	for _, file := range incoming {
+		hash, ok := storedByPath[file.Path]
+		if !ok || hash != file.Hash {
+			return false
+		}
+	}
+	return true
 }
 
 func GetExpoConfig(update types.Update) (json.RawMessage, error) {
@@ -164,11 +215,12 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	}
 	metadata.ID = id
 	metadata.Fingerprint = fingerprint
-	cache2.SetJSON(metadataCache, metadataCacheKey, metadata, nil)
+	metadataTTL := ImmutableCacheTTLSeconds
+	cache2.SetJSON(metadataCache, metadataCacheKey, metadata, &metadataTTL)
 	return metadata, nil
 }
 
-func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platform, branch, updateId string) (string, error) {
+func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion string, platform types.Platform, branch, updateId string) (string, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid base URL: %w", err)
@@ -176,7 +228,7 @@ func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platf
 	query := url.Values{}
 	query.Set("asset", assetFilePath)
 	query.Set("runtimeVersion", runtimeVersion)
-	query.Set("platform", platform)
+	query.Set("platform", string(platform))
 	query.Set("branch", branch)
 	// Pins the asset to the exact update the manifest came from, so rollout
 	// clients on a non-latest update fetch from the right folder (control-plane
@@ -186,11 +238,28 @@ func BuildFinalManifestAssetUrlURL(baseURL, assetFilePath, runtimeVersion, platf
 	return parsedURL.String(), nil
 }
 
-func GetAssetEndpoint() string {
-	return config.GetEnv("BASE_URL") + "/assets"
+// BuildBlobAssetURL addresses an asset by its content, for updates whose files
+// live in cas/ and have no path any more. ext carries "bundle" for the launch
+// asset, the same convention shapeAsset uses, so the serving side can rebuild
+// the content type from the one mime table.
+func BuildBlobAssetURL(baseURL, hash, fileExtension string, platform types.Platform) (string, error) {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL: %w", err)
+	}
+	query := url.Values{}
+	query.Set("h", hash)
+	query.Set("ext", strings.TrimPrefix(fileExtension, "."))
+	query.Set("platform", string(platform))
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
 
-func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform string) (types.ManifestAsset, error) {
+func GetAssetEndpoint() string {
+	return config.BaseURL() + "/assets"
+}
+
+func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform types.Platform) (types.ManifestAsset, error) {
 	cacheKey := ComputeManifestAssetCacheKey(update.AppId, update, asset.Path)
 	assetCache := cache2.GetCache()
 	if manifestAsset, ok := cache2.GetJSON[types.ManifestAsset](assetCache, cacheKey); ok {
@@ -238,7 +307,8 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 		ContentType:   contentType,
 		Url:           finalUrl,
 	}
-	cache2.SetJSON(assetCache, cacheKey, manifestAsset, nil)
+	assetTTL := ImmutableCacheTTLSeconds
+	cache2.SetJSON(assetCache, cacheKey, manifestAsset, &assetTTL)
 	return manifestAsset, nil
 }
 
@@ -254,45 +324,68 @@ func computeManifestMetadata(update types.Update) json.RawMessage {
 	return json.RawMessage(metadataBytes)
 }
 
-func ComposeUpdateManifest(
+// manifestAssets shapes the platform's assets and launch asset, from the stored
+// mapping when the update has one, and by reading the update folder when it does
+// not.
+func manifestAssets(
 	metadata *types.UpdateMetadata,
 	update types.Update,
-	platform string,
-) (types.UpdateManifest, error) {
-	manifestCache := cache2.GetCache()
-	cacheKey := ComputeUpdateManifestCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
-	if manifest, ok := cache2.GetJSON[types.UpdateManifest](manifestCache, cacheKey); ok {
-		return manifest, nil
+	mapping *types.UpdateAssetMapping,
+	platform types.Platform,
+) ([]types.ManifestAsset, types.ManifestAsset, error) {
+	if mapping != nil {
+		return manifestAssetsFromMapping(mapping, platform)
 	}
-	expoConfig, errConfig := GetExpoConfig(update)
-	if errConfig != nil {
-		return types.UpdateManifest{}, errConfig
-	}
-	storedMetadata, _ := RetrieveUpdateStoredMetadata(update)
-	if storedMetadata == nil || storedMetadata.UpdateUUID == "" {
-		storedMetadata = &types.UpdateStoredMetadata{
-			Platform:   platform,
-			CommitHash: "",
-			UpdateUUID: crypto.ConvertSHA256HashToUUID(metadata.ID),
-		}
-	}
+	return manifestAssetsFromFolder(metadata, update, platform)
+}
 
-	var platformSpecificMetadata types.PlatformMetadata
-	switch platform {
-	case "ios":
-		platformSpecificMetadata = metadata.MetadataJSON.FileMetadata.IOS
-	case "android":
-		platformSpecificMetadata = metadata.MetadataJSON.FileMetadata.Android
+// manifestAssetsFromMapping needs no storage at all: the publish stored every
+// field the manifest carries, so only the URL is built here.
+func manifestAssetsFromMapping(mapping *types.UpdateAssetMapping, platform types.Platform) ([]types.ManifestAsset, types.ManifestAsset, error) {
+	toManifestAsset := func(shaped types.ShapedAsset) (types.ManifestAsset, error) {
+		assetURL, err := BuildBlobAssetURL(GetAssetEndpoint(), shaped.Hash, shaped.FileExtension, platform)
+		if err != nil {
+			return types.ManifestAsset{}, err
+		}
+		return types.ManifestAsset{
+			Hash:          shaped.Hash,
+			Key:           shaped.Key,
+			FileExtension: shaped.FileExtension,
+			ContentType:   shaped.ContentType,
+			Url:           assetURL,
+		}, nil
 	}
-	if platformSpecificMetadata.Bundle == "" {
-		return types.UpdateManifest{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	launchAsset, err := toManifestAsset(mapping.LaunchAsset)
+	if err != nil {
+		return nil, types.ManifestAsset{}, err
+	}
+	assets := make([]types.ManifestAsset, len(mapping.Assets))
+	for i, shaped := range mapping.Assets {
+		asset, err := toManifestAsset(shaped)
+		if err != nil {
+			return nil, types.ManifestAsset{}, err
+		}
+		assets[i] = asset
+	}
+	return assets, launchAsset, nil
+}
+
+// manifestAssetsFromFolder reads and hashes every file of the update, which is
+// the only way to shape an update published before the mapping existed.
+func manifestAssetsFromFolder(
+	metadata *types.UpdateMetadata,
+	update types.Update,
+	platform types.Platform,
+) ([]types.ManifestAsset, types.ManifestAsset, error) {
+	platformSpecificMetadata, err := metadata.MetadataJSON.FileMetadata.PlatformMetadata(platform)
+	if err != nil || platformSpecificMetadata.Bundle == "" {
+		return nil, types.ManifestAsset{}, fmt.Errorf("platform %s not supported by update %s/%s/%s/%s", platform, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	}
 	var (
 		assets = make([]types.ManifestAsset, len(platformSpecificMetadata.Assets))
 		errs   = make(chan error, len(platformSpecificMetadata.Assets))
 		wg     sync.WaitGroup
 	)
-
 	for i, a := range platformSpecificMetadata.Assets {
 		wg.Add(1)
 		go func(index int, asset types.Asset) {
@@ -305,20 +398,36 @@ func ComposeUpdateManifest(
 			assets[index] = shapedAsset
 		}(i, a)
 	}
-
 	wg.Wait()
 	close(errs)
-
 	if len(errs) > 0 {
-		return types.UpdateManifest{}, <-errs
+		return nil, types.ManifestAsset{}, <-errs
 	}
-
-	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{
-		Path: platformSpecificMetadata.Bundle,
-		Ext:  "",
-	}, true, platform)
+	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{Path: platformSpecificMetadata.Bundle}, true, platform)
 	if errShape != nil {
-		return types.UpdateManifest{}, errShape
+		return nil, types.ManifestAsset{}, errShape
+	}
+	return assets, launchAsset, nil
+}
+
+// ComposeUpdateManifest builds the manifest an update serves. Pure: caching is
+// the caller's business (the services manifest-response cache). mapping is nil
+// for an update published before the files moved to cas/: its assets are then
+// shaped by reading them back out of the update folder, as they always were.
+func ComposeUpdateManifest(
+	metadata *types.UpdateMetadata,
+	update types.Update,
+	storedMetadata *types.UpdateStoredMetadata,
+	mapping *types.UpdateAssetMapping,
+	platform types.Platform,
+) (types.UpdateManifest, error) {
+	expoConfig, errConfig := GetExpoConfig(update)
+	if errConfig != nil {
+		return types.UpdateManifest{}, errConfig
+	}
+	assets, launchAsset, err := manifestAssets(metadata, update, mapping, platform)
+	if err != nil {
+		return types.UpdateManifest{}, err
 	}
 
 	manifest := types.UpdateManifest{
@@ -333,8 +442,6 @@ func ComposeUpdateManifest(
 		Assets:      assets,
 		LaunchAsset: launchAsset,
 	}
-	cache2.SetJSON(manifestCache, cacheKey, manifest, nil)
-
 	return manifest, nil
 }
 
@@ -386,13 +493,13 @@ func RetrieveUpdateStoredMetadata(update types.Update) (*types.UpdateStoredMetad
 // unique-key/constraint conflicts in relational stores, we append a deterministic
 // platform identifier digit (+1 for iOS, +2 for Android) to the end of the timestamp,
 // mathematically decoupling their identities under any hardware concurrency schedule.
-func GenerateUpdateTimestamp(platform string) int64 {
+func GenerateUpdateTimestamp(platform types.Platform) int64 {
 	milli := time.Now().UnixNano() / int64(time.Millisecond)
 	var platformModifier int64 = 0
-	switch strings.ToLower(platform) {
-	case "ios":
+	switch platform {
+	case types.PlatformIOS:
 		platformModifier = 1
-	case "android":
+	case types.PlatformAndroid:
 		platformModifier = 2
 	default:
 		platformModifier = 9

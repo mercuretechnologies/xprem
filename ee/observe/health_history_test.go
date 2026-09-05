@@ -243,16 +243,16 @@ func TestSnapshotCaptureIsElectedSeparatelyFromTheDrain(t *testing.T) {
 	require.NoError(t, err)
 	defer otherPool.Close()
 
-	releaseSnapshot, locked, err := postgres.TryAdvisoryLock(ctx, pool, snapshotAdvisoryLockID, "health snapshot")
+	releaseSnapshot, locked, err := postgres.TryAdvisoryLock(ctx, pool, postgres.HealthSnapshotLockID, "health snapshot")
 	require.NoError(t, err)
 	require.True(t, locked)
 
-	_, second, err := postgres.TryAdvisoryLock(ctx, otherPool, snapshotAdvisoryLockID, "health snapshot")
+	_, second, err := postgres.TryAdvisoryLock(ctx, otherPool, postgres.HealthSnapshotLockID, "health snapshot")
 	require.NoError(t, err)
 	require.False(t, second, "a second replica must not capture the same minute")
 
 	// The drain is a different lock, so holding the snapshot one leaves it free.
-	releaseDrain, drainFree, err := postgres.TryAdvisoryLock(ctx, otherPool, outboxAdvisoryLockID, "health outbox")
+	releaseDrain, drainFree, err := postgres.TryAdvisoryLock(ctx, otherPool, postgres.HealthOutboxLockID, "health outbox")
 	require.NoError(t, err)
 	require.True(t, drainFree, "the drain must not wait on the capture")
 	releaseDrain()
@@ -260,7 +260,7 @@ func TestSnapshotCaptureIsElectedSeparatelyFromTheDrain(t *testing.T) {
 	releaseSnapshot()
 	// A held lock pins a connection, and pgxpool.Close waits for it: forgetting
 	// this hangs the test rather than failing it.
-	releaseAgain, freeNow, err := postgres.TryAdvisoryLock(ctx, otherPool, snapshotAdvisoryLockID, "health snapshot")
+	releaseAgain, freeNow, err := postgres.TryAdvisoryLock(ctx, otherPool, postgres.HealthSnapshotLockID, "health snapshot")
 	require.NoError(t, err)
 	require.True(t, freeNow, "the lock must be released when the capture ends")
 	releaseAgain()

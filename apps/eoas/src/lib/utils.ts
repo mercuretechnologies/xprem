@@ -4,7 +4,22 @@ import path from 'path';
 import Log from './log';
 
 export function isValidUpdateUrl(updateUrl: string): boolean {
-  return updateUrl.match(/^https?:\/\/[^/]+$/) !== null;
+  try {
+    const parsed = new URL(updateUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    if (!parsed.host) {
+      return false;
+    }
+    // A query or fragment would corrupt the `${url}/manifest` concatenation.
+    if (parsed.search || parsed.hash) {
+      return false;
+    }
+    return !parsed.pathname.replace(/\/+$/, '').endsWith('/manifest');
+  } catch {
+    return false;
+  }
 }
 
 // Appends pattern to the project .gitignore unless an identical rule is already

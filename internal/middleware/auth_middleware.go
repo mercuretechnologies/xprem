@@ -6,7 +6,6 @@ import (
 	"xprem/internal/handlers"
 	"xprem/internal/helpers"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )
@@ -79,31 +78,14 @@ func NewDashboardOnlyMiddleware() mux.MiddlewareFunc {
 }
 
 // NewAdminMiddleware guards a route behind the account-level admin flag.
-// userRepo is nil in stateless mode, where the single ADMIN_EMAIL account is
-// always an admin.
-func NewAdminMiddleware(userRepo services.UserRepository) mux.MiddlewareFunc {
+// NewAdminMiddleware gates a route behind the principal's admin flag, which the
+// auth middleware reads from the users table on every request.
+func NewAdminMiddleware() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal := services.PrincipalFromContext(r.Context())
 			if principal == nil {
 				http.Error(w, "This action requires a dashboard session", http.StatusForbidden)
-				return
-			}
-			if userRepo != nil {
-				user, err := userRepo.GetUserByID(r.Context(), principal.UserId)
-				if err != nil {
-					if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
-						http.Error(w, "Invalid token", http.StatusUnauthorized)
-					} else {
-						http.Error(w, "Could not verify the account", http.StatusInternalServerError)
-					}
-					return
-				}
-				if !user.IsAdmin {
-					http.Error(w, "This action requires an admin account", http.StatusForbidden)
-					return
-				}
-				next.ServeHTTP(w, r)
 				return
 			}
 			if !principal.IsAdmin {

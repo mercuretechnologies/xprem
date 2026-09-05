@@ -7,7 +7,6 @@ import (
 	"errors"
 	bucket2 "xprem/internal/bucket"
 	"xprem/internal/crypto"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/helpers"
 	"xprem/internal/types"
 
@@ -31,7 +30,7 @@ func NewBucketUpdateStore(bucket bucket2.Bucket) *BucketUpdateStore {
 
 // GetLatestUpdate returns the newest complete update for the platform, or nil
 // when the branch has none yet.
-func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error) {
+func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	updates, err := bucket2.GetBucket().GetUpdates(appId, branchName, runtimeVersion)
 	if err != nil {
 		return nil, err
@@ -45,6 +44,7 @@ func (s *BucketUpdateStore) GetLatestUpdate(ctx context.Context, appId string, b
 		if !s.isUpdateValid(updates[i]) {
 			continue
 		}
+		updates[i].UpdateUUID = storedMetadata.UpdateUUID
 		return &updates[i], nil
 	}
 	return nil, nil
@@ -96,9 +96,9 @@ func (s *BucketUpdateStore) MarkUpdateAsChecked(ctx context.Context, update type
 
 // updateMetadataReader marshals the update-metadata.json body. message is
 // omitted when empty.
-func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, error) {
+func updateMetadataReader(platform types.Platform, commitHash, message string) (*bytes.Reader, error) {
 	fileUpdateMetadata := map[string]string{
-		"platform":   platform,
+		"platform":   string(platform),
 		"commitHash": commitHash,
 	}
 	if message != "" {
@@ -112,7 +112,7 @@ func updateMetadataReader(platform, commitHash, message string) (*bytes.Reader, 
 }
 
 // publishGroup is ignored: stateless mode has no publish grouping.
-func (s *BucketUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, publishGroup *string) (*types.Update, error) {
 	metadataReader, err := updateMetadataReader(platform, commitHash, message)
 	if err != nil {
 		return nil, err
@@ -252,32 +252,88 @@ func (s *BucketUpdateStore) GetUpdate(ctx context.Context, appId string, branchN
 	}, nil
 }
 
+func (s *BucketUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	update, err := s.GetUpdate(ctx, appId, branchName, runtimeVersion, updateId)
+	if err != nil {
+		return nil, err
+	}
+	valid, err := s.IsUpdateValid(ctx, *update)
+	if err != nil {
+		return nil, err
+	}
+	if !valid {
+		return nil, nil
+	}
+	return update, nil
+}
+
 func (s *BucketUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	return update2.RetrieveUpdateStoredMetadata(update)
 }
 
+// updateMetadataFile is the on-disk shape of update-metadata.json: the metadata
+// every mode carries, plus the asset mapping only stateless keeps here. The
+// embedded struct flattens, so the file's JSON is unchanged.
+type updateMetadataFile struct {
+	types.UpdateStoredMetadata
+	AssetMapping *types.UpdateAssetMapping `json:"assetMapping,omitempty"`
+}
+
 func (s *BucketUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
+	return s.mutateUpdateMetadataFile(update, func(stored *updateMetadataFile) {
+		stored.UpdateUUID = updateUUID
+	})
+}
+
+func (s *BucketUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	stored, err := s.readUpdateMetadataFile(update)
+	if err != nil || stored == nil {
+		return nil, err
+	}
+	return stored.AssetMapping, nil
+}
+
+func (s *BucketUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	return s.mutateUpdateMetadataFile(update, func(stored *updateMetadataFile) {
+		stored.AssetMapping = mapping
+	})
+}
+
+func (s *BucketUpdateStore) readUpdateMetadataFile(update types.Update) (*updateMetadataFile, error) {
 	file, err := s.bucket.GetFile(update, "update-metadata.json")
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
 	}
 	defer file.Reader.Close()
-	var storedMetadata types.UpdateStoredMetadata
-	err = json.NewDecoder(file.Reader).Decode(&storedMetadata)
+	var stored updateMetadataFile
+	if err := json.NewDecoder(file.Reader).Decode(&stored); err != nil {
+		return nil, err
+	}
+	return &stored, nil
+}
+
+func (s *BucketUpdateStore) mutateUpdateMetadataFile(update types.Update, apply func(*updateMetadataFile)) error {
+	stored, err := s.readUpdateMetadataFile(update)
 	if err != nil {
 		return err
 	}
-	storedMetadata.UpdateUUID = updateUUID
-	updatedMetadata, err := json.Marshal(storedMetadata)
+	if stored == nil {
+		return fmt.Errorf("update-metadata.json missing for update %s", update.UpdateId)
+	}
+	apply(stored)
+	updated, err := json.Marshal(stored)
 	if err != nil {
 		return err
 	}
-	return s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(updatedMetadata))
+	return s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(updated))
 }
 
 // CreateRollback writes the metadata file and the "rollback" marker file;
 // there is no bundle or asset to store for a rollback.
-func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error) {
 	update := types.Update{
 		AppId:          appId,
 		UpdateId:       update2.ConvertUpdateTimestampToString(updateId),
@@ -300,13 +356,9 @@ func (s *BucketUpdateStore) CreateRollback(ctx context.Context, appId string, up
 	return &update, nil
 }
 
-func (s *BucketUpdateStore) GetUpdateByBranchNameAndRuntime(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error) {
-	return pgdb.GetUpdateByBranchNameAndRuntimeRow{}, ErrNotSupportedInStatelessMode
-}
-
 // GetLatestUpdateWithRollout wraps GetLatestUpdate with an empty rollout
 // envelope, since stateless mode has no rollouts.
-func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
+func (s *BucketUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	latest, err := s.GetLatestUpdate(ctx, appId, branchName, runtimeVersion, platform)
 	if err != nil {
 		return nil, err
@@ -323,8 +375,16 @@ func (s *BucketUpdateStore) HasActiveRolloutUpdate(ctx context.Context, appId st
 	return false, nil
 }
 
-func (s *BucketUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
+func (s *BucketUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
 	return nil, ErrNotSupportedInStatelessMode
+}
+
+func (s *BucketUpdateStore) ImportUpdate(ctx context.Context, params ImportUpdateParams) (bool, error) {
+	return false, ErrNotSupportedInStatelessMode
+}
+
+func (s *BucketUpdateStore) UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error) {
+	return false, ErrNotSupportedInStatelessMode
 }
 
 func (s *BucketUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appId string, branchName string, runtimeVersion string, publishGroup string) ([]types.PublishGroupMember, error) {

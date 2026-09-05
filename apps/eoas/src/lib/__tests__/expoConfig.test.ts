@@ -272,13 +272,30 @@ module.exports = makeConfig();
 describe('resolveServerUrl', () => {
   const config = { updates: { url: 'https://ota.example.com/manifest' } } as any;
 
-  it('falls back to the origin of the Expo config update url', async () => {
+  it('strips a trailing /manifest and keeps the origin', async () => {
     await expect(resolveServerUrl(config)).resolves.toBe('https://ota.example.com');
   });
 
-  it('prefers the custom server url and keeps only its origin', async () => {
+  it('keeps a path prefix in front of /manifest', async () => {
+    await expect(
+      resolveServerUrl({ updates: { url: 'https://api.example.com/ota/manifest' } } as any)
+    ).resolves.toBe('https://api.example.com/ota');
+    await expect(
+      resolveServerUrl({
+        updates: { url: 'https://api.example.com/path1/path2/manifest' },
+      } as any)
+    ).resolves.toBe('https://api.example.com/path1/path2');
+  });
+
+  it('prefers the custom server url and keeps its path', async () => {
     await expect(resolveServerUrl(config, 'https://publish.example.com/some/path')).resolves.toBe(
-      'https://publish.example.com'
+      'https://publish.example.com/some/path'
+    );
+  });
+
+  it('strips /manifest from an explicit --serverUrl', async () => {
+    await expect(resolveServerUrl(config, 'https://api.example.com/ota/manifest/')).resolves.toBe(
+      'https://api.example.com/ota'
     );
   });
 

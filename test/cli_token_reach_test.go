@@ -115,7 +115,8 @@ func TestPublishingTokenIsRefusedOnAppScopedMutations(t *testing.T) {
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodDelete, "/api/apps/test-app-id"},
-		{http.MethodPatch, "/api/apps/test-app-id"},
+		{http.MethodPatch, "/api/apps/test-app-id/name"},
+		{http.MethodPatch, "/api/apps/test-app-id/git-url"},
 		{http.MethodPost, "/api/apps/test-app-id/branches"},
 		{http.MethodDelete, "/api/apps/test-app-id/branches/branch-1"},
 		{http.MethodPost, "/api/apps/test-app-id/channels"},

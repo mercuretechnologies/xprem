@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 	"xprem/internal/cache"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
@@ -22,20 +21,20 @@ func guardService(t *testing.T, surfing *types.BranchSurfing) *ExpoProtocolServi
 	if surfing != nil {
 		settings["qa"] = surfing
 	}
-	return NewExpoProtocolService(fakeAppRepo{}, &fakeChannelRepo{surfing: settings}, nil, nil, nil)
+	return NewExpoProtocolService(fakeAppRepo{}, &fakeChannelRepo{surfing: settings}, nil, nil, nil, nil)
 }
 
 func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {
-	mapped := &expo.ChannelMapping{Id: "1", BranchName: "staging"}
-	withRollout := &expo.ChannelMapping{
+	mapped := &types.ChannelResolution{Id: "1", BranchName: "staging"}
+	withRollout := &types.ChannelResolution{
 		Id: "1", BranchName: "staging",
-		Rollout: &expo.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 50},
+		Rollout: &types.ChannelRolloutInfo{ID: "r1", BranchName: "canary", Percentage: 50},
 	}
 
 	cases := []struct {
 		name    string
 		surfing *types.BranchSurfing
-		mapping *expo.ChannelMapping
+		mapping *types.ChannelResolution
 		branch  string
 		want    bool
 	}{
@@ -59,7 +58,7 @@ func TestAssetBranchGuardMirrorsTheManifest(t *testing.T) {
 // branch it has no claim to.
 func TestAssetBranchGuardDeniesOnUnknownChannel(t *testing.T) {
 	service := guardService(t, nil)
-	mapped := &expo.ChannelMapping{Id: "1", BranchName: "staging"}
+	mapped := &types.ChannelResolution{Id: "1", BranchName: "staging"}
 
 	assert.False(t, service.isAssetBranchAllowed(context.Background(), guardAppID, "qa", "pr-482", mapped))
 }

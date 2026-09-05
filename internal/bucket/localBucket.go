@@ -55,16 +55,15 @@ func (b *LocalBucket) RequestUploadUrlForFileUpdate(appId string, branch string,
 	if err != nil {
 		return "", err
 	}
-	token, err := crypto.GenerateJWTToken(config.GetEnv("JWT_SECRET"), jwt.MapClaims{
-		"sub":      GetSubjectForApp(appId),
-		"exp":      time.Now().Add(time.Minute * 10).Unix(),
-		"filePath": filepath.Join(dirPath, fileName),
-		"action":   "uploadLocalFile",
-		"appId":    appId,
-		// The branch this upload belongs to. The route that spends this token
-		// names no branch of its own, so this claim is what lets the router
-		// judge it against the API key's access rules.
-		"branch": branch,
+	token, err := crypto.GenerateJWTToken(config.GetEnv("JWT_SECRET"), uploadClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   GetSubjectForApp(appId),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute * 10)),
+		},
+		FilePath: filepath.Join(dirPath, fileName),
+		Action:   "uploadLocalFile",
+		AppID:    appId,
+		Branch:   branch,
 	})
 	if err != nil {
 		return "", err
@@ -276,6 +275,17 @@ func GetSubjectForApp(appId string) string {
 	return fmt.Sprintf("app:%s", appId)
 }
 
+// uploadClaims is the claim set of a local upload URL token. Branch is what
+// lets the router judge the upload route, which names no branch of its own,
+// against the API key's access rules.
+type uploadClaims struct {
+	jwt.RegisteredClaims
+	FilePath string `json:"filePath"`
+	Action   string `json:"action"`
+	AppID    string `json:"appId"`
+	Branch   string `json:"branch"`
+}
+
 // ValidateUploadTokenAndResolveFilePath decodes and verifies the JWT emitted
 // by RequestUploadUrlForFileUpdate. It returns the resolved filesystem path
 // plus the appId claim so the caller can confirm the token is scoped to the
@@ -283,23 +293,15 @@ func GetSubjectForApp(appId string) string {
 // token for AppA could PUT into AppB's bucket by hitting
 // /{AppB}/uploadLocalFile?token=<appA_token>.
 func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId string, branch string, err error) {
-	claims := jwt.MapClaims{}
-	decodedToken, err := crypto.DecodeAndExtractJWTToken(config.GetEnv("JWT_SECRET"), token, claims)
-	if err != nil {
+	claims := uploadClaims{}
+	if _, err := crypto.DecodeAndExtractJWTToken(config.GetEnv("JWT_SECRET"), token, &claims); err != nil {
 		return "", "", "", err
 	}
-	if !decodedToken.Valid {
-		return "", "", "", errors.New("invalid token")
-	}
-	action, _ := claims["action"].(string)
-	filePath, _ = claims["filePath"].(string)
-	sub, _ := claims["sub"].(string)
-	appId, _ = claims["appId"].(string)
-	branch, _ = claims["branch"].(string)
-	if appId == "" || sub != GetSubjectForApp(appId) {
+	filePath, appId, branch = claims.FilePath, claims.AppID, claims.Branch
+	if appId == "" || claims.Subject != GetSubjectForApp(appId) {
 		return "", "", "", errors.New("invalid token sub")
 	}
-	if action != "uploadLocalFile" {
+	if claims.Action != "uploadLocalFile" {
 		return "", "", "", errors.New("invalid token action")
 	}
 	// The token carries the branch and the file path as two separate claims,
@@ -315,6 +317,16 @@ func ValidateUploadTokenAndResolveFilePath(token string) (filePath string, appId
 	// rules happen to refuse a scoped key on an empty branch). The cost is a
 	// publish that fails during a rolling deploy, in local-bucket mode, which
 	// does not survive several replicas anyway.
+	//
+	// Blob uploads sit at {appId}/cas/{hash}, outside any branch directory.
+	// The branch claim is still required so scoped keys can be judged; the
+	// path check is the cas directory instead of the branch tree.
+	if uploadPathIsBlob(filePath, appId) {
+		if branch == "" {
+			return "", "", "", errors.New("upload token path does not match its branch")
+		}
+		return filePath, appId, branch, nil
+	}
 	if !uploadPathIsInBranch(filePath, appId, branch) {
 		return "", "", "", errors.New("upload token path does not match its branch")
 	}
@@ -353,6 +365,149 @@ func uploadPathIsInBranch(filePath, appId, branch string) bool {
 		return false
 	}
 	return true
+}
+
+func uploadPathIsBlob(filePath, appId string) bool {
+	root := localBucketRoot()
+	if root == "" || filePath == "" || appId == "" {
+		return false
+	}
+	expectedBase := filepath.Join(root, appId, casDir)
+	rel, err := filepath.Rel(expectedBase, filepath.Clean(filePath))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	if strings.ContainsRune(rel, os.PathSeparator) {
+		return false
+	}
+	return ValidateBlobHash(rel) == nil
+}
+
+func (b *LocalBucket) blobPath(appId, hash string) string {
+	return filepath.Join(b.rootPath(), appId, casDir, hash)
+}
+
+func (b *LocalBucket) bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return filepath.Join(b.rootPath(), appId, bsDiffDir, branch, targetUpdateUUID, sourceUpdateUUID)
+}
+
+func (b *LocalBucket) BlobExists(_ context.Context, appId, hash string) (bool, error) {
+	return b.fileExists(b.blobPath(appId, hash))
+}
+
+func (b *LocalBucket) GetBlob(_ context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.openFile(b.blobPath(appId, hash))
+}
+
+func (b *LocalBucket) PutBlob(_ context.Context, appId, hash string, body io.Reader) error {
+	return b.writeFile(b.blobPath(appId, hash), body)
+}
+
+func (b *LocalBucket) BSDiffExists(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.fileExists(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *LocalBucket) GetBSDiff(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.openFile(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *LocalBucket) PutBSDiff(_ context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.writeFile(b.bsDiffPath(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
+}
+
+func (b *LocalBucket) DeleteBSDiffs(_ context.Context, appId, branch string) error {
+	if b.BasePath == "" {
+		return errors.New("BasePath not set")
+	}
+	return os.RemoveAll(filepath.Join(b.rootPath(), appId, bsDiffDir, branch))
+}
+
+func (b *LocalBucket) fileExists(filePath string) (bool, error) {
+	if b.BasePath == "" {
+		return false, errors.New("BasePath not set")
+	}
+	_, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// openFile returns nil, nil when the file does not exist.
+func (b *LocalBucket) openFile(filePath string) (*types.BucketFile, error) {
+	if b.BasePath == "" {
+		return nil, errors.New("BasePath not set")
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	return &types.BucketFile{
+		Reader:    file,
+		CreatedAt: info.ModTime(),
+	}, nil
+}
+
+func (b *LocalBucket) writeFile(filePath string, body io.Reader) error {
+	if b.BasePath == "" {
+		return errors.New("BasePath not set")
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
+		return err
+	}
+	out, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, body)
+	return err
+}
+
+func (b *LocalBucket) RequestBlobUploadURL(appId, hash, branch string) (string, error) {
+	if b.BasePath == "" {
+		return "", errors.New("BasePath not set")
+	}
+	dirPath := filepath.Join(b.rootPath(), appId, casDir)
+	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+		return "", err
+	}
+	token, err := crypto.GenerateJWTToken(config.GetEnv("JWT_SECRET"), uploadClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   GetSubjectForApp(appId),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute * 10)),
+		},
+		FilePath: filepath.Join(dirPath, hash),
+		Action:   "uploadLocalFile",
+		AppID:    appId,
+		Branch:   branch,
+	})
+	if err != nil {
+		return "", err
+	}
+	parsedURL, err := url.Parse(config.GetEnv("BASE_URL"))
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL: %w", err)
+	}
+	parsedURL.Path, err = url.JoinPath(parsedURL.Path, appId, "uploadLocalFile")
+	if err != nil {
+		return "", fmt.Errorf("error joining path: %w", err)
+	}
+	query := url.Values{}
+	query.Set("token", token)
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
 
 // ResolveUploadTokenBranch returns the branch an upload token was minted for.

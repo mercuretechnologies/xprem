@@ -30,6 +30,7 @@ type AppRepository interface {
 	DeleteAppByID(ctx context.Context, id string) error
 	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
 	UpdateAppNameByID(ctx context.Context, id string, newName string) error
+	UpdateAppGitURLByID(ctx context.Context, id string, gitURL string) error
 	GetAppByID(ctx context.Context, id string) (config.AppConfig, error)
 }
 
@@ -46,6 +47,15 @@ func (s *AppService) SetOnAuditEvent(record auditlog.RecordFunc) {
 }
 
 func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, uuid.New(), displayName, keysConfig)
+}
+
+// Insert rejects a colliding id.
+func (s *AppService) CreateAppWithId(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
+	return s.createApp(ctx, appId, displayName, keysConfig)
+}
+
+func (s *AppService) createApp(ctx context.Context, appId uuid.UUID, displayName string, keysConfig config.KeysConfig) (string, error) {
 	if err := validation.DisplayName("name", displayName); err != nil {
 		return "", err
 	}
@@ -72,7 +82,6 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 		// Surface as a validation error so the handler answers 400, not 500.
 		return "", validation.Errorf("keysConfig", "%v", err)
 	}
-	appId := uuid.New()
 	modeStr := string(keysConfig.Mode)
 	params := store.InsertAppParameters{
 		ID:       appId.String(),
@@ -96,9 +105,9 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 		if err != nil {
 			return "", fmt.Errorf("failed to generate application signing keys: %w", err)
 		}
-		// Sealed under the id minted above, which is also the id the row is
-		// inserted with, so the binding is checked at unseal against the row the
-		// blob was actually read from. See keyStore.AppKeyAAD.
+		// Sealed under this app id, which is also the id the row is inserted
+		// with, so the binding is checked at unseal against the row the blob
+		// was actually read from. See keyStore.AppKeyAAD.
 		sealedPublicKey, err := crypto.SealAESGCM([]byte(pubPEM), masterKeyBytes, keyStore.AppKeyAAD(appId.String(), true))
 		if err != nil {
 			return "", fmt.Errorf("failed to seal public key: %w", err)
@@ -133,23 +142,20 @@ func (s *AppService) CreateApp(ctx context.Context, displayName string, keysConf
 	return insertedAppId, nil
 }
 
-func (s *AppService) DeleteApp(ctx context.Context, appId string) error {
-	// Read before the delete: afterwards there is no row left to name in the
-	// audit entry. Best-effort, like the entry itself.
-	displayName := appId
-	if app, err := s.appRepo.GetAppByID(ctx, appId); err == nil && app.Name != "" {
-		displayName = app.Name
-	}
-	err := s.appRepo.DeleteAppByID(ctx, appId)
-	if err != nil {
+func (s *AppService) DeleteApp(ctx context.Context, app config.AppConfig) error {
+	if err := s.appRepo.DeleteAppByID(ctx, app.Id); err != nil {
 		return err
+	}
+	displayName := app.Name
+	if displayName == "" {
+		displayName = app.Id
 	}
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionAppDeleted,
 		TargetType:    "app",
-		TargetID:      appId,
+		TargetID:      app.Id,
 		TargetDisplay: displayName,
-		AppID:         appId,
+		AppID:         app.Id,
 	})
 	return nil
 }
@@ -163,6 +169,12 @@ func (s *AppService) GetAppByID(ctx context.Context, appId string) (config.AppCo
 	if err != nil {
 		return config.AppConfig{}, err
 	}
+	return s.PresentApp(ctx, app), nil
+}
+
+// PresentApp is the dashboard view of an app: secrets stripped, key paths
+// masked, display name resolved.
+func (s *AppService) PresentApp(ctx context.Context, app config.AppConfig) config.AppConfig {
 	app.AccessToken = ""
 	app.Keys.SealedPrivateKey = ""
 	app.Keys.SealedPublicKey = ""
@@ -179,34 +191,56 @@ func (s *AppService) GetAppByID(ctx context.Context, appId string) (config.AppCo
 		// device-facing OTA path never pays the Expo round-trip.
 		app.Name = expo.FetchAppName(ctx, app.Id)
 	}
-	return app, nil
+	return app
 }
 
-func (s *AppService) UpdateApp(ctx context.Context, appId string, newName string) error {
+func (s *AppService) UpdateAppName(ctx context.Context, app config.AppConfig, newName string) error {
 	if err := validation.DisplayName("name", newName); err != nil {
 		return err
 	}
-	previous, previousErr := s.appRepo.GetAppByID(ctx, appId)
-	err := s.appRepo.UpdateAppNameByID(ctx, appId, newName)
-	if err != nil {
+	if err := s.appRepo.UpdateAppNameByID(ctx, app.Id, newName); err != nil {
 		return err
 	}
-	// An idempotent rename is not a change: no event. Unknown previous state
-	// records anyway, without the previous_name annotation.
-	if previousErr == nil && previous.Name == newName {
+	// An idempotent rename is not a change: no event.
+	if app.Name == newName {
 		return nil
-	}
-	metadata := map[string]any{"name": newName}
-	if previousErr == nil {
-		metadata["previous_name"] = previous.Name
 	}
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionAppRenamed,
 		TargetType:    "app",
-		TargetID:      appId,
+		TargetID:      app.Id,
 		TargetDisplay: newName,
-		AppID:         appId,
-		Metadata:      metadata,
+		AppID:         app.Id,
+		Metadata:      map[string]any{"name": newName, "previous_name": app.Name},
+	})
+	return nil
+}
+
+func (s *AppService) UpdateAppGitURL(ctx context.Context, app config.AppConfig, gitURL string) error {
+	normalized, err := validation.GitURL("gitUrl", gitURL)
+	if err != nil {
+		return err
+	}
+	if app.GitURL == normalized {
+		return nil
+	}
+	if err := s.appRepo.UpdateAppGitURLByID(ctx, app.Id, normalized); err != nil {
+		return err
+	}
+	displayName := app.Name
+	if displayName == "" {
+		displayName = app.Id
+	}
+	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
+		Action:        auditlog.ActionAppGitURLUpdated,
+		TargetType:    "app",
+		TargetID:      app.Id,
+		TargetDisplay: displayName,
+		AppID:         app.Id,
+		Metadata: map[string]any{
+			"git_url":          normalized,
+			"previous_git_url": app.GitURL,
+		},
 	})
 	return nil
 }
@@ -216,8 +250,14 @@ func (s *AppService) RetrieveAppCertificate(ctx context.Context, appId string) (
 	if err != nil {
 		return "", err
 	}
+	return s.CertificateFor(ctx, app)
+}
+
+// CertificateFor wraps the app's public key in a self-signed code-signing
+// certificate.
+func (s *AppService) CertificateFor(ctx context.Context, app config.AppConfig) (string, error) {
 	if app.Keys.Mode != config.KeysModeDatabase {
-		return "", fmt.Errorf("app with id %s does not use database keys mode", appId)
+		return "", fmt.Errorf("app with id %s does not use database keys mode", app.Id)
 	}
 	publicKey := keyStore.GetPublicExpoKey(app)
 	privateKey := keyStore.GetPrivateExpoKey(app)
@@ -236,9 +276,9 @@ func (s *AppService) RetrieveAppCertificate(ctx context.Context, appId string) (
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        auditlog.ActionCertificateDownloaded,
 		TargetType:    "app",
-		TargetID:      appId,
+		TargetID:      app.Id,
 		TargetDisplay: app.Name,
-		AppID:         appId,
+		AppID:         app.Id,
 	})
 	return pemCertificateString, nil
 }

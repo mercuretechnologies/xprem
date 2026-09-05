@@ -15,8 +15,7 @@ import (
 	"time"
 
 	"xprem/config"
-	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
+	"xprem/internal/crypto"
 	"xprem/internal/rollout"
 	"xprem/internal/store"
 	"xprem/internal/types"
@@ -49,12 +48,13 @@ func (l *eventLog) snapshot() []string {
 type fakeStoredUpdate struct {
 	update            types.Update
 	updateType        types.UpdateType
-	platform          string
+	platform          types.Platform
 	checked           bool
 	rolloutPercentage *int
 	controlUpdateId   *string
 	updateUUID        string
 	publishGroup      *string
+	assetMapping      *types.UpdateAssetMapping
 }
 
 type fakeUpdateRepo struct {
@@ -70,8 +70,10 @@ type fakeUpdateRepo struct {
 func (r *fakeUpdateRepo) setUUID(appId, branchName, updateId, updateUUID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if row := r.findRowLocked(appId, branchName, updateId); row != nil {
-		row.updateUUID = updateUUID
+	for _, row := range r.rows {
+		if row.update.AppId == appId && row.update.Branch == branchName && row.update.UpdateId == updateId {
+			row.updateUUID = updateUUID
+		}
 	}
 }
 
@@ -81,9 +83,10 @@ func (r *fakeUpdateRepo) uuidLookups() int {
 	return r.uuidReads
 }
 
-func (r *fakeUpdateRepo) findRowLocked(appId, branchName, updateId string) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) findRowLocked(appId, branchName, runtimeVersion, updateId string) *fakeStoredUpdate {
 	for _, row := range r.rows {
-		if row.update.AppId == appId && row.update.Branch == branchName && row.update.UpdateId == updateId {
+		if row.update.AppId == appId && row.update.Branch == branchName &&
+			row.update.RuntimeVersion == runtimeVersion && row.update.UpdateId == updateId {
 			return row
 		}
 	}
@@ -92,7 +95,7 @@ func (r *fakeUpdateRepo) findRowLocked(appId, branchName, updateId string) *fake
 
 // latestCheckedLocked mirrors the GetLatestUpdateWithRollout SQL: newest checked row
 // for (branch, rtv, platform) by numeric id.
-func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion, platform string) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion string, platform types.Platform) *fakeStoredUpdate {
 	var latest *fakeStoredUpdate
 	var latestId int64 = -1
 	for _, row := range r.rows {
@@ -112,7 +115,7 @@ func (r *fakeUpdateRepo) latestCheckedLocked(appId, branchName, runtimeVersion, 
 	return latest
 }
 
-func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchName, runtimeVersion, platform string, updateType types.UpdateType) *fakeStoredUpdate {
+func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, updateType types.UpdateType) *fakeStoredUpdate {
 	row := &fakeStoredUpdate{
 		update: types.Update{
 			AppId:          appId,
@@ -131,7 +134,7 @@ func (r *fakeUpdateRepo) appendRowLocked(appId string, updateId int64, branchNam
 func (r *fakeUpdateRepo) MarkUpdateAsChecked(_ context.Context, update types.Update) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -157,10 +160,10 @@ func (r *fakeUpdateRepo) GetUpdateDetails(_ context.Context, _, _, _, _ string) 
 	return types.UpdateDetails{}, nil
 }
 
-func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, updateId string) (*types.Update, error) {
+func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(appId, branchName, updateId)
+	row := r.findRowLocked(appId, branchName, runtimeVersion, updateId)
 	if row == nil {
 		return nil, nil
 	}
@@ -168,7 +171,18 @@ func (r *fakeUpdateRepo) GetUpdate(_ context.Context, appId, branchName, _, upda
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, runtimeVersion, platform string) (*types.Update, error) {
+func (r *fakeUpdateRepo) GetCheckedUpdate(_ context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(appId, branchName, runtimeVersion, updateId)
+	if row == nil || !row.checked {
+		return nil, nil
+	}
+	updateCopy := row.update
+	return &updateCopy, nil
+}
+
+func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.latestCheckedLocked(appId, branchName, runtimeVersion, platform)
@@ -179,7 +193,7 @@ func (r *fakeUpdateRepo) GetLatestUpdate(_ context.Context, appId, branchName, r
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, branchName, runtimeVersion, platform string) (*types.UpdateWithRollout, error) {
+func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, branchName, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.latestCheckedLocked(appId, branchName, runtimeVersion, platform)
@@ -192,7 +206,7 @@ func (r *fakeUpdateRepo) GetLatestUpdateWithRollout(_ context.Context, appId, br
 		envelope.RolloutPercentage = &pct
 	}
 	if row.controlUpdateId != nil {
-		if control := r.findRowLocked(appId, branchName, *row.controlUpdateId); control != nil {
+		if control := r.findRowLocked(appId, branchName, runtimeVersion, *row.controlUpdateId); control != nil {
 			controlCopy := control.update
 			envelope.Control = &controlCopy
 		}
@@ -228,7 +242,7 @@ func (r *fakeUpdateRepo) HasActiveRolloutUpdate(_ context.Context, appId, branch
 func (r *fakeUpdateRepo) GetUpdateType(_ context.Context, update types.Update) (types.UpdateType, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return types.NormalUpdate, fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -238,11 +252,11 @@ func (r *fakeUpdateRepo) GetUpdateType(_ context.Context, update types.Update) (
 func (r *fakeUpdateRepo) IsUpdateValid(_ context.Context, update types.Update) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	return row != nil && row.checked, nil
 }
 
-func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string, publishGroup *string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string, publishGroup *string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.appendRowLocked(appId, updateId, branchName, runtimeVersion, platform, types.NormalUpdate)
@@ -254,7 +268,7 @@ func (r *fakeUpdateRepo) CreateUpdate(_ context.Context, appId string, updateId 
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The control resolves at insert time to the latest checked update of the same
@@ -275,7 +289,7 @@ func (r *fakeUpdateRepo) CreateUpdateWithRollout(_ context.Context, appId string
 	return &updateCopy, nil
 }
 
-func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion, platform, _, _ string) (*types.Update, error) {
+func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateId int64, branchName, runtimeVersion string, platform types.Platform, _, _ string) (*types.Update, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	row := r.appendRowLocked(appId, updateId, branchName, runtimeVersion, platform, types.Rollback)
@@ -284,10 +298,6 @@ func (r *fakeUpdateRepo) CreateRollback(_ context.Context, appId string, updateI
 	}
 	updateCopy := row.update
 	return &updateCopy, nil
-}
-
-func (r *fakeUpdateRepo) GetUpdateByBranchNameAndRuntime(_ context.Context, _ string, _ int64, _, _ string) (pgdb.GetUpdateByBranchNameAndRuntimeRow, error) {
-	return pgdb.GetUpdateByBranchNameAndRuntimeRow{}, nil
 }
 
 func (r *fakeUpdateRepo) GetUpdatesByRunTimeVersionAndBranchName(_ context.Context, _, _, _ string, _ *int64, _ int) (types.UpdatesPage, error) {
@@ -331,7 +341,7 @@ func (r *fakeUpdateRepo) GetUpdatesByPublishGroup(_ context.Context, appId, bran
 func (r *fakeUpdateRepo) RetrieveUpdateStoredMetadata(_ context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId)
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if row == nil {
 		return nil, fmt.Errorf("update %s not found", update.UpdateId)
 	}
@@ -341,9 +351,38 @@ func (r *fakeUpdateRepo) RetrieveUpdateStoredMetadata(_ context.Context, update 
 func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update types.Update, updateUUID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if row := r.findRowLocked(update.AppId, update.Branch, update.UpdateId); row != nil {
+	if row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); row != nil {
 		row.updateUUID = updateUUID
 	}
+	return nil
+}
+
+func (r *fakeUpdateRepo) ImportUpdate(context.Context, store.ImportUpdateParams) (bool, error) {
+	return false, fmt.Errorf("ImportUpdate is not exercised by these tests")
+}
+
+func (r *fakeUpdateRepo) UpdateExists(context.Context, string, string, int64) (bool, error) {
+	return false, fmt.Errorf("UpdateExists is not exercised by these tests")
+}
+
+func (r *fakeUpdateRepo) GetUpdateAssetMapping(_ context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return nil, nil
+	}
+	return row.assetMapping, nil
+}
+
+func (r *fakeUpdateRepo) StoreUpdateAssetMapping(_ context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return fmt.Errorf("update %s not found", update.UpdateId)
+	}
+	row.assetMapping = mapping
 	return nil
 }
 
@@ -443,7 +482,7 @@ func (r *fakeRolloutRepo) ClearUpdateRollout(_ context.Context, appId, branchNam
 }
 
 type fakeChannelRepo struct {
-	mappings map[string]*expo.ChannelMapping
+	mappings map[string]*types.ChannelResolution
 	// surfing is the branch-surfing setting GetBranchSurfing answers with, per
 	// channel name. A channel absent from the map does not exist.
 	surfing map[string]*types.BranchSurfing
@@ -482,7 +521,7 @@ func (r *fakeChannelRepo) GetChannels(_ context.Context, _ string) ([]types.Chan
 	return nil, nil
 }
 
-func (r *fakeChannelRepo) GetChannelBranchMapping(_ context.Context, _, channelName string) (*expo.ChannelMapping, error) {
+func (r *fakeChannelRepo) GetChannelBranchMapping(_ context.Context, _, channelName string) (*types.ChannelResolution, error) {
 	mapping, ok := r.mappings[channelName]
 	if !ok {
 		return nil, nil
@@ -507,6 +546,8 @@ func (fakeAppRepo) GetApps(_ context.Context) ([]config.AppDescriptor, error) { 
 
 func (fakeAppRepo) UpdateAppNameByID(_ context.Context, _, _ string) error { return nil }
 
+func (fakeAppRepo) UpdateAppGitURLByID(_ context.Context, _, _ string) error { return nil }
+
 func (fakeAppRepo) GetAppByID(_ context.Context, _ string) (config.AppConfig, error) {
 	return config.AppConfig{}, nil
 }
@@ -516,11 +557,11 @@ type fakeBranchRepo struct {
 	surfable map[string][]types.SurfableBranch
 }
 
-func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
+func (r fakeBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return r.surfable[runtimeVersion], nil
 }
 
-func (fakeBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
+func (fakeBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, error) {
 	return 0, nil
 }
 
@@ -528,7 +569,7 @@ func (fakeBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _, _, _ s
 	return nil
 }
 
-func (fakeBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _, _ string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
+func (fakeBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 
@@ -551,6 +592,40 @@ func (fakeBranchRepo) CreateRuntimeVersion(_ context.Context, _, _ string) (int6
 }
 
 func (fakeBranchRepo) GetBranchByName(_ context.Context, _, _ string) (int64, error) { return 0, nil }
+
+func roledUpload(path, ext string, role FileRole) FileUploadItem {
+	sum, err := crypto.CreateHash([]byte(path), "sha256", "base64")
+	if err != nil {
+		panic(err)
+	}
+	return FileUploadItem{
+		Path: path,
+		Hash: crypto.GetBase64URLEncoding(sum),
+		Key:  path + "-key",
+		Ext:  ext,
+		Role: role,
+	}
+}
+
+func configUpload(path string) FileUploadItem {
+	return roledUpload(path, "json", FileRoleConfig)
+}
+
+func hashedUpload(path string) FileUploadItem {
+	return roledUpload(path, "png", FileRoleAsset)
+}
+
+// hashedUploads is a publish the server accepts: the named files as assets,
+// plus the one launch asset every publish must carry.
+func hashedUploads(paths ...string) []FileUploadItem {
+	files := []FileUploadItem{roledUpload(launchAssetPath, "hbc", FileRoleLaunch)}
+	for _, path := range paths {
+		files = append(files, hashedUpload(path))
+	}
+	return files
+}
+
+const launchAssetPath = "bundles/launch.hbc"
 
 // fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
 type fakeRolloutBucket struct{}
@@ -600,6 +675,38 @@ func (fakeRolloutBucket) ApplyMigration(_ string) error { return nil }
 
 func (fakeRolloutBucket) RemoveMigrationFromHistory(_ string) error { return nil }
 
+func (fakeRolloutBucket) BlobExists(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (fakeRolloutBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	return nil, fmt.Errorf("fake bucket stores no files")
+}
+
+func (fakeRolloutBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	return nil
+}
+
+func (fakeRolloutBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (fakeRolloutBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
+	return nil, fmt.Errorf("fake bucket stores no files")
+}
+
+func (fakeRolloutBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	return nil
+}
+
+func (fakeRolloutBucket) DeleteBSDiffs(context.Context, string, string) error {
+	return nil
+}
+
+func (fakeRolloutBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	return "", nil
+}
+
 type rolloutTestHarness struct {
 	appId             string
 	events            *eventLog
@@ -616,11 +723,12 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 	t.Helper()
 	events := &eventLog{}
 	updateRepo := &fakeUpdateRepo{events: events}
-	channelRepo := &fakeChannelRepo{mappings: map[string]*expo.ChannelMapping{}}
+	channelRepo := &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{}}
 	rolloutRepo := &fakeRolloutRepo{updateRepo: updateRepo, events: events}
 	updateService := NewUpdateService(updateRepo, nil)
 	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeRolloutBucket{})
-	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{})
+	bsDiffService := NewBSDiffService(fakeRolloutBucket{}, nil, updateService, updateRepo, nil)
+	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{}, bsDiffService)
 	return &rolloutTestHarness{
 		appId:             uuid.NewString(),
 		events:            events,
@@ -628,7 +736,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 		channelRepo:       channelRepo,
 		rolloutRepo:       rolloutRepo,
 		updateService:     updateService,
-		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules()),
+		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules(), fakeRolloutBucket{}),
 		deploymentService: deploymentService,
 		rolloutService:    NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService),
 	}
@@ -639,7 +747,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 type seedRow struct {
 	branch     string
 	rtv        string
-	platform   string
+	platform   types.Platform
 	id         int64
 	updateType types.UpdateType
 	checked    bool
@@ -761,10 +869,10 @@ func TestGetLatestUpdateForClientDecisionTree(t *testing.T) {
 	})
 }
 
-func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
+func TestResolveUpdateForDeviceServesRollbackControl(t *testing.T) {
 	ctx := context.Background()
 	h := newRolloutTestHarness(t)
-	h.channelRepo.mappings["production"] = &expo.ChannelMapping{Id: "1", BranchName: "main"}
+	h.channelRepo.mappings["production"] = &types.ChannelResolution{Id: "1", BranchName: "main"}
 	// A rollout published on top of a rollback (the progressive hotfix case): the
 	// out-of-bucket cohort must receive the rollback directive, so the update type
 	// dispatch has to run on the served update, not on the latest row.
@@ -782,7 +890,7 @@ func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
 	}
 
 	params.ClientID = clientIDInBucket(t, salt, 40, false)
-	outResult, err := h.protocolService.ResolveManifestBundle(ctx, params)
+	outResult, err := h.protocolService.ResolveUpdateForDevice(ctx, params)
 	require.NoError(t, err)
 	require.NotNil(t, outResult.Update)
 	assert.Equal(t, "100", outResult.Update.UpdateId)
@@ -790,23 +898,23 @@ func TestResolveManifestBundleServesRollbackControl(t *testing.T) {
 	assert.Equal(t, "main", outResult.BranchName)
 
 	params.ClientID = clientIDInBucket(t, salt, 40, true)
-	inResult, err := h.protocolService.ResolveManifestBundle(ctx, params)
+	inResult, err := h.protocolService.ResolveUpdateForDevice(ctx, params)
 	require.NoError(t, err)
 	require.NotNil(t, inResult.Update)
 	assert.Equal(t, "200", inResult.Update.UpdateId)
 	assert.Equal(t, types.NormalUpdate, inResult.UpdateType)
 }
 
-func TestResolveManifestBundleChannelRollout(t *testing.T) {
+func TestResolveUpdateForDeviceChannelRollout(t *testing.T) {
 	ctx := context.Background()
 	const channelSalt = "channel-rollout-salt-uuid"
 
 	newChannelRolloutHarness := func(t *testing.T) *rolloutTestHarness {
 		h := newRolloutTestHarness(t)
-		h.channelRepo.mappings["production"] = &expo.ChannelMapping{
+		h.channelRepo.mappings["production"] = &types.ChannelResolution{
 			Id:         "1",
 			BranchName: "main",
-			Rollout:    &expo.ChannelRolloutInfo{ID: channelSalt, BranchName: "beta", Percentage: 30},
+			Rollout:    &types.ChannelRolloutInfo{ID: channelSalt, BranchName: "beta", Percentage: 30},
 		}
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true})
 		return h
@@ -828,7 +936,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 		h := newChannelRolloutHarness(t)
 		h.seed(seedRow{branch: "beta", rtv: "1", platform: "ios", id: 200, checked: true})
 
-		inResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		inResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, inResult.Update)
 		assert.Equal(t, "200", inResult.Update.UpdateId)
@@ -836,13 +944,13 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 		// attribution: it must be the rollout branch for the in-bucket cohort.
 		assert.Equal(t, "beta", inResult.BranchName)
 
-		outResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, false)))
+		outResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, false)))
 		require.NoError(t, err)
 		require.NotNil(t, outResult.Update)
 		assert.Equal(t, "100", outResult.Update.UpdateId)
 		assert.Equal(t, "main", outResult.BranchName)
 
-		anonymousResult, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, ""))
+		anonymousResult, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, ""))
 		require.NoError(t, err)
 		require.NotNil(t, anonymousResult.Update)
 		assert.Equal(t, "main", anonymousResult.BranchName)
@@ -850,7 +958,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 
 	t.Run("runtime version fallback when the rollout branch has no update", func(t *testing.T) {
 		h := newChannelRolloutHarness(t)
-		result, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		result, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, result.Update)
 		assert.Equal(t, "100", result.Update.UpdateId)
@@ -860,7 +968,7 @@ func TestResolveManifestBundleChannelRollout(t *testing.T) {
 	t.Run("unchecked updates on the rollout branch do not count", func(t *testing.T) {
 		h := newChannelRolloutHarness(t)
 		h.seed(seedRow{branch: "beta", rtv: "1", platform: "ios", id: 200, checked: false})
-		result, err := h.protocolService.ResolveManifestBundle(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
+		result, err := h.protocolService.ResolveUpdateForDevice(ctx, baseParams(h, clientIDInBucket(t, channelSalt, 30, true)))
 		require.NoError(t, err)
 		require.NotNil(t, result.Update)
 		assert.Equal(t, "100", result.Update.UpdateId)
@@ -880,7 +988,7 @@ func TestPublishRepublishRollbackBlockedDuringActiveRollout(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames:      []string{"bundle.js"},
+		Files:          hashedUploads("bundle.js"),
 	})
 	assert.ErrorIs(t, err, ErrActiveRolloutBlocksPublish)
 
@@ -1129,9 +1237,9 @@ func TestRolloutServiceRequiresControlPlane(t *testing.T) {
 func TestResolveAssetUpdateTiers(t *testing.T) {
 	ctx := context.Background()
 
-	newAssetHarness := func(t *testing.T) (*rolloutTestHarness, *expo.ChannelMapping, string, string) {
+	newAssetHarness := func(t *testing.T) (*rolloutTestHarness, *types.ChannelResolution, string, string) {
 		h := newRolloutTestHarness(t)
-		h.channelRepo.mappings["production"] = &expo.ChannelMapping{Id: "1", BranchName: "main"}
+		h.channelRepo.mappings["production"] = &types.ChannelResolution{Id: "1", BranchName: "main"}
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true, uuid: "11111111-1111-1111-1111-111111111111"})
 		h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 200, checked: true, percentage: 40, controlId: 100, uuid: "22222222-2222-2222-2222-222222222222"})
 		branchMap, err := h.channelRepo.GetChannelBranchMapping(ctx, h.appId, "production")

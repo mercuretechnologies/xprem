@@ -10,7 +10,6 @@ import (
 
 	"xprem/ee/apikeyrestrictions"
 	"xprem/internal/bucket"
-	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/services"
 	"xprem/internal/types"
 
@@ -208,7 +207,7 @@ func (acceptingCliRepo) GetApiKeyNameByID(context.Context, string, int64) (strin
 func (acceptingCliRepo) InsertApiKey(context.Context, string, string, string, string) (int64, error) {
 	return 0, nil
 }
-func (acceptingCliRepo) GetApiKeysMetadataByAppID(context.Context, string) ([]pgdb.GetApiKeysMetadataByAppIDRow, error) {
+func (acceptingCliRepo) GetApiKeysMetadataByAppID(context.Context, string) ([]types.ApiKeyMetadata, error) {
 	return nil, nil
 }
 func (acceptingCliRepo) RevokeApiKeyByID(context.Context, int64, string) (string, error) {

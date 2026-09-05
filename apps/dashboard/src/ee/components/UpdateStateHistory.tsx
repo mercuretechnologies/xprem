@@ -40,11 +40,13 @@ export const UpdateStateHistory = ({
   pointsByUpdate,
   annotations,
   renderAnnotationDetails,
+  devicesLabel = 'Devices on this update now',
 }: {
   series: HealthHistorySeries[];
   pointsByUpdate: Record<string, UpdateStateHistoryPoint[]>;
   annotations?: TimeSeriesAnnotation[];
   renderAnnotationDetails?: TimeSeriesChartProps['renderAnnotationDetails'];
+  devicesLabel?: string;
 }) => {
   const [metric, setMetric] = useState<Metric>('arrivals');
 
@@ -132,7 +134,7 @@ export const UpdateStateHistory = ({
                 }`}>
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <option.icon className="h-3 w-3" />
-                  {option.key === 'arrivals' ? 'Devices on this update now' : 'Failing now'}
+                  {option.key === 'arrivals' ? devicesLabel : 'Failing now'}
                 </span>
                 <span
                   className={`font-mono text-lg tabular-nums ${

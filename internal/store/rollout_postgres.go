@@ -147,7 +147,7 @@ func (s *PostgresRolloutStore) GetActiveRolloutUpdates(ctx context.Context, appI
 	for _, row := range rows {
 		item := types.RolloutUpdate{
 			UpdateId:  strconv.FormatInt(row.ID, 10),
-			Platform:  row.Platform,
+			Platform:  types.Platform(row.Platform),
 			CreatedAt: row.CreatedAt.Time.Format(time.RFC3339),
 		}
 		if row.RolloutPercentage != nil {

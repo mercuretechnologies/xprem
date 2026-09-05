@@ -14,6 +14,8 @@ export type GeoipStrategy = 'proxy-headers' | 'maxmind';
 
 export type ServerChoices = {
   baseUrl?: string;
+  /** The server routes under BASE_URL's path itself (SERVE_FROM_SUB_PATH). */
+  serveFromSubPath?: boolean;
   jwtSecret?: string;
   dbUrl?: string;
   masterKeySource: MasterKeySource;

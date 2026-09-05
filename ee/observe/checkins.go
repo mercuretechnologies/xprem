@@ -346,7 +346,6 @@ func (r *CheckInRecorder) record(ctx context.Context, checkIn handlers.DeviceChe
 	return r.identity.TouchDevice(ctx, checkIn.AppID, checkIn.EASClientID, currentUpdate, state.device)
 }
 
-
 // ParseFailedUpdateIDs reads the Expo-Recent-Failed-Update-IDs header.
 func ParseFailedUpdateIDs(raw string) []string {
 	return update.ParseFailedUpdateIDs(raw)

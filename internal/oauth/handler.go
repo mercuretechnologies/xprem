@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 	"xprem/config"
 	"xprem/internal/handlers"
@@ -34,10 +33,6 @@ func NewOAuthHandler(service *OAuthService, limiter *ratelimit.Limiter) *OAuthHa
 	return &OAuthHandler{service: service, limiter: limiter}
 }
 
-func baseURL() string {
-	return strings.TrimRight(config.GetEnv("BASE_URL"), "/")
-}
-
 // WithCORS opens an endpoint to cross-origin callers. The OAuth surface is
 // meant to be reached from other origins (claude.ai and its kind fetch the
 // metadata and token endpoints from their own pages), and nothing on it relies
@@ -61,17 +56,16 @@ func WithCORS(next http.HandlerFunc) http.HandlerFunc {
 func (h *OAuthHandler) ProtectedResourceMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	handlers.RenderJSON(w, http.StatusOK, map[string]interface{}{
 		"resource":                 ResourceURL(),
-		"authorization_servers":    []string{baseURL()},
+		"authorization_servers":    []string{config.BaseURL()},
 		"scopes_supported":         []string{ScopeMCP},
 		"bearer_methods_supported": []string{"header"},
 	})
 }
 
 // AuthorizationServerMetadataHandler serves RFC 8414 metadata. The issuer is
-// the bare BASE_URL, deliberately without a path: path-bearing issuers trigger
-// the well-known path-insertion rules clients disagree on.
+// BASE_URL, including any path the server is mounted under.
 func (h *OAuthHandler) AuthorizationServerMetadataHandler(w http.ResponseWriter, r *http.Request) {
-	base := baseURL()
+	base := config.BaseURL()
 	handlers.RenderJSON(w, http.StatusOK, map[string]interface{}{
 		"issuer":                                base,
 		"authorization_endpoint":                base + "/oauth/authorize",
@@ -181,7 +175,7 @@ func (h *OAuthHandler) AuthorizeHandler(w http.ResponseWriter, r *http.Request) 
 	if req.Resource != "" {
 		consent.Set("resource", req.Resource)
 	}
-	http.Redirect(w, r, baseURL()+consentPath+"?"+consent.Encode(), http.StatusFound)
+	http.Redirect(w, r, config.BaseURL()+consentPath+"?"+consent.Encode(), http.StatusFound)
 }
 
 // ConsentHandler turns an approved consent into an authorization code. It sits

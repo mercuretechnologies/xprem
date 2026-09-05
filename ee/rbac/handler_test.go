@@ -143,7 +143,7 @@ func TestMyPermissionsHandler(t *testing.T) {
 	require.Equal(t, map[string][]string{"app-1": {"branch:create"}}, response.Apps)
 
 	// Admin: flagged as such, no map needed.
-	recorder = run(t, http.MethodGet, "/me/permissions", "", &services.DashboardPrincipal{UserId: "admin-1"})
+	recorder = run(t, http.MethodGet, "/me/permissions", "", &services.DashboardPrincipal{UserId: "admin-1", IsAdmin: true})
 	response = decode(recorder)
 	require.True(t, response.IsAdmin)
 	require.Nil(t, response.Apps)

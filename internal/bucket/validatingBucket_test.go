@@ -2,8 +2,10 @@ package bucket
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"xprem/internal/types"
@@ -57,6 +59,38 @@ func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); re
 func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
 func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
 func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }
+func (s *stubBucket) BlobExists(context.Context, string, string) (bool, error) {
+	s.mark()
+	return false, nil
+}
+func (s *stubBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	s.mark()
+	return nil, nil
+}
+func (s *stubBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
+	s.mark()
+	return false, nil
+}
+func (s *stubBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
+	s.mark()
+	return nil, nil
+}
+func (s *stubBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) DeleteBSDiffs(context.Context, string, string) error {
+	s.mark()
+	return nil
+}
+func (s *stubBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	s.mark()
+	return "", nil
+}
 
 func validUpdate() types.Update {
 	return types.Update{AppId: "app-1", Branch: "main", RuntimeVersion: "1.0", UpdateId: "123"}
@@ -222,6 +256,16 @@ func TestValidatingBucket_UploadFileIntoUpdate_RejectsTraversalInFileName(t *tes
 	assert.False(t, stub.called)
 }
 
+func TestValidatingBucket_UploadFileIntoUpdate_RejectsReservedBranch(t *testing.T) {
+	stub := &stubBucket{}
+	v := &validatingBucket{Inner: stub}
+	update := validUpdate()
+	update.Branch = casDir
+	err := v.UploadFileIntoUpdate(update, "metadata.json", bytes.NewReader(nil))
+	assert.Error(t, err)
+	assert.False(t, stub.called, "an update folder under cas/ must never reach the backend")
+}
+
 func TestValidatingBucket_CopyFileIntoUpdate_RejectsTraversalInFileName(t *testing.T) {
 	stub := &stubBucket{}
 	v := &validatingBucket{Inner: stub}
@@ -297,4 +341,29 @@ func TestValidatingBucket_ValidInputsDelegate(t *testing.T) {
 	_, err := v.GetFile(validUpdate(), "assets/image.png")
 	assert.NoError(t, err)
 	assert.True(t, stub.called)
+}
+
+// The backends list the children of {appId}/, and the cas folder is one of
+// them: without the filter the dashboard renders "cas" as a branch.
+func TestValidatingBucketGetBranchesHidesCas(t *testing.T) {
+	base := t.TempDir()
+	writeFile(t, filepath.Join(base, "app-1", "branch-a", "1.0", "100", ".check"))
+	writeFile(t, filepath.Join(base, "app-1", "cas", "some-blob-hash"))
+	writeFile(t, filepath.Join(base, "app-1", "bsdiff", "branch-a", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
+
+	b := &validatingBucket{Inner: &LocalBucket{BasePath: base}}
+
+	branches, err := b.GetBranches("app-1")
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"branch-a"}, branches)
+}
+
+func TestValidatingBucketRejectsTheReservedBranchName(t *testing.T) {
+	b := &validatingBucket{Inner: &stubBucket{}}
+
+	_, err := b.GetRuntimeVersions("app-1", casDir)
+	assert.ErrorContains(t, err, "reserved")
+
+	_, err = b.RequestUploadUrlForFileUpdate("app-1", casDir, "1.0", "100", "metadata.json")
+	assert.ErrorContains(t, err, "reserved")
 }

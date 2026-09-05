@@ -92,6 +92,46 @@ func TestDisplayName_Rejects(t *testing.T) {
 	}
 }
 
+func TestGitURL_NormalizesRepositoryURLs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		input string
+		want  string
+	}{
+		"github":         {"https://github.com/acme/mobile", "https://github.com/acme/mobile"},
+		"trailing slash": {"https://gitlab.com/acme/mobile/", "https://gitlab.com/acme/mobile"},
+		"git suffix":     {"https://bitbucket.org/acme/mobile.git", "https://bitbucket.org/acme/mobile"},
+		"self hosted":    {"http://git.internal:8080/team/mobile", "http://git.internal:8080/team/mobile"},
+		"clear setting":  {"   ", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := GitURL("gitUrl", tc.input)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestGitURL_RejectsUnsafeOrNonWebURLs(t *testing.T) {
+	for name, value := range map[string]string{
+		"ssh remote":      "git@github.com:acme/mobile.git",
+		"file URL":        "file:///tmp/mobile",
+		"missing host":    "https:///acme/mobile",
+		"missing repo":    "https://github.com",
+		"credentials":     "https://user:token@github.com/acme/mobile",
+		"query":           "https://github.com/acme/mobile?token=secret",
+		"fragment":        "https://github.com/acme/mobile#readme",
+		"control char":    "https://github.com/acme/mobile\nother",
+		"over max length": "https://github.com/acme/" + strings.Repeat("a", maxGitURLLen),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := GitURL("gitUrl", value)
+			require.Error(t, err)
+			assert.True(t, IsValidationError(err))
+			assert.Contains(t, err.Error(), "gitUrl")
+		})
+	}
+}
+
 func TestNumericID(t *testing.T) {
 	for _, v := range []string{"1", "42", "9223372036854775807"} {
 		assert.NoError(t, NumericID("apiKeyId", v), "expected %q to be valid", v)

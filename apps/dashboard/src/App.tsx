@@ -24,6 +24,7 @@ import { PermissionsProvider } from '@/ee/lib/PermissionsContext';
 import { RequiresApp } from '@/components/RequiresApp';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Branches } from '@/pages/Branches';
+import { UpdateDetails } from '@/pages/UpdateDetails';
 import { useSettings } from '@/lib/SettingsContext';
 import { BuildCredentials } from './pages/BuildCredentials';
 import { AppIdentifierDetail } from './pages/BuildCredentials/AppIdentifierDetail';
@@ -124,11 +125,25 @@ export const App = () => {
                           element={withLayout(withApp(<Branches />))}
                         />
                         <Route
+                          path="/branches/:branchName/runtime-versions/:runtimeVersion/updates/:updateId"
+                          element={withLayout(withApp(<UpdateDetails />))}
+                        />
+                        <Route
                           path="/updates"
                           element={withLayout(
                             withApp(
                               <RequiresControlPlane>
                                 <Updates />
+                              </RequiresControlPlane>
+                            )
+                          )}
+                        />
+                        <Route
+                          path="/updates/:branchName/:runtimeVersion/:updateId"
+                          element={withLayout(
+                            withApp(
+                              <RequiresControlPlane>
+                                <UpdateDetails />
                               </RequiresControlPlane>
                             )
                           )}

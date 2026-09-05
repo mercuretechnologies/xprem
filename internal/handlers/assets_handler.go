@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"xprem/internal/compression"
 	"xprem/internal/services"
+	"xprem/internal/types"
 
 	"github.com/google/uuid"
 )
@@ -21,21 +22,31 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 	}
 
 	channelName := r.Header.Get("expo-channel-name")
-
-	params := services.AssetResolutionParams{
-		RequestID:         requestID,
-		AppID:             appId,
-		ChannelName:       channelName,
-		AssetName:         r.URL.Query().Get("asset"),
-		RuntimeVersion:    r.URL.Query().Get("runtimeVersion"),
-		Platform:          r.URL.Query().Get("platform"),
-		ClientID:          r.Header.Get("EAS-Client-ID"),
-		Branch:            r.URL.Query().Get("branch"),
-		UpdateID:          r.URL.Query().Get("updateId"),
-		RequestedUpdateID: r.Header.Get("Expo-Requested-Update-ID"),
+	platform, err := types.ParsePlatform(r.URL.Query().Get("platform"))
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid platform: %s", requestID, r.URL.Query().Get("platform"))
+		http.Error(w, "Invalid platform", http.StatusBadRequest)
+		return
 	}
 
-	result, err := h.protocolService.ResolveAssetBundle(r.Context(), params)
+	params := services.AssetResolutionParams{
+		RequestID:           requestID,
+		AppID:               appId,
+		ChannelName:         channelName,
+		AssetName:           r.URL.Query().Get("asset"),
+		RuntimeVersion:      r.URL.Query().Get("runtimeVersion"),
+		Platform:            platform,
+		ClientID:            r.Header.Get("EAS-Client-ID"),
+		Branch:              r.URL.Query().Get("branch"),
+		UpdateID:            r.URL.Query().Get("updateId"),
+		RequestedUpdateID:   r.Header.Get("Expo-Requested-Update-ID"),
+		Hash:                r.URL.Query().Get("h"),
+		Extension:           r.URL.Query().Get("ext"),
+		ExpoCurrentUpdateId: r.Header.Get("Expo-Current-Update-ID"),
+		AIM:                 r.Header.Get("A-IM"),
+	}
+
+	result, err := h.protocolService.ResolveAsset(r.Context(), params)
 	if err != nil {
 		if assetErr := (*services.ExpoAssetError)(nil); errors.As(err, &assetErr) {
 			http.Error(w, assetErr.Message, assetErr.StatusCode)
@@ -63,5 +74,12 @@ func (h *ExpoProtocolHandler) HandleAssets(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if result.Uncompressed {
+		w.Header().Set("Content-Type", result.ContentType)
+		if _, err := w.Write(result.Body); err != nil {
+			log.Printf("[RequestID: %s] Error writing response: %v", requestID, err)
+		}
+		return
+	}
 	compression.ServeCompressedAsset(w, r, result.Body, result.ContentType, params.RequestID)
 }

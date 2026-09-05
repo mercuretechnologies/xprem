@@ -5,8 +5,6 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/auditlog"
-	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
 	"xprem/internal/store"
 	"xprem/internal/types"
 
@@ -36,6 +34,12 @@ func (f *fakeMgmtAppRepo) UpdateAppNameByID(_ context.Context, id string, newNam
 	f.apps[id] = app
 	return nil
 }
+func (f *fakeMgmtAppRepo) UpdateAppGitURLByID(_ context.Context, id string, gitURL string) error {
+	app := f.apps[id]
+	app.GitURL = gitURL
+	f.apps[id] = app
+	return nil
+}
 func (f *fakeMgmtAppRepo) GetAppByID(_ context.Context, id string) (config.AppConfig, error) {
 	app, ok := f.apps[id]
 	if !ok {
@@ -56,7 +60,7 @@ func (f *fakeMgmtChannelRepo) GetChannelNameByBranchName(_ context.Context, _ st
 func (f *fakeMgmtChannelRepo) GetChannels(_ context.Context, _ string) ([]types.ChannelMapping, error) {
 	return nil, nil
 }
-func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*expo.ChannelMapping, error) {
+func (f *fakeMgmtChannelRepo) GetChannelBranchMapping(_ context.Context, _ string, _ string) (*types.ChannelResolution, error) {
 	return nil, nil
 }
 func (f *fakeMgmtChannelRepo) GetBranchSurfing(_ context.Context, _ string, _ string) (*types.BranchSurfing, error) {
@@ -68,17 +72,17 @@ func (f *fakeMgmtChannelRepo) SetBranchSurfing(_ context.Context, _ string, _ st
 
 type fakeMgmtBranchRepo struct{}
 
-func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ string, _ string) ([]types.SurfableBranch, error) {
+func (f *fakeMgmtBranchRepo) GetSurfableBranches(_ context.Context, _ string, _ string, _ types.Platform) ([]types.SurfableBranch, error) {
 	return nil, nil
 }
 
-func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _ pgdb.InsertBranchParams) (int64, error) {
+func (f *fakeMgmtBranchRepo) InsertBranch(_ context.Context, _, _ string) (int64, error) {
 	return 7, nil
 }
 func (f *fakeMgmtBranchRepo) UpsertBranchAndRuntimeVersion(_ context.Context, _ string, _ string, _ string) error {
 	return nil
 }
-func (f *fakeMgmtBranchRepo) GetUpdatedMetadataByBranchName(_ context.Context, _ string, _ string) ([]pgdb.GetUpdatesMetadataByBranchNameRow, error) {
+func (f *fakeMgmtBranchRepo) GetUpdateRefsByBranchName(_ context.Context, _ string, _ string) ([]types.UpdateRef, error) {
 	return nil, nil
 }
 func (f *fakeMgmtBranchRepo) DeleteBranchByName(_ context.Context, _ string, _ string) error {
@@ -127,20 +131,46 @@ func TestAppLifecycleEmitsAuditEvents(t *testing.T) {
 	assert.Equal(t, map[string]any{"keys_mode": "database"}, created.Metadata)
 
 	// The rename carries both names; an idempotent rename emits nothing.
-	require.NoError(t, appService.UpdateApp(ctx, appId, "Renamed App"))
+	app, err := appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppName(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 	renamed := recorder.events[1]
 	assert.Equal(t, auditlog.ActionAppRenamed, renamed.Action)
 	assert.Equal(t, map[string]any{"name": "Renamed App", "previous_name": "My App"}, renamed.Metadata)
 
-	require.NoError(t, appService.UpdateApp(ctx, appId, "Renamed App"))
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppName(ctx, app, "Renamed App"))
 	require.Len(t, recorder.events, 2)
 
-	// The deletion entry still names the app: read before the row went away.
-	require.NoError(t, appService.DeleteApp(ctx, appId))
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, "https://github.com/acme/mobile.git/"))
 	require.Len(t, recorder.events, 3)
-	assert.Equal(t, auditlog.ActionAppDeleted, recorder.events[2].Action)
-	assert.Equal(t, "Renamed App", recorder.events[2].TargetDisplay)
+	gitURLUpdated := recorder.events[2]
+	assert.Equal(t, auditlog.ActionAppGitURLUpdated, gitURLUpdated.Action)
+	assert.Equal(t, map[string]any{
+		"git_url":          "https://github.com/acme/mobile",
+		"previous_git_url": "",
+	}, gitURLUpdated.Metadata)
+
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, "https://github.com/acme/mobile"))
+	require.Len(t, recorder.events, 3)
+
+	require.NoError(t, appService.UpdateAppGitURL(ctx, app, ""))
+	require.Len(t, recorder.events, 4)
+	assert.Equal(t, auditlog.ActionAppGitURLUpdated, recorder.events[3].Action)
+
+	// The deletion entry still names the app.
+	app, err = appService.GetAppByID(ctx, appId)
+	require.NoError(t, err)
+	require.NoError(t, appService.DeleteApp(ctx, app))
+	require.Len(t, recorder.events, 5)
+	assert.Equal(t, auditlog.ActionAppDeleted, recorder.events[4].Action)
+	assert.Equal(t, "Renamed App", recorder.events[4].TargetDisplay)
 }
 
 func TestChannelEventsEmitAuditEvents(t *testing.T) {

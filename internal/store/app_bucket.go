@@ -55,3 +55,7 @@ func (s *BucketAppStore) DeleteAppByID(ctx context.Context, id string) error {
 func (s *BucketAppStore) UpdateAppNameByID(ctx context.Context, id string, newName string) error {
 	return ErrNotSupportedInStatelessMode
 }
+
+func (s *BucketAppStore) UpdateAppGitURLByID(ctx context.Context, id string, gitURL string) error {
+	return ErrNotSupportedInStatelessMode
+}

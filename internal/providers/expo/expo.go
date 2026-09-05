@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/types"
@@ -23,22 +24,6 @@ type UserAccount struct {
 	Id       string `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
-}
-
-// ChannelRolloutInfo is the active channel rollout folded into a ChannelMapping in
-// control-plane mode. ID doubles as the bucketing salt. The stateless (Expo) provider
-// never sets it, so rollouts stay a control-plane-only feature.
-type ChannelRolloutInfo struct {
-	ID         string `json:"id"`
-	BranchName string `json:"branchName"`
-	Percentage int    `json:"percentage"`
-}
-
-type ChannelMapping struct {
-	Id         string `json:"id"`
-	BranchName string `json:"branchName"`
-	// Set only by the Postgres channel store when the channel has an active rollout.
-	Rollout *ChannelRolloutInfo `json:"rollout,omitempty"`
 }
 
 type BranchMapping struct {
@@ -63,8 +48,13 @@ type RawBranchMapping struct {
 	} `json:"data"`
 }
 
+func HasCredential(auth types.Auth) bool {
+	return (auth.Token != nil && strings.TrimSpace(*auth.Token) != "") ||
+		(auth.SessionSecret != nil && strings.TrimSpace(*auth.SessionSecret) != "")
+}
+
 func ValidateAuth(appId string, expoAuth types.Auth) (*UserAccount, error) {
-	if expoAuth.Token == nil && expoAuth.SessionSecret == nil {
+	if !HasCredential(expoAuth) {
 		return nil, errors.New("no valid Expo auth provided")
 	}
 	expoAccount, err := FetchUserAccountInformations(expoAuth)
@@ -356,10 +346,10 @@ func FetchAppName(ctx context.Context, appId string) string {
 	return name
 }
 
-func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
+func FetchChannelMapping(appId, channelName string) (*types.ChannelResolution, error) {
 	mappingCache := cache2.GetCache()
 	cacheKey := channelMappingCacheKey(appId, channelName)
-	if mapping, ok := cache2.GetJSON[ChannelMapping](mappingCache, cacheKey); ok {
+	if mapping, ok := cache2.GetJSON[types.ChannelResolution](mappingCache, cacheKey); ok {
 		return &mapping, nil
 	}
 
@@ -442,7 +432,7 @@ func FetchChannelMapping(appId, channelName string) (*ChannelMapping, error) {
 		return nil, nil
 	}
 
-	result := &ChannelMapping{
+	result := &types.ChannelResolution{
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,
 	}

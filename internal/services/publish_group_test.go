@@ -23,17 +23,17 @@ func (h *rolloutTestHarness) seedGrouped(row seedRow, publishGroup string) types
 	update := h.seed(row)
 	h.updateRepo.mu.Lock()
 	defer h.updateRepo.mu.Unlock()
-	if stored := h.updateRepo.findRowLocked(h.appId, row.branch, update.UpdateId); stored != nil {
+	if stored := h.updateRepo.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); stored != nil {
 		stored.publishGroup = &publishGroup
 	}
 	return update
 }
 
 // rowsInGroup returns the fake rows stamped with the given group, keyed by platform.
-func (h *rolloutTestHarness) rowsInGroup(publishGroup string) map[string]*fakeStoredUpdate {
+func (h *rolloutTestHarness) rowsInGroup(publishGroup string) map[types.Platform]*fakeStoredUpdate {
 	h.updateRepo.mu.Lock()
 	defer h.updateRepo.mu.Unlock()
-	rows := map[string]*fakeStoredUpdate{}
+	rows := map[types.Platform]*fakeStoredUpdate{}
 	for _, row := range h.updateRepo.rows {
 		if row.publishGroup != nil && *row.publishGroup == publishGroup {
 			rows[row.platform] = row
@@ -59,7 +59,7 @@ func TestRepublishPublishGroup(t *testing.T) {
 
 		created := h.rowsInGroup(result.PublishGroup)
 		require.Len(t, created, 2)
-		for _, platform := range []string{"ios", "android"} {
+		for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
 			require.Contains(t, created, platform)
 			assert.Equal(t, types.NormalUpdate, created[platform].updateType)
 			assert.True(t, created[platform].checked)
@@ -140,7 +140,7 @@ func TestRequestUploadURLsStampsPublishGroup(t *testing.T) {
 		BranchName:     "main",
 		Platform:       "ios",
 		RuntimeVersion: "1",
-		FileNames:      []string{"bundle.js"},
+		Files:          hashedUploads("bundle.js"),
 		PublishGroupID: &group,
 	})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestRequestUploadURLsStampsPublishGroup(t *testing.T) {
 		BranchName:        "main",
 		Platform:          "android",
 		RuntimeVersion:    "1",
-		FileNames:         []string{"bundle.js"},
+		Files:             hashedUploads("bundle.js"),
 		RolloutPercentage: &pct,
 		PublishGroupID:    &group,
 	})
@@ -188,7 +188,7 @@ func TestPublishGroupRolloutActivatesEveryPlatform(t *testing.T) {
 
 	rows := h.rowsInGroup(group)
 	require.Len(t, rows, 2)
-	for _, platform := range []string{"ios", "android"} {
+	for _, platform := range []types.Platform{types.PlatformIOS, types.PlatformAndroid} {
 		require.Contains(t, rows, platform)
 		assert.True(t, rows[platform].checked)
 		require.NotNil(t, rows[platform].rolloutPercentage)

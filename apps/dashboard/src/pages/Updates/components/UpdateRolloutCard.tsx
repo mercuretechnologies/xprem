@@ -204,6 +204,7 @@ export const UpdateRolloutCard = ({
             <UpdateHealthHistory
               from={updates.map(update => update.createdAt).sort()[0]}
               live
+              devicesLabel="Devices in this rollout now"
               series={[
                 {
                   key: 'candidate',

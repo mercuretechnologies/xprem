@@ -1,7 +1,7 @@
 name: Promote release to latest
 
 # Manually promotes an already-released version to the "latest" Docker tag,
-# across the canonical xprem image and the deprecated expo-open-ota paths.
+# on the canonical xprem image and the deprecated expo-open-ota path.
 # The release workflow never touches "latest" anymore.
 
 on:
@@ -11,11 +11,9 @@ on:
         description: "Stable release tag to promote (e.g. v3.0.0)"
         required: true
 
-# The GHCR push authenticates with its own token, so this workflow never needs
-# anything from GITHUB_TOKEN. Stated explicitly rather than inherited from the
-# org-wide default.
 permissions:
   contents: read
+  packages: write
 
 jobs:
   promote:
@@ -34,12 +32,11 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.DOCKER_GITHUB_CONTAINER_REGISTRY_TOKEN }}" | docker login ghcr.io -u axelmarciano --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Tag Docker image as latest in every namespace
         run: |
           for REPO in "ghcr.io/${{ github.repository_owner }}/xprem" \
-                      "ghcr.io/${{ github.repository_owner }}/expo-open-ota" \
-                      "ghcr.io/axelmarciano/expo-open-ota"; do
+                      "ghcr.io/${{ github.repository_owner }}/expo-open-ota"; do
             docker buildx imagetools create -t "$REPO:latest" "$REPO:$TAG"
           done

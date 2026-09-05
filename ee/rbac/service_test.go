@@ -238,7 +238,7 @@ func TestAuthorizeAdminBypassesEverything(t *testing.T) {
 	// allowed and always sees everything.
 	for _, service := range []*RBACService{licensedService(newFakeRepo()), unlicensedService(newFakeRepo()), unlicensedService(nil)} {
 		require.NoError(t, service.Authorize(ctx, admin, "any-app", PermAppDelete, FallbackAdminOnly))
-		visible, err := service.CanSeeApp(ctx, admin, "any-app")
+		visible, _, err := service.VisibleGrant(ctx, admin, "any-app")
 		require.NoError(t, err)
 		require.True(t, visible)
 		restricted, _, err := service.VisibleApps(ctx, admin)
@@ -305,7 +305,7 @@ func TestMemberVisibility(t *testing.T) {
 	restricted, _, err := unlicensedService(repo).VisibleApps(ctx, member)
 	require.NoError(t, err)
 	require.False(t, restricted)
-	visible, err := unlicensedService(repo).CanSeeApp(ctx, member, "app-3")
+	visible, _, err := unlicensedService(repo).VisibleGrant(ctx, member, "app-3")
 	require.NoError(t, err)
 	require.True(t, visible)
 
@@ -321,12 +321,14 @@ func TestMemberVisibility(t *testing.T) {
 	require.True(t, restricted)
 	require.Empty(t, ids)
 
-	visible, err = service.CanSeeApp(ctx, member, "app-2")
+	visible, grant, err := service.VisibleGrant(ctx, member, "app-2")
 	require.NoError(t, err)
 	require.True(t, visible)
-	visible, err = service.CanSeeApp(ctx, member, "app-3")
+	require.Equal(t, "app-2", grant.AppID)
+	visible, grant, err = service.VisibleGrant(ctx, member, "app-3")
 	require.NoError(t, err)
 	require.False(t, visible)
+	require.Nil(t, grant)
 }
 
 func TestVisibleAppsForPrincipal(t *testing.T) {

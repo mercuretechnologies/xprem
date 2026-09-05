@@ -161,20 +161,12 @@ func (h *HealthHistory) drainOutbox(ctx context.Context) bool {
 	return delivered
 }
 
-// outboxAdvisoryLockID serializes outbox drainers across replicas (see
-// migrationAdvisoryLockID in internal/database/postgres for the convention).
-const outboxAdvisoryLockID = 745103622
-
 // outboxSendTimeout bounds the ClickHouse insert.
 const outboxSendTimeout = 15 * time.Second
 
-// snapshotAdvisoryLockID elects one replica to take fleet snapshots,
-// separate from the outbox lock.
-const snapshotAdvisoryLockID = 745103623
-
 // lockOutbox elects one drainer across replicas.
 func (h *HealthHistory) lockOutbox(ctx context.Context) (func(), bool, error) {
-	return postgres.TryAdvisoryLock(ctx, h.postgres.DB, outboxAdvisoryLockID, "health outbox")
+	return postgres.TryAdvisoryLock(ctx, h.postgres.DB, postgres.HealthOutboxLockID, "health outbox")
 }
 
 // deliverOutboxBatch moves one batch of events from PostgreSQL to ClickHouse.
@@ -255,7 +247,7 @@ func (h *HealthHistory) deliverOutboxBatch(ctx context.Context) (int, error) {
 // captureSnapshots aggregates the fleet's current health into one replica's
 // snapshot, guarded by an advisory lock so only one replica runs it.
 func (h *HealthHistory) captureSnapshots(ctx context.Context) {
-	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, snapshotAdvisoryLockID, "health snapshot")
+	release, locked, err := postgres.TryAdvisoryLock(ctx, h.postgres.DB, postgres.HealthSnapshotLockID, "health snapshot")
 	if err != nil {
 		log.Printf("observe: taking the health snapshot lock failed: %v", err)
 		return

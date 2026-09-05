@@ -60,7 +60,7 @@ func (s *PostgresUpdateStore) GetUpdateDetails(ctx context.Context, appId string
 		UpdateId:   strconv.FormatInt(update.ID, 10),
 		CreatedAt:  update.CreatedAt.Time.Format(time.RFC3339),
 		CommitHash: update.CommitHash,
-		Platform:   update.Platform,
+		Platform:   types.Platform(update.Platform),
 		Message:    messageStr,
 		Type:       types.UpdateType(update.UpdateType),
 		ExpoConfig: string(expoConfig),
@@ -76,13 +76,13 @@ func (s *PostgresUpdateStore) GetUpdateDetails(ctx context.Context, appId string
 	return details, nil
 }
 
-func (s *PostgresUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.Update, error) {
+func (s *PostgresUpdateStore) GetLatestUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.Update, error) {
 	pgAppID := ToPgUUID(appId)
 	row, err := s.engine.Queries.GetLatestUpdate(ctx, pgdb.GetLatestUpdateParams{
 		AppID:    pgAppID,
 		Name:     branchName,
 		Version:  runtimeVersion,
-		Platform: platform,
+		Platform: string(platform),
 	})
 	if err != nil {
 		if database.IsNoRows(err) {
@@ -174,7 +174,7 @@ func (s *PostgresUpdateStore) MarkUpdateAsChecked(ctx context.Context, update ty
 	return nil
 }
 
-func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, publishGroup *string) (*types.Update, error) {
+func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, publishGroup *string) (*types.Update, error) {
 	messagePtr := &message
 	if message == "" {
 		messagePtr = (*string)(nil)
@@ -186,7 +186,7 @@ func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, up
 		Name:         branchName,
 		Version:      runtimeVersion,
 		UpdateType:   int32(types.NormalUpdate),
-		Platform:     platform,
+		Platform:     string(platform),
 		CommitHash:   commitHash,
 		Message:      messagePtr,
 		PublishGroup: ToPgUUIDPtr(publishGroup),
@@ -203,6 +203,63 @@ func (s *PostgresUpdateStore) CreateUpdate(ctx context.Context, appId string, up
 	}, nil
 }
 
+// UpdateUUID and AssetMapping stay nil for rollback rows.
+type ImportUpdateParams struct {
+	AppId          string
+	UpdateId       int64
+	BranchName     string
+	RuntimeVersion string
+	UpdateType     types.UpdateType
+	Platform       types.Platform
+	CommitHash     string
+	Message        string
+	CreatedAt      time.Time
+	CheckedAt      time.Time
+	UpdateUUID     *string
+	PublishGroup   *string
+	AssetMapping   *types.UpdateAssetMapping
+}
+
+// ImportUpdate inserts an already-checked row; false when the row already
+// existed and was left untouched.
+func (s *PostgresUpdateStore) ImportUpdate(ctx context.Context, params ImportUpdateParams) (bool, error) {
+	var messagePtr *string
+	if params.Message != "" {
+		messagePtr = &params.Message
+	}
+	rows, err := s.engine.Queries.ImportUpdate(ctx, pgdb.ImportUpdateParams{
+		ID:           params.UpdateId,
+		AppID:        ToPgUUID(params.AppId),
+		Name:         params.BranchName,
+		Version:      params.RuntimeVersion,
+		UpdateType:   int32(params.UpdateType),
+		Platform:     string(params.Platform),
+		CommitHash:   params.CommitHash,
+		Message:      messagePtr,
+		CheckedAt:    pgtype.Timestamptz{Time: params.CheckedAt, Valid: true},
+		UpdateUuid:   ToPgUUIDPtr(params.UpdateUUID),
+		CreatedAt:    pgtype.Timestamptz{Time: params.CreatedAt, Valid: true},
+		PublishGroup: ToPgUUIDPtr(params.PublishGroup),
+		AssetMapping: params.AssetMapping,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to import update into database: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func (s *PostgresUpdateStore) UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error) {
+	exists, err := s.engine.Queries.UpdateExistsOnBranch(ctx, pgdb.UpdateExistsOnBranchParams{
+		AppID: ToPgUUID(appId),
+		Name:  branchName,
+		ID:    updateId,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check for an existing update: %w", err)
+	}
+	return exists, nil
+}
+
 func (s *PostgresUpdateStore) GetUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
 	updateIdInt, err := strconv.ParseInt(updateId, 10, 64)
 	if err != nil {
@@ -214,6 +271,32 @@ func (s *PostgresUpdateStore) GetUpdate(ctx context.Context, appId string, branc
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to retrieve update by ID from database: %w", err)
+	}
+	return &types.Update{
+		UpdateId:       strconv.FormatInt(update.ID, 10),
+		Branch:         update.BranchName,
+		RuntimeVersion: update.RuntimeVersion,
+		CreatedAt:      time.Duration(update.CreatedAt.Time.UnixNano()),
+		AppId:          appId,
+	}, nil
+}
+
+// GetCheckedUpdate answers in one query what GetUpdate + IsUpdateValid answer
+// in two; it sits on the per-asset-download hot path.
+func (s *PostgresUpdateStore) GetCheckedUpdate(ctx context.Context, appId string, branchName string, runtimeVersion string, updateId string) (*types.Update, error) {
+	updateIdInt, err := strconv.ParseInt(updateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	update, err := s.GetUpdateByBranchNameAndRuntime(ctx, appId, updateIdInt, branchName, runtimeVersion)
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update by ID from database: %w", err)
+	}
+	if !update.CheckedAt.Valid {
+		return nil, nil
 	}
 	return &types.Update{
 		UpdateId:       strconv.FormatInt(update.ID, 10),
@@ -247,7 +330,7 @@ func (s *PostgresUpdateStore) GetUpdatesByPublishGroup(ctx context.Context, appI
 	for _, row := range rows {
 		members = append(members, types.PublishGroupMember{
 			UpdateId:   strconv.FormatInt(row.ID, 10),
-			Platform:   row.Platform,
+			Platform:   types.Platform(row.Platform),
 			CommitHash: row.CommitHash,
 		})
 	}
@@ -305,7 +388,7 @@ func (s *PostgresUpdateStore) GetPublishGroupsPage(ctx context.Context, appId st
 		group.Updates = append(group.Updates, types.PublishGroupUpdateItem{
 			UpdateId:   strconv.FormatInt(row.ID, 10),
 			CreatedAt:  createdAt,
-			Platform:   row.Platform,
+			Platform:   types.Platform(row.Platform),
 			CommitHash: row.CommitHash,
 		})
 	}
@@ -381,7 +464,7 @@ func (s *PostgresUpdateStore) GetUpdatesByRunTimeVersionAndBranchName(ctx contex
 			CreatedAt:  createdAtStr,
 			CommitHash: row.CommitHash,
 			Message:    messageStr,
-			Platform:   row.Platform,
+			Platform:   types.Platform(row.Platform),
 		}
 		if row.RolloutPercentage != nil {
 			pct := int(*row.RolloutPercentage)
@@ -430,7 +513,7 @@ func (s *PostgresUpdateStore) GetUpdateFeed(ctx context.Context, appId string, q
 		AppID:           ToPgUUID(appId),
 		Branch:          query.Branch,
 		RuntimeVersion:  query.RuntimeVersion,
-		Platform:        query.Platform,
+		Platform:        string(query.Platform),
 		UpdateUuid:      escapeLikePattern(query.UpdateUUID),
 		PublishGroup:    escapeLikePattern(query.PublishGroup),
 		CommitHash:      escapeLikePattern(query.CommitHash),
@@ -462,7 +545,7 @@ func (s *PostgresUpdateStore) GetUpdateFeed(ctx context.Context, appId string, q
 				UpdateId:   strconv.FormatInt(row.ID, 10),
 				CreatedAt:  row.CreatedAt.Time.Format(time.RFC3339),
 				CommitHash: row.CommitHash,
-				Platform:   row.Platform,
+				Platform:   types.Platform(row.Platform),
 			},
 			Branch:         row.BranchName,
 			RuntimeVersion: row.RuntimeVersion,
@@ -508,8 +591,47 @@ func (s *PostgresUpdateStore) RetrieveUpdateStoredMetadata(ctx context.Context, 
 		UpdateUUID: metadata.UpdateUuid.String(),
 		CommitHash: metadata.CommitHash,
 		Message:    messageStr,
-		Platform:   metadata.Platform,
+		Platform:   types.Platform(metadata.Platform),
 	}, nil
+}
+
+func (s *PostgresUpdateStore) GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error) {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	mapping, err := s.engine.Queries.GetUpdateAssetMapping(ctx, pgdb.GetUpdateAssetMappingParams{
+		ID:    updateIdInt,
+		AppID: ToPgUUID(update.AppId),
+		Name:  update.Branch,
+	})
+	if err != nil {
+		if database.IsNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve update asset mapping from database: %w", err)
+	}
+	return mapping, nil
+}
+
+func (s *PostgresUpdateStore) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
+	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("failed to parse update ID: %w", err)
+	}
+	commandTag, err := s.engine.Queries.SetUpdateAssetMapping(ctx, pgdb.SetUpdateAssetMappingParams{
+		ID:           updateIdInt,
+		AssetMapping: mapping,
+		AppID:        ToPgUUID(update.AppId),
+		Name:         update.Branch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to store update asset mapping in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return fmt.Errorf("no rows were updated when storing the asset mapping for update ID %s", update.UpdateId)
+	}
+	return nil
 }
 
 func (s *PostgresUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, update types.Update, updateUUID string) error {
@@ -536,12 +658,12 @@ func (s *PostgresUpdateStore) StoreUpdateUUIDInMetadata(ctx context.Context, upd
 
 // GetLatestUpdateWithRollout returns the newest checked update for the platform
 // along with its rollout state and resolved control, or nil if none exists.
-func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform string) (*types.UpdateWithRollout, error) {
+func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, appId string, branchName string, runtimeVersion string, platform types.Platform) (*types.UpdateWithRollout, error) {
 	row, err := s.engine.Queries.GetLatestUpdateWithRollout(ctx, pgdb.GetLatestUpdateWithRolloutParams{
 		AppID:    ToPgUUID(appId),
 		Name:     branchName,
 		Version:  runtimeVersion,
-		Platform: platform,
+		Platform: string(platform),
 	})
 	if err != nil {
 		if database.IsNoRows(err) {
@@ -558,6 +680,11 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			AppId:          appId,
 		},
 	}
+	// Legacy rows without a stored UUID leave the field empty; the poll
+	// short-circuit then falls back to the composed manifest's id.
+	if row.UpdateUuid.Valid {
+		result.Update.UpdateUUID = row.UpdateUuid.String()
+	}
 	if row.RolloutPercentage != nil {
 		pct := int(*row.RolloutPercentage)
 		result.RolloutPercentage = &pct
@@ -569,6 +696,9 @@ func (s *PostgresUpdateStore) GetLatestUpdateWithRollout(ctx context.Context, ap
 			RuntimeVersion: runtimeVersion,
 			CreatedAt:      time.Duration(row.ControlCreatedAt.Time.UnixNano()),
 			AppId:          appId,
+		}
+		if row.ControlUpdateUuid.Valid {
+			result.Control.UpdateUUID = row.ControlUpdateUuid.String()
 		}
 	}
 	return result, nil
@@ -613,7 +743,7 @@ func (s *PostgresUpdateStore) GetUpdateByUUID(ctx context.Context, appId string,
 // CreateUpdateWithRollout inserts a normal update carrying a rollout percentage. The
 // control (previous checked update of the same branch/rtv/platform) is resolved inside
 // the same statement and may be NULL for the first update of a branch.
-func (s *PostgresUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
+func (s *PostgresUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error) {
 	messagePtr := &message
 	if message == "" {
 		messagePtr = (*string)(nil)
@@ -626,7 +756,7 @@ func (s *PostgresUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId
 		Name:              branchName,
 		Version:           runtimeVersion,
 		UpdateType:        int32(types.NormalUpdate),
-		Platform:          platform,
+		Platform:          string(platform),
 		CommitHash:        commitHash,
 		Message:           messagePtr,
 		RolloutPercentage: &pct,
@@ -644,7 +774,7 @@ func (s *PostgresUpdateStore) CreateUpdateWithRollout(ctx context.Context, appId
 	}, nil
 }
 
-func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform string, commitHash string, message string) (*types.Update, error) {
+func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error) {
 	pgAppID := ToPgUUID(appId)
 	var messageParam *string
 	if message != "" {
@@ -656,7 +786,7 @@ func (s *PostgresUpdateStore) CreateRollback(ctx context.Context, appId string, 
 		Name:       branchName,
 		Version:    runtimeVersion,
 		UpdateType: int32(types.Rollback),
-		Platform:   platform,
+		Platform:   string(platform),
 		CommitHash: commitHash,
 		Message:    messageParam,
 	})

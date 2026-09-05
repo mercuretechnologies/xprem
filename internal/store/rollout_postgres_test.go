@@ -78,9 +78,9 @@ func newRolloutFixture(t *testing.T) *rolloutFixture {
 	}
 	_, err = pool.Exec(ctx, "INSERT INTO apps (id, name) VALUES ($1, $2)", fixture.appId, "rollout-store-test")
 	require.NoError(t, err)
-	fixture.defaultBranchId, err = fixture.branches.InsertBranch(ctx, pgdb.InsertBranchParams{AppID: store.ToPgUUID(fixture.appId), Name: rolloutTestDefaultBranch})
+	fixture.defaultBranchId, err = fixture.branches.InsertBranch(ctx, fixture.appId, rolloutTestDefaultBranch)
 	require.NoError(t, err)
-	fixture.rolloutBranchId, err = fixture.branches.InsertBranch(ctx, pgdb.InsertBranchParams{AppID: store.ToPgUUID(fixture.appId), Name: rolloutTestRolloutBranch})
+	fixture.rolloutBranchId, err = fixture.branches.InsertBranch(ctx, fixture.appId, rolloutTestRolloutBranch)
 	require.NoError(t, err)
 	_, err = fixture.branches.CreateRuntimeVersion(ctx, fixture.appId, rolloutTestRuntime)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func (f *rolloutFixture) startChannelRollout(t *testing.T, percentage int) strin
 	return rolloutId
 }
 
-func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int64, platform string, checked bool) types.Update {
+func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int64, platform types.Platform, checked bool) types.Update {
 	t.Helper()
 	created, err := f.updates.CreateUpdate(context.Background(), f.appId, updateId, branch, rolloutTestRuntime, platform, "abc123", "", nil)
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func (f *rolloutFixture) createUpdate(t *testing.T, branch string, updateId int6
 	return *created
 }
 
-func (f *rolloutFixture) createRolloutUpdate(t *testing.T, branch string, updateId int64, platform string, percentage int) types.Update {
+func (f *rolloutFixture) createRolloutUpdate(t *testing.T, branch string, updateId int64, platform types.Platform, percentage int) types.Update {
 	t.Helper()
 	created, err := f.updates.CreateUpdateWithRollout(context.Background(), f.appId, updateId, branch, rolloutTestRuntime, platform, "abc123", "", percentage, nil)
 	require.NoError(t, err)
@@ -433,11 +433,11 @@ func TestPerUpdateRolloutRowsAndCountsPostgres(t *testing.T) {
 	activeRollouts, err := fixture.rollouts.GetActiveRolloutUpdates(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime)
 	require.NoError(t, err)
 	require.Len(t, activeRollouts, 2)
-	assert.Equal(t, "android", activeRollouts[0].Platform)
+	assert.Equal(t, types.PlatformAndroid, activeRollouts[0].Platform)
 	assert.Equal(t, "2011", activeRollouts[0].UpdateId)
 	require.NotNil(t, activeRollouts[0].ControlUpdateId)
 	assert.Equal(t, "2001", *activeRollouts[0].ControlUpdateId)
-	assert.Equal(t, "ios", activeRollouts[1].Platform)
+	assert.Equal(t, types.PlatformIOS, activeRollouts[1].Platform)
 	assert.Equal(t, "2010", activeRollouts[1].UpdateId)
 	require.NotNil(t, activeRollouts[1].ControlUpdateId)
 	assert.Equal(t, "2000", *activeRollouts[1].ControlUpdateId)

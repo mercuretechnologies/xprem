@@ -6,7 +6,7 @@ import { useCurrentUser } from '@/lib/CurrentUserContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { usePermissions } from '@/ee/lib/PermissionsContext';
 import { Button } from '@/components/ui/button';
-import { CreateAppModal } from '@/components/app-creation-modal';
+import { CreateAppModal } from '@/components/app-creation';
 
 // Wraps the app-scoped pages (updates, channels, app info, tokens): when the
 // account can see no app at all, the page is replaced by an explicit empty

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"io"
 	"testing"
 	"time"
@@ -69,6 +70,38 @@ func (b *dummyMigrationsBucket) RemoveMigrationFromHistory(migrationId string) e
 		}
 	}
 	return nil
+}
+func (b *dummyMigrationsBucket) BlobExists(context.Context, string, string) (bool, error) {
+	b.actionsRecorded = append(b.actionsRecorded, "BlobExists")
+	return false, nil
+}
+func (b *dummyMigrationsBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
+	b.actionsRecorded = append(b.actionsRecorded, "GetBlob")
+	return nil, nil
+}
+func (b *dummyMigrationsBucket) PutBlob(context.Context, string, string, io.Reader) error {
+	b.actionsRecorded = append(b.actionsRecorded, "PutBlob")
+	return nil
+}
+func (b *dummyMigrationsBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
+	b.actionsRecorded = append(b.actionsRecorded, "BSDiffExists")
+	return false, nil
+}
+func (b *dummyMigrationsBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
+	b.actionsRecorded = append(b.actionsRecorded, "GetBSDiff")
+	return nil, nil
+}
+func (b *dummyMigrationsBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
+	b.actionsRecorded = append(b.actionsRecorded, "PutBSDiff")
+	return nil
+}
+func (b *dummyMigrationsBucket) DeleteBSDiffs(context.Context, string, string) error {
+	b.actionsRecorded = append(b.actionsRecorded, "DeleteBSDiffs")
+	return nil
+}
+func (b *dummyMigrationsBucket) RequestBlobUploadURL(_, _, _ string) (string, error) {
+	b.actionsRecorded = append(b.actionsRecorded, "RequestBlobUploadURL")
+	return "", nil
 }
 
 func TestShouldNotRunAppliedMigrations(t *testing.T) {

@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,20 +28,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # The personal token has write access to both the mercuretechnologies and
-      # the legacy axelmarciano namespaces (GHCR packages do not follow repo
-      # transfers, and existing deployments still pull the old path).
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.DOCKER_GITHUB_CONTAINER_REGISTRY_TOKEN }}" | docker login ghcr.io -u axelmarciano --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # xprem is the canonical image. The two expo-open-ota paths are kept in
-      # sync so deployments made under the old project name keep pulling.
+      # xprem is the canonical image. The expo-open-ota path is kept in sync so
+      # deployments made under the old project name keep pulling.
       - name: Build and push multi-platform Docker image
         run: |
           IMAGE_TAG="${GITHUB_REF#refs/tags/}"
           REPO="ghcr.io/${{ github.repository_owner }}/xprem"
           DEPRECATED_REPO="ghcr.io/${{ github.repository_owner }}/expo-open-ota"
-          LEGACY_REPO="ghcr.io/axelmarciano/expo-open-ota"
 
           echo "Building Docker image with tag: $IMAGE_TAG"
           docker buildx build \
@@ -48,7 +45,6 @@ jobs:
             --build-arg VERSION="$IMAGE_TAG" \
             -t "$REPO:$IMAGE_TAG" \
             -t "$DEPRECATED_REPO:$IMAGE_TAG" \
-            -t "$LEGACY_REPO:$IMAGE_TAG" \
             --push .
 
   helm:
@@ -56,6 +52,7 @@ jobs:
     needs: docker
     permissions:
       contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -79,7 +76,7 @@ jobs:
           sed -i 's/^name: expo-open-ota$/name: xprem/' helm/Chart.yaml
 
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.DOCKER_GITHUB_CONTAINER_REGISTRY_TOKEN }}" | helm registry login ghcr.io -u axelmarciano --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push Helm chart to GHCR
         run: |
@@ -88,7 +85,6 @@ jobs:
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           for CHART in xprem expo-open-ota; do
             helm push "./charts/${CHART}-${CHART_VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts"
-            helm push "./charts/${CHART}-${CHART_VERSION}.tgz" "oci://ghcr.io/axelmarciano/charts"
           done
 
       # Only the canonical chart ships as a release asset; the deprecated copy

@@ -18,12 +18,15 @@ import (
 	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
+	"xprem/internal/cdn"
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
 	"xprem/internal/database/postgres/migrations"
+	"xprem/internal/expoimport"
 	"xprem/internal/handlers"
 	dashhandlers "xprem/internal/handlers/dashboard"
+	"xprem/internal/jobs"
 	"xprem/internal/mcp"
 	"xprem/internal/mcptools"
 	"xprem/internal/oauth"
@@ -34,6 +37,7 @@ import (
 
 type AppContainer struct {
 	AuthHandler                 *dashhandlers.AuthHandler
+	BlobService                 *services.BlobService
 	DashboardAuthService        *services.DashboardAuthService
 	CliAuthService              *services.CliAuthService
 	ApiKeyHandler               *dashhandlers.ApiKeyHandler
@@ -42,6 +46,7 @@ type AppContainer struct {
 	ApiKeyAccessService         *apikeyrestrictions.ApiKeyAccessService
 	AppHandler                  *dashhandlers.AppHandler
 	AppRepo                     services.AppRepository
+	ExpoImportHandler           *dashhandlers.ExpoImportHandler
 	BranchHandler               *dashhandlers.BranchHandler
 	AppIdentifiersHandler       *dashhandlers.AppIdentifiersHandler
 	BranchListHandler           *handlers.BranchListHandler
@@ -60,6 +65,7 @@ type AppContainer struct {
 	SettingsHandler             *dashhandlers.SettingsHandler
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
+	BundlePatchHandler          *dashhandlers.BundlePatchHandler
 	UploadHandler               *handlers.UploadHandler
 	RepublishHandler            *handlers.RepublishHandler
 	UsersHandler                *dashhandlers.UsersHandler
@@ -89,6 +95,9 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var branchRepo services.BranchRepository
 	var channelRepo services.ChannelRepository
 	var updateRepo services.UpdateRepository
+	var blobRepo services.BlobRepository
+	// nil in stateless mode: background jobs need the control plane.
+	var jobsClient *jobs.Client
 	// nil in stateless mode: accounts only exist on the control plane.
 	var userRepo services.UserRepository
 	var refreshTokenRepo services.RefreshTokenRepository
@@ -96,6 +105,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var oauthCodeRepo oauth.CodeRepository
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
+	var bundlePatchRepo services.BundlePatchRepository
 	// nil in stateless mode: store identities and signing credentials only
 	// exist on the control plane.
 	var appIdentifierRepo services.AppIdentifierRepository
@@ -152,6 +162,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		postgres.RunDBMigrations(dbUrl)
 
 		authRepo = store.NewPostgresAuthStore(dbEngine)
+		blobRepo = store.NewPostgresBlobStore(dbEngine)
 		appRepo = store.NewPostgresAppStore(dbEngine)
 		userRepo = store.NewPostgresUserStore(dbEngine)
 		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
@@ -167,7 +178,12 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		channelRepo = store.NewPostgresChannelStore(dbEngine)
 		pgUpdateStore := store.NewPostgresUpdateStore(dbEngine)
 		updateRepo = pgUpdateStore
+		jobsClient, err = jobs.NewClient(dbEngine)
+		if err != nil {
+			log.Fatalf("Job system initialization failed: %v", err)
+		}
 		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
+		bundlePatchRepo = store.NewPostgresBundlePatchStore(dbEngine)
 		appIdentifierRepo = store.NewPostgresAppIdentifierStore(dbEngine)
 		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
 		environmentRepo = store.NewPostgresEnvironmentStore(dbEngine)
@@ -180,7 +196,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		}
 
 		if config.IsDeviceTelemetryDisabled() {
-			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened. The Observe and Identity dashboards report the feature as unavailable, and CLICKHOUSE_URL is ignored.")
+			log.Println("🔕 [TELEMETRY] DISABLE_DEVICE_TELEMETRY is set; nothing is recorded about a device: manifest check-ins, identity ops and telemetry batches are all dropped, and no ClickHouse connection is opened.(CLICKHOUSE_URL is ignored.)")
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
@@ -216,6 +232,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		branchRepo = store.NewBucketBranchStore(resolvedBucket)
 		channelRepo = store.NewBucketChannelStore(resolvedBucket)
 		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
+		blobRepo = store.NewBucketBlobStore(resolvedBucket)
 		if telemetryEnabled {
 			instanceId, instanceIdErr = store.NewBucketServerInstanceStore(resolvedBucket, cache.GetCache()).GetOrCreateInstanceID(ctx)
 			if instanceIdErr != nil {
@@ -242,7 +259,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	auditService.StartRetentionPurgeFromEnv(ctx)
 
 	licenseClient := licensing.NewClient(config.GetEnv("LICENSE_API_URL"))
-	licenseService := licensing.NewLicenseService(licenseRepo, licenseClient, instanceId, config.GetEnv("BASE_URL"))
+	licenseService := licensing.NewLicenseService(licenseRepo, licenseClient, instanceId, config.BaseURL())
 	// Wired before the loops start: they emit audit events from goroutines.
 	licenseService.SetOnAuditEvent(auditService.Record)
 	if err := licenseService.ActivateFromStore(ctx); err != nil {
@@ -278,9 +295,24 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
 	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
-	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules())
-	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket)
+	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo, bundlePatchRepo)
+	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
+	if jobsClient != nil {
+		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
+		services.RegisterBSDiffWorker(jobsClient.Workers(), bsDiffService)
+		if err := jobsClient.Start(ctx); err != nil {
+			log.Fatalf("Job system startup failed: %v", err)
+		}
+
+		addCleanup(jobsClient.Stop)
+	}
+	if config.IsBundleDiffingCDNRedirect() && !cdn.SupportsPatchRedirect() {
+		log.Fatalf("BUNDLE_DIFFING_CDN_REDIRECT needs a CDN with an edge that can add response headers (CloudFront or CDN_BASE_URL); resolved CDN: %q", cdn.ResolvedType())
+	}
+	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
+	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
+	bsDiffService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 	appIdentifierService := services.NewAppIdentifierService(appIdentifierRepo)
@@ -307,6 +339,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				Channels:            channelService,
 				UpdateFeed:          updateService,
 				UpdateRollouts:      rolloutService,
+				BundlePatches:       bsDiffService,
 				Certificates:        appService,
 				BranchWriter:        branchService,
 				ChannelWriter:       channelService,
@@ -336,12 +369,14 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		AuthHandler:                 dashhandlers.NewAuthHandler(dashboardAuthService, rateLimiter),
 		DashboardAuthService:        dashboardAuthService,
 		CliAuthService:              cliAuthService,
+		BlobService:                 services.NewBlobService(blobRepo),
 		ApiKeyHandler:               dashhandlers.NewApiKeyHandler(cliAuthService),
 		ApiKeyAccessHandler:         apikeyrestrictions.NewApiKeyAccessHandler(apiKeyAccessService),
 		ApiKeyAccessService:         apiKeyAccessService,
 		BranchProtectionHandler:     branchprotection.NewHandler(branchProtectionService),
 		AppHandler:                  dashhandlers.NewAppHandler(appService, visibleApps),
 		AppRepo:                     appRepo,
+		ExpoImportHandler:           dashhandlers.NewExpoImportHandler(expoImportService),
 		BranchHandler:               dashhandlers.NewBranchHandler(branchService),
 		BranchListHandler:           handlers.NewBranchListHandler(channelService),
 		ChannelHandler:              dashhandlers.NewChannelHandler(channelService),
@@ -359,6 +394,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		SettingsHandler:             dashhandlers.NewSettingsHandler(appService, ssoService.Enabled, visibleApps),
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
+		BundlePatchHandler:          dashhandlers.NewBundlePatchHandler(bsDiffService),
 		UploadHandler:               handlers.NewUploadHandler(deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,

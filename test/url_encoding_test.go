@@ -24,7 +24,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(projectRoot, "./updates"))
-	sampleUpdatePath := filepath.Join(projectRoot, "test/test-updates/test-app-id/branch-4/1/1674170952")
+	sampleUpdatePath := filepath.Join(projectRoot, "test/sample-exports/bundles-layout")
 
 	u, _ := url.Parse("http://localhost:3000/test-app-id/requestUploadUrl/DO_NOT_USE")
 	q := u.Query()
@@ -37,7 +37,7 @@ func TestRequestUploadUrlWithEncodedPlusInRuntimeVersion(t *testing.T) {
 	r := httptest.NewRequest("POST", u.String(), nil)
 	r.Header.Set("Authorization", "Bearer expo_test_token")
 
-	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
+	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath, "android")
 	uploadRequestsInputJSON, err := json.Marshal(uploadRequestsInput)
 	require.NoError(t, err)
 	r.Body = io.NopCloser(bytes.NewReader(uploadRequestsInputJSON))

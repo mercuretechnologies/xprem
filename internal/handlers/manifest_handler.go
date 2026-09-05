@@ -146,11 +146,12 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		return services.ManifestRequestParams{}, errors.New("Invalid protocol version")
 	}
 
-	platform := r.Header.Get("expo-platform")
-	if platform == "" {
-		platform = r.URL.Query().Get("platform")
+	rawPlatform := r.Header.Get("expo-platform")
+	if rawPlatform == "" {
+		rawPlatform = r.URL.Query().Get("platform")
 	}
-	if platform != "ios" && platform != "android" {
+	platform, err := types.ParsePlatform(rawPlatform)
+	if err != nil {
 		return services.ManifestRequestParams{}, errors.New("Invalid platform")
 	}
 
@@ -173,12 +174,14 @@ func manifestParams(r *http.Request, requestID string) (services.ManifestRequest
 		SurfBlockTokens:       r.Header.Get(services.SurfBlockedHeader),
 		ClientID:              r.Header.Get("EAS-Client-ID"),
 		CurrentUpdateID:       r.Header.Get("expo-current-update-id"),
+		EmbeddedUpdateID:      r.Header.Get("expo-embedded-update-id"),
+		ExpectSignature:       r.Header.Get("expo-expect-signature"),
 		ExpoFatalError:        r.Header.Get("expo-fatal-error"),
 		RecentFailedUpdateIDs: r.Header.Get("Expo-Recent-Failed-Update-Ids"),
 	}, nil
 }
 
-func serverDefinedHeaders(params services.ManifestRequestParams, result services.ManifestResult) *services.HeaderDictionary {
+func serverDefinedHeaders(params services.ManifestRequestParams, result services.UpdateDecision) *services.HeaderDictionary {
 	dictionary := services.NewHeaderDictionary()
 	if result.BlockedSurf != nil {
 		services.SetSurfBlocked(dictionary, params.SurfBlockTokens, result.BlockedSurf.Token)
@@ -202,11 +205,8 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	appId := params.AppID
-	platform := params.Platform
-	runtimeVersion := params.RuntimeVersion
-	protocolVersion := params.ProtocolVersion
 
-	result, err := h.protocolService.ResolveManifestBundle(r.Context(), params)
+	result, err := h.protocolService.ResolveUpdateForDevice(r.Context(), params)
 	if err != nil {
 		var svcErr *services.ExpoProtocolError
 		status := http.StatusInternalServerError
@@ -214,32 +214,12 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		if errors.As(err, &svcErr) {
 			status, message = svcErr.StatusCode, svcErr.Message
 		}
-		// The crash detail is the one thing this poll carries that no later
-		// poll can, so a resolution that failed TRANSIENTLY still hands it
-		// over: the recorder holds it in memory and re-attaches it to the next
-		// poll that resolves, writing nothing durable now.
-		//
-		// Only transiently. A 4xx says the app or the channel does not exist,
-		// and that answer will not change on its own, so there is no later poll
-		// to re-attach anything to. Stashing there would let an unknown app id
-		// put an entry in the cache for an hour, once per request, which is a
-		// growth path opened by the very mechanism meant to avoid writing.
 		if status >= http.StatusInternalServerError {
 			h.reportRejectedCrash(r, appId, params)
 		}
 		http.Error(w, message, status)
 		return
 	}
-
-	// A poll becomes a device check-in only once it has resolved: a request we
-	// answer with an error is not evidence that a device exists, and the
-	// registry is a durable table reachable from an unauthenticated endpoint.
-	// Resolving first means an unknown app id or a channel that maps to no
-	// branch is rejected without leaving a row behind. A resolution that found
-	// no update still checks in: the app, the channel and the branch were all
-	// real, and a device out of a rollout bucket or ahead of every published
-	// update is as alive as any other. The check-in carries the update-health
-	// signals the same headers already delivered.
 	if h.onDeviceCheckIn != nil && params.ClientID != "" {
 		h.onDeviceCheckIn(r.Context(), DeviceCheckIn{
 			AppID:              appId,
@@ -250,8 +230,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 		})
 	}
 
-	// Set before any response is written so it also rides a noUpdateAvailable,
-	// which is what a device already holding the mapped branch gets.
+	// Set before any response is written so it also rides a noUpdateAvailable
 	writeServerDefinedHeaders(w, serverDefinedHeaders(params, result))
 	refusedBranch := ""
 	if result.BlockedSurf != nil {
@@ -259,15 +238,14 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 	}
 
 	if result.Update == nil {
-		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, runtimeVersion, result.BranchName)
-		h.protocolService.PutNoUpdateAvailableInResponse(w, r, appId, runtimeVersion, protocolVersion, requestID)
+		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, params.RuntimeVersion, result.BranchName)
+		h.protocolService.PutNoUpdateAvailableInResponse(r.Context(), w, params)
 		return
 	}
 
-	updateType := result.UpdateType
-	if updateType == types.NormalUpdate {
-		h.protocolService.PutUpdateInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID, refusedBranch)
+	if result.UpdateType == types.NormalUpdate {
+		h.protocolService.PutUpdateInResponse(r.Context(), w, params, *result.Update, refusedBranch)
 	} else {
-		h.protocolService.PutRollbackInResponse(w, r, appId, *result.Update, platform, protocolVersion, requestID)
+		h.protocolService.PutRollbackInResponse(r.Context(), w, params, *result.Update)
 	}
 }

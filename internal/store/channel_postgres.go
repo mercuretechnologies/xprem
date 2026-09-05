@@ -8,7 +8,6 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 
 	"github.com/jackc/pgx/v5"
@@ -167,7 +166,7 @@ func (s *PostgresChannelStore) GetUpdatesByRunTimeVersionAndBranchName(ctx conte
 	})
 }
 
-func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*expo.ChannelMapping, error) {
+func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
 	pgAppID := ToPgUUID(appId)
 	mapping, err := s.engine.Queries.GetChannelBranchMapping(ctx, pgdb.GetChannelBranchMappingParams{
 		AppID: pgAppID,
@@ -175,7 +174,7 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 	})
 	if err != nil {
 		// An unknown channel, or one left unmapped, is a 404 for the caller, not a
-		// server error; match the bucket backend's (nil, nil) so ResolveManifestBundle's
+		// server error; match the bucket backend's (nil, nil) so ResolveUpdateForDevice's
 		// nil-check works in DB mode too.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -183,12 +182,12 @@ func (s *PostgresChannelStore) GetChannelBranchMapping(ctx context.Context, appI
 		return nil, fmt.Errorf("failed to retrieve channel mapping from database: %w", err)
 	}
 	mappingStr := strconv.FormatInt(mapping.ID, 10)
-	result := &expo.ChannelMapping{
+	result := &types.ChannelResolution{
 		Id:         mappingStr,
 		BranchName: mapping.BranchName,
 	}
 	if mapping.RolloutID.Valid && mapping.RolloutBranchName != nil && mapping.RolloutPercentage != nil {
-		result.Rollout = &expo.ChannelRolloutInfo{
+		result.Rollout = &types.ChannelRolloutInfo{
 			ID:         mapping.RolloutID.String(),
 			BranchName: *mapping.RolloutBranchName,
 			Percentage: int(*mapping.RolloutPercentage),

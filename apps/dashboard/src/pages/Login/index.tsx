@@ -1,5 +1,6 @@
 import { TriangleAlert } from 'lucide-react';
-import { XpremMark } from '@/components/xprem-mark';
+import wordmark from '@/assets/xprem-wordmark.svg';
+import wordmarkOnLight from '@/assets/xprem-wordmark-on-light.svg';
 import { Input } from '@/components/ui/input.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import { Label } from '@/components/ui/label.tsx';
@@ -132,20 +133,12 @@ export const Login = () => {
     <div className="flex min-h-screen w-full items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="rounded-lg border bg-card p-8 shadow-elevated">
-          <div className="mb-8 flex flex-col items-center gap-3 text-center">
-            <XpremMark className="h-11 w-11 rounded-lg" />
-            <div className="space-y-1">
-              <h1 className="font-display text-lg font-semibold tracking-tight text-foreground">
-                xprem
-                <span
-                  aria-hidden
-                  className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary"
-                />
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Sign in to manage your over-the-air updates
-              </p>
-            </div>
+          <div className="mb-8 flex flex-col items-center text-center">
+            <img src={wordmarkOnLight} alt="xprem" className="h-14 w-48 object-cover dark:hidden" />
+            <img src={wordmark} alt="xprem" className="hidden h-14 w-48 object-cover dark:block" />
+            <p className="text-sm text-muted-foreground">
+              Sign in to manage your over-the-air updates
+            </p>
           </div>
 
           {signInNotice && (

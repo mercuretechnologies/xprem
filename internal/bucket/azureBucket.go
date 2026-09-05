@@ -188,6 +188,95 @@ func (b *AzureBucket) RequestUploadUrlForFileUpdate(appId string, branch string,
 	return url, nil
 }
 
+func (b *AzureBucket) blobKey(appId, hash string) string {
+	return prefixedBlobKey(b.KeyPrefix, appId, hash)
+}
+
+func (b *AzureBucket) bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
+	return b.prefixedKey(BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *AzureBucket) BlobExists(ctx context.Context, appId, hash string) (bool, error) {
+	return b.objectExists(ctx, b.blobKey(appId, hash))
+}
+
+func (b *AzureBucket) GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.blobKey(appId, hash))
+}
+
+func (b *AzureBucket) PutBlob(ctx context.Context, appId, hash string, body io.Reader) error {
+	return b.putObject(ctx, b.blobKey(appId, hash), body)
+}
+
+func (b *AzureBucket) BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error) {
+	return b.objectExists(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *AzureBucket) GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error) {
+	return b.getObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID))
+}
+
+func (b *AzureBucket) PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error {
+	return b.putObject(ctx, b.bsDiffKey(appId, branch, targetUpdateUUID, sourceUpdateUUID), body)
+}
+
+func (b *AzureBucket) objectExists(ctx context.Context, key string) (bool, error) {
+	cc, err := b.containerClient()
+	if err != nil {
+		return false, err
+	}
+	_, err = cc.NewBlobClient(key).GetProperties(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("GetProperties error: %w", err)
+	}
+	return true, nil
+}
+
+// getObject returns nil, nil when the key does not exist.
+func (b *AzureBucket) getObject(ctx context.Context, key string) (*types.BucketFile, error) {
+	cc, err := b.containerClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cc.NewBlobClient(key).DownloadStream(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("DownloadStream error: %w", err)
+	}
+	var created time.Time
+	if resp.LastModified != nil {
+		created = *resp.LastModified
+	}
+	return &types.BucketFile{Reader: resp.Body, CreatedAt: created}, nil
+}
+
+func (b *AzureBucket) putObject(ctx context.Context, key string, body io.Reader) error {
+	cc, err := b.containerClient()
+	if err != nil {
+		return err
+	}
+	if _, err := cc.NewBlockBlobClient(key).UploadStream(ctx, body, nil); err != nil {
+		return fmt.Errorf("error uploading blob: %w", err)
+	}
+	return nil
+}
+
+func (b *AzureBucket) RequestBlobUploadURL(appId, hash, _ string) (string, error) {
+	if b.ContainerName == "" {
+		return "", errors.New("ContainerName not set")
+	}
+	url, err := azure.SignBlobSAS(b.ContainerName, b.blobKey(appId, hash), sas.BlobPermissions{Create: true, Write: true}, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("error generating SAS URL: %w", err)
+	}
+	return url, nil
+}
+
 func (b *AzureBucket) UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error {
 	ctx := context.Background()
 	cc, err := b.containerClient()
@@ -214,12 +303,19 @@ func (b *AzureBucket) PutObject(ctx context.Context, key string, body []byte) er
 }
 
 func (b *AzureBucket) DeleteUpdateFolder(appId, branch, runtimeVersion, updateId string) error {
-	ctx := context.Background()
+	return b.deletePrefix(context.Background(), b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId)))
+}
+
+func (b *AzureBucket) DeleteBSDiffs(ctx context.Context, appId, branch string) error {
+	return b.deletePrefix(ctx, b.prefixedKey(BSDiffBranchPrefix(appId, branch)))
+}
+
+// deletePrefix removes every blob under prefix.
+func (b *AzureBucket) deletePrefix(ctx context.Context, prefix string) error {
 	cc, err := b.containerClient()
 	if err != nil {
 		return err
 	}
-	prefix := b.prefixedKey(fmt.Sprintf("%s/%s/%s/%s/", appId, branch, runtimeVersion, updateId))
 	pager := cc.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{Prefix: &prefix})
 	sem := make(chan struct{}, runtime.NumCPU())
 	var wg sync.WaitGroup

@@ -5,8 +5,7 @@ import { DataTable } from '@/components/DataTable';
 import { Badge } from '@/components/ui/badge.tsx';
 import apple from '@/assets/apple.svg';
 import android from '@/assets/android.svg';
-import { UpdateDetailsRef, UpdateDetailsSheet } from '@/components/UpdateDetailsSheet';
-import { useRef } from 'react';
+import { useNavigate } from 'react-router';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useSettings } from '@/lib/SettingsContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -15,6 +14,9 @@ import { UpdatesBreadcrumb } from '@/pages/Updates/components/UpdatesBreadcrumb'
 import { UpdateRolloutCard } from '@/pages/Updates/components/UpdateRolloutCard';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { Button } from '@/components/ui/button';
+import { updateDetailsPath, updateTitle } from '@/lib/update-format';
+import { GitCommitLink } from '@/components/GitCommitLink';
+import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
 
 const UPDATES_PAGE_SIZE = 20;
 
@@ -27,7 +29,7 @@ export const UpdatesTable = ({
   runtimeVersion: string;
   showBreadcrumb?: boolean;
 }) => {
-  const sheetRef = useRef<UpdateDetailsRef>(null);
+  const navigate = useNavigate();
   const { selectedAppId } = useSelectedApp();
   const { CONTROL_PLANE_ENABLED } = useSettings();
   const canManageUpdateRollout = useAppPermission('update-rollout:manage', 'admin-only');
@@ -42,6 +44,11 @@ export const UpdatesTable = ({
     refetchOnWindowFocus: false,
   });
   const updates = updatesQuery.data?.pages.flatMap(page => page.items) ?? [];
+  const appDetailsQuery = useQuery({
+    queryKey: ['appDetails', selectedAppId],
+    queryFn: () => api.getApp(selectedAppId!),
+    enabled: !!selectedAppId && CONTROL_PLANE_ENABLED,
+  });
 
   // Rollout state is read fresh (control-plane only). It drives the card above
   // the table and the "Control" markers in the passive Rollout column.
@@ -106,7 +113,6 @@ export const UpdatesTable = ({
           controlUpdateUUIDs={controlUuids}
         />
       )}
-      <UpdateDetailsSheet ref={sheetRef} branch={branch} runtimeVersion={runtimeVersion} />
       <DataTable
         loading={updatesQuery.isLoading}
         columns={[
@@ -144,10 +150,10 @@ export const UpdatesTable = ({
             header: 'Message',
             accessorKey: 'message',
             cell: ({ row }) => {
-              const msg = row.original.message;
+              const msg = updateTitle(row.original.message, row.original.commitHash);
               return msg ? (
                 <span className="block max-w-[200px] truncate text-sm text-muted-foreground">
-                  {msg}
+                  <LinkedUpdateTitle title={msg} gitUrl={appDetailsQuery.data?.gitUrl} />
                 </span>
               ) : (
                 <span className="text-sm text-muted-foreground/60">No message</span>
@@ -157,13 +163,12 @@ export const UpdatesTable = ({
           {
             header: 'Commit',
             accessorKey: 'commitHash',
-            cell: ({ row }) => {
-              return (
-                <Badge variant="outline" className="font-mono text-xs">
-                  {row.original.commitHash.slice(0, 7)}
-                </Badge>
-              );
-            },
+            cell: ({ row }) => (
+              <GitCommitLink
+                commitHash={row.original.commitHash}
+                gitUrl={appDetailsQuery.data?.gitUrl}
+              />
+            ),
           },
           ...(CONTROL_PLANE_ENABLED
             ? [
@@ -204,9 +209,9 @@ export const UpdatesTable = ({
         data={updates}
         defaultSorting={[{ id: 'createdAt', desc: true }]}
         emptyMessage="No updates published for this runtime version yet."
-        onRowClick={row => {
-          sheetRef?.current?.openSheet(row);
-        }}
+        onRowClick={row =>
+          navigate(updateDetailsPath({ branch, runtimeVersion, updateId: row.updateId }, 'branch'))
+        }
       />
       {updatesQuery.hasNextPage && (
         <div className="mt-4 flex justify-center">

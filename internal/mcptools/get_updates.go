@@ -47,6 +47,14 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 			return nil, GetUpdatesOutput{}, err
 		}
 
+		var platform types.Platform
+		if input.Platform != "" {
+			parsed, err := types.ParsePlatform(input.Platform)
+			if err != nil {
+				return nil, GetUpdatesOutput{}, errors.New("platform must be ios or android")
+			}
+			platform = parsed
+		}
 		limit := input.Limit
 		if limit <= 0 {
 			limit = defaultUpdatesLimit
@@ -58,7 +66,7 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 		query := types.UpdateFeedQuery{
 			Branch:         input.Branch,
 			RuntimeVersion: input.RuntimeVersion,
-			Platform:       input.Platform,
+			Platform:       platform,
 			UpdateUUID:     input.UpdateUUID,
 			PublishGroup:   input.PublishGroup,
 			CommitHash:     input.CommitHash,

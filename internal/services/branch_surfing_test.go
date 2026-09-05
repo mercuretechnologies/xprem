@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 	cache2 "xprem/internal/cache"
-	"xprem/internal/providers/expo"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -176,7 +175,7 @@ type countingBranchRepo struct {
 	reads    int
 }
 
-func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ string) ([]types.SurfableBranch, error) {
+func (r *countingBranchRepo) GetSurfableBranches(_ context.Context, _, runtimeVersion string, _ types.Platform) ([]types.SurfableBranch, error) {
 	r.reads++
 	return r.surfable[runtimeVersion], nil
 }
@@ -272,7 +271,7 @@ func TestTheChannelsOwnBranchIsNotOfferedAsASwitch(t *testing.T) {
 			{Name: "pr-1", LastUpdateAt: "2026-08-02T10:00:00Z"},
 			{Name: "staging", LastUpdateAt: "2026-08-01T10:00:00Z"},
 		}})
-	channelRepo.mappings = map[string]*expo.ChannelMapping{
+	channelRepo.mappings = map[string]*types.ChannelResolution{
 		"qa": {BranchName: "staging"},
 	}
 
@@ -357,6 +356,6 @@ func TestAMappingReadFailureIsNotSwallowed(t *testing.T) {
 
 type mappingErrorChannelRepo struct{ *fakeChannelRepo }
 
-func (mappingErrorChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*expo.ChannelMapping, error) {
+func (mappingErrorChannelRepo) GetChannelBranchMapping(_ context.Context, _, _ string) (*types.ChannelResolution, error) {
 	return nil, assert.AnError
 }
