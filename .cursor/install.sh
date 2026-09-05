@@ -69,9 +69,12 @@ echo "==> [install] Local .env"
 # signing keys could no longer be decrypted. To keep them in sync we persist a
 # copy outside the repo (which survives re-checkouts on the same disk) and
 # restore it instead of regenerating whenever the repo .env is missing.
+# These files hold live secrets, so keep them owner-only (0600) and the backup
+# directory owner-only (0700); a 022 umask would otherwise leave them readable
+# by any other local account.
 ENV_BACKUP="${HOME}/.xprem/dev.env"
 if [ ! -f .env ] && [ -f "$ENV_BACKUP" ]; then
-  cp "$ENV_BACKUP" .env
+  install -m 600 "$ENV_BACKUP" .env
   echo "    restored .env from ${ENV_BACKUP} (keeps secrets in sync with the persisted DB)"
 fi
 if [ ! -f .env ]; then
@@ -122,14 +125,18 @@ DISABLE_TELEMETRY=true
 EOF
   echo "    wrote .env (secrets generated)"
 fi
+# Enforce owner-only perms whether .env was just generated, restored, or
+# hand-edited by the developer.
+chmod 600 .env
 
 # Mirror the current .env to the persistent backup so a later fresh checkout
 # restores these exact secrets instead of minting new ones. Idempotent: only
 # copies when the backup is missing or has drifted from the repo .env.
-mkdir -p "$(dirname "$ENV_BACKUP")"
+install -d -m 700 "$(dirname "$ENV_BACKUP")"
 if [ ! -f "$ENV_BACKUP" ] || ! cmp -s .env "$ENV_BACKUP"; then
-  cp .env "$ENV_BACKUP"
+  install -m 600 .env "$ENV_BACKUP"
   echo "    backed up .env to ${ENV_BACKUP}"
 fi
+chmod 600 "$ENV_BACKUP"
 
 echo "==> [install] done"
