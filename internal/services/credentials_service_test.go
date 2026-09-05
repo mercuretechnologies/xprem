@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"testing"
+	"xprem/internal/android/androidtest"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
 	"xprem/internal/store"
@@ -110,7 +111,7 @@ func newCredentialsFixture() (*CredentialsService, *fakeCredentialsRepo, *fakeId
 func validAndroidInput() AndroidCredentialsInput {
 	return AndroidCredentialsInput{
 		KeyAlias:         "upload",
-		KeystoreBase64:   base64.StdEncoding.EncodeToString([]byte("fake-jks-bytes")),
+		KeystoreBase64:   base64.StdEncoding.EncodeToString(androidtest.JKSKeystore("keystore-pass", "key-pass", "upload")),
 		KeystorePassword: "keystore-pass",
 		KeyPassword:      "key-pass",
 	}
@@ -129,7 +130,9 @@ func TestSaveAndroidCredentialsSealsEveryTouchedSecret(t *testing.T) {
 
 	keystore, err := crypto.UnsealAESGCM(sealed.SealedKeystore, []byte(testMasterKey), androidCredentialAAD(testIdentifierId, "keystore"))
 	require.NoError(t, err)
-	assert.Equal(t, "fake-jks-bytes", string(keystore))
+	sentKeystore, err := base64.StdEncoding.DecodeString(input.KeystoreBase64)
+	require.NoError(t, err)
+	assert.Equal(t, sentKeystore, keystore)
 	keystorePassword, err := crypto.UnsealAESGCM(sealed.SealedKeystorePassword, []byte(testMasterKey), androidCredentialAAD(testIdentifierId, "keystore_password"))
 	require.NoError(t, err)
 	assert.Equal(t, "keystore-pass", string(keystorePassword))
@@ -179,6 +182,12 @@ func TestSaveAndroidCredentialsRejectsInvalidInput(t *testing.T) {
 		"bad base64":         func(i *AndroidCredentialsInput) { i.KeystoreBase64 = "not base64!!" },
 		"empty keystore":     func(i *AndroidCredentialsInput) { i.KeystoreBase64 = "" },
 		"bad gsa json":       func(i *AndroidCredentialsInput) { i.GoogleServiceAccountKeyJSON = "{broken" },
+		"garbage keystore": func(i *AndroidCredentialsInput) {
+			i.KeystoreBase64 = base64.StdEncoding.EncodeToString([]byte("not a keystore"))
+		},
+		"wrong keystore pwd": func(i *AndroidCredentialsInput) { i.KeystorePassword = "wrong" },
+		"wrong key pwd":      func(i *AndroidCredentialsInput) { i.KeyPassword = "wrong" },
+		"unknown alias":      func(i *AndroidCredentialsInput) { i.KeyAlias = "release" },
 	} {
 		input := validAndroidInput()
 		mutate(&input)

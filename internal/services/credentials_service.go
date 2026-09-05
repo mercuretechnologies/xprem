@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"xprem/internal/android"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
 	"xprem/internal/keyStore"
@@ -112,6 +113,9 @@ func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId s
 	}
 	if len(keystore) > maxKeystoreBytes {
 		return validation.Errorf("keystore", "keystore exceeds the %d KB limit", maxKeystoreBytes/1024)
+	}
+	if err := android.ValidateKeystore(keystore, input.KeystorePassword, input.KeyPassword, input.KeyAlias); err != nil {
+		return err
 	}
 	if input.GoogleServiceAccountKeyJSON != "" && !json.Valid([]byte(input.GoogleServiceAccountKeyJSON)) {
 		return validation.Errorf("googleServiceAccountKey", "google service account key is not valid JSON")

@@ -21,6 +21,7 @@ require (
 	github.com/jarcoal/httpmock v1.3.1
 	github.com/joho/godotenv v1.5.1
 	github.com/oschwald/geoip2-golang v1.13.0
+	github.com/pavlo-v-chernykh/keystore-go/v4 v4.5.0
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/redis/go-redis/v9 v9.18.0
@@ -33,6 +34,7 @@ require (
 	golang.org/x/sync v0.22.0
 	google.golang.org/api v0.178.0
 	gopkg.in/yaml.v3 v3.0.1
+	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
 require (
