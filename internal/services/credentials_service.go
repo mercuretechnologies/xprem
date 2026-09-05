@@ -95,6 +95,9 @@ func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId s
 	if err != nil {
 		return err
 	}
+	// Bind every field to the canonical database ID, independent of the UUID
+	// spelling accepted by the HTTP handler.
+	identifierId = ref.Id
 	if input.KeyAlias == "" || len(input.KeyAlias) > 255 {
 		return validation.Errorf("keyAlias", "key alias must be between 1 and 255 characters")
 	}

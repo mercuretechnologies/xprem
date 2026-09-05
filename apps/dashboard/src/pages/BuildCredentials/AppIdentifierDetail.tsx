@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ApiError } from '@/components/APIError';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
 import { CheckCircle2, Pencil, Trash2 } from 'lucide-react';
@@ -85,8 +86,12 @@ const AndroidCredentialsSection = ({
     }
   };
 
-  if (credentialsQuery.isLoading) {
+  if (credentialsQuery.isPending) {
     return <Skeleton className="h-48 w-full rounded-xl" />;
+  }
+
+  if (credentialsQuery.isError) {
+    return <ApiError error={credentialsQuery.error} onRetry={() => void credentialsQuery.refetch()} />;
   }
 
   const metadata: AndroidCredentialsMetadata | null | undefined = credentialsQuery.data;
@@ -220,7 +225,7 @@ export const AppIdentifierDetail = () => {
     }
   };
 
-  if (identifiersQuery.isLoading) {
+  if (identifiersQuery.isPending) {
     return (
       <div className="w-full space-y-4">
         <Skeleton className="h-8 w-72" />
@@ -228,6 +233,10 @@ export const AppIdentifierDetail = () => {
         <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     );
+  }
+
+  if (identifiersQuery.isError) {
+    return <ApiError error={identifiersQuery.error} onRetry={() => void identifiersQuery.refetch()} />;
   }
 
   if (!identifier) {

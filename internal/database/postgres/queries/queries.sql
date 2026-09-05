@@ -2528,6 +2528,13 @@ UPDATE app_identifiers
 SET build_number = $3
 WHERE app_id = $1 AND id = $2;
 
+-- name: LockAppIdentifierByID :one
+-- Lock separately from the guarded DELETE so its next READ COMMITTED snapshot
+-- sees credentials inserted by a transaction we waited for (FK KEY SHARE).
+SELECT identifier FROM app_identifiers
+WHERE app_id = $1 AND id = $2
+FOR UPDATE;
+
 -- name: DeleteAppIdentifierByID :execresult
 -- Guarded: an identifier still holding credentials is NOT deleted, its
 -- keystore must be removed explicitly first. The caller disambiguates the

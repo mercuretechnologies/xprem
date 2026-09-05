@@ -5059,6 +5059,26 @@ func (q *Queries) ListUserAppGrants(ctx context.Context, userID pgtype.UUID) ([]
 	return items, nil
 }
 
+const lockAppIdentifierByID = `-- name: LockAppIdentifierByID :one
+SELECT identifier FROM app_identifiers
+WHERE app_id = $1 AND id = $2
+FOR UPDATE
+`
+
+type LockAppIdentifierByIDParams struct {
+	AppID pgtype.UUID `json:"app_id"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+// Lock separately from the guarded DELETE so its next READ COMMITTED snapshot
+// sees credentials inserted by a transaction we waited for (FK KEY SHARE).
+func (q *Queries) LockAppIdentifierByID(ctx context.Context, arg LockAppIdentifierByIDParams) (string, error) {
+	row := q.db.QueryRow(ctx, lockAppIdentifierByID, arg.AppID, arg.ID)
+	var identifier string
+	err := row.Scan(&identifier)
+	return identifier, err
+}
+
 const markEnterpriseLicenseValidated = `-- name: MarkEnterpriseLicenseValidated :one
 UPDATE enterprise_license SET
     org_name = $1,

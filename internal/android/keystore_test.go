@@ -65,7 +65,7 @@ func TestValidateAndroidKeystorePKCS12FromKeytool(t *testing.T) {
 func TestValidateAndroidKeystorePKCS12WithoutAlias(t *testing.T) {
 	data := androidtest.PKCS12Keystore("store-pass")
 
-	assert.NoError(t, ValidateKeystore(data, "store-pass", "store-pass", "any-alias"))
+	assertFieldError(t, ValidateKeystore(data, "store-pass", "store-pass", "any-alias"), "keyAlias")
 
 	assertFieldError(t, ValidateKeystore(data, "wrong", "wrong", "any-alias"), "keystorePassword")
 	assertFieldError(t, ValidateKeystore(data, "store-pass", "other", "any-alias"), "keyPassword")

@@ -112,21 +112,27 @@ func (s *PostgresAppIdentifierStore) SetBuildNumber(ctx context.Context, appId s
 }
 
 func (s *PostgresAppIdentifierStore) DeleteAppIdentifier(ctx context.Context, appId string, identifierId string) error {
-	commandTag, err := s.engine.Queries.DeleteAppIdentifierByID(ctx, pgdb.DeleteAppIdentifierByIDParams{
-		AppID: ToPgUUID(appId),
-		ID:    ToPgUUID(identifierId),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete app identifier from database: %w", err)
-	}
-	if commandTag.RowsAffected() == 0 {
-		// The guarded DELETE reports 0 rows for both an unknown identifier and
-		// one still holding credentials; disambiguate.
-		ref, refErr := s.GetAppIdentifierByID(ctx, appId, identifierId)
-		if refErr == nil && ref != nil {
-			return &ErrIdentifierHasCredentials{Identifier: ref.Identifier}
+	return s.engine.WithTx(ctx, func(q *pgdb.Queries) error {
+		identifier, err := q.LockAppIdentifierByID(ctx, pgdb.LockAppIdentifierByIDParams{
+			AppID: ToPgUUID(appId), ID: ToPgUUID(identifierId),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
 		}
-		return &ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to lock app identifier: %w", err)
+		}
+		commandTag, err := q.DeleteAppIdentifierByID(ctx, pgdb.DeleteAppIdentifierByIDParams{
+			AppID: ToPgUUID(appId),
+			ID:    ToPgUUID(identifierId),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to delete app identifier from database: %w", err)
+		}
+		if commandTag.RowsAffected() == 0 {
+			// The locked row exists, so only the credentials guard can reject it.
+			return &ErrIdentifierHasCredentials{Identifier: identifier}
+		}
+		return nil
+	})
 }

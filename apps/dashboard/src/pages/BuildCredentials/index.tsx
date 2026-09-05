@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ApiError } from '@/components/APIError';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { AlertTriangle, CheckCircle2, Plus, Trash2 } from 'lucide-react';
@@ -90,6 +91,10 @@ export const BuildCredentials = () => {
         </div>
       </div>
     );
+  }
+
+  if (identifiersQuery.isError) {
+    return <ApiError error={identifiersQuery.error} onRetry={() => void identifiersQuery.refetch()} />;
   }
 
   return (

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ApiError } from '@/components/APIError';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { Plus, Trash2 } from 'lucide-react';
@@ -69,6 +70,10 @@ export const Environments = () => {
         </div>
       </div>
     );
+  }
+
+  if (environmentsQuery.isError) {
+    return <ApiError error={environmentsQuery.error} onRetry={() => void environmentsQuery.refetch()} />;
   }
 
   return (
