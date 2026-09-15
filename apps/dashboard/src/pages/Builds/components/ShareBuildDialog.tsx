@@ -26,7 +26,7 @@ const parseHours = (value: string): number | null => {
   return hours;
 };
 
-const CopyLinkButton = ({ url }: { url: string }) => {
+export const CopyLinkButton = ({ url }: { url: string }) => {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   return (

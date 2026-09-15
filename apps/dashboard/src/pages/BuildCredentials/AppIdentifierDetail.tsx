@@ -23,6 +23,7 @@ import {
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { AndroidCredentialsSection } from './components/AndroidCredentialsSection';
 import { BuildNumberCard } from './components/BuildNumberCard';
+import { IosCredentialsSection } from './components/IosCredentialsSection';
 import { PlatformLogo } from './components/PlatformLogo';
 import { platformLabel } from './platforms';
 
@@ -163,9 +164,11 @@ export const AppIdentifierDetail = () => {
       {identifier.platform === 'android' ? (
         <AndroidCredentialsSection identifier={identifier} canManage={canManage} />
       ) : (
-        <div className="rounded-xl border border-dashed bg-muted/30 p-8 text-center text-sm text-muted-foreground">
-          Credentials management for {platformLabel(identifier.platform)} is not supported yet.
-        </div>
+        <IosCredentialsSection
+          key={`ios-${identifier.id}`}
+          identifier={identifier}
+          canManage={canManage}
+        />
       )}
 
       <DeleteDialog

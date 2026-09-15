@@ -174,11 +174,39 @@ func TestLoggingMiddlewareRedactsShareInPanic(t *testing.T) {
 	require.NotContains(t, output, shareToken)
 }
 
-func TestRedactBuildCapability(t *testing.T) {
-	require.Equal(t, "/build-shares/[REDACTED]/download", redactBuildCapability("/build-shares/"+shareToken+"/download"))
-	require.Equal(t, "https://h/x/build-shares/[REDACTED]?[REDACTED]", redactBuildCapability("https://h/x/build-shares/"+shareToken+"?a=1"))
-	require.Equal(t, "/build-shares/", redactBuildCapability("/build-shares/"))
-	require.Equal(t, "/api/app/app-1/builds/b-1/shares", redactBuildCapability("/api/app/app-1/builds/b-1/shares"))
-	require.Equal(t, "[REDACTED]", redactBuildCapability("%2Fbuild-shares%2F"+shareToken))
-	require.Equal(t, "[REDACTED]", redactBuildCapability("%252Fbuild-shares%252F"+shareToken))
+func TestRedactCapability(t *testing.T) {
+	require.Equal(t, "/build-shares/[REDACTED]/download", redactCapability("/build-shares/"+shareToken+"/download"))
+	require.Equal(t, "https://h/x/build-shares/[REDACTED]?[REDACTED]", redactCapability("https://h/x/build-shares/"+shareToken+"?a=1"))
+	require.Equal(t, "/build-shares/", redactCapability("/build-shares/"))
+	require.Equal(t, "/api/app/app-1/builds/b-1/shares", redactCapability("/api/app/app-1/builds/b-1/shares"))
+	require.Equal(t, "[REDACTED]", redactCapability("%2Fbuild-shares%2F"+shareToken))
+	require.Equal(t, "[REDACTED]", redactCapability("%252Fbuild-shares%252F"+shareToken))
+}
+
+const deviceRegistrationToken = "Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6"
+
+func TestLoggingMiddlewareRedactsDeviceRegistrationLinks(t *testing.T) {
+	for _, target := range []string{
+		"/device-registrations/" + deviceRegistrationToken,
+		"/device-registrations/" + deviceRegistrationToken + "/profile",
+		"/device-registrations/" + deviceRegistrationToken + "/enroll",
+		"/device-registrations/" + deviceRegistrationToken + "/registrations/11111111-1111-1111-1111-111111111111",
+		"/dashboard/register-device/" + deviceRegistrationToken + "?registration=11111111-1111-1111-1111-111111111111",
+		"/dashboard/register-device%2F" + deviceRegistrationToken,
+	} {
+		t.Run(target, func(t *testing.T) {
+			logs := captureLogs(t)
+			handler := LoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusMovedPermanently)
+			}))
+			request := httptest.NewRequest(http.MethodGet, target, nil)
+			request.Header.Set("Referer", "https://ota.example.com/dashboard/register-device/"+deviceRegistrationToken)
+			request.Header.Set("User-Agent", "iPhone")
+			handler.ServeHTTP(httptest.NewRecorder(), request)
+			output := logs.String()
+			require.Contains(t, output, "[REDACTED]")
+			require.Contains(t, output, "iPhone", "ordinary headers stay visible")
+			require.NotContains(t, output, deviceRegistrationToken)
+		})
+	}
 }

@@ -122,7 +122,9 @@ export const CreateIdentifierDialog = ({
                 autoFocus
               />
               <p className="text-xs text-muted-foreground">
-                The Android application ID, as declared in your app manifest.
+                {platform === 'android'
+                  ? 'The Android application ID, as declared in your app manifest.'
+                  : 'The bundle identifier of the main iOS app.'}
               </p>
             </div>
           </div>

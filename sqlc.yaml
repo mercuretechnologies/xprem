@@ -49,3 +49,23 @@ sql:
             go_type:
               import: "xprem/internal/types"
               type: "Platform"
+          - column: "ios_certificates.certificate_type"
+            go_type:
+              import: "xprem/internal/types"
+              type: "IosCertificateType"
+          - column: "ios_certificates.source"
+            go_type:
+              import: "xprem/internal/types"
+              type: "IosCertificateSource"
+          - column: "ios_signing_settings.mode"
+            go_type:
+              import: "xprem/internal/types"
+              type: "IosSigningMode"
+          - column: "ios_device_registrations.status"
+            go_type:
+              import: "xprem/internal/types"
+              type: "IosDeviceRegistrationStatus"
+          - column: "ios_device_invitations.created_by_actor_type"
+            go_type:
+              import: "xprem/internal/auditlog"
+              type: "ActorType"

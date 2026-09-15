@@ -10,12 +10,13 @@ import (
 	"time"
 )
 
-var buildCapabilityPath = regexp.MustCompile(`(/build-shares/)[^/?]+`)
+var capabilityPath = regexp.MustCompile(`(/(?:build-shares|device-registrations|register-device)/)[^/?]+`)
 
 const maxCapabilityUnescapes = 5
 
-func redactBuildCapability(value string) string {
-	redacted := buildCapabilityPath.ReplaceAllString(value, "${1}[REDACTED]")
+// redactCapability masks bearer capabilities in public build and device-registration URLs.
+func redactCapability(value string) string {
+	redacted := capabilityPath.ReplaceAllString(value, "${1}[REDACTED]")
 	if redacted != value {
 		if i := strings.IndexByte(redacted, '?'); i >= 0 {
 			redacted = redacted[:i] + "?[REDACTED]"
@@ -28,7 +29,7 @@ func redactBuildCapability(value string) string {
 		if err != nil || next == decoded {
 			break
 		}
-		if buildCapabilityPath.MatchString(next) {
+		if capabilityPath.MatchString(next) {
 			return "[REDACTED]"
 		}
 		decoded = next
@@ -36,6 +37,7 @@ func redactBuildCapability(value string) string {
 	return value
 }
 
+// redactHeaders copies request headers while masking credentials and capability-bearing URLs.
 func redactHeaders(headers http.Header) http.Header {
 	redactedHeaders := make(http.Header)
 	for key, values := range headers {
@@ -44,13 +46,14 @@ func redactHeaders(headers http.Header) http.Header {
 		} else {
 			redactedHeaders[key] = append([]string(nil), values...)
 			for i, value := range redactedHeaders[key] {
-				redactedHeaders[key][i] = redactBuildCapability(value)
+				redactedHeaders[key][i] = redactCapability(value)
 			}
 		}
 	}
 	return redactedHeaders
 }
 
+// LoggingMiddleware records requests with capability redaction and recovers handler panics.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/hc" || r.URL.Path == "/metrics" || r.URL.Path == "/health" {
@@ -59,7 +62,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		}
 
 		safeHeaders := redactHeaders(r.Header)
-		safeURI := redactBuildCapability(r.RequestURI)
+		safeURI := redactCapability(r.RequestURI)
 		safeQuery := r.URL.RawQuery
 		if safeURI != r.RequestURI {
 			// A capability URL may echo its token in the query, so the whole query goes.

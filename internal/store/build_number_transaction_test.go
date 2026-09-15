@@ -163,7 +163,7 @@ func TestBuildNumberTextMigration(t *testing.T) {
 			_, err = tx.Exec(ctx, parts[0])
 			require.NoError(t, err)
 			var stored []string
-			require.NoError(t, tx.QueryRow(ctx, "SELECT array_agg(build_number ORDER BY build_number) FROM app_identifiers").Scan(&stored))
+			require.NoError(t, tx.QueryRow(ctx, "SELECT array_agg(build_number ORDER BY build_number COLLATE \"C\") FROM app_identifiers").Scan(&stored))
 			require.Equal(t, []string{"-9223372036854775808", "42", "9223372036854775807"}, stored)
 			var initial string
 			require.NoError(t, tx.QueryRow(ctx, "INSERT INTO app_identifiers DEFAULT VALUES RETURNING build_number").Scan(&initial))

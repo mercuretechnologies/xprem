@@ -1,9 +1,10 @@
 import { Layout } from '@/containers/Layout';
-import { Navigate, Route, Routes, useNavigate } from 'react-router';
+import { Navigate, Route, Routes, useMatch, useNavigate } from 'react-router';
 import { isAuthenticated } from '@/lib/auth.ts';
 import { lazy, ReactNode, Suspense, useEffect } from 'react';
 import { Login } from '@/pages/Login';
 import { OAuthConsent } from '@/pages/OAuthConsent';
+import { RegisterDevice } from '@/pages/RegisterDevice';
 import { Toaster } from '@/components/ui/toaster.tsx';
 import { Updates } from '@/pages/Updates';
 import { Settings } from '@/pages/Settings';
@@ -86,12 +87,13 @@ const observeRoute = withLayout(
 export const App = () => {
   const isLoggedIn = isAuthenticated();
   const navigate = useNavigate();
+  const isPublicPage = useMatch('/register-device/:token') !== null;
 
   useEffect(() => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn && !isPublicPage) {
       navigate('/login');
     }
-  }, [isLoggedIn, navigate]);
+  }, [isLoggedIn, isPublicPage, navigate]);
 
   return (
     <>
@@ -101,6 +103,8 @@ export const App = () => {
         {/* Standalone like /login: the OAuth bounce lands here for any account,
             and the page handles the not-signed-in case itself (returnTo). */}
         <Route path="/oauth/consent" element={<OAuthConsent />} />
+        {/* Public: opened on a tester's iPhone, without a dashboard session. */}
+        <Route path="/register-device/:token" element={<RegisterDevice />} />
         <Route
           path="*"
           element={

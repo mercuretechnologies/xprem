@@ -178,8 +178,9 @@ export type AppIdentifier = {
   identifier: string;
   buildNumber: string;
   hasAndroidCredentials: boolean;
+  hasIosCredentials: boolean;
   createdAt: string;
-}
+};
 
 // The non-secret projection of stored Android signing credentials. Secrets
 // (keystore, passwords, service account key) never come back down; the only
@@ -200,6 +201,103 @@ export type AndroidCredentialsPayload = {
   keystore: string;
   keystorePassword: string;
   keyPassword: string;
+};
+
+export type IosCertificate = {
+  id: string;
+  commonName: string;
+  serialNumber: string;
+  type: 'distribution' | 'development';
+  teamId: string;
+  expiresAt: string;
+  source: 'generated' | 'uploaded';
+};
+
+// `certificateMissing`: the selected certificate was deleted, so `certificate` is null.
+export type IosSigningSetting = {
+  mode: 'automatic' | 'certificate';
+  certificate: IosCertificate | null;
+  certificateMissing: boolean;
+};
+
+export type IosCredentialsMetadata = {
+  identifier: string;
+  signing: IosSigningSetting;
+};
+
+export type IosSigningPayload =
+  | { mode: 'automatic' }
+  | { mode: 'certificate'; certificateId: string };
+
+export type AppleApiKey = {
+  keyId: string;
+  issuerId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AppleApiKeyPayload = {
+  keyId: string;
+  issuerId: string;
+  privateKey: string;
+};
+
+// A distribution certificate of the Apple team; `selectable` when xprem holds its private key.
+export type AppleDistributionCertificate = {
+  appleId: string;
+  name: string;
+  serialNumber: string;
+  expiresAt: string;
+  fingerprintSha1: string;
+  xpremCertificateId: string | null;
+  selectable: boolean;
+};
+
+// A device of the Apple team; `status` and `deviceClass` are Apple's values.
+// `product` and `osVersion` come from xprem's registration record: '' for a device added outside xprem.
+export type AppleDevice = {
+  id: string;
+  name: string;
+  udid: string;
+  deviceClass: string;
+  model: string;
+  product: string;
+  osVersion: string;
+  status: 'ENABLED' | 'DISABLED';
+  addedAt: string;
+  registeredVia: { invitationId: string; label: string; registeredAt: string } | null;
+};
+
+export type IosDeviceInvitation = {
+  id: string;
+  label: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+  createdBy: string;
+  status: 'pending' | 'used' | 'expired' | 'revoked';
+  // The iPhone registered with the link, once used.
+  device: { name: string; product: string } | null;
+};
+
+export type CreateIosDeviceInvitationResponse = {
+  invitation: IosDeviceInvitation;
+  url: string;
+};
+
+export type DeviceRegistrationLink = {
+  appName: string;
+  label: string;
+  expiresAt: string;
+};
+
+export type PublicResult<T> = { status: 'ok'; data: T } | { status: 'invalid-link' | 'used' };
+
+export type DeviceRegistrationStatus = {
+  status: 'registered' | 'failed';
+  deviceName: string;
+  product: string;
+  error: string | null;
 };
 
 // One variable of an environment: metadata only, the value stays server side
@@ -1696,6 +1794,160 @@ export class ApiClient {
       `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/android/google-play-service-account`,
       { method: 'DELETE' }
     );
+  }
+
+  /** Returns the selected app Apple API key metadata, never its private key. */
+  public async getAppleApiKey() {
+    const response = await this.request<{ apiKey: AppleApiKey | null }>(
+      `${this.appScope()}/apple/api-key`,
+      { method: 'GET' }
+    );
+    return response.apiKey;
+  }
+
+  /** Validates and saves an App Store Connect team key for the selected app. */
+  public async saveAppleApiKey(payload: AppleApiKeyPayload) {
+    const response = await this.request<{ apiKey: AppleApiKey | null }>(
+      `${this.appScope()}/apple/api-key`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    return response.apiKey;
+  }
+
+  /** Deletes the selected app App Store Connect key. */
+  public async deleteAppleApiKey() {
+    return this.request<void>(`${this.appScope()}/apple/api-key`, { method: 'DELETE' });
+  }
+
+  /** Loads the identifier signing mode and selected certificate metadata. */
+  public async getIosCredentials(identifierId: string) {
+    return this.request<IosCredentialsMetadata>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/ios`,
+      { method: 'GET' }
+    );
+  }
+
+  /** Saves the identifier shared signing choice for its iOS build destinations. */
+  public async updateIosSigning(identifierId: string, payload: IosSigningPayload) {
+    return this.request<IosCredentialsMetadata>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/ios/signing`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  /** Stores the private key of an Apple certificate created outside xprem; answers the updated list. */
+  public async importIosCertificate(
+    identifierId: string,
+    payload: { fingerprintSha1: string; certificateP12: string; certificatePassword: string }
+  ) {
+    const response = await this.request<{ certificates: AppleDistributionCertificate[] }>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/ios/certificates/import`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+    return response.certificates;
+  }
+
+  /** Lists Apple certificates and whether xprem holds each private key. */
+  public async getAppleDistributionCertificates(identifierId: string) {
+    const response = await this.request<{ certificates: AppleDistributionCertificate[] }>(
+      `${this.appScope()}/identifiers/${encodeURIComponent(identifierId)}/credentials/ios/certificates`,
+      { method: 'GET' }
+    );
+    return response.certificates;
+  }
+
+  /** Lists the Apple team devices with local invitation metadata. */
+  public async getIosDevices() {
+    const response = await this.request<{ devices: AppleDevice[] }>(
+      `${this.appScope()}/ios/devices`,
+      { method: 'GET' }
+    );
+    return response.devices;
+  }
+
+  /** Lists registration invitations, including consumed, expired and revoked links. */
+  public async getIosDeviceInvitations() {
+    const response = await this.request<{ invitations: IosDeviceInvitation[] }>(
+      `${this.appScope()}/ios/device-invitations`,
+      { method: 'GET' }
+    );
+    return response.invitations;
+  }
+
+  /** The only call that returns the registration URL; there is no way to read it back later. */
+  public async createIosDeviceInvitation(payload: { label: string; expiresInHours: number }) {
+    return this.request<CreateIosDeviceInvitationResponse>(
+      `${this.appScope()}/ios/device-invitations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  /** Revokes an invitation so it cannot start another enrollment. */
+  public async revokeIosDeviceInvitation(invitationId: string) {
+    return this.request<void>(
+      `${this.appScope()}/ios/device-invitations/${encodeURIComponent(invitationId)}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  /** Disables a device in the selected app Apple team. */
+  public async disableIosDevice(deviceId: string) {
+    return this.request<void>(
+      `${this.appScope()}/ios/devices/${encodeURIComponent(deviceId)}/disable`,
+      { method: 'POST' }
+    );
+  }
+
+  /** Re-enables a device in the selected app Apple team. */
+  public async enableIosDevice(deviceId: string) {
+    return this.request<void>(
+      `${this.appScope()}/ios/devices/${encodeURIComponent(deviceId)}/enable`,
+      { method: 'POST' }
+    );
+  }
+
+  /** Public endpoints of the iPhone registration page: plain fetches, so no session is sent. */
+  public async getDeviceRegistrationLink(token: string) {
+    return this.fetchPublic<DeviceRegistrationLink>(
+      `/device-registrations/${encodeURIComponent(token)}`
+    );
+  }
+
+  /** Reads a public registration result using its invitation token without a session. */
+  public async getDeviceRegistrationStatus(token: string, registrationId: string) {
+    return this.fetchPublic<DeviceRegistrationStatus>(
+      `/device-registrations/${encodeURIComponent(token)}/registrations/${encodeURIComponent(registrationId)}`
+    );
+  }
+
+  /** Builds the download URL of an invitation Profile Service configuration. */
+  public deviceRegistrationProfileUrl(token: string) {
+    return `${this.baseUrl}/device-registrations/${encodeURIComponent(token)}/profile`;
+  }
+
+  /** 404 is an unknown, expired or revoked link; 410 a link that already registered its iPhone. */
+  private async fetchPublic<T>(endpoint: string): Promise<PublicResult<T>> {
+    const response = await fetch(`${this.baseUrl}${endpoint}`, { credentials: 'omit' });
+    if (response.status === 404) return { status: 'invalid-link' };
+    if (response.status === 410) return { status: 'used' };
+    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+    return { status: 'ok', data: (await response.json()) as T };
   }
 
   public async getBuilds(limit = 20, cursor?: string) {

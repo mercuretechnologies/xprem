@@ -16,18 +16,19 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// getDashboardPath locates the dashboard assets relative to the working directory or executable.
 func getDashboardPath() string {
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Fatalf("Error getting executable path: %v", err)
 	}
-	exeDir := filepath.Dir(exePath)
-
-	if strings.Contains(exePath, "/var/folders/") || strings.Contains(exePath, "Temp") {
-		workingDir, _ := os.Getwd()
-		return filepath.Join(workingDir, "apps", "dashboard", "dist")
+	exeDist := filepath.Join(filepath.Dir(exePath), "apps", "dashboard", "dist")
+	if _, err := os.Stat(exeDist); err == nil {
+		return exeDist
 	}
-	return filepath.Join(exeDir, "apps", "dashboard", "dist")
+	// go run builds the executable in a temporary or cache directory, away from the checkout.
+	workingDir, _ := os.Getwd()
+	return filepath.Join(workingDir, "apps", "dashboard", "dist")
 }
 
 // registerDashboardAssets serves the dashboard's static build. Anything that

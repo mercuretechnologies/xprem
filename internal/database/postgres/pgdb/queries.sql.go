@@ -1305,7 +1305,8 @@ func (q *Queries) GetAppIdentifierByPlatformAndIdentifier(ctx context.Context, a
 
 const getAppIdentifiersByAppID = `-- name: GetAppIdentifiersByAppID :many
 SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
-       (ac.id IS NOT NULL)::bool AS has_android_credentials
+       (ac.id IS NOT NULL)::bool AS has_android_credentials,
+       EXISTS (SELECT 1 FROM app_store_connect_api_keys k WHERE k.app_id = ai.app_id) AS has_ios_credentials
 FROM app_identifiers ai
 LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
 WHERE ai.app_id = $1
@@ -1319,6 +1320,7 @@ type GetAppIdentifiersByAppIDRow struct {
 	BuildNumber           string             `json:"build_number"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	HasAndroidCredentials bool               `json:"has_android_credentials"`
+	HasIosCredentials     bool               `json:"has_ios_credentials"`
 }
 
 func (q *Queries) GetAppIdentifiersByAppID(ctx context.Context, appID pgtype.UUID) ([]GetAppIdentifiersByAppIDRow, error) {
@@ -1337,6 +1339,7 @@ func (q *Queries) GetAppIdentifiersByAppID(ctx context.Context, appID pgtype.UUI
 			&i.BuildNumber,
 			&i.CreatedAt,
 			&i.HasAndroidCredentials,
+			&i.HasIosCredentials,
 		); err != nil {
 			return nil, err
 		}

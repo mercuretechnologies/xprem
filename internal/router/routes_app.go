@@ -122,6 +122,32 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 	app.route(http.MethodDelete, "/identifiers/{IDENTIFIER_ID}/credentials/android", container.CredentialsHandler.DeleteAndroidCredentialsHandler,
 		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/identifiers/{IDENTIFIER_ID}/credentials/ios", container.IosCredentialsHandler.GetIosCredentialsHandler,
+		AnyViewer())
+	app.route(http.MethodGet, "/identifiers/{IDENTIFIER_ID}/credentials/ios/certificates", container.IosCredentialsHandler.ListIosSigningCertificatesHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/identifiers/{IDENTIFIER_ID}/credentials/ios/certificates/import", container.IosCredentialsHandler.ImportIosCertificateHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPut, "/identifiers/{IDENTIFIER_ID}/credentials/ios/signing", container.IosCredentialsHandler.PutIosSigningSettingHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/apple/api-key", container.IosCredentialsHandler.GetAppStoreConnectApiKeyHandler,
+		AnyViewer())
+	app.route(http.MethodPut, "/apple/api-key", container.IosCredentialsHandler.PutAppStoreConnectApiKeyHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodDelete, "/apple/api-key", container.IosCredentialsHandler.DeleteAppStoreConnectApiKeyHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/ios/device-invitations", container.IosCredentialsHandler.CreateIosDeviceInvitationHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/ios/device-invitations", container.IosCredentialsHandler.ListIosDeviceInvitationsHandler,
+		AnyViewer())
+	app.route(http.MethodDelete, "/ios/device-invitations/{INVITATION_ID}", container.IosCredentialsHandler.RevokeIosDeviceInvitationHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodGet, "/ios/devices", container.IosCredentialsHandler.ListAppleDevicesHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/ios/devices/{DEVICE_ID}/disable", container.IosCredentialsHandler.DisableAppleDeviceHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
+	app.route(http.MethodPost, "/ios/devices/{DEVICE_ID}/enable", container.IosCredentialsHandler.EnableAppleDeviceHandler,
+		NeedsPermission(rbac.PermCredentialsManage, rbac.FallbackAdminOnly))
 
 	app.route(http.MethodGet, "/environments", container.EnvironmentsHandler.ListEnvironmentsHandler,
 		AnyViewer())

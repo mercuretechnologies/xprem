@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"xprem/internal/auditlog"
 	"xprem/internal/types"
 )
 
@@ -82,6 +83,16 @@ type AppIdentifier struct {
 	Identifier  string             `json:"identifier"`
 	BuildNumber string             `json:"build_number"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type AppStoreConnectApiKey struct {
+	ID               pgtype.UUID        `json:"id"`
+	AppID            pgtype.UUID        `json:"app_id"`
+	KeyID            string             `json:"key_id"`
+	IssuerID         string             `json:"issuer_id"`
+	SealedPrivateKey string             `json:"sealed_private_key"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AuditExportState struct {
@@ -315,6 +326,60 @@ type IdentityValueStat struct {
 	Value       string             `json:"value"`
 	DeviceCount int64              `json:"device_count"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type IosCertificate struct {
+	ID                        pgtype.UUID                `json:"id"`
+	SealedCertificate         string                     `json:"sealed_certificate"`
+	SealedCertificatePassword string                     `json:"sealed_certificate_password"`
+	CommonName                string                     `json:"common_name"`
+	SerialNumber              string                     `json:"serial_number"`
+	FingerprintSha1           string                     `json:"fingerprint_sha1"`
+	CertificateType           types.IosCertificateType   `json:"certificate_type"`
+	TeamID                    string                     `json:"team_id"`
+	ExpiresAt                 pgtype.Timestamptz         `json:"expires_at"`
+	Source                    types.IosCertificateSource `json:"source"`
+	CreatedAt                 pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt                 pgtype.Timestamptz         `json:"updated_at"`
+}
+
+type IosDeviceInvitation struct {
+	ID                    pgtype.UUID        `json:"id"`
+	AppID                 pgtype.UUID        `json:"app_id"`
+	TokenHash             string             `json:"token_hash"`
+	Challenge             string             `json:"challenge"`
+	Label                 string             `json:"label"`
+	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt             pgtype.Timestamptz `json:"revoked_at"`
+	CreatedByActorType    auditlog.ActorType `json:"created_by_actor_type"`
+	CreatedByActorID      string             `json:"created_by_actor_id"`
+	CreatedByActorDisplay string             `json:"created_by_actor_display"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	ClaimedAt             pgtype.Timestamptz `json:"claimed_at"`
+	ConsumedAt            pgtype.Timestamptz `json:"consumed_at"`
+	RegistrationID        pgtype.UUID        `json:"registration_id"`
+	ClaimToken            pgtype.UUID        `json:"claim_token"`
+}
+
+type IosDeviceRegistration struct {
+	ID            pgtype.UUID                       `json:"id"`
+	InvitationID  pgtype.UUID                       `json:"invitation_id"`
+	Udid          string                            `json:"udid"`
+	DeviceName    string                            `json:"device_name"`
+	Product       string                            `json:"product"`
+	OsVersion     string                            `json:"os_version"`
+	Status        types.IosDeviceRegistrationStatus `json:"status"`
+	AppleDeviceID *string                           `json:"apple_device_id"`
+	Error         *string                           `json:"error"`
+	CreatedAt     pgtype.Timestamptz                `json:"created_at"`
+}
+
+type IosSigningSetting struct {
+	AppIdentifierID pgtype.UUID          `json:"app_identifier_id"`
+	Mode            types.IosSigningMode `json:"mode"`
+	CertificateID   pgtype.UUID          `json:"certificate_id"`
+	CreatedAt       pgtype.Timestamptz   `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz   `json:"updated_at"`
 }
 
 type OauthAuthorizationCode struct {

@@ -21,6 +21,7 @@ type AppIdentifierRow struct {
 	Identifier            string
 	BuildNumber           string
 	HasAndroidCredentials bool
+	HasIosCredentials     bool
 	CreatedAt             time.Time
 }
 
@@ -61,6 +62,7 @@ func (s *PostgresAppIdentifierStore) InsertAppIdentifier(ctx context.Context, ap
 	return id, nil
 }
 
+// GetAppIdentifiers lists app identifiers with their platform signing-credential readiness.
 func (s *PostgresAppIdentifierStore) GetAppIdentifiers(ctx context.Context, appId string) ([]AppIdentifierRow, error) {
 	rows, err := s.engine.Queries.GetAppIdentifiersByAppID(ctx, ToPgUUID(appId))
 	if err != nil {
@@ -74,6 +76,7 @@ func (s *PostgresAppIdentifierStore) GetAppIdentifiers(ctx context.Context, appI
 			Identifier:            row.Identifier,
 			BuildNumber:           row.BuildNumber,
 			HasAndroidCredentials: row.HasAndroidCredentials,
+			HasIosCredentials:     row.HasIosCredentials,
 			CreatedAt:             row.CreatedAt.Time,
 		}
 	}

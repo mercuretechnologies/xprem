@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, KeyRound, Upload, X } from 'lucide-react';
 import { api, ApiProblemError, describeApiError } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
+import { arrayBufferToBase64 } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,16 +20,7 @@ import {
 
 const MAX_KEYSTORE_BYTES = 512 * 1024;
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-};
-
-const PasswordInput = ({
+export const PasswordInput = ({
   id,
   label,
   value,

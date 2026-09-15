@@ -2541,7 +2541,8 @@ RETURNING id;
 
 -- name: GetAppIdentifiersByAppID :many
 SELECT ai.id, ai.platform, ai.identifier, ai.build_number, ai.created_at,
-       (ac.id IS NOT NULL)::bool AS has_android_credentials
+       (ac.id IS NOT NULL)::bool AS has_android_credentials,
+       EXISTS (SELECT 1 FROM app_store_connect_api_keys k WHERE k.app_id = ai.app_id) AS has_ios_credentials
 FROM app_identifiers ai
 LEFT JOIN android_credentials ac ON ac.app_identifier_id = ai.id
 WHERE ai.app_id = $1
