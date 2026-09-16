@@ -26,6 +26,14 @@ func GetPort() string {
 	return port
 }
 
+// GetBindAddress returns the address the API server listens on
+// (BIND_TO_ADDRESS). The default 0.0.0.0 accepts traffic on every interface.
+// Set it to 127.0.0.1 to keep the server on the
+// loopback interface, for example behind a reverse proxy on the same host.
+func GetBindAddress() string {
+	return GetEnv("BIND_TO_ADDRESS")
+}
+
 func GetDBURL() string {
 	return GetEnv("DB_URL")
 }
@@ -319,6 +327,9 @@ var DefaultEnvValues = map[string]string{
 	// Client-controlled CDN bypass: opt-in because every asset client can use
 	// the header once it is enabled.
 	"ENABLE_PREVENT_CDN_REDIRECTION_HEADER": "false",
+
+	// Default address to bind to
+	"BIND_TO_ADDRESS": "0.0.0.0",
 
 	// Database connection defaults
 	"DB_URL":                "",

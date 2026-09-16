@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -45,7 +46,7 @@ func main() {
 	handler.Store(&boot)
 
 	server := &http.Server{
-		Addr: "0.0.0.0:" + config.GetPort(),
+		Addr: net.JoinHostPort(config.GetBindAddress(), config.GetPort()),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			(*handler.Load()).ServeHTTP(w, r)
 		}),
@@ -57,7 +58,7 @@ func main() {
 	go func() {
 		log.Fatalf("Server failed to start: %v", server.ListenAndServe())
 	}()
-	log.Println("Server is running on port " + config.GetPort())
+	log.Println("Server is running on " + server.Addr)
 
 	// The lock is released on failure, so a crash-looping pod retries the
 	// migration on every boot instead of skipping it while the lock expires.

@@ -243,3 +243,16 @@ func TestPreventCDNRedirectionHeaderEnabled(t *testing2.T) {
 		assert.Equal(t, expected, IsPreventCDNRedirectionHeaderEnabled(), "ENABLE_PREVENT_CDN_REDIRECTION_HEADER=%q", value)
 	}
 }
+
+func TestGetBindAddress(t *testing2.T) {
+	teardown := setup(t)
+	defer teardown()
+	for value, expected := range map[string]string{
+		"":          "0.0.0.0",
+		"127.0.0.1": "127.0.0.1",
+		"::1":       "::1",
+	} {
+		t.Setenv("BIND_TO_ADDRESS", value)
+		assert.Equal(t, expected, GetBindAddress(), "BIND_TO_ADDRESS=%q", value)
+	}
+}
