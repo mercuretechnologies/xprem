@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -31,7 +32,15 @@ func GetPort() string {
 // Set it to 127.0.0.1 to keep the server on the
 // loopback interface, for example behind a reverse proxy on the same host.
 func GetBindAddress() string {
-	return GetEnv("BIND_TO_ADDRESS")
+	bind_to_address := GetEnv("BIND_TO_ADDRESS")
+
+	bind_address := net.ParseIP(bind_to_address)
+
+	if bind_address == nil {
+		log.Fatalf("Invalid BIND_TO_ADDRESS set; must be a valid IP")
+	}
+
+	return bind_address.String()
 }
 
 func GetDBURL() string {
