@@ -434,9 +434,16 @@ func TestBuildRegistryRoutesRequireBuildCreate(t *testing.T) {
 		{http.MethodPost, "/artifacts/" + buildID + "/failed", `{"finishedAt":"2026-09-08T10:00:00Z"}`},
 		{http.MethodPost, "/artifacts/" + buildID + "/complete", ""},
 		{http.MethodPut, "/artifacts/" + buildID + "/upload", "artifact bytes"},
+		{http.MethodPost, "/cache/uploads", `{"namespace":"gradle","key":"archive-v1-` + strings.Repeat("a", 64) + `","size":1,"sha256":"` + strings.Repeat("a", 64) + `"}`},
+		{http.MethodPost, "/cache/uploads/" + buildID + "/complete", ""},
+		{http.MethodPut, "/cache/uploads/" + buildID, "cache bytes"},
+		{http.MethodGet, "/cache/uploads/" + buildID + "/download", ""},
+		{http.MethodGet, "/cache/gradle/archive-v1-" + strings.Repeat("a", 64), ""},
 	}
 	granted := apikeyrestrictions.ApiKeyAccess{ApiKeyID: 42, BuildRules: []apikeyrestrictions.BuildRule{{AppIdentifierID: buildID, Actions: []apikeyrestrictions.BuildAction{apikeyrestrictions.BuildActionCreate}}}}
 	elsewhere := apikeyrestrictions.ApiKeyAccess{ApiKeyID: 42, BuildRules: []apikeyrestrictions.BuildRule{{AppIdentifierID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Actions: []apikeyrestrictions.BuildAction{apikeyrestrictions.BuildActionCreate}}}}
+	blockedIP := granted
+	blockedIP.AllowedIps = []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
 	for _, tc := range []struct {
 		name   string
 		auth   services.CliAuthRepository
@@ -446,6 +453,7 @@ func TestBuildRegistryRoutesRequireBuildCreate(t *testing.T) {
 	}{
 		{"allowed", acceptingCliRepo{}, granted, buildID, http.StatusBadRequest},
 		{"denied", acceptingCliRepo{}, elsewhere, buildID, http.StatusForbidden},
+		{"blocked IP", acceptingCliRepo{}, blockedIP, buildID, http.StatusForbidden},
 		{"unauthenticated", failingBuildAuth{}, granted, buildID, http.StatusUnauthorized},
 		{"unregistered token", buildAuthKeyID{keyID: 0}, granted, buildID, http.StatusUnauthorized},
 		{"foreign identifier", acceptingCliRepo{}, granted, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", http.StatusNotFound},
@@ -453,10 +461,11 @@ func TestBuildRegistryRoutesRequireBuildCreate(t *testing.T) {
 		for _, endpoint := range endpoints {
 			t.Run(tc.name+" "+endpoint.method+" "+endpoint.suffix, func(t *testing.T) {
 				access := &buildAccessRepo{access: tc.access}
-				container := &AppContainer{AppRepo: buildAppRepo{}, CliAuthService: services.NewCliAuthService(tc.auth), ApiKeyAccessService: apikeyrestrictions.NewApiKeyAccessService(access), AppIdentifierRepo: &buildIdentifierRepo{platform: types.PlatformAndroid}, BuildHandler: handlers.NewBuildHandler(nil, nil, nil, nil), BuildRegistryHandler: registry}
+				container := &AppContainer{AppRepo: buildAppRepo{}, CliAuthService: services.NewCliAuthService(tc.auth), ApiKeyAccessService: apikeyrestrictions.NewApiKeyAccessService(access), AppIdentifierRepo: &buildIdentifierRepo{platform: types.PlatformAndroid}, BuildHandler: handlers.NewBuildHandler(nil, nil, nil, nil), BuildRegistryHandler: registry, BuildCacheHandler: handlers.NewBuildCacheHandler(services.NewBuildCacheService(nil, nil))}
 				router := mux.NewRouter()
 				registerBuildRoutes(router, container)
-				req := httptest.NewRequest(endpoint.method, "/app-1/build/"+tc.id+endpoint.suffix, strings.NewReader(endpoint.body))
+				body := strings.NewReader(endpoint.body)
+				req := httptest.NewRequest(endpoint.method, "/app-1/build/"+tc.id+endpoint.suffix, body)
 				req.Header.Set("Authorization", "Bearer eoo_key")
 				req.RemoteAddr = "192.0.2.1:4000"
 				w := httptest.NewRecorder()
@@ -467,6 +476,7 @@ func TestBuildRegistryRoutesRequireBuildCreate(t *testing.T) {
 					require.Contains(t, w.Body.String(), "stateless mode", "the guard let the request through to the registry handler")
 				} else {
 					require.NotContains(t, w.Body.String(), "stateless mode", "the registry handler must not run")
+					require.Equal(t, len(endpoint.body), body.Len(), "access must be denied before reading the upload")
 				}
 			})
 		}
@@ -574,8 +584,7 @@ func TestBuildLocalUploadRequiresBothTokensAndBuildPermission(t *testing.T) {
 			router.ServeHTTP(w, req)
 			require.Equal(t, tc.status, w.Code, w.Body.String())
 			if tc.status == http.StatusNoContent {
-				key, err := (bucket.BuildArtifact{IdentifierID: buildID, BuildID: buildID, Type: types.BuildArtifactAPK}).Key(true)
-				require.NoError(t, err)
+				key := (bucket.BuildArtifact{IdentifierID: buildID, BuildID: buildID, Type: types.BuildArtifactAPK}).Key(true)
 				contents, err := os.ReadFile(filepath.Join(root, key))
 				require.NoError(t, err)
 				require.Equal(t, "apk", string(contents))

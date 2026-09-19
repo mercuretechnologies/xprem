@@ -34,7 +34,7 @@ func NewBucketServerInstanceStore(b bucket.Bucket, c cache.Cache) *BucketServerI
 func (s *BucketServerInstanceStore) GetOrCreateInstanceID(ctx context.Context) (string, error) {
 	locked := false
 	for attempt := 0; ; attempt++ {
-		id, err := s.bucket.GetInstanceID()
+		id, err := s.bucket.GetInstanceID(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -48,12 +48,16 @@ func (s *BucketServerInstanceStore) GetOrCreateInstanceID(ctx context.Context) (
 		if locked || attempt >= instanceIDMaxWaits {
 			break
 		}
-		time.Sleep(instanceIDWaitPoll)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(instanceIDWaitPoll):
+		}
 	}
 	if locked {
 		defer s.cache.Delete(instanceIDLockKey)
 	}
-	id, err := s.bucket.GetInstanceID()
+	id, err := s.bucket.GetInstanceID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -61,7 +65,7 @@ func (s *BucketServerInstanceStore) GetOrCreateInstanceID(ctx context.Context) (
 		return id, nil
 	}
 	minted := uuid.New().String()
-	if err := s.bucket.PersistInstanceID(minted); err != nil {
+	if err := s.bucket.PersistInstanceID(ctx, minted); err != nil {
 		return "", err
 	}
 	return minted, nil

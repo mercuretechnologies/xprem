@@ -29,17 +29,18 @@ export async function withTemporaryDirectory<T>(
         directory: await fs.mkdtemp(path.join(os.tmpdir(), 'eoas-build-')),
         release: async () => {},
       };
+  // Interruption and normal unwinding can both reach cleanup.
+  let cleaning: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => (cleaning ??= fs.remove(temporary).then(release));
   const interrupt = (): void => {
     buildLog.abort();
     buildLog.general.write('Build interrupted.');
     void terminateBuildCommand()
+      .catch(() => {
+        buildLog.general.warn('Could not stop all build processes.');
+      })
       .then(() => buildLog.close())
-      .finally(() =>
-        fs
-          .remove(temporary)
-          .then(release)
-          .finally(() => process.exit(130))
-      );
+      .finally(() => cleanup().finally(() => process.exit(130)));
   };
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
@@ -48,13 +49,12 @@ export async function withTemporaryDirectory<T>(
   } finally {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
-    await fs.remove(temporary);
-    await release();
+    await cleanup();
   }
 }
 
-// Xcode tooling caches absolute paths of the project it builds, so one project always builds at one
-// path, which one build at a time may hold.
+// Native compiler caches include absolute paths. Recreate a project's workspace at the same path,
+// which one build at a time may hold.
 async function claimStableDirectory(
   project: string
 ): Promise<{ directory: string; release: () => Promise<void> }> {
@@ -63,7 +63,7 @@ async function claimStableDirectory(
   const release = await lockDirectory(directory);
   try {
     await fs.remove(directory);
-    await fs.ensureDir(directory);
+    await fs.mkdir(directory, { mode: 0o700 });
   } catch (error) {
     await release();
     throw error;

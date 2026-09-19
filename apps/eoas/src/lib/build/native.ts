@@ -131,10 +131,12 @@ export interface NativeBuild {
   maintainedProjectNotice: string;
   // App config carrying the profile's identifier and the allocated build number.
   withIdentity(expo: ExpoConfig, buildNumber: number): ExpoConfig;
+  restoreCache?(workspace: NativeWorkspace): Promise<void>;
   // Signs and compiles the generated native project.
   compile(workspace: NativeWorkspace): Promise<void>;
   // Path of the compiled artifact inside the workspace.
   findArtifact(workspace: NativeWorkspace): Promise<string>;
+  saveCache?(workspace: NativeWorkspace): Promise<void>;
 }
 
 export async function runNativeBuild(
@@ -159,6 +161,7 @@ export async function runNativeBuild(
   }
   buildLog.general.info(`Build ID: ${record.id}`);
   let output: string;
+  let workspace: NativeWorkspace;
   try {
     const working = await buildLog.runStep(BuildStep.PREPARE_PROJECT, async () => {
       const working = await copyProject(build.project, temporary);
@@ -233,7 +236,8 @@ export async function runNativeBuild(
         );
       }
     });
-    const workspace: NativeWorkspace = { working, temporary, buildNumber, buildLog, secrets };
+    workspace = { working, temporary, buildNumber, buildLog, secrets };
+    await native.restoreCache?.(workspace);
     await native.compile(workspace);
     output = await buildLog.runStep(BuildStep.PREPARE_ARTIFACTS, async stepLog => {
       await fs.ensureDir(path.dirname(build.output));
@@ -269,5 +273,6 @@ export async function runNativeBuild(
       )}`
     );
   }
+  await native.saveCache?.(workspace);
   return output;
 }

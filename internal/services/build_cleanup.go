@@ -28,19 +28,20 @@ const (
 	buildUnfinishedStaleAfter  = 24 * time.Hour
 )
 
-// BuildArtifactDeleter removes one artifact object; absent objects are not an error.
-type BuildArtifactDeleter interface {
+// BuildCleanupStorage removes artifacts and cache objects; absent objects are not an error.
+type BuildCleanupStorage interface {
 	DeleteBuildArtifact(context.Context, bucket.BuildArtifact, bool) error
+	DeleteBuildCache(context.Context, bucket.BuildCacheObject) error
 }
 
 // BuildCleanup drains the build_artifact_cleanup outbox, sweeps stale staging
 // uploads and fails abandoned builds. Final artifacts of ready builds are never touched.
 type BuildCleanup struct {
 	db      database.DBTX
-	storage BuildArtifactDeleter
+	storage BuildCleanupStorage
 }
 
-func NewBuildCleanup(db database.DBTX, storage BuildArtifactDeleter) *BuildCleanup {
+func NewBuildCleanup(db database.DBTX, storage BuildCleanupStorage) *BuildCleanup {
 	return &BuildCleanup{db: db, storage: storage}
 }
 
@@ -48,7 +49,11 @@ func NewBuildCleanup(db database.DBTX, storage BuildArtifactDeleter) *BuildClean
 func (c *BuildCleanup) Start(parent context.Context) func() {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		c.loop(ctx, buildStagingSweepInterval, "build cache", c.SweepCache)
+	}()
 	go func() {
 		defer wg.Done()
 		c.loop(ctx, buildOutboxInterval, "outbox", c.DrainOutbox)
@@ -162,9 +167,6 @@ func (c *BuildCleanup) FailStaleBuilds(ctx context.Context) (int, error) {
 }
 
 func (c *BuildCleanup) deleteArtifact(ctx context.Context, ref bucket.BuildArtifact, staging, final bool) error {
-	if _, err := ref.Key(false); err != nil {
-		return fmt.Errorf("unusable artifact reference: %w", err)
-	}
 	var errs []error
 	if staging {
 		if err := c.deleteOne(ctx, ref, true); err != nil {

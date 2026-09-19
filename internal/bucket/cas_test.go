@@ -102,7 +102,7 @@ func TestLocalBucket_RequestBlobUploadURL_TokenAcceptsCASPath(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://localhost/xprem")
 
 	b := &LocalBucket{BasePath: root}
-	upload, err := b.RequestBlobUploadURL("app-1", testBlobHash, "production")
+	upload, err := b.RequestBlobUploadURL(t.Context(), "app-1", testBlobHash, "production")
 	require.NoError(t, err)
 
 	parsed, err := url.Parse(upload.URL)

@@ -19,7 +19,10 @@ import (
 // fail because UnwrapBucket expects a concrete *LocalBucket/*S3Bucket/
 // *GCSBucket, but the migration's up() bails out before unwrapping when
 // EXPO_APP_ID is unset, which is exactly what we want to prove.
-type unreachableBucket struct{ t *testing.T }
+type unreachableBucket struct {
+	bucket.BuildCacheStorage
+	t *testing.T
+}
 
 func (u unreachableBucket) GetBranches(string) ([]string, error) {
 	u.t.Fatal("migration should have skipped; GetBranches should not be called")
@@ -57,11 +60,11 @@ func (u unreachableBucket) CreateUpdateFrom(*types.Update, string) (*types.Updat
 	u.t.Fatal("migration should have skipped")
 	return nil, nil
 }
-func (u unreachableBucket) GetInstanceID() (string, error) {
+func (u unreachableBucket) GetInstanceID(context.Context) (string, error) {
 	u.t.Fatal("migration should have skipped")
 	return "", nil
 }
-func (u unreachableBucket) PersistInstanceID(string) error {
+func (u unreachableBucket) PersistInstanceID(context.Context, string) error {
 	u.t.Fatal("migration should have skipped")
 	return nil
 }
@@ -105,7 +108,7 @@ func (u unreachableBucket) DeleteBSDiffs(context.Context, string, string) error 
 	u.t.Fatal("migration should have skipped")
 	return nil
 }
-func (u unreachableBucket) RequestBlobUploadURL(string, string, string) (*bucket.UploadRequest, error) {
+func (u unreachableBucket) RequestBlobUploadURL(context.Context, string, string, string) (*bucket.UploadRequest, error) {
 	u.t.Fatal("migration should have skipped")
 	return &bucket.UploadRequest{Method: "PUT"}, nil
 }

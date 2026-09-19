@@ -17,6 +17,7 @@ import (
 // stubBucket records the last call so tests can verify whether the validating
 // decorator delegated to the inner bucket or short-circuited on validation.
 type stubBucket struct {
+	BuildCacheStorage
 	called bool
 }
 
@@ -55,11 +56,11 @@ func (s *stubBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId 
 	s.mark()
 	return nil, nil
 }
-func (s *stubBucket) GetInstanceID() (string, error)              { s.mark(); return "", nil }
-func (s *stubBucket) PersistInstanceID(_ string) error            { s.mark(); return nil }
-func (s *stubBucket) RetrieveMigrationHistory() ([]string, error) { s.mark(); return nil, nil }
-func (s *stubBucket) ApplyMigration(migrationId string) error     { s.mark(); return nil }
-func (s *stubBucket) RemoveMigrationFromHistory(id string) error  { s.mark(); return nil }
+func (s *stubBucket) GetInstanceID(context.Context) (string, error)       { s.mark(); return "", nil }
+func (s *stubBucket) PersistInstanceID(_ context.Context, _ string) error { s.mark(); return nil }
+func (s *stubBucket) RetrieveMigrationHistory() ([]string, error)         { s.mark(); return nil, nil }
+func (s *stubBucket) ApplyMigration(migrationId string) error             { s.mark(); return nil }
+func (s *stubBucket) RemoveMigrationFromHistory(id string) error          { s.mark(); return nil }
 func (s *stubBucket) BlobExists(context.Context, string, string) (bool, error) {
 	s.mark()
 	return false, nil
@@ -88,7 +89,7 @@ func (s *stubBucket) DeleteBSDiffs(context.Context, string, string) error {
 	s.mark()
 	return nil
 }
-func (s *stubBucket) RequestBlobUploadURL(_, _, _ string) (*UploadRequest, error) {
+func (s *stubBucket) RequestBlobUploadURL(_ context.Context, _, _, _ string) (*UploadRequest, error) {
 	s.mark()
 	return &UploadRequest{Method: "PUT"}, nil
 }

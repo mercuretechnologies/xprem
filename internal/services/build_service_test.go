@@ -220,14 +220,12 @@ func (f *buildFixture) registerInput(content []byte) RegisterBuildInput {
 }
 
 func (f *buildFixture) stagedPath(t *testing.T, b types.BuildRecord) string {
-	key, err := artifactRef(b).Key(true)
-	require.NoError(t, err)
+	key := artifactRef(b).Key(true)
 	return filepath.Join(f.root, key)
 }
 
 func (f *buildFixture) finalPath(t *testing.T, b types.BuildRecord) string {
-	key, err := artifactRef(b).Key(false)
-	require.NoError(t, err)
+	key := artifactRef(b).Key(false)
 	return filepath.Join(f.root, key)
 }
 

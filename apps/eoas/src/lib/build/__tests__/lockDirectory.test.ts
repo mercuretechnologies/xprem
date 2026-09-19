@@ -72,7 +72,8 @@ it('lets one build at a time use the stable directory of a project', async () =>
   const buildLog = {} as BuildLog;
   await withTemporaryDirectory(
     buildLog,
-    async () => {
+    async directory => {
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
       await expect(
         withTemporaryDirectory(buildLog, async () => {}, '/projects/one')
       ).rejects.toThrow('already running');

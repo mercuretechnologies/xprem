@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,17 @@ func TestBuildArtifactDownloadURLs(t *testing.T) {
 		{"azure", &AzureBucket{ContainerName: "artifacts", KeyPrefix: "prefix/"}, "buildtest.blob.core.windows.net", "/artifacts/prefix/", "sig"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			cache, ok := tc.storage.(BuildCacheStorage)
+			require.True(t, ok, "%T must implement BuildCacheStorage", tc.storage)
+			upload, err := cache.RequestBuildCacheUploadURL(context.Background(), BuildCacheObject{
+				AppID: testBuildID, IdentifierID: testIdentifierID, Namespace: types.BuildCacheGradle, ID: testBuildID,
+			})
+			require.NoError(t, err)
+			put, err := url.Parse(upload.URL)
+			require.NoError(t, err)
+			if tc.name == "s3" {
+				require.Empty(t, put.Query().Get("X-Amz-Checksum-Crc32"), "do not sign an empty-body checksum")
+			}
 			storage := &validatingBucket{Inner: tc.storage}
 			deadline := time.Now().Add(30 * time.Second).UTC().Truncate(time.Second)
 			signed, err := storage.RequestBuildArtifactDownloadURL(context.Background(), testArtifact(), deadline)

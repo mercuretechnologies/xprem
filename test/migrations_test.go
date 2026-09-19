@@ -11,6 +11,7 @@ import (
 )
 
 type dummyMigrationsBucket struct {
+	bucket.BuildCacheStorage
 	migrationsHistory []string
 	actionsRecorded   []string
 }
@@ -51,8 +52,8 @@ func (b *dummyMigrationsBucket) CreateUpdateFrom(_ *types.Update, _ string) (*ty
 	b.actionsRecorded = append(b.actionsRecorded, "CreateUpdateFrom")
 	return nil, nil
 }
-func (b *dummyMigrationsBucket) GetInstanceID() (string, error) { return "", nil }
-func (b *dummyMigrationsBucket) PersistInstanceID(_ string) error {
+func (b *dummyMigrationsBucket) GetInstanceID(context.Context) (string, error) { return "", nil }
+func (b *dummyMigrationsBucket) PersistInstanceID(_ context.Context, _ string) error {
 	return nil
 }
 func (b *dummyMigrationsBucket) RetrieveMigrationHistory() ([]string, error) {
@@ -99,7 +100,7 @@ func (b *dummyMigrationsBucket) DeleteBSDiffs(context.Context, string, string) e
 	b.actionsRecorded = append(b.actionsRecorded, "DeleteBSDiffs")
 	return nil
 }
-func (b *dummyMigrationsBucket) RequestBlobUploadURL(_, _, _ string) (*bucket.UploadRequest, error) {
+func (b *dummyMigrationsBucket) RequestBlobUploadURL(_ context.Context, _, _, _ string) (*bucket.UploadRequest, error) {
 	b.actionsRecorded = append(b.actionsRecorded, "RequestBlobUploadURL")
 	return &bucket.UploadRequest{Method: "PUT"}, nil
 }

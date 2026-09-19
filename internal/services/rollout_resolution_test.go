@@ -629,7 +629,7 @@ func hashedUploads(paths ...string) []FileUploadItem {
 const launchAssetPath = "bundles/launch.hbc"
 
 // fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
-type fakeRolloutBucket struct{}
+type fakeRolloutBucket struct{ bucket.BuildCacheStorage }
 
 func (fakeRolloutBucket) GetBranches(_ string) ([]string, error) { return nil, nil }
 
@@ -666,9 +666,9 @@ func (fakeRolloutBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdat
 	}, nil
 }
 
-func (fakeRolloutBucket) GetInstanceID() (string, error) { return "", nil }
+func (fakeRolloutBucket) GetInstanceID(context.Context) (string, error) { return "", nil }
 
-func (fakeRolloutBucket) PersistInstanceID(_ string) error { return nil }
+func (fakeRolloutBucket) PersistInstanceID(_ context.Context, _ string) error { return nil }
 
 func (fakeRolloutBucket) RetrieveMigrationHistory() ([]string, error) { return nil, nil }
 
@@ -704,7 +704,7 @@ func (fakeRolloutBucket) DeleteBSDiffs(context.Context, string, string) error {
 	return nil
 }
 
-func (fakeRolloutBucket) RequestBlobUploadURL(_, _, _ string) (*bucket.UploadRequest, error) {
+func (fakeRolloutBucket) RequestBlobUploadURL(_ context.Context, _, _, _ string) (*bucket.UploadRequest, error) {
 	return &bucket.UploadRequest{Method: "PUT"}, nil
 }
 

@@ -34,10 +34,14 @@ type recordingDeleter struct {
 }
 
 func (r *recordingDeleter) DeleteBuildArtifact(_ context.Context, ref bucket.BuildArtifact, staging bool) error {
-	key, err := ref.Key(staging)
-	if err != nil {
-		return err
-	}
+	return r.delete(ref.Key(staging))
+}
+
+func (r *recordingDeleter) DeleteBuildCache(_ context.Context, ref bucket.BuildCacheObject) error {
+	return r.delete(ref.Key())
+}
+
+func (r *recordingDeleter) delete(key string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.failOn[key]; err != nil {
@@ -74,6 +78,31 @@ func setupBuildCleanup(t *testing.T) (*pgxpool.Pool, *recordingDeleter, *BuildCl
 	return pool, deleter, NewBuildCleanup(pool, deleter)
 }
 
+func TestBuildCacheCleanupRetriesBucketFailure(t *testing.T) {
+	pool, deleter, cleanup := setupBuildCleanup(t)
+	ctx := context.Background()
+	ref := bucket.BuildCacheObject{AppID: uuid.NewString(), IdentifierID: uuid.NewString(), Namespace: types.BuildCacheGradle, ID: uuid.NewString()}
+	key := ref.Key()
+	_, err := pool.Exec(ctx, "INSERT INTO build_cache_cleanup (id, app_id, app_identifier_id, namespace, size, due_at) VALUES ($1, $2, $3, $4, 2048, now())", ref.ID, ref.AppID, ref.IdentifierID, ref.Namespace)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM build_cache_cleanup WHERE id = $1", ref.ID) })
+	deleter.failOn[key] = errors.New("bucket unavailable")
+	_, err = cleanup.SweepCache(ctx)
+	require.NoError(t, err)
+	var postponed bool
+	require.NoError(t, pool.QueryRow(ctx, "SELECT due_at > now() FROM build_cache_cleanup WHERE id = $1", ref.ID).Scan(&postponed))
+	require.True(t, postponed)
+	require.NotContains(t, deleter.keys(), key)
+
+	delete(deleter.failOn, key)
+	_, err = pool.Exec(ctx, "UPDATE build_cache_cleanup SET due_at = now() WHERE id = $1", ref.ID)
+	require.NoError(t, err)
+	_, err = cleanup.SweepCache(ctx)
+	require.NoError(t, err)
+	require.Contains(t, deleter.keys(), key)
+	require.ErrorIs(t, pool.QueryRow(ctx, "SELECT true FROM build_cache_cleanup WHERE id = $1", ref.ID).Scan(&postponed), pgx.ErrNoRows)
+}
+
 type cleanupFixture struct {
 	appID        string
 	identifierID string
@@ -95,9 +124,8 @@ func insertCleanupFixture(t *testing.T, pool *pgxpool.Pool) cleanupFixture {
 func (f cleanupFixture) insertBuild(t *testing.T, pool *pgxpool.Pool, status string, age time.Duration) bucket.BuildArtifact {
 	t.Helper()
 	ref := bucket.BuildArtifact{IdentifierID: f.identifierID, BuildID: uuid.NewString(), Type: types.BuildArtifactAPK}
-	key, err := ref.Key(false)
-	require.NoError(t, err)
-	_, err = pool.Exec(context.Background(), `INSERT INTO builds (id, app_id, app_identifier_id, platform, application_id, status, artifact_type, size, sha256, artifact_key, metadata, actor_type, actor_id, actor_display, started_at, finished_at, duration_ms, ready_at, created_at, updated_at)
+	key := ref.Key(false)
+	_, err := pool.Exec(context.Background(), `INSERT INTO builds (id, app_id, app_identifier_id, platform, application_id, status, artifact_type, size, sha256, artifact_key, metadata, actor_type, actor_id, actor_display, started_at, finished_at, duration_ms, ready_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'android', 'com.example.app', $4, 'apk',
         CASE WHEN $4 = 'building' THEN 0 ELSE 1 END,
         CASE WHEN $4 = 'building' THEN '' ELSE repeat('a', 64) END,
@@ -122,10 +150,8 @@ func duration(i pgtype.Interval) time.Duration {
 
 func keysOf(t *testing.T, ref bucket.BuildArtifact) (final, staging string) {
 	t.Helper()
-	final, err := ref.Key(false)
-	require.NoError(t, err)
-	staging, err = ref.Key(true)
-	require.NoError(t, err)
+	final = ref.Key(false)
+	staging = ref.Key(true)
 	return final, staging
 }
 
