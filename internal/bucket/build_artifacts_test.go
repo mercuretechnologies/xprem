@@ -124,16 +124,13 @@ func TestValidateBuildUploadTokenRejectsInvalidGrants(t *testing.T) {
 
 func TestBuildObjectKeysAreIsolatedAndValidated(t *testing.T) {
 	ref := testArtifact()
-	key, err := ref.Key(false)
-	require.NoError(t, err)
+	key := ref.Key(false)
 	require.Equal(t, "builds/android/"+testIdentifierID+"/"+testBuildID+".apk", key)
-	staging, err := ref.Key(true)
-	require.NoError(t, err)
+	staging := ref.Key(true)
 	require.Equal(t, "builds/android/"+testIdentifierID+"/.uploads/"+testBuildID+".apk", staging)
 	ios := ref
 	ios.Type = types.BuildArtifactIPA
-	key, err = ios.Key(false)
-	require.NoError(t, err)
+	key = ios.Key(false)
 	require.Equal(t, "builds/ios/"+testIdentifierID+"/"+testBuildID+".ipa", key)
 
 	stub := &stubBucket{}
@@ -276,8 +273,7 @@ func TestBuildTreeCoexistsWithOTATreesAndMigration(t *testing.T) {
 func TestBuildKeysNeverConfirmAV1Triple(t *testing.T) {
 	ref := testArtifact()
 	for _, staging := range []bool{false, true} {
-		key, err := ref.Key(staging)
-		require.NoError(t, err)
+		key := ref.Key(staging)
 		_, isMarker := v1BranchTripleFromMarker(key)
 		require.False(t, isMarker)
 		require.False(t, inConfirmedTriple(key, map[string]bool{}))

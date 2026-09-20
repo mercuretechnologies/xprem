@@ -160,12 +160,13 @@ it.each([
       variables: {},
       nodeEnv: mode === 'release' ? 'production' : 'development',
       toolEnv: {},
+      toolVersions: {},
       env: {},
     };
     const record = await startBuildRecord(
       build,
       'apk',
-      build.profile.android.mode,
+      build.profile.android!.mode,
       metadata.startedAt
     );
     const persisted = await fs.readJson(`${build.output}.build.json`);
@@ -193,6 +194,7 @@ it('refuses to build against a server without the build registry', async () => {
     variables: {},
     nodeEnv: 'production',
     toolEnv: {},
+    toolVersions: {},
     env: {},
   };
   await expect(startBuildRecord(build, 'apk', 'release', metadata.startedAt)).rejects.toThrow(

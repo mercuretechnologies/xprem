@@ -442,6 +442,7 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	}
 
 	updateRequests, err := bucket.RequestUploadUrlsForFileUpdates(
+		ctx,
 		params.AppID,
 		params.BranchName,
 		params.RuntimeVersion,

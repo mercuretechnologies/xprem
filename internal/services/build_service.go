@@ -255,10 +255,7 @@ func (s *BuildService) newRecord(ctx context.Context, appID, identifierID, id st
 	}
 	actorType, actorID, actorDisplay := auditActorFromContext(ctx)
 	record := &types.BuildRecord{ID: id, AppID: appID, AppIdentifierID: identifierID, Platform: ref.Platform, ApplicationID: ref.Identifier, ArtifactType: artifactType, ActorType: string(actorType), ActorID: actorID, ActorDisplay: actorDisplay}
-	record.ArtifactKey, err = artifactRef(*record).Key(false)
-	if err != nil {
-		return nil, validation.Errorf("artifactType", "%s", err)
-	}
+	record.ArtifactKey = artifactRef(*record).Key(false)
 	return record, nil
 }
 

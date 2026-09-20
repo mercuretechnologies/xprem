@@ -96,7 +96,7 @@ func TestRequestUploadUrlsCarryAzureBlobTypeHeader(t *testing2.T) {
 		os.Unsetenv("AZURE_STORAGE_ACCOUNT_NAME")
 		os.Unsetenv("AZURE_STORAGE_ACCOUNT_KEY")
 	}()
-	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
+	requests, err := RequestUploadUrlsForFileUpdates(t.Context(), "app", "branch", "1", "100", []UploadFile{{Name: "bundles/android.js", Hash: testBlobHash}})
 	assert.Nil(t, err)
 	assert.Len(t, requests, 1)
 	assert.Equal(t, "android.js", requests[0].FileName)
@@ -114,7 +114,7 @@ func TestRequestUploadUrlsCarryLocalUploadTokenInHeaders(t *testing2.T) {
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", t.TempDir())
 	os.Setenv("BASE_URL", "http://localhost:3000")
 	os.Setenv("JWT_SECRET", "test_jwt_secret")
-	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{
+	requests, err := RequestUploadUrlsForFileUpdates(t.Context(), "app", "branch", "1", "100", []UploadFile{
 		{Name: "bundles/android.js", Hash: testBlobHash},
 		{Name: "metadata.json", InUpdateFolder: true},
 	})
@@ -339,7 +339,7 @@ func TestRequestUploadUrlsRouteByDestination(t *testing2.T) {
 	os.Setenv("BASE_URL", "http://localhost:3000")
 	os.Setenv("JWT_SECRET", "test_jwt_secret")
 
-	requests, err := RequestUploadUrlsForFileUpdates("app", "branch", "1", "100", []UploadFile{
+	requests, err := RequestUploadUrlsForFileUpdates(t.Context(), "app", "branch", "1", "100", []UploadFile{
 		{Name: "metadata.json", Hash: testBlobHash, InUpdateFolder: true},
 		{Name: "bundles/android.js", Hash: testBlobHash},
 		{Name: "assets/copy-of-bundle", Hash: testBlobHash},
