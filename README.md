@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '41111063-c87c-4035-b6e6-c589fbfdd762'
+  PropagateID: '41111063-c87c-4035-b6e6-c589fbfdd762'
+  ReservedCode1: '781339fc-e29c-44ca-bce9-9e3b9c9982c4'
+  ReservedCode2: '781339fc-e29c-44ca-bce9-9e3b9c9982c4'
+---
+
 <p align="center">
   <img src=".github/img/cover.png" alt="xprem" />
 </p>
@@ -65,6 +76,16 @@ Most providers are already supported. If yours is missing, feel free to open an 
 ## Deployment
 
 xprem is one Go process, deployed as a single instance or as many replicas as you need. The project ships a Docker image and a Helm chart to keep the deployment simple, plus `npx eoas server:init`, a utility that sets up the environment for your configuration.
+
+## Before your first update
+
+Publishing succeeds, devices poll the server, and still no update arrives? Each of these three prerequisites fails silently, and all of them take only a few minutes to set up:
+
+- **The code-signing certificate comes from the server.** When an app is created, xprem generates the signing key pair and seals the private key in its key store. Download the certificate from the dashboard (or `GET /api/apps/{appId}/certificate`) and embed it in your app. Generating your own key pair instead makes expo-updates reject every manifest with `Code signing incorrect signature`.
+
+- **Channels and branches are two layers.** Builds request updates on a *channel*, `eoas` publishes updates to a *branch*, and the mapping between the two lives on the server, created from the dashboard or the REST API. Until it exists, device polls return `404 No branch mapping found` while publishing keeps succeeding.
+
+- **Custom publish scripts must upload `expoConfig.json`.** The manifest's `extra.expoClient` is filled from this file; without it, devices download and verify the update on every poll but never launch it. `eoas` writes it from `expo config --json --type public` and uploads it alongside the bundle; scripts that publish over the REST API directly must do the same.
 
 ## Benchmark
 
