@@ -61,19 +61,21 @@ func sortNewestFirst(updates []types.Update) []types.Update {
 }
 
 func (s *BucketUpdateRepository) GetUpdateType(ctx context.Context, update types.Update) (types.UpdateType, error) {
-	return s.updateType(ctx, update), nil
+	return s.updateType(ctx, update)
 }
 
 // updateType reports whether update is a rollback, based on the presence of
 // the "rollback" marker file written by CreateRollback.
-// A missing marker and an unreachable bucket are indistinguishable here; both mean "not a rollback".
-func (s *BucketUpdateRepository) updateType(ctx context.Context, update types.Update) types.UpdateType {
-	file, _ := s.updateStore.GetFile(ctx, update, "rollback")
-	if file != nil {
-		file.Reader.Close()
-		return types.Rollback
+func (s *BucketUpdateRepository) updateType(ctx context.Context, update types.Update) (types.UpdateType, error) {
+	file, err := s.updateStore.GetFile(ctx, update, "rollback")
+	if err != nil {
+		return 0, fmt.Errorf("failed to read the rollback marker: %w", err)
 	}
-	return types.NormalUpdate
+	if file == nil {
+		return types.NormalUpdate, nil
+	}
+	file.Reader.Close()
+	return types.Rollback, nil
 }
 
 func (s *BucketUpdateRepository) IsUpdateValid(ctx context.Context, update types.Update) (bool, error) {
@@ -154,8 +156,12 @@ func (s *BucketUpdateRepository) GetUpdateDetails(ctx context.Context, appId str
 	}
 	numberUpdate, _ := strconv.ParseInt(update.UpdateId, 10, 64)
 	storedMetadata, _ := update2.RetrieveUpdateStoredMetadata(ctx, *update)
+	updateType, err := s.updateType(ctx, *update)
+	if err != nil {
+		return types.UpdateDetails{}, err
+	}
 	updateUUID := "Rollback to embedded"
-	if s.updateType(ctx, *update) != types.Rollback {
+	if updateType != types.Rollback {
 		updateUUID = storedMetadata.UpdateUUID
 		if updateUUID == "" {
 			updateUUID = crypto.ConvertSHA256HashToUUID(metadata.ID)
@@ -168,7 +174,7 @@ func (s *BucketUpdateRepository) GetUpdateDetails(ctx context.Context, appId str
 		CommitHash: storedMetadata.CommitHash,
 		Platform:   storedMetadata.Platform,
 		Message:    storedMetadata.Message,
-		Type:       s.updateType(ctx, *update),
+		Type:       updateType,
 		ExpoConfig: string(expoConfig),
 	}, nil
 }
@@ -192,7 +198,10 @@ func (s *BucketUpdateRepository) GetUpdatesByRunTimeVersionAndBranchName(ctx con
 		}
 		numberUpdate := updateID
 		storedMetadata, _ := update2.RetrieveUpdateStoredMetadata(ctx, update)
-		updateType := s.updateType(ctx, update)
+		updateType, err := s.updateType(ctx, update)
+		if err != nil {
+			return types.UpdatesPage{}, err
+		}
 		if updateType == types.Rollback {
 			updatesResponse = append(updatesResponse, types.UpdateItem{
 				UpdateUUID: "Rollback to embedded",
