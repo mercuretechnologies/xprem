@@ -172,7 +172,7 @@ func (s *AuditService) archiveNextBatch(ctx context.Context, archiveStore object
 	lastID := events[len(events)-1].ID
 	key := fmt.Sprintf("%04d/%02d/%02d/%d-%d.ndjson",
 		firstDay.Year(), firstDay.Month(), firstDay.Day(), events[0].ID, lastID)
-	if err := archiveStore.Put(ctx, key, &body); err != nil {
+	if err := archiveStore.Put(ctx, key, bytes.NewReader(body.Bytes())); err != nil {
 		return false, err
 	}
 
