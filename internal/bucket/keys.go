@@ -18,6 +18,7 @@ const (
 	maxSegmentLen  = 128
 	casDir         = "cas"
 	bsDiffDir      = "bsdiff"
+	sourcemapsDir  = "sourcemaps"
 	blobHashLength = 43
 )
 
@@ -117,7 +118,7 @@ func ValidateUploadFile(name, hash string) error {
 }
 
 func ReservedBranchName(branch string) bool {
-	return branch == casDir || branch == bsDiffDir
+	return branch == casDir || branch == bsDiffDir || branch == sourcemapsDir
 }
 
 func updatePrefix(appId, branch, runtimeVersion, updateId string) string {
@@ -127,6 +128,12 @@ func updatePrefix(appId, branch, runtimeVersion, updateId string) string {
 // BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
 func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
+}
+
+// SourcemapObjectKey is {appId}/sourcemaps/{hash}: the source map of the
+// bundle blob with that hash.
+func SourcemapObjectKey(appId, hash string) string {
+	return appId + "/" + sourcemapsDir + "/" + hash
 }
 
 // BSDiffBranchPrefix is {appId}/bsdiff/{branch}/, under which every patch of

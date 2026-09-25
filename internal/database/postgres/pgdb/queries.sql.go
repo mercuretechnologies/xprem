@@ -2226,7 +2226,7 @@ func (q *Queries) GetUpdateAssetMapping(ctx context.Context, arg GetUpdateAssetM
 }
 
 const getUpdateByBranchNameAndRuntime = `-- name: GetUpdateByBranchNameAndRuntime :one
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at, u.sourcemap_hash
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id
@@ -2258,6 +2258,7 @@ type GetUpdateByBranchNameAndRuntimeRow struct {
 	RolloutPercentage *int32             `json:"rollout_percentage"`
 	ControlUpdateID   *int64             `json:"control_update_id"`
 	CheckedAt         pgtype.Timestamptz `json:"checked_at"`
+	SourcemapHash     *string            `json:"sourcemap_hash"`
 }
 
 // app_id is load-bearing, not redundant: pk_updates is (branch_id, id), so an
@@ -2286,6 +2287,7 @@ func (q *Queries) GetUpdateByBranchNameAndRuntime(ctx context.Context, arg GetUp
 		&i.RolloutPercentage,
 		&i.ControlUpdateID,
 		&i.CheckedAt,
+		&i.SourcemapHash,
 	)
 	return i, err
 }
@@ -2539,6 +2541,26 @@ func (q *Queries) GetUpdateOriginByUUID(ctx context.Context, arg GetUpdateOrigin
 	var i GetUpdateOriginByUUIDRow
 	err := row.Scan(&i.BranchName, &i.PublishGroup)
 	return i, err
+}
+
+const getUpdateSourcemapHash = `-- name: GetUpdateSourcemapHash :one
+SELECT u.sourcemap_hash
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3
+`
+
+type GetUpdateSourcemapHashParams struct {
+	ID    int64       `json:"id"`
+	AppID pgtype.UUID `json:"app_id"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) GetUpdateSourcemapHash(ctx context.Context, arg GetUpdateSourcemapHashParams) (*string, error) {
+	row := q.db.QueryRow(ctx, getUpdateSourcemapHash, arg.ID, arg.AppID, arg.Name)
+	var sourcemap_hash *string
+	err := row.Scan(&sourcemap_hash)
+	return sourcemap_hash, err
 }
 
 const getUpdateType = `-- name: GetUpdateType :one
@@ -5764,6 +5786,33 @@ func (q *Queries) SetUpdateRolloutPercentage(ctx context.Context, arg SetUpdateR
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setUpdateSourcemapHash = `-- name: SetUpdateSourcemapHash :execresult
+UPDATE updates
+SET sourcemap_hash = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+)
+`
+
+type SetUpdateSourcemapHashParams struct {
+	ID            int64       `json:"id"`
+	SourcemapHash *string     `json:"sourcemap_hash"`
+	AppID         pgtype.UUID `json:"app_id"`
+	Name          string      `json:"name"`
+}
+
+func (q *Queries) SetUpdateSourcemapHash(ctx context.Context, arg SetUpdateSourcemapHashParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, setUpdateSourcemapHash,
+		arg.ID,
+		arg.SourcemapHash,
+		arg.AppID,
+		arg.Name,
+	)
 }
 
 const storeUpdateUUID = `-- name: StoreUpdateUUID :execresult

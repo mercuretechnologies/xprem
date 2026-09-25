@@ -129,18 +129,26 @@ func UpdatesLocation(mode Mode) string {
 // reading its location from the env var registered for the active mode. On
 // disk the store is private to the server's user.
 func OpenDedicated(locationEnv map[Mode]string) (Store, error) {
+	return OpenFeatureStore(locationEnv, false)
+}
+
+// OpenFeatureStore opens a feature's store at the location its env var names.
+// The updates location is refused unless mayShareUpdatesLocation; on disk a
+// directory of its own is private to the server's user.
+func OpenFeatureStore(locationEnv map[Mode]string, mayShareUpdatesLocation bool) (Store, error) {
 	mode := ResolveMode()
 	envVar := locationEnv[mode]
 	location := config.GetEnv(envVar)
 	if location == "" {
 		return nil, fmt.Errorf("%s is not set", envVar)
 	}
-	if sameLocation(mode, location, UpdatesLocation(mode)) {
+	sharesUpdates := sameLocation(mode, location, UpdatesLocation(mode))
+	if sharesUpdates && !mayShareUpdatesLocation {
 		kind := locationKind[mode]
 		return nil, fmt.Errorf("%s must be a dedicated %s, not the updates %s (%s)", envVar, kind, kind, updatesLocationEnv[mode])
 	}
 	if mode == ModeLocal {
-		return &localStore{root: location, private: true}, nil
+		return &localStore{root: location, private: !sharesUpdates}, nil
 	}
 	return Open(mode, location), nil
 }

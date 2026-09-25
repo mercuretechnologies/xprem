@@ -227,6 +227,16 @@ func LoadConfig() {
 	}
 }
 
+// IsSourcemapUploadEnabled reports whether publishes store the bundle's source
+// map alongside the update (UPLOAD_SOURCEMAPS=true, off by default).
+func IsSourcemapUploadEnabled() bool {
+	if (!IsDBMode()) {
+		return false
+	}
+	enabled, _ := strconv.ParseBool(GetEnv("UPLOAD_SOURCEMAPS"))
+	return enabled
+}
+
 // IsBundleDiffingEnabled reports whether bundle patches are computed at
 // publish and served to devices (BUNDLE_DIFFING=true, off by default).
 func IsBundleDiffingEnabled() bool {
@@ -332,6 +342,11 @@ var DefaultEnvValues = map[string]string{
 	"BUNDLE_DIFFING_CDN_REDIRECT":       "false",
 	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "64",
 	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
+
+	// Source map uploads: off by default. The maps land in their own store,
+	// which may be the updates one.
+	"UPLOAD_SOURCEMAPS":          "false",
+	"LOCAL_SOURCEMAPS_BASE_PATH": "./sourcemaps",
 
 	// Client-controlled CDN bypass: opt-in because every asset client can use
 	// the header once it is enabled.

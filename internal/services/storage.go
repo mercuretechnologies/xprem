@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"io"
+	"xprem/internal/objectstore"
 	"xprem/internal/types"
 )
 
@@ -18,6 +19,13 @@ type PatchStore interface {
 	Get(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error)
 	Put(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error
 	DeleteBranch(ctx context.Context, appId, branch string) error
+}
+
+// SourcemapStore holds the source maps of published bundles.
+type SourcemapStore interface {
+	Exists(ctx context.Context, appId, hash string) (bool, error)
+	Put(ctx context.Context, appId, hash string, body io.Reader) error
+	PresignPut(ctx context.Context, appId, hash, branch string) (*objectstore.UploadRequest, error)
 }
 
 type UpdateStore interface {

@@ -313,6 +313,14 @@ func (s *BucketUpdateRepository) GetUpdateAssetMapping(ctx context.Context, upda
 	return stored.AssetMapping, nil
 }
 
+func (s *BucketUpdateRepository) GetUpdateSourcemapHash(ctx context.Context, update types.Update) (*string, error) {
+	return nil, nil
+}
+
+func (s *BucketUpdateRepository) StoreUpdateSourcemapHash(ctx context.Context, update types.Update, hash string) error {
+	return ErrNotSupportedInStatelessMode
+}
+
 func (s *BucketUpdateRepository) StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
 	return s.mutateUpdateMetadataFile(ctx, update, func(stored *updateMetadataFile) {
 		stored.AssetMapping = mapping

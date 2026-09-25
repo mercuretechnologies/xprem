@@ -178,6 +178,9 @@ type UpdateDetails struct {
 	// for non-rollout updates.
 	RolloutPercentage *int    `json:"rolloutPercentage,omitempty"`
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
+	// SourcemapHash names the bundle's source map in the sourcemap store;
+	// nil when none was uploaded. Control-plane only.
+	SourcemapHash *string `json:"sourcemapHash,omitempty"`
 }
 
 // UpdateRef is the (update id, runtime version) pair that, with a branch,
