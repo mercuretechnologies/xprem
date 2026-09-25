@@ -29,8 +29,11 @@ func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHand
 }
 
 type RequestUploadURLsRequest struct {
-	Files   []services.FileUploadItem `json:"files"`
-	Message string                    `json:"message,omitempty"`
+	Files []services.FileUploadItem `json:"files"`
+	// Sourcemap is the launch asset's source map; absent when the export has
+	// none or the CLI predates source map uploads.
+	Sourcemap *services.SourcemapUploadItem `json:"sourcemap,omitempty"`
+	Message   string                        `json:"message,omitempty"`
 }
 
 // manifestKeyPattern is the md5 hex expo-updates uses as its on-device cache
@@ -327,6 +330,13 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if bodyReq.Sourcemap != nil {
+		if err := bucket.ValidateUploadFile(bodyReq.Sourcemap.Path, bodyReq.Sourcemap.Hash); err != nil {
+			log.Printf("[RequestID: %s] Invalid sourcemap: %v", requestID, err)
+			http.Error(w, fmt.Sprintf("%s: %v", bodyReq.Sourcemap.Path, err), http.StatusBadRequest)
+			return
+		}
+	}
 
 	params := services.RequestUploadURLParams{
 		RequestID:         requestID,
@@ -336,6 +346,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		CommitHash:        commitHash,
 		RuntimeVersion:    runtimeVersion,
 		Files:             bodyReq.Files,
+		Sourcemap:         bodyReq.Sourcemap,
 		Message:           bodyReq.Message,
 		RolloutPercentage: rolloutPercentage,
 		PublishGroupID:    publishGroup,

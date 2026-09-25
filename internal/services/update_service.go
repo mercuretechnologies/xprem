@@ -58,6 +58,9 @@ type UpdateRepository interface {
 	// mapping existed; callers fall back to the update-folder layout.
 	GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error)
 	StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error
+	// Control-plane only: the bucket repository answers nil, and refuses to store.
+	GetUpdateSourcemapHash(ctx context.Context, update types.Update) (*string, error)
+	StoreUpdateSourcemapHash(ctx context.Context, update types.Update, hash string) error
 }
 
 type UpdateService struct {

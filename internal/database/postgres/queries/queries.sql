@@ -389,6 +389,22 @@ FROM updates u
 JOIN branches b ON u.branch_id = b.id
 WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
 
+-- name: SetUpdateSourcemapHash :execresult
+UPDATE updates
+SET sourcemap_hash = $2
+WHERE updates.id = $1 AND branch_id = (
+    SELECT branches.id
+    FROM branches
+    WHERE app_id = $3
+      AND name = $4
+);
+
+-- name: GetUpdateSourcemapHash :one
+SELECT u.sourcemap_hash
+FROM updates u
+JOIN branches b ON u.branch_id = b.id
+WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
+
 -- name: ListUpdatesWithoutAssetMapping :many
 SELECT u.id, b.app_id, b.name AS branch, rv.version AS runtime_version
 FROM updates u
@@ -424,7 +440,7 @@ LIMIT 1;
 -- update id is only unique per branch, and branch names are only unique per app.
 -- Without the app filter the same (id, branch, runtime) triple matches another
 -- tenant's row.
-SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at
+SELECT u.id, u.update_uuid, b.app_id, b.name AS branch_name, r.version AS runtime_version, u.update_type, u.commit_hash, u.message, u.platform, u.created_at, u.rollout_percentage, u.control_update_id, u.checked_at, u.sourcemap_hash
 FROM updates u
 INNER JOIN branches b ON u.branch_id = b.id
 INNER JOIN runtime_versions r ON u.runtime_version_id = r.id

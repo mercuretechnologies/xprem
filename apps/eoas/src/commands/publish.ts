@@ -10,6 +10,7 @@ import {
   NoChangesDetectedError,
   RequestUploadUrlItem,
   activeRolloutConflictMessage,
+  buildSourcemapUpload,
   buildUploadFiles,
   computeFilesRequests,
   requestUploadUrls,
@@ -97,7 +98,7 @@ export default class Publish extends Command {
     }),
     dumpSourcemap: Flags.boolean({
       description:
-        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact; they stay in the output directory and are never uploaded. Disable with --no-dumpSourcemap.',
+        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact. A server with UPLOAD_SOURCEMAPS enabled stores them with the update; otherwise they stay in the output directory. Disable with --no-dumpSourcemap.',
       default: true,
       allowNo: true,
     }),
@@ -387,7 +388,10 @@ export default class Publish extends Command {
           try {
             return {
               ...(await requestUploadUrls({
-                body: { files: buildUploadFiles(files, platform) },
+                body: {
+                  files: buildUploadFiles(files, platform),
+                  sourcemap: buildSourcemapUpload(files, platform),
+                },
                 requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
                 auth: credentials,
                 runtimeVersion,
@@ -499,7 +503,9 @@ export default class Publish extends Command {
 
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
       for (const { platform: uploadedPlatform, uploadRequests } of uploadUrls) {
-        const totalFiles = buildUploadFiles(files, uploadedPlatform).length;
+        const totalFiles =
+          buildUploadFiles(files, uploadedPlatform).length +
+          (buildSourcemapUpload(files, uploadedPlatform) ? 1 : 0);
         const deduplicated = totalFiles - uploadRequests.length;
         Log.withInfo(
           `📊 ${uploadedPlatform}: ${uploadRequests.length}/${totalFiles} files uploaded, ${deduplicated} deduplicated (already on the server)`

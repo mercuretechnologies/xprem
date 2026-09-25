@@ -295,6 +295,7 @@ type Update struct {
 	ControlUpdateID   *int64                    `json:"control_update_id"`
 	PublishGroup      pgtype.UUID               `json:"publish_group"`
 	AssetMapping      *types.UpdateAssetMapping `json:"asset_mapping"`
+	SourcemapHash     *string                   `json:"sourcemap_hash"`
 }
 
 type User struct {

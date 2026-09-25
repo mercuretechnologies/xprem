@@ -55,6 +55,7 @@ type fakeStoredUpdate struct {
 	updateUUID        string
 	publishGroup      *string
 	assetMapping      *types.UpdateAssetMapping
+	sourcemapHash     *string
 }
 
 type fakeUpdateRepo struct {
@@ -383,6 +384,27 @@ func (r *fakeUpdateRepo) StoreUpdateAssetMapping(_ context.Context, update types
 		return fmt.Errorf("update %s not found", update.UpdateId)
 	}
 	row.assetMapping = mapping
+	return nil
+}
+
+func (r *fakeUpdateRepo) GetUpdateSourcemapHash(_ context.Context, update types.Update) (*string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return nil, nil
+	}
+	return row.sourcemapHash, nil
+}
+
+func (r *fakeUpdateRepo) StoreUpdateSourcemapHash(_ context.Context, update types.Update, hash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return fmt.Errorf("update %s not found", update.UpdateId)
+	}
+	row.sourcemapHash = &hash
 	return nil
 }
 

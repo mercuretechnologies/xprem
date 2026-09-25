@@ -84,9 +84,9 @@ func ValidateUploadToken(token string) (key string, appId string, branch string,
 	if claims.Action != "uploadLocalFile" {
 		return "", "", "", errors.New("invalid token action")
 	}
-	// A blob key sits outside any branch, but the branch claim is still
-	// required so scoped keys can be judged.
-	if branch == "" || !(keyInBranch(key, appId, branch) || isBlobKey(key, appId)) {
+	// A blob or sourcemap key sits outside any branch, but the branch claim is
+	// still required so scoped keys can be judged.
+	if branch == "" || !(keyInBranch(key, appId, branch) || isBlobKey(key, appId) || IsSourcemapKey(key, appId)) {
 		return "", "", "", errors.New("upload token key does not match its branch")
 	}
 	return key, appId, branch, nil
@@ -100,6 +100,22 @@ func keyInBranch(key, appId, branch string) bool {
 func isBlobKey(key, appId string) bool {
 	prefix := appId + "/" + casDir + "/"
 	return strings.HasPrefix(key, prefix) && ValidateBlobHash(strings.TrimPrefix(key, prefix)) == nil
+}
+
+// IsSourcemapKey reports whether key names a source map of appId.
+func IsSourcemapKey(key, appId string) bool {
+	_, ok := SourcemapKeyHash(key, appId)
+	return ok
+}
+
+// SourcemapKeyHash returns the hash a source map key of appId names.
+func SourcemapKeyHash(key, appId string) (string, bool) {
+	prefix := appId + "/" + sourcemapsDir + "/"
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	hash := strings.TrimPrefix(key, prefix)
+	return hash, ValidateBlobHash(hash) == nil
 }
 
 // ResolveUploadTokenBranch returns the branch an upload token was minted for,

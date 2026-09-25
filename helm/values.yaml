@@ -63,6 +63,12 @@ archiveAuditLogs: "false"
 # and serve them to devices that ask for one, instead of the full bundle. Needs
 # the control plane. Patches are served by the server itself, not the CDN.
 bundleDiffing: "false"
+# Set to "true" to store the Hermes source map of every published bundle in a
+# sourcemap store (control plane only). The *_SOURCEMAPS_* destination var
+# matching storageMode then becomes required. It may name the updates bucket
+# only when that bucket is not publicly readable: a source map embeds the app's
+# source code, and the server refuses to boot with CDN_BASE_URL fronting it.
+uploadSourcemaps: "false"
 # Set to "true" to redirect patch downloads to the CDN instead of serving them
 # from the server. Only with CloudFront or a CDN_BASE_URL edge, which must add
 # the "im: bsdiff" and "expo-base-update-id" response headers on */bsdiff/*
@@ -478,6 +484,40 @@ environment:
     required: false
     enabled:
       - key: "archiveAuditLogs"
+        is: "true"
+      - key: "storageMode"
+        is: "local"
+  - name: "UPLOAD_SOURCEMAPS"
+    key: "uploadSourcemaps"
+    required: true
+    computed: true
+  - name: "S3_BUCKET_SOURCEMAPS_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "s3"
+  - name: "GCS_BUCKET_SOURCEMAPS_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "gcs"
+  - name: "AZURE_BLOB_SOURCEMAPS_CONTAINER_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "azure"
+  # The server defaults it to ./sourcemaps when unset.
+  - name: "LOCAL_SOURCEMAPS_BASE_PATH"
+    value: ""
+    required: false
+    enabled:
+      - key: "uploadSourcemaps"
         is: "true"
       - key: "storageMode"
         is: "local"

@@ -43,6 +43,7 @@ export interface AssetToUpload {
   // null for metadata.json and expoConfig.json, which belong to no platform.
   platform: Platform | null;
   isLaunchAsset: boolean;
+  isSourcemap: boolean;
 }
 
 // FileRole is what a published file is to the update, as the server reads it:
@@ -57,12 +58,20 @@ export interface FileUploadItem {
   role: FileRole;
 }
 
+// SourcemapUploadItem is the launch asset's source map, sent beside the file
+// list: a server that stores source maps asks for its upload, an older one
+// ignores the field.
+export interface SourcemapUploadItem {
+  path: string;
+  hash: string;
+}
+
 // buildUploadFiles is one platform's publish: its launch asset, its assets and
 // the config files, each stamped with its role. This is what tells the server
 // which bundle is which — only the CLI reads metadata.json.
 export function buildUploadFiles(files: AssetToUpload[], platform: string): FileUploadItem[] {
   return files
-    .filter(file => file.platform === null || file.platform === platform)
+    .filter(file => !file.isSourcemap && (file.platform === null || file.platform === platform))
     .map(file => {
       if (file.platform === null) {
         return { path: file.path, hash: file.hash, role: 'config' as const };
@@ -75,6 +84,14 @@ export function buildUploadFiles(files: AssetToUpload[], platform: string): File
         role: file.isLaunchAsset ? ('launch' as const) : ('asset' as const),
       };
     });
+}
+
+export function buildSourcemapUpload(
+  files: AssetToUpload[],
+  platform: string
+): SourcemapUploadItem | undefined {
+  const sourcemap = files.find(file => file.isSourcemap && file.platform === platform);
+  return sourcemap && { path: sourcemap.path, hash: sourcemap.hash };
 }
 
 function loadMetadata(distRoot: string): Metadata {
@@ -142,6 +159,7 @@ export async function computeFilesRequests(
       ext: 'json',
       platform: null,
       isLaunchAsset: false,
+      isSourcemap: false,
     },
     {
       path: 'expoConfig.json',
@@ -149,6 +167,7 @@ export async function computeFilesRequests(
       ext: 'json',
       platform: null,
       isLaunchAsset: false,
+      isSourcemap: false,
     },
   ];
   for (const platform of Object.keys(metadata.fileMetadata) as Platform[]) {
@@ -162,7 +181,20 @@ export async function computeFilesRequests(
       ext: 'hbc',
       platform,
       isLaunchAsset: true,
+      isSourcemap: false,
     });
+    const sourcemapPath = toServerPath(bundle + '.map'); // _expo/static/js/ios/index-….hbc.map
+    const hasSourcemap = await fs.pathExists(path.join(exportRoot, sourcemapPath));
+    if (hasSourcemap) {
+      pending.push({
+        path: sourcemapPath,
+        name: path.basename(sourcemapPath),
+        ext: 'map',
+        platform,
+        isLaunchAsset: false,
+        isSourcemap: true,
+      });
+    }
     for (const asset of metadata.fileMetadata[platform].assets) {
       pending.push({
         path: toServerPath(asset.path),
@@ -170,6 +202,7 @@ export async function computeFilesRequests(
         ext: asset.ext,
         platform,
         isLaunchAsset: false,
+        isSourcemap: false,
       });
     }
   }
@@ -411,7 +444,7 @@ export async function requestUploadUrls({
   publishGroup,
   branch,
 }: {
-  body: { files: FileUploadItem[] };
+  body: { files: FileUploadItem[]; sourcemap?: SourcemapUploadItem };
   requestUploadUrl: string;
   auth: Credentials;
   runtimeVersion: string;
@@ -438,6 +471,7 @@ export async function requestUploadUrls({
 
   const requestBody: {
     files: FileUploadItem[];
+    sourcemap?: SourcemapUploadItem;
     message?: string;
   } = { ...body };
   if (message) {

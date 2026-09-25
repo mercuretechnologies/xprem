@@ -301,6 +301,18 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket.BlobStore, resolvedBucket.PatchStore)
 	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket.BlobStore, resolvedBucket.UpdateStore, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
+	if config.IsSourcemapUploadEnabled() {
+		sourcemapStore, err := bucket.OpenSourcemapStore()
+		if err != nil {
+			log.Fatalf("UPLOAD_SOURCEMAPS is enabled but %v", err)
+		}
+		// CDN_BASE_URL fronts a publicly readable bucket, and a source map
+		// embeds the app's source code.
+		if sourcemapStore.SharesUpdatesLocation() && cdn.ResolvedType() == "generic" {
+			log.Fatalf("UPLOAD_SOURCEMAPS: source maps cannot share the updates bucket when CDN_BASE_URL serves it; point them at a dedicated bucket")
+		}
+		deploymentService.SetSourcemapStore(sourcemapStore)
+	}
 	bsDiffService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
