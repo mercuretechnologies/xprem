@@ -532,7 +532,8 @@ func (s *Service) invalidateHistoryServingCaches(appId string, touched map[branc
 }
 
 func (s *Service) deleteHistoryUpdateFolder(ctx context.Context, update types.Update) {
-	if err := s.updateStore.Delete(ctx, update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
+	// The cleanup often follows a canceled job; it must still run.
+	if err := s.updateStore.Delete(context.WithoutCancel(ctx), update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
 		log.Printf("[expo-import] failed to clean up update folder %s: %v", update.UpdateId, err)
 	}
 }

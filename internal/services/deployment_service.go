@@ -200,7 +200,8 @@ func NewDeploymentService(branchService *BranchService, updateService *UpdateSer
 // ProcessUploadedUpdate verifies and publishes an uploaded update, and returns
 // its manifest id (the value expo-updates exposes as Updates.updateId).
 func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params ProcessUpdateParams) (string, error) {
-
+	// Once started, publishing runs to the end even if the CLI disconnects.
+	ctx = context.WithoutCancel(ctx)
 	err := s.branchService.UpsertBranchAndRuntimeVersion(ctx, params.AppID, params.BranchName, params.RuntimeVersion)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error upserting branch and runtime version: %v", params.RequestID, err)
