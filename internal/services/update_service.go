@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 	"xprem/internal/cache"
 	"xprem/internal/repository"
 	"xprem/internal/rollout"
@@ -97,6 +98,9 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 // manifestResponseEntry is the poll-ready form of a composed manifest: the
 // exact bytes the response body carries, and the update's UUID for the
 // same-version short-circuit.
+// manifestComposeTimeout bounds a compose that no longer follows any caller.
+const manifestComposeTimeout = 30 * time.Second
+
 type manifestResponseEntry struct {
 	ManifestJSON json.RawMessage `json:"manifestJson"`
 	UpdateUUID   string          `json:"updateUuid"`
@@ -112,6 +116,9 @@ func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types
 		return entry, nil
 	}
 	flightEntry, err, _ := s.manifestFlight.Do(cacheKey, func() (any, error) {
+		// Shared by every waiting request: one caller leaving must not fail the others.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manifestComposeTimeout)
+		defer cancel()
 		if entry, ok := cache.GetJSON[manifestResponseEntry](manifestCache, cacheKey); ok {
 			return entry, nil
 		}
