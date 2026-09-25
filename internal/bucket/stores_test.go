@@ -191,3 +191,20 @@ func TestUpdatesFilesRoundTrip(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(dir, "app-1", "main", "1.0", "300"))
 	assert.FileExists(t, filepath.Join(dir, "app-1", "main", "1.0", "123", "assets", "img.png"))
 }
+
+// Instances sharing one bucket are kept apart by BUCKET_KEY_PREFIX: the bucket
+// built from the environment must write under it, not at the root.
+func TestGetBucketWritesUnderTheKeyPrefix(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", dir)
+	t.Setenv("BUCKET_KEY_PREFIX", "tenant-a")
+	t.Setenv("S3_KEY_PREFIX", "")
+	ResetBucketInstance()
+	t.Cleanup(ResetBucketInstance)
+
+	require.NoError(t, GetBucket().UpdateStore.PutFile(context.Background(), validUpdate(), "metadata.json", strings.NewReader("{}")))
+
+	assert.FileExists(t, filepath.Join(dir, "tenant-a", "app-1", "main", "1.0", "123", "metadata.json"))
+	assert.NoDirExists(t, filepath.Join(dir, "app-1"))
+}
