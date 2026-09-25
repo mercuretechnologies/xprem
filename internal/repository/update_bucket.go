@@ -42,7 +42,11 @@ func (s *BucketUpdateRepository) GetLatestUpdate(ctx context.Context, appId stri
 		if metaErr != nil || storedMetadata == nil || storedMetadata.Platform != platform {
 			continue
 		}
-		if !s.isUpdateValid(ctx, updates[i]) {
+		valid, err := s.isUpdateValid(ctx, updates[i])
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
 			continue
 		}
 		updates[i].UpdateUUID = storedMetadata.UpdateUUID
@@ -79,18 +83,21 @@ func (s *BucketUpdateRepository) updateType(ctx context.Context, update types.Up
 }
 
 func (s *BucketUpdateRepository) IsUpdateValid(ctx context.Context, update types.Update) (bool, error) {
-	return s.isUpdateValid(ctx, update), nil
+	return s.isUpdateValid(ctx, update)
 }
 
 // isUpdateValid reports whether the ".check" sentinel file is present, marking
 // the update as fully uploaded.
-func (s *BucketUpdateRepository) isUpdateValid(ctx context.Context, update types.Update) bool {
-	file, _ := s.updateStore.GetFile(ctx, update, ".check")
-	if file != nil {
-		file.Reader.Close()
-		return true
+func (s *BucketUpdateRepository) isUpdateValid(ctx context.Context, update types.Update) (bool, error) {
+	file, err := s.updateStore.GetFile(ctx, update, ".check")
+	if err != nil {
+		return false, fmt.Errorf("failed to read the .check marker: %w", err)
 	}
-	return false
+	if file == nil {
+		return false, nil
+	}
+	file.Reader.Close()
+	return true, nil
 }
 
 func (s *BucketUpdateRepository) MarkUpdateAsChecked(ctx context.Context, update types.Update) error {
@@ -192,7 +199,10 @@ func (s *BucketUpdateRepository) GetUpdatesByRunTimeVersionAndBranchName(ctx con
 		if err != nil || (cursor != nil && updateID >= *cursor) {
 			continue
 		}
-		isValid := s.isUpdateValid(ctx, update)
+		isValid, err := s.isUpdateValid(ctx, update)
+		if err != nil {
+			return types.UpdatesPage{}, err
+		}
 		if !isValid {
 			continue
 		}
