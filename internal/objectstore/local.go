@@ -14,6 +14,9 @@ import (
 
 type localStore struct {
 	root string
+	// private keeps the directories 0700 and the files 0600, for destinations
+	// holding personal data. Otherwise files are 0644, readable by a web server.
+	private bool
 }
 
 func (s *localStore) path(key string) (string, error) {
@@ -70,7 +73,11 @@ func (s *localStore) Put(_ context.Context, key string, body io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), os.ModePerm); err != nil {
+	dirMode := os.ModePerm
+	if s.private {
+		dirMode = 0o700
+	}
+	if err := os.MkdirAll(filepath.Dir(target), dirMode); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".upload-")
@@ -78,6 +85,12 @@ func (s *localStore) Put(_ context.Context, key string, body io.Reader) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
+	if !s.private {
+		if err := tmp.Chmod(0o644); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
 	_, copyErr := io.Copy(tmp, body)
 	syncErr := tmp.Sync()
 	closeErr := tmp.Close()

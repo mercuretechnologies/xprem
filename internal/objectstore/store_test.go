@@ -148,3 +148,30 @@ func TestDeletePrefixRefusesTheWholeStore(t *testing.T) {
 	require.Error(t, WithPrefix(store, "tenant/").DeletePrefix(ctx, ""))
 	assert.FileExists(t, filepath.Join(dir, "tenant", "app", "cas", "blob"))
 }
+
+// The audit archive holds emails and IPs: other local users must not list,
+// replace or delete it. Update files stay readable by a web server.
+func TestLocalFilePermissions(t *testing.T) {
+	archiveDir := filepath.Join(t.TempDir(), "archive")
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", t.TempDir())
+	t.Setenv("LOCAL_ARCHIVE_DIR", archiveDir)
+	archive, err := OpenDedicated(map[Mode]string{ModeLocal: "LOCAL_ARCHIVE_DIR"})
+	require.NoError(t, err)
+	put(t, archive, "2026/07/22/1-5.ndjson", "{}")
+
+	for _, dir := range []string{archiveDir, filepath.Join(archiveDir, "2026", "07", "22")} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+	}
+	info, err := os.Stat(filepath.Join(archiveDir, "2026", "07", "22", "1-5.ndjson"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	updatesDir := t.TempDir()
+	put(t, Open(ModeLocal, updatesDir), "app/main/1/100/metadata.json", "{}")
+	info, err = os.Stat(filepath.Join(updatesDir, "app", "main", "1", "100", "metadata.json"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+}

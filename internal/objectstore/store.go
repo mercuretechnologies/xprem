@@ -126,7 +126,8 @@ func UpdatesLocation(mode Mode) string {
 }
 
 // OpenDedicated opens a store a feature keeps apart from the updates store,
-// reading its location from the env var registered for the active mode.
+// reading its location from the env var registered for the active mode. On
+// disk the store is private to the server's user.
 func OpenDedicated(locationEnv map[Mode]string) (Store, error) {
 	mode := ResolveMode()
 	envVar := locationEnv[mode]
@@ -137,6 +138,9 @@ func OpenDedicated(locationEnv map[Mode]string) (Store, error) {
 	if sameLocation(mode, location, UpdatesLocation(mode)) {
 		kind := locationKind[mode]
 		return nil, fmt.Errorf("%s must be a dedicated %s, not the updates %s (%s)", envVar, kind, kind, updatesLocationEnv[mode])
+	}
+	if mode == ModeLocal {
+		return &localStore{root: location, private: true}, nil
 	}
 	return Open(mode, location), nil
 }

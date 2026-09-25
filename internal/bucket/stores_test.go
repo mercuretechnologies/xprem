@@ -208,3 +208,21 @@ func TestGetBucketWritesUnderTheKeyPrefix(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dir, "tenant-a", "app-1", "main", "1.0", "123", "metadata.json"))
 	assert.NoDirExists(t, filepath.Join(dir, "app-1"))
 }
+
+// On disk, ./tenant/ and tenant// name the same directory as tenant/, and a
+// republish lists the files back through that directory.
+func TestCreateFromUnderNonCanonicalLocalPrefixes(t *testing.T) {
+	for _, keyPrefix := range []string{"./tenant/", "tenant//"} {
+		t.Run(keyPrefix, func(t *testing.T) {
+			dir := t.TempDir()
+			b := Open(objectstore.ModeLocal, dir, keyPrefix)
+			source := validUpdate()
+			require.NoError(t, b.UpdateStore.PutFile(context.Background(), source, "assets/img.png", strings.NewReader("png-bytes")))
+
+			_, err := b.UpdateStore.CreateFrom(context.Background(), &source, "300")
+
+			require.NoError(t, err)
+			assert.FileExists(t, filepath.Join(dir, "tenant", "app-1", "main", "1.0", "300", "assets", "img.png"))
+		})
+	}
+}

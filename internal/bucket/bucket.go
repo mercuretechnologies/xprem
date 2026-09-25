@@ -27,11 +27,19 @@ type Bucket struct {
 
 // Open lays the stores out over location, under keyPrefix.
 func Open(mode objectstore.Mode, location, keyPrefix string) *Bucket {
-	objectStore := objectstore.WithPrefix(objectstore.Open(mode, location), keyPrefix)
 	localUploads := mode == objectstore.ModeLocal
 	localRoot := ""
+	var objectStore objectstore.Store
 	if localUploads {
-		localRoot = filepath.Join(location, keyPrefix)
+		// On disk the prefix is a directory, so spellings like ./tenant/ and
+		// tenant// resolve to the same place, as they do when listed back.
+		localRoot = location
+		if location != "" {
+			localRoot = filepath.Join(location, keyPrefix)
+		}
+		objectStore = objectstore.Open(mode, localRoot)
+	} else {
+		objectStore = objectstore.WithPrefix(objectstore.Open(mode, location), keyPrefix)
 	}
 	return &Bucket{
 		localRoot:     localRoot,
