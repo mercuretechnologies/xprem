@@ -98,6 +98,9 @@ func (s *s3Store) Delete(ctx context.Context, key string) error {
 }
 
 func (s *s3Store) DeletePrefix(ctx context.Context, prefix string) error {
+	if err := requirePrefix(prefix); err != nil {
+		return err
+	}
 	client, err := s.client()
 	if err != nil {
 		return err

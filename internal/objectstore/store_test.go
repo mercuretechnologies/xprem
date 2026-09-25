@@ -135,3 +135,16 @@ func TestEscapeCopySourceKey(t *testing.T) {
 	assert.Equal(t, "foo+bar/a%2Bb", escapeCopySourceKey("foo bar/a+b"))
 	assert.Equal(t, "branch/1/12345/update-metadata.json", escapeCopySourceKey("branch/1/12345/update-metadata.json"))
 }
+
+// An empty prefix names every object: deleting it must be refused, including
+// behind a key prefix where it would name the whole tenant.
+func TestDeletePrefixRefusesTheWholeStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := Open(ModeLocal, dir)
+	put(t, store, "tenant/app/cas/blob", "b")
+
+	require.Error(t, store.DeletePrefix(ctx, ""))
+	require.Error(t, WithPrefix(store, "tenant/").DeletePrefix(ctx, ""))
+	assert.FileExists(t, filepath.Join(dir, "tenant", "app", "cas", "blob"))
+}

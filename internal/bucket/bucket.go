@@ -10,10 +10,6 @@ import (
 	"xprem/internal/objectstore"
 )
 
-// copyFileTimeout bounds a single CopyFile provider call, so a stalled copy
-// degrades into a regular upload instead of hanging the publish.
-const copyFileTimeout = 30 * time.Second
-
 // createFromCopyTimeout bounds each file copy of CreateFrom, which Azure may
 // report as pending indefinitely.
 const createFromCopyTimeout = 2 * time.Minute

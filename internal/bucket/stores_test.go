@@ -154,8 +154,6 @@ func TestUpdatesRejectUnsafeIdentifiers(t *testing.T) {
 	assert.Error(t, err)
 	assert.Error(t, b.UpdateStore.PutFile(context.Background(), validUpdate(), "../evil.js", bytes.NewReader(nil)))
 	assert.Error(t, b.UpdateStore.PutFile(context.Background(), reserved, "metadata.json", bytes.NewReader(nil)), "an update folder under cas/ must never reach the store")
-	assert.Error(t, b.UpdateStore.CopyFile(context.Background(), evilId, validUpdate(), "assets/img.png"))
-	assert.Error(t, b.UpdateStore.CopyFile(context.Background(), validUpdate(), validUpdate(), "../evil.js"))
 	assert.Error(t, b.UpdateStore.Delete(context.Background(), "app-1", "main", "1.0", "123/../456"))
 	_, err = b.UpdateStore.PresignPut(context.Background(), "app-1", "main", "1.0", "123", "../etc/passwd")
 	assert.Error(t, err)
@@ -167,8 +165,6 @@ func TestUpdatesRejectUnsafeIdentifiers(t *testing.T) {
 func TestUpdatesFilesRoundTrip(t *testing.T) {
 	b, dir := localBucket(t)
 	source := validUpdate()
-	target := validUpdate()
-	target.UpdateId = "200"
 
 	require.NoError(t, b.UpdateStore.PutFile(context.Background(), source, "assets/img.png", bytes.NewReader([]byte("png-bytes"))))
 	require.NoError(t, b.UpdateStore.PutFile(context.Background(), source, ".check", strings.NewReader("")))
@@ -183,10 +179,6 @@ func TestUpdatesFilesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, missing)
 
-	require.NoError(t, b.UpdateStore.CopyFile(context.Background(), source, target, "assets/img.png"))
-	assert.FileExists(t, filepath.Join(dir, "app-1", "main", "1.0", "200", "assets", "img.png"))
-	assert.Error(t, b.UpdateStore.CopyFile(context.Background(), source, target, "assets/absent.png"))
-
 	// The markers are not copied: the republished update earns its own.
 	created, err := b.UpdateStore.CreateFrom(context.Background(), &source, "300")
 	require.NoError(t, err)
@@ -197,5 +189,5 @@ func TestUpdatesFilesRoundTrip(t *testing.T) {
 
 	require.NoError(t, b.UpdateStore.Delete(context.Background(), "app-1", "main", "1.0", "300"))
 	assert.NoDirExists(t, filepath.Join(dir, "app-1", "main", "1.0", "300"))
-	assert.FileExists(t, filepath.Join(dir, "app-1", "main", "1.0", "200", "assets", "img.png"))
+	assert.FileExists(t, filepath.Join(dir, "app-1", "main", "1.0", "123", "assets", "img.png"))
 }

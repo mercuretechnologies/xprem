@@ -107,6 +107,9 @@ func (s *localStore) Delete(_ context.Context, key string) error {
 }
 
 func (s *localStore) DeletePrefix(_ context.Context, prefix string) error {
+	if err := requirePrefix(prefix); err != nil {
+		return err
+	}
 	path, err := s.path(prefix)
 	if err != nil {
 		return err

@@ -91,6 +91,9 @@ func (s *gcsStore) Delete(ctx context.Context, key string) error {
 }
 
 func (s *gcsStore) DeletePrefix(ctx context.Context, prefix string) error {
+	if err := requirePrefix(prefix); err != nil {
+		return err
+	}
 	keys, err := s.List(ctx, prefix)
 	if err != nil {
 		return err

@@ -148,20 +148,6 @@ func (u *UpdateStore) PutFile(ctx context.Context, update types.Update, path str
 	return u.objectStore.Put(ctx, key, body)
 }
 
-func (u *UpdateStore) CopyFile(ctx context.Context, source, target types.Update, path string) error {
-	from, err := updateFileKey(source, path)
-	if err != nil {
-		return err
-	}
-	to, err := updateFileKey(target, path)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, copyFileTimeout)
-	defer cancel()
-	return u.objectStore.Copy(ctx, from, to)
-}
-
 func (u *UpdateStore) PresignPut(ctx context.Context, appId, branch, runtimeVersion, updateId, path string) (*objectstore.UploadRequest, error) {
 	key, err := updateFileKey(types.Update{AppId: appId, Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}, path)
 	if err != nil {

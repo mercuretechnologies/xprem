@@ -37,6 +37,9 @@ func (p *prefixed) Delete(ctx context.Context, key string) error {
 }
 
 func (p *prefixed) DeletePrefix(ctx context.Context, prefix string) error {
+	if err := requirePrefix(prefix); err != nil {
+		return err
+	}
 	return p.inner.DeletePrefix(ctx, p.prefix+prefix)
 }
 

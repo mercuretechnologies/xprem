@@ -89,6 +89,9 @@ func (s *azureStore) Delete(ctx context.Context, key string) error {
 }
 
 func (s *azureStore) DeletePrefix(ctx context.Context, prefix string) error {
+	if err := requirePrefix(prefix); err != nil {
+		return err
+	}
 	keys, err := s.List(ctx, prefix)
 	if err != nil {
 		return err

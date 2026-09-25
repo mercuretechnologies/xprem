@@ -4,6 +4,7 @@ package objectstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -36,6 +37,14 @@ type UploadRequest struct {
 	URL     string            `json:"url"`
 	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// requirePrefix refuses the empty prefix, which names every object of the store.
+func requirePrefix(prefix string) error {
+	if prefix == "" || prefix == "/" {
+		return errors.New("refusing to delete every object of the store")
+	}
+	return nil
 }
 
 // Mode is the STORAGE_MODE value selecting the driver.
