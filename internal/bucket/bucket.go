@@ -33,10 +33,7 @@ func Open(mode objectstore.Mode, location, keyPrefix string) *Bucket {
 	if localUploads {
 		// On disk the prefix is a directory, so spellings like ./tenant/ and
 		// tenant// resolve to the same place, as they do when listed back.
-		localRoot = location
-		if location != "" {
-			localRoot = filepath.Join(location, keyPrefix)
-		}
+		localRoot = filepath.Join(location, keyPrefix)
 		objectStore = objectstore.Open(mode, localRoot)
 	} else {
 		objectStore = objectstore.WithPrefix(objectstore.Open(mode, location), keyPrefix)
