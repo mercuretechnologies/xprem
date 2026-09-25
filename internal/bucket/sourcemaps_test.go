@@ -71,8 +71,9 @@ func TestSourcemapStoreLivesUnderTheKeyPrefix(t *testing.T) {
 }
 
 func TestSourcemapStorePutVerifiesTheHash(t *testing.T) {
-	dir := localUploadEnv(t)
-	store := sourcemapEnv(t, t.TempDir())
+	localUploadEnv(t)
+	dir := t.TempDir()
+	store := sourcemapEnv(t, dir)
 	ctx := context.Background()
 
 	err := store.Put(ctx, "app-1", blobHash([]byte("what the CLI hashed")), bytes.NewReader([]byte("what it sent")))

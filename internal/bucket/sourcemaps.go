@@ -3,6 +3,7 @@ package bucket
 import (
 	"context"
 	"io"
+	"log"
 	"xprem/config"
 	"xprem/internal/objectstore"
 )
@@ -18,8 +19,14 @@ var sourcemapsLocationEnv = map[objectstore.Mode]string{
 // {appId}/sourcemaps/{hash}, under the bucket key prefix. Its location may be
 // the updates one: the directory is reserved there.
 type SourcemapStore struct {
-	objectStore  objectstore.Store
-	localUploads bool
+	objectStore   objectstore.Store
+	localUploads  bool
+	sharesUpdates bool
+}
+
+// SharesUpdatesLocation reports whether the maps live in the updates bucket.
+func (s *SourcemapStore) SharesUpdatesLocation() bool {
+	return s.sharesUpdates
 }
 
 // OpenSourcemapStore opens the store UPLOAD_SOURCEMAPS points at; nil when the
@@ -28,13 +35,19 @@ func OpenSourcemapStore() (*SourcemapStore, error) {
 	if !config.IsSourcemapUploadEnabled() {
 		return nil, nil
 	}
-	objectStore, err := objectstore.OpenFeatureStore(sourcemapsLocationEnv, true)
+	mode := objectstore.ResolveMode()
+	objectStore, sharesUpdates, err := objectstore.OpenFeatureStore(sourcemapsLocationEnv, true)
 	if err != nil {
 		return nil, err
 	}
+	if sharesUpdates {
+		kind := objectstore.LocationKind(mode)
+		log.Printf("WARNING: source maps share the updates %s (%s). They embed the app's source code: this %s must not be publicly readable", kind, sourcemapsLocationEnv[mode], kind)
+	}
 	return &SourcemapStore{
-		objectStore:  objectstore.WithPrefix(objectStore, ResolveKeyPrefix()),
-		localUploads: objectstore.ResolveMode() == objectstore.ModeLocal,
+		objectStore:   objectstore.WithPrefix(objectStore, ResolveKeyPrefix()),
+		localUploads:  mode == objectstore.ModeLocal,
+		sharesUpdates: sharesUpdates,
 	}, nil
 }
 

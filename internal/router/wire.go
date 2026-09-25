@@ -306,6 +306,11 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		if err != nil {
 			log.Fatalf("UPLOAD_SOURCEMAPS is enabled but %v", err)
 		}
+		// CDN_BASE_URL fronts a publicly readable bucket, and a source map
+		// embeds the app's source code.
+		if sourcemapStore.SharesUpdatesLocation() && cdn.ResolvedType() == "generic" {
+			log.Fatalf("UPLOAD_SOURCEMAPS: source maps cannot share the updates bucket when CDN_BASE_URL serves it; point them at a dedicated bucket")
+		}
 		deploymentService.SetSourcemapStore(sourcemapStore)
 	}
 	bsDiffService.SetOnAuditEvent(auditService.Record)

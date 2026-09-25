@@ -230,7 +230,7 @@ func LoadConfig() {
 // IsSourcemapUploadEnabled reports whether publishes store the bundle's source
 // map alongside the update (UPLOAD_SOURCEMAPS=true, off by default).
 func IsSourcemapUploadEnabled() bool {
-	if (!IsDBMode()) {
+	if !IsDBMode() {
 		return false
 	}
 	enabled, _ := strconv.ParseBool(GetEnv("UPLOAD_SOURCEMAPS"))
@@ -344,7 +344,8 @@ var DefaultEnvValues = map[string]string{
 	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
 
 	// Source map uploads: off by default. The maps land in their own store,
-	// which may be the updates one.
+	// which may be the updates one when it is not publicly readable: a map
+	// embeds the app's source code.
 	"UPLOAD_SOURCEMAPS":          "false",
 	"LOCAL_SOURCEMAPS_BASE_PATH": "./sourcemaps",
 

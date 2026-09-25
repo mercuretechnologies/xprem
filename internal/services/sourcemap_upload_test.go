@@ -17,10 +17,13 @@ import (
 func newSourcemapTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness, *bucket.SourcemapStore) {
 	t.Helper()
 	svc, h := newDedupTestHarness(t)
+	t.Setenv("DB_URL", "postgres://localhost/xprem")
 	t.Setenv("UPLOAD_SOURCEMAPS", "true")
 	t.Setenv("LOCAL_SOURCEMAPS_BASE_PATH", os.Getenv("LOCAL_BUCKET_BASE_PATH"))
 	store, err := bucket.OpenSourcemapStore()
 	require.NoError(t, err)
+	// A nil *SourcemapStore in the interface would pass the service's nil check.
+	require.NotNil(t, store)
 	svc.SetSourcemapStore(store)
 	return svc, h, store
 }
