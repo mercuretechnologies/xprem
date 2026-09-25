@@ -37,7 +37,7 @@ func up(b *bucket.Bucket) error {
 		return nil
 	}
 	log.Printf("🧱 v1→v2 bucket re-path: moving root entries under %q …", appId)
-	if err := bucket.MoveRootEntriesUnder(context.Background(), b.ObjectStore, appId); err != nil {
+	if err := b.MoveRootEntriesUnder(context.Background(), appId); err != nil {
 		return fmt.Errorf("bucket re-path: %w", err)
 	}
 	log.Println("✅ v1→v2 bucket re-path complete.")

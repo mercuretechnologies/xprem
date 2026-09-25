@@ -26,7 +26,7 @@ func v1Bucket(t *testing.T) (*Bucket, string) {
 
 func moveUnder(t *testing.T, b *Bucket, appId string) error {
 	t.Helper()
-	return MoveRootEntriesUnder(context.Background(), b.ObjectStore, appId)
+	return b.MoveRootEntriesUnder(context.Background(), appId)
 }
 
 func TestMoveRootEntriesUnderMovesBranchesAndKeepsTheLedger(t *testing.T) {
@@ -70,6 +70,7 @@ func TestMoveRootEntriesUnderIsIdempotentAndResumable(t *testing.T) {
 func TestMoveRootEntriesUnderSkipsNonBranchShapedEntries(t *testing.T) {
 	b, dir := localBucket(t)
 	writeFile(t, filepath.Join(dir, "branch-a", "1", "12345", ".check"))
+	writeFile(t, filepath.Join(dir, "branch-a", "1", "99999", "bundle.js"))
 	writeFile(t, filepath.Join(dir, "branch-a", "1", "12345", "assets", "x.png"))
 	writeFile(t, filepath.Join(dir, "other-app-uuid", "branch-a", "1", "67890", ".check"))
 	writeFile(t, filepath.Join(dir, "random", "README.md"))
@@ -78,6 +79,7 @@ func TestMoveRootEntriesUnderSkipsNonBranchShapedEntries(t *testing.T) {
 
 	assert.FileExists(t, filepath.Join(dir, "app-1", "branch-a", "1", "12345", ".check"))
 	assert.FileExists(t, filepath.Join(dir, "app-1", "branch-a", "1", "12345", "assets", "x.png"))
+	assert.FileExists(t, filepath.Join(dir, "app-1", "branch-a", "1", "99999", "bundle.js"), "an aborted upload moves with its branch")
 	assert.NoDirExists(t, filepath.Join(dir, "branch-a"))
 	assert.FileExists(t, filepath.Join(dir, "other-app-uuid", "branch-a", "1", "67890", ".check"))
 	assert.NoDirExists(t, filepath.Join(dir, "app-1", "other-app-uuid"))
@@ -121,6 +123,26 @@ func TestMoveRootEntriesUnderRespectsKeyPrefix(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dir, "myapp", ".migrationhistory"))
 	assert.FileExists(t, filepath.Join(dir, "other-tenant", ".check"))
 	assert.NoDirExists(t, filepath.Join(dir, "myapp", "app-1", "other-tenant"))
+}
+
+// The S3 and GCS path moves keys one by one instead of renaming directories;
+// it runs here on a local object store.
+func TestMoveRootKeysUnderMovesConfirmedUpdates(t *testing.T) {
+	b, dir := v1Bucket(t)
+	writeFile(t, filepath.Join(dir, "other-app-uuid", "branch-a", "1", "67890", ".check"))
+
+	require.NoError(t, moveRootKeysUnder(context.Background(), b.ObjectStore, "app-1"))
+
+	assert.FileExists(t, filepath.Join(dir, "app-1", "branch-a", "1", "12345", ".check"))
+	assert.FileExists(t, filepath.Join(dir, "app-1", "branch-b", "1", "67890", ".check"))
+	assert.FileExists(t, filepath.Join(dir, ".migrationhistory"))
+	assert.FileExists(t, filepath.Join(dir, "other-app-uuid", "branch-a", "1", "67890", ".check"))
+	require.NoError(t, moveRootKeysUnder(context.Background(), b.ObjectStore, "app-1"))
+	assert.NoDirExists(t, filepath.Join(dir, "app-1", "app-1"))
+
+	colliding, collidingDir := localBucket(t)
+	writeFile(t, filepath.Join(collidingDir, "staging", "1", "12345", ".check"))
+	assert.ErrorIs(t, moveRootKeysUnder(context.Background(), colliding.ObjectStore, "staging"), ErrAppIdCollidesWithV1Branch)
 }
 
 func TestV1BranchTripleFromMarker(t *testing.T) {

@@ -25,13 +25,20 @@ type Bucket struct {
 	UpdateStore   *UpdateStore
 	PatchStore    *PatchStore
 	InstanceStore *InstanceStore
+	// localRoot is the bucket's directory in local mode, empty otherwise.
+	localRoot string
 }
 
 // Open lays the stores out over location, under keyPrefix.
 func Open(mode objectstore.Mode, location, keyPrefix string) *Bucket {
 	objectStore := objectstore.WithPrefix(objectstore.Open(mode, location), keyPrefix)
 	localUploads := mode == objectstore.ModeLocal
+	localRoot := ""
+	if localUploads {
+		localRoot = filepath.Join(location, keyPrefix)
+	}
 	return &Bucket{
+		localRoot:     localRoot,
 		ObjectStore:   objectStore,
 		BlobStore:     &BlobStore{objectStore: objectStore, localUploads: localUploads},
 		UpdateStore:   &UpdateStore{objectStore: objectStore, localUploads: localUploads},

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,7 +20,7 @@ var ErrAppIdCollidesWithV1Branch = fmt.Errorf("app id collides with a v1 branch 
 
 const migrationHistoryKey = ".migrationhistory"
 
-// migrationConcurrency is how many objects MoveRootEntriesUnder moves in
+// migrationConcurrency is how many objects moveRootKeysUnder moves in
 // parallel, tunable with BUCKET_MIGRATION_CONCURRENCY.
 func migrationConcurrency() int {
 	if v := os.Getenv("BUCKET_MIGRATION_CONCURRENCY"); v != "" {
@@ -42,11 +43,89 @@ func (p *moveProgress) tick() {
 }
 
 // MoveRootEntriesUnder re-paths the v1 layout ({branch}/{rv}/{updateId}/…)
-// under {appId}/. Only confirmed v1 branches move: those with a .check or
-// update-metadata.json marker at exactly that depth. The move is idempotent:
-// each object is copied then deleted, and the markers go last so an
-// interrupted run still finds its branches on retry.
-func MoveRootEntriesUnder(ctx context.Context, objectStore objectstore.Store, appId string) error {
+// under {appId}/. The move is idempotent, so an interrupted run converges on
+// retry.
+func (b *Bucket) MoveRootEntriesUnder(ctx context.Context, appId string) error {
+	if b.localRoot != "" {
+		return moveLocalRootEntriesUnder(b.localRoot, appId)
+	}
+	return moveRootKeysUnder(ctx, b.ObjectStore, appId)
+}
+
+// moveLocalRootEntriesUnder renames each directory shaped like a v1 branch
+// into {root}/{appId}/.
+func moveLocalRootEntriesUnder(root, appId string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", root, err)
+	}
+	// A v1 branch named like the app has its marker one level higher than a
+	// v2 {appId}/ directory.
+	if looksLikeV1Branch(root, appId) {
+		return fmt.Errorf("%w: %q", ErrAppIdCollidesWithV1Branch, appId)
+	}
+	var toMove []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == appId || name == migrationHistoryKey || !entry.IsDir() {
+			continue
+		}
+		if looksLikeV1Branch(root, name) {
+			toMove = append(toMove, name)
+		}
+	}
+	if len(toMove) == 0 {
+		return nil
+	}
+	targetDir := filepath.Join(root, appId)
+	if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetDir, err)
+	}
+	for _, name := range toMove {
+		if err := os.Rename(filepath.Join(root, name), filepath.Join(targetDir, name)); err != nil {
+			return fmt.Errorf("move %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// looksLikeV1Branch reports whether {root}/{name} holds a .check or
+// update-metadata.json at {rv}/{updateId}/.
+func looksLikeV1Branch(root, name string) bool {
+	branchDir := filepath.Join(root, name)
+	runtimeVersions, err := os.ReadDir(branchDir)
+	if err != nil {
+		return false
+	}
+	for _, runtimeVersion := range runtimeVersions {
+		if !runtimeVersion.IsDir() {
+			continue
+		}
+		updates, err := os.ReadDir(filepath.Join(branchDir, runtimeVersion.Name()))
+		if err != nil {
+			continue
+		}
+		for _, update := range updates {
+			if !update.IsDir() {
+				continue
+			}
+			updateDir := filepath.Join(branchDir, runtimeVersion.Name(), update.Name())
+			for _, marker := range []string{".check", "update-metadata.json"} {
+				if _, err := os.Stat(filepath.Join(updateDir, marker)); err == nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// moveRootKeysUnder moves the keys of every confirmed v1 update, each copied
+// then deleted, markers last so an interrupted run still finds them on retry.
+func moveRootKeysUnder(ctx context.Context, objectStore objectstore.Store, appId string) error {
 	appPrefix := appId + "/"
 
 	nested, err := objectStore.List(ctx, appPrefix)
