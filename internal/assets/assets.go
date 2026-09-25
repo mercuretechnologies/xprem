@@ -1,7 +1,9 @@
 package assets
 
 import (
+	"context"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"xprem/internal/bucket"
@@ -42,7 +44,7 @@ type validatedAsset struct {
 // and the file path would otherwise proxy internal objects like
 // update-metadata.json living next to real assets. A non-nil response means
 // the request must be refused as-is.
-func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
+func validateAssetRequest(ctx context.Context, req AssetsRequest) (validatedAsset, *AssetsResponse) {
 	requestID := req.RequestID
 
 	if req.AssetName == "" {
@@ -63,7 +65,7 @@ func validateAssetRequest(req AssetsRequest) (validatedAsset, *AssetsResponse) {
 		return validatedAsset{}, &AssetsResponse{StatusCode: http.StatusNotFound, Body: []byte("No update found")}
 	}
 
-	metadata, err := update.GetMetadata(*req.Update)
+	metadata, err := update.GetMetadata(ctx, *req.Update)
 	if errors.Is(err, update.ErrUpdateMetadataMissing) {
 		// No metadata means no manifest ever advertised this asset: answer
 		// like any unknown asset instead of surfacing a server error.
@@ -107,13 +109,13 @@ func ExpoProtocolHeaders() map[string]string {
 	}
 }
 
-func HandleAssetsWithFile(req AssetsRequest) (AssetsResponse, error) {
-	validated, errResp := validateAssetRequest(req)
+func HandleAssetsWithFile(ctx context.Context, req AssetsRequest) (AssetsResponse, error) {
+	validated, errResp := validateAssetRequest(ctx, req)
 	if errResp != nil {
 		return *errResp, nil
 	}
 
-	asset, err := bucket.GetBucket().GetFile(*validated.update, req.AssetName)
+	asset, err := bucket.GetBucket().UpdateStore.GetFile(ctx, *validated.update, req.AssetName)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error getting asset: %v", req.RequestID, err)
 		return AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error getting asset")}, nil
@@ -123,8 +125,8 @@ func HandleAssetsWithFile(req AssetsRequest) (AssetsResponse, error) {
 		return AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Resolved file is nil")}, nil
 	}
 
-	buffer, err := bucket.ConvertReadCloserToBytes(asset.Reader)
 	defer asset.Reader.Close()
+	buffer, err := io.ReadAll(asset.Reader)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error converting asset to buffer: %v", req.RequestID, err)
 		return AssetsResponse{StatusCode: http.StatusInternalServerError, Body: []byte("Error converting asset to buffer")}, err
@@ -143,8 +145,8 @@ func HandleAssetsWithFile(req AssetsRequest) (AssetsResponse, error) {
 	}, nil
 }
 
-func HandleAssetsWithURL(req AssetsRequest, resolvedCDN cdn.CDN) (AssetsResponse, error) {
-	validated, errResp := validateAssetRequest(req)
+func HandleAssetsWithURL(ctx context.Context, req AssetsRequest, resolvedCDN cdn.CDN) (AssetsResponse, error) {
+	validated, errResp := validateAssetRequest(ctx, req)
 	if errResp != nil {
 		return *errResp, nil
 	}

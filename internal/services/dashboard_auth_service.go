@@ -11,7 +11,7 @@ import (
 	"xprem/config"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -53,11 +53,11 @@ type DashboardPrincipal struct {
 // RefreshTokenRepository is the refresh-token rotation ledger. Like
 // UserRepository it only exists on the control plane.
 type RefreshTokenRepository interface {
-	InsertRefreshToken(ctx context.Context, params store.InsertRefreshTokenParameters) error
+	InsertRefreshToken(ctx context.Context, params repository.InsertRefreshTokenParameters) error
 	// RotateRefreshToken retires one token and issues its successor in the same
 	// family, atomically.
-	RotateRefreshToken(ctx context.Context, params store.RotateRefreshTokenParameters) (store.RefreshToken, error)
-	GetRefreshToken(ctx context.Context, id string, replayGrace time.Duration) (store.RefreshToken, error)
+	RotateRefreshToken(ctx context.Context, params repository.RotateRefreshTokenParameters) (repository.RefreshToken, error)
+	GetRefreshToken(ctx context.Context, id string, replayGrace time.Duration) (repository.RefreshToken, error)
 	DeleteRefreshTokenFamily(ctx context.Context, familyId string) error
 	DeleteExpiredRefreshTokens(ctx context.Context, userId string) error
 }
@@ -221,7 +221,7 @@ func (a *DashboardAuthService) startSession(ctx context.Context, principal Dashb
 		return a.issueSessionPair(principal, "", expiresAt)
 	}
 	tokenId := uuid.New().String()
-	if err := a.refreshTokens.InsertRefreshToken(ctx, store.InsertRefreshTokenParameters{
+	if err := a.refreshTokens.InsertRefreshToken(ctx, repository.InsertRefreshTokenParameters{
 		ID:        tokenId,
 		UserID:    principal.UserId,
 		FamilyID:  uuid.New().String(),
@@ -239,7 +239,7 @@ func (a *DashboardAuthService) startSession(ctx context.Context, principal Dashb
 // ADMIN_PASSWORD. When password is nil only the account's existence is
 // resolved, for the refresh path.
 func resolveStatelessPrincipal(email string, password *string) (*DashboardPrincipal, error) {
-	adminEmail := store.NormalizeEmail(config.GetEnv("ADMIN_EMAIL"))
+	adminEmail := repository.NormalizeEmail(config.GetEnv("ADMIN_EMAIL"))
 	if adminEmail == "" {
 		return nil, ErrAdminEmailNotSet
 	}
@@ -247,7 +247,7 @@ func resolveStatelessPrincipal(email string, password *string) (*DashboardPrinci
 	if adminPassword == "" {
 		return nil, errors.New("admin password is not set, all requests will be rejected")
 	}
-	if store.NormalizeEmail(email) != adminEmail {
+	if repository.NormalizeEmail(email) != adminEmail {
 		return nil, errors.New("invalid credentials")
 	}
 	if password != nil && *password != adminPassword {
@@ -267,7 +267,7 @@ var ErrAuthUnavailable = errors.New("could not verify the account against the da
 // principalForUser is the single choke point every database-backed sign-in
 // path (password login, SSO callback, refresh) goes through, which is why the
 // enabled check lives here.
-func (a *DashboardAuthService) principalForUser(ctx context.Context, user store.User) (*DashboardPrincipal, error) {
+func (a *DashboardAuthService) principalForUser(ctx context.Context, user repository.User) (*DashboardPrincipal, error) {
 	if !user.Enabled {
 		return nil, ErrAccountPendingApproval
 	}
@@ -288,7 +288,7 @@ func (a *DashboardAuthService) resolveLoginPrincipal(ctx context.Context, email 
 	}
 	user, err := a.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			// Burn the same bcrypt cost as a real comparison so timing cannot
 			// enumerate which emails exist.
 			crypto.VerifyPassword(unknownUserPasswordHash, password)
@@ -319,7 +319,7 @@ func (a *DashboardAuthService) resolveRefreshPrincipal(ctx context.Context, user
 	}
 	user, err := a.userRepo.GetUserByID(ctx, userId)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, errors.New("invalid credentials")
 		}
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
@@ -387,7 +387,7 @@ func (a *DashboardAuthService) recordLoginFailure(ctx context.Context, email str
 // IssueSession mints the standard dashboard JWT pair for an account
 // authenticated by other means than a password, such as the enterprise SSO
 // callback.
-func (a *DashboardAuthService) IssueSession(ctx context.Context, user store.User) (*DashboardSession, error) {
+func (a *DashboardAuthService) IssueSession(ctx context.Context, user repository.User) (*DashboardSession, error) {
 	if a.userRepo == nil {
 		return nil, errors.New("sessions can only be issued for database-backed accounts")
 	}
@@ -440,7 +440,7 @@ func (a *DashboardAuthService) AuthenticateSession(ctx context.Context, tokenStr
 	}
 	user, err := a.userRepo.GetUserByID(ctx, principal.UserId)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, ErrSessionRevoked
 		}
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
@@ -500,7 +500,7 @@ func (a *DashboardAuthService) RefreshSession(ctx context.Context, tokenString s
 
 	successorId := uuid.New().String()
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	_, err = a.refreshTokens.RotateRefreshToken(ctx, store.RotateRefreshTokenParameters{
+	_, err = a.refreshTokens.RotateRefreshToken(ctx, repository.RotateRefreshTokenParameters{
 		OldID:     spentId,
 		NewID:     successorId,
 		ExpiresAt: expiresAt,
@@ -511,7 +511,7 @@ func (a *DashboardAuthService) RefreshSession(ctx context.Context, tokenString s
 		}
 		return a.issueSessionPair(*principal, successorId, expiresAt)
 	}
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	if !errors.As(err, &notFoundErr) {
 		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}

@@ -10,8 +10,8 @@ import (
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/providers/expo"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -28,14 +28,14 @@ func expoAuth(token string) types.Auth {
 }
 
 type importFakeAppRepo struct {
-	inserted  []store.InsertAppParameters
+	inserted  []repository.InsertAppParameters
 	deleted   []string
 	insertErr error
 	// missing makes GetAppByID answer not-found.
 	missing bool
 }
 
-func (f *importFakeAppRepo) InsertApp(_ context.Context, app store.InsertAppParameters) (string, error) {
+func (f *importFakeAppRepo) InsertApp(_ context.Context, app repository.InsertAppParameters) (string, error) {
 	if f.insertErr != nil {
 		return "", f.insertErr
 	}
@@ -153,19 +153,19 @@ func importService(t *testing.T, appRepo *importFakeAppRepo, branchRepo *importF
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	appService := services.NewAppService(appRepo)
-	branchService := services.NewBranchService(branchRepo, channelRepo, nil, nil, nil)
+	branchService := services.NewBranchService(branchRepo, channelRepo, nil, nil, nil, nil)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
-	return NewService(appService, branchService, channelService, nil, nil, nil)
+	return NewService(appService, branchService, channelService, nil, nil, nil, nil)
 }
 
 // No jobs client: tests run the job body directly or stop before the enqueue.
-func historyImportService(t *testing.T, branchRepo *importFakeBranchRepo, updateRepo services.UpdateRepository, historyBucket bucket.Bucket) *Service {
+func historyImportService(t *testing.T, branchRepo *importFakeBranchRepo, updateRepo services.UpdateRepository, historyBucket *bucket.Bucket) *Service {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://stub")
 	appService := services.NewAppService(&importFakeAppRepo{})
-	branchService := services.NewBranchService(branchRepo, &importFakeChannelRepo{}, nil, nil, nil)
+	branchService := services.NewBranchService(branchRepo, &importFakeChannelRepo{}, nil, nil, nil, nil)
 	channelService := services.NewChannelService(branchRepo, &importFakeChannelRepo{})
-	return NewService(appService, branchService, channelService, updateRepo, nil, historyBucket)
+	return NewService(appService, branchService, channelService, updateRepo, nil, historyBucket.BlobStore, historyBucket.UpdateStore)
 }
 
 func awsKeysConfig() config.KeysConfig {
@@ -307,11 +307,11 @@ func TestImportRequiresControlPlane(t *testing.T) {
 	t.Setenv("DB_URL", "")
 
 	_, err := service.ListImportableApps(context.Background(), expoAuth("token"))
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 	_, err = service.PreviewImport(context.Background(), expoAuth("token"), importExpoAppID)
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 	_, err = service.ImportApp(context.Background(), expoAuth("token"), importExpoAppID, awsKeysConfig(), 0)
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 }
 
 func TestImportAppSurfacesExpoErrors(t *testing.T) {
@@ -359,12 +359,12 @@ func TestImportAppPropagatesAlreadyExists(t *testing.T) {
 	defer httpmock.DeactivateAndReset()
 	mockExpoProjectStructure(t)
 
-	appRepo := &importFakeAppRepo{insertErr: &store.ErrResourceAlreadyExists{Resource: "app", Identifier: importExpoAppID}}
+	appRepo := &importFakeAppRepo{insertErr: &repository.ErrResourceAlreadyExists{Resource: "app", Identifier: importExpoAppID}}
 	service := importService(t, appRepo, &importFakeBranchRepo{}, &importFakeChannelRepo{})
 
 	_, err := service.ImportApp(context.Background(), expoAuth("token"), importExpoAppID, awsKeysConfig(), 0)
 
-	alreadyExists := (*store.ErrResourceAlreadyExists)(nil)
+	alreadyExists := (*repository.ErrResourceAlreadyExists)(nil)
 	require.ErrorAs(t, err, &alreadyExists)
 	assert.Empty(t, appRepo.deleted)
 }

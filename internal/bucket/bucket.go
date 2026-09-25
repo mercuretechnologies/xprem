@@ -1,314 +1,60 @@
+// Package bucket is the layout of the updates bucket: one store per kind of
+// object it holds, each owning its keys, over a raw object store.
 package bucket
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"fmt"
-	"io"
-	"log"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"xprem/config"
-	"xprem/internal/types"
+	"xprem/internal/objectstore"
 )
 
-var s3KeyPrefixDeprecationOnce sync.Once
-
-// maxSegmentLen bounds any single path segment (branch, runtimeVersion,
-// updateId, migrationId). Keeps DoS surface small on map keys and
-// filesystem paths while staying comfortably above realistic names
-// (UUIDs are 36, semver+build metadata under 100).
-const (
-	maxSegmentLen  = 128
-	casDir         = "cas"
-	bsDiffDir      = "bsdiff"
-	blobHashLength = 43
-)
-
-// copyFileTimeout bounds a single CopyFileIntoUpdate provider call, so a
-// stalled copy degrades into a regular upload instead of hanging the publish.
+// copyFileTimeout bounds a single CopyFile provider call, so a stalled copy
+// degrades into a regular upload instead of hanging the publish.
 const copyFileTimeout = 30 * time.Second
 
-// validateSegment ensures a single-segment identifier (branch, runtimeVersion,
-// updateId, migrationId) is safe to embed in a storage path / object key.
-// Defense-in-depth against path traversal on the local backend and weird
-// keys on S3/GCS. Rejects empties, path separators, "." / "..", null bytes,
-// control characters, and anything over maxSegmentLen.
-func validateSegment(name, value string) error {
-	if value == "" {
-		return fmt.Errorf("invalid %s: must not be empty", name)
-	}
-	if len(value) > maxSegmentLen {
-		return fmt.Errorf("invalid %s: exceeds max length %d", name, maxSegmentLen)
-	}
-	if strings.ContainsAny(value, "/\\") {
-		return fmt.Errorf("invalid %s: must not contain path separators", name)
-	}
-	if value == "." || value == ".." {
-		return fmt.Errorf("invalid %s: reserved name", name)
-	}
-	// Null bytes truncate keys in C-based filesystem syscalls; control
-	// characters break URL encoding / logging / key listing on S3/GCS.
-	for _, r := range value {
-		if r == 0x00 {
-			return fmt.Errorf("invalid %s: must not contain null bytes", name)
-		}
-		if unicode.IsControl(r) {
-			return fmt.Errorf("invalid %s: must not contain control characters", name)
-		}
-	}
-	return nil
+type Bucket struct {
+	// ObjectStore is the raw store, for the layout migrations that reshape it.
+	ObjectStore   objectstore.Store
+	BlobStore     *BlobStore
+	UpdateStore   *UpdateStore
+	PatchStore    *PatchStore
+	InstanceStore *InstanceStore
 }
 
-// validateRelativePath validates multi-segment paths supplied for fileName /
-// assetPath. Nested paths are allowed (e.g. "assets/image.png") but no
-// absolute paths and no ".." segments. Backslashes are rejected outright -
-// on Windows filepath.Join treats them as separators, so allowing them would
-// let an attacker escape the intended directory via a path like
-// "assets\..\..\etc\passwd".
-func validateRelativePath(name, value string) error {
-	if value == "" {
-		return fmt.Errorf("invalid %s: must not be empty", name)
-	}
-	if strings.ContainsRune(value, '\\') {
-		return fmt.Errorf("invalid %s: must not contain '\\' characters", name)
-	}
-	if strings.HasPrefix(value, "/") {
-		return fmt.Errorf("invalid %s: must not be absolute", name)
-	}
-	for _, seg := range strings.Split(value, "/") {
-		if seg == ".." {
-			return fmt.Errorf("invalid %s: must not contain '..' segments", name)
-		}
-	}
-	return nil
-}
-
-func ValidateBlobHash(hash string) error {
-	if len(hash) != blobHashLength {
-		return fmt.Errorf("invalid hash: must be %d characters", blobHashLength)
-	}
-	// Strict rejects spellings with non-zero trailing padding bits, which
-	// decode to the same digest but would mint a second CAS key.
-	if _, err := base64.RawURLEncoding.Strict().DecodeString(hash); err != nil {
-		return fmt.Errorf("invalid hash: must be canonical base64url")
-	}
-	return nil
-}
-
-func ValidateUploadFile(name, hash string) error {
-	if err := validateRelativePath("file name", name); err != nil {
-		return err
-	}
-	return ValidateBlobHash(hash)
-}
-
-func ReservedBranchName(branch string) bool {
-	return branch == casDir || branch == bsDiffDir
-}
-
-// BlobObjectKey is {appId}/cas/{hash}, without the bucket key prefix.
-func BlobObjectKey(appId, hash string) string {
-	return appId + "/" + casDir + "/" + hash
-}
-
-// BSDiffBranchPrefix is {appId}/bsdiff/{branch}/, under which every patch of
-// the branch lives. Update ids are only unique within a branch.
-func BSDiffBranchPrefix(appId, branch string) string {
-	return appId + "/" + bsDiffDir + "/" + branch + "/"
-}
-
-// BSDiffObjectKey is {appId}/bsdiff/{branch}/{targetUpdateUUID}/{sourceUpdateUUID}:
-// the patch that turns the source update's bundle into the target's. The
-// source UUID is the last segment so a CDN edge can echo it as the
-// expo-base-update-id header.
-func BSDiffObjectKey(appId, branch, targetUpdateUUID, sourceUpdateUUID string) string {
-	return BSDiffBranchPrefix(appId, branch) + targetUpdateUUID + "/" + sourceUpdateUUID
-}
-
-func prefixedBlobKey(prefix, appId, hash string) string {
-	return prefix + BlobObjectKey(appId, hash)
-}
-
-func validateUpdate(u *types.Update) error {
-	if u == nil {
-		return fmt.Errorf("update must not be nil")
-	}
-	if err := validateSegment("appId", u.AppId); err != nil {
-		return err
-	}
-	if err := validateBranch(u.Branch); err != nil {
-		return err
-	}
-	if err := validateSegment("runtimeVersion", u.RuntimeVersion); err != nil {
-		return err
-	}
-	if err := validateSegment("updateId", u.UpdateId); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ResolveKeyPrefix returns the bucket key prefix, normalized to end with "/"
-// when non-empty. It reads BUCKET_KEY_PREFIX first and falls back to the
-// legacy S3_KEY_PREFIX env var. Panics on unsafe values (absolute paths or
-// ".." segments) to fail-fast on operator misconfiguration that could let
-// the local backend escape its BasePath.
-//
-// Exported because the CDN builders need the same prefix when signing
-// object URLs, a CloudFront or GCS-direct URL that omits the prefix
-// points to a non-existent object and 404s.
-func ResolveKeyPrefix() string {
-	return resolveKeyPrefix()
-}
-
-func resolveKeyPrefix() string {
-	prefix := config.GetEnv("BUCKET_KEY_PREFIX")
-	if prefix == "" {
-		// TODO: remove S3_KEY_PREFIX backward-compat once users migrated to BUCKET_KEY_PREFIX
-		prefix = config.GetEnv("S3_KEY_PREFIX")
-		if prefix != "" {
-			s3KeyPrefixDeprecationOnce.Do(func() {
-				log.Println("WARNING: S3_KEY_PREFIX is deprecated and will be removed in a future release; use BUCKET_KEY_PREFIX instead")
-			})
-		}
-	}
-	if prefix == "" {
-		return ""
-	}
-	if strings.ContainsRune(prefix, '\\') {
-		panic("bucket key prefix must not contain '\\' characters")
-	}
-	if strings.HasPrefix(prefix, "/") {
-		panic("bucket key prefix must not be absolute (starts with '/')")
-	}
-	for _, seg := range strings.Split(prefix, "/") {
-		if seg == ".." {
-			panic("bucket key prefix must not contain '..' segments")
-		}
-	}
-	if prefix[len(prefix)-1] != '/' {
-		prefix += "/"
-	}
-	return prefix
-}
-
-type Bucket interface {
-	GetBranches(appId string) ([]string, error)
-	GetRuntimeVersions(appId string, branch string) ([]types.RuntimeVersionWithStats, error)
-	GetUpdates(appId string, branch string, runtimeVersion string) ([]types.Update, error)
-	GetFile(update types.Update, assetPath string) (*types.BucketFile, error)
-	RequestUploadUrlForFileUpdate(appId string, branch string, runtimeVersion string, updateId string, fileName string) (*UploadRequest, error)
-	UploadFileIntoUpdate(update types.Update, fileName string, file io.Reader) error
-	CopyFileIntoUpdate(source types.Update, target types.Update, fileName string) error
-	DeleteUpdateFolder(appId string, branch string, runtimeVersion string, updateId string) error
-	CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error)
-	RetrieveMigrationHistory() ([]string, error)
-	ApplyMigration(migrationId string) error
-	RemoveMigrationFromHistory(migrationId string) error
-	GetInstanceID() (string, error)
-	PersistInstanceID(id string) error
-	BlobExists(ctx context.Context, appId, hash string) (bool, error)
-	GetBlob(ctx context.Context, appId, hash string) (*types.BucketFile, error)
-	PutBlob(ctx context.Context, appId, hash string, body io.Reader) error
-	RequestBlobUploadURL(appId, hash, branch string) (*UploadRequest, error)
-	BSDiffExists(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (bool, error)
-	GetBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string) (*types.BucketFile, error)
-	PutBSDiff(ctx context.Context, appId, branch, targetUpdateUUID, sourceUpdateUUID string, body io.Reader) error
-	DeleteBSDiffs(ctx context.Context, appId, branch string) error
-}
-
-type BucketType string
-
-const (
-	S3BucketType    BucketType = "s3"
-	LocalBucketType BucketType = "local"
-	GCSBucketType   BucketType = "gcs"
-	AzureBucketType BucketType = "azure"
-)
-
-func ResolveBucketType() BucketType {
-	storageMode := config.GetEnv("STORAGE_MODE")
-	switch storageMode {
-	case "local", "":
-		return LocalBucketType
-	case "s3":
-		return S3BucketType
-	case "gcs":
-		return GCSBucketType
-	case "azure":
-		return AzureBucketType
-	default:
-		return LocalBucketType
+// Open lays the stores out over location, under keyPrefix.
+func Open(mode objectstore.Mode, location, keyPrefix string) *Bucket {
+	objectStore := objectstore.WithPrefix(objectstore.Open(mode, location), keyPrefix)
+	localUploads := mode == objectstore.ModeLocal
+	return &Bucket{
+		ObjectStore:   objectStore,
+		BlobStore:     &BlobStore{objectStore: objectStore, localUploads: localUploads},
+		UpdateStore:   &UpdateStore{objectStore: objectStore, localUploads: localUploads},
+		PatchStore:    &PatchStore{objectStore: objectStore},
+		InstanceStore: &InstanceStore{objectStore: objectStore},
 	}
 }
 
 var (
-	bucketInstance Bucket
+	bucketInstance *Bucket
 	once           sync.Once
 )
 
-func GetBucket() Bucket {
+// GetBucket is the updates bucket the environment configures.
+func GetBucket() *Bucket {
 	once.Do(func() {
 		if bucketInstance == nil {
-			bucketType := ResolveBucketType()
-			keyPrefix := resolveKeyPrefix()
-			var inner Bucket
-			switch bucketType {
-			case S3BucketType:
-				inner = &S3Bucket{
-					BucketName: config.GetEnv("S3_BUCKET_NAME"),
-					KeyPrefix:  keyPrefix,
-				}
-			case GCSBucketType:
-				inner = &GCSBucket{
-					BucketName: config.GetEnv("GCS_BUCKET_NAME"),
-					KeyPrefix:  keyPrefix,
-				}
-			case AzureBucketType:
-				inner = &AzureBucket{
-					ContainerName: config.GetEnv("AZURE_BLOB_CONTAINER_NAME"),
-					KeyPrefix:     keyPrefix,
-				}
-			case LocalBucketType:
-				inner = &LocalBucket{
-					BasePath:  config.GetEnv("LOCAL_BUCKET_BASE_PATH"),
-					KeyPrefix: keyPrefix,
-				}
-			default:
-				panic(fmt.Sprintf("Unknown bucket type: %s", bucketType))
-			}
-			bucketInstance = &validatingBucket{Inner: inner}
+			mode := objectstore.ResolveMode()
+			bucketInstance = Open(mode, objectstore.UpdatesLocation(mode), ResolveKeyPrefix())
 		}
 	})
 	return bucketInstance
 }
 
-func ConvertReadCloserToBytes(rc io.ReadCloser) ([]byte, error) {
-	defer rc.Close()
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, rc); err != nil {
-		return nil, fmt.Errorf("error copying file to buffer: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
 func ResetBucketInstance() {
 	bucketInstance = nil
 	once = sync.Once{}
-}
-
-const LocalUploadTokenHeader = "local-upload-token"
-
-// UploadRequest describes a PUT, including any per-file authorization headers.
-type UploadRequest struct {
-	URL     string            `json:"url"`
-	Method  string            `json:"method"`
-	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type FileUploadRequest struct {
@@ -337,57 +83,34 @@ type UploadFile struct {
 // RequestUploadUrlsForFileUpdates presigns one publish's uploads, routing each
 // file by where it lives: cas/{hash} for content-addressed files, the update
 // folder for the rest.
-func RequestUploadUrlsForFileUpdates(appId, branch, runtimeVersion, updateId string, files []UploadFile) ([]FileUploadRequest, error) {
+func RequestUploadUrlsForFileUpdates(ctx context.Context, appId, branch, runtimeVersion, updateId string, files []UploadFile) ([]FileUploadRequest, error) {
 	resolvedBucket := GetBucket()
-
+	var requests []FileUploadRequest
 	// Several files may name the same blob; presign it once.
-	toSign := make([]UploadFile, 0, len(files))
-	seenBlobs := make(map[string]struct{}, len(files))
+	presignedBlobs := make(map[string]bool, len(files))
 	for _, file := range files {
-		if !file.InUpdateFolder {
-			if _, dup := seenBlobs[file.Hash]; dup {
+		var upload *objectstore.UploadRequest
+		var err error
+		if file.InUpdateFolder {
+			upload, err = resolvedBucket.UpdateStore.PresignPut(ctx, appId, branch, runtimeVersion, updateId, file.Name)
+		} else {
+			if presignedBlobs[file.Hash] {
 				continue
 			}
-			seenBlobs[file.Hash] = struct{}{}
+			presignedBlobs[file.Hash] = true
+			upload, err = resolvedBucket.BlobStore.PresignPut(ctx, appId, file.Hash, branch)
 		}
-		toSign = append(toSign, file)
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, FileUploadRequest{
+			RequestUploadUrl: upload.URL,
+			FileName:         filepath.Base(file.Name),
+			FilePath:         file.Name,
+			OriginalFileName: file.Name,
+			Hash:             file.Hash,
+			Headers:          upload.Headers,
+		})
 	}
-
-	requests := make([]FileUploadRequest, len(toSign))
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(toSign))
-	wg.Add(len(toSign))
-	for i, file := range toSign {
-		go func(index int, file UploadFile) {
-			defer wg.Done()
-			var upload *UploadRequest
-			var err error
-			if file.InUpdateFolder {
-				upload, err = resolvedBucket.RequestUploadUrlForFileUpdate(appId, branch, runtimeVersion, updateId, file.Name)
-			} else {
-				upload, err = resolvedBucket.RequestBlobUploadURL(appId, file.Hash, branch)
-			}
-			if err != nil {
-				errChan <- err
-				return
-			}
-			requests[index] = FileUploadRequest{
-				RequestUploadUrl: upload.URL,
-				FileName:         filepath.Base(file.Name),
-				FilePath:         file.Name,
-				OriginalFileName: file.Name,
-				Hash:             file.Hash,
-				Headers:          upload.Headers,
-			}
-		}(i, file)
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	if len(errChan) > 0 {
-		return nil, <-errChan
-	}
-
 	return requests, nil
 }

@@ -8,8 +8,8 @@ import (
 	"context"
 	"testing"
 	"xprem/internal/auditlog"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +53,7 @@ func TestRoleLifecycleEmitsAuditEvents(t *testing.T) {
 
 func TestSetUserGrantsEmitsAuditEvent(t *testing.T) {
 	repo := newFakeRepo()
-	lookup := &fakeUserLookup{users: map[string]store.User{
+	lookup := &fakeUserLookup{users: map[string]repository.User{
 		"member-1": {Id: "member-1", Email: "member@example.com"},
 	}}
 	service := withLookup(licensedService(repo), lookup)

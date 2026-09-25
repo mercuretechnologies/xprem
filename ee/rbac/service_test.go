@@ -9,15 +9,15 @@ import (
 	"errors"
 	"testing"
 
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
 
 type fakeRepo struct {
 	roles map[string]Role
-	// grants is keyed by userID; the slice order mirrors what the store
+	// grants is keyed by userID; the slice order mirrors what the repository
 	// would return.
 	grants map[string][]AppGrant
 	// replaced records the last ReplaceUserGrants call for assertions.
@@ -335,7 +335,7 @@ func TestVisibleAppsForPrincipal(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1"}}
-	lookup := &fakeUserLookup{users: map[string]store.User{
+	lookup := &fakeUserLookup{users: map[string]repository.User{
 		"member-1": {Id: "member-1"},
 		"admin-1":  {Id: "admin-1", IsAdmin: true},
 	}}

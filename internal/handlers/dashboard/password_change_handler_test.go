@@ -12,8 +12,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/crypto"
 	"xprem/internal/ratelimit"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,12 +30,12 @@ import (
 // touches. The rest panics rather than returning zero values, so a future call
 // path shows up as a failure instead of as a plausible-looking answer.
 type fakePasswordUserRepo struct {
-	user store.User
+	user repository.User
 }
 
-func (r *fakePasswordUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (r *fakePasswordUserRepo) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	if id != r.user.Id {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return r.user, nil
 }
@@ -54,14 +54,14 @@ func (r *fakePasswordUserRepo) BumpUserSessionVersion(_ context.Context, _ strin
 
 func (r *fakePasswordUserRepo) TouchUserLastConnected(_ context.Context, _ string) error { return nil }
 
-func (r *fakePasswordUserRepo) InsertUser(context.Context, store.InsertUserParameters) (store.User, error) {
+func (r *fakePasswordUserRepo) InsertUser(context.Context, repository.InsertUserParameters) (repository.User, error) {
 	panic("unused")
 }
-func (r *fakePasswordUserRepo) GetUserByEmail(context.Context, string) (store.User, error) {
+func (r *fakePasswordUserRepo) GetUserByEmail(context.Context, string) (repository.User, error) {
 	panic("unused")
 }
-func (r *fakePasswordUserRepo) GetUsers(context.Context) ([]store.User, error) { panic("unused") }
-func (r *fakePasswordUserRepo) DeleteUserByID(context.Context, string) error   { panic("unused") }
+func (r *fakePasswordUserRepo) GetUsers(context.Context) ([]repository.User, error) { panic("unused") }
+func (r *fakePasswordUserRepo) DeleteUserByID(context.Context, string) error        { panic("unused") }
 func (r *fakePasswordUserRepo) UpdateUserIsAdmin(context.Context, string, bool) error {
 	panic("unused")
 }
@@ -72,22 +72,22 @@ func (r *fakePasswordUserRepo) UpdateUserEnabled(context.Context, string, bool) 
 // fakeLedger is the rotation ledger, in memory. The replacement session needs
 // a row like any other sign-in.
 type fakeLedger struct {
-	tokens    map[string]store.RefreshToken
+	tokens    map[string]repository.RefreshToken
 	insertErr error
 }
 
-func (l *fakeLedger) InsertRefreshToken(_ context.Context, params store.InsertRefreshTokenParameters) error {
+func (l *fakeLedger) InsertRefreshToken(_ context.Context, params repository.InsertRefreshTokenParameters) error {
 	if l.insertErr != nil {
 		return l.insertErr
 	}
-	l.tokens[params.ID] = store.RefreshToken{Id: params.ID, UserId: params.UserID, FamilyId: params.FamilyID, ExpiresAt: params.ExpiresAt}
+	l.tokens[params.ID] = repository.RefreshToken{Id: params.ID, UserId: params.UserID, FamilyId: params.FamilyID, ExpiresAt: params.ExpiresAt}
 	return nil
 }
 func (l *fakeLedger) DeleteExpiredRefreshTokens(context.Context, string) error { return nil }
-func (l *fakeLedger) RotateRefreshToken(context.Context, store.RotateRefreshTokenParameters) (store.RefreshToken, error) {
+func (l *fakeLedger) RotateRefreshToken(context.Context, repository.RotateRefreshTokenParameters) (repository.RefreshToken, error) {
 	panic("unused")
 }
-func (l *fakeLedger) GetRefreshToken(context.Context, string, time.Duration) (store.RefreshToken, error) {
+func (l *fakeLedger) GetRefreshToken(context.Context, string, time.Duration) (repository.RefreshToken, error) {
 	panic("unused")
 }
 func (l *fakeLedger) DeleteRefreshTokenFamily(context.Context, string) error { panic("unused") }
@@ -114,10 +114,10 @@ func newPasswordFixture(t *testing.T) *passwordFixture {
 	t.Setenv("JWT_SECRET", "test-secret")
 	hash, err := crypto.HashPassword("Sup3rSecret!")
 	require.NoError(t, err)
-	repo := &fakePasswordUserRepo{user: store.User{
+	repo := &fakePasswordUserRepo{user: repository.User{
 		Id: "11111111-1111-1111-1111-111111111111", Email: "member@example.com", PasswordHash: hash, Enabled: true,
 	}}
-	ledger := &fakeLedger{tokens: map[string]store.RefreshToken{}}
+	ledger := &fakeLedger{tokens: map[string]repository.RefreshToken{}}
 	authService := services.NewDashboardAuthService(repo, ledger)
 	return &passwordFixture{
 		handler:   NewUsersHandler(services.NewUserService(repo), authService, ratelimit.New(cache2.GetCache())),

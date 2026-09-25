@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -272,9 +273,9 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 		if !decoded.Valid {
 			assert.Fail(t, "Expected valid JWT token")
 		}
-		filePath, ok := claims["filePath"].(string)
-		assert.True(t, ok, "Expected filePath to be a string")
-		assert.NotEmpty(t, filePath, "Expected non-empty file path")
+		key, ok := claims["key"].(string)
+		assert.True(t, ok, "Expected key to be a string")
+		assert.NotEmpty(t, key, "Expected non-empty key")
 		sub, ok := claims["sub"].(string)
 		assert.True(t, ok, "Expected sub to be a string")
 		assert.Equal(t, "test_username", sub, "Expected test_username sub")
@@ -361,7 +362,7 @@ func TestRequestUploadUrlWithSampleUpdate(t *testing.T) {
 		UpdateUUID string `json:"updateUUID"`
 	}
 	require.NoError(t, json.NewDecoder(wMark.Body).Decode(&markResponse))
-	metadata, err := update.GetMetadata(*lastUpdate)
+	metadata, err := update.GetMetadata(context.Background(), *lastUpdate)
 	require.NoError(t, err)
 	assert.Equal(t, crypto.ConvertSHA256HashToUUID(metadata.ID), markResponse.UpdateUUID)
 }

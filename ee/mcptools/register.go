@@ -16,7 +16,7 @@ import (
 )
 
 // identityUpdateHealth is what the device registry answers per update; aliased
-// so the health tool does not repeat the store's package path.
+// so the health tool does not repeat the repository's package path.
 type identityUpdateHealth = identity.UpdateHealth
 
 // Deps carries what the enterprise tools need from the composition root;

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"testing"
 	"xprem/internal/auditlog"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +25,7 @@ func (f *fakeAuditRecorder) Record(_ context.Context, event auditlog.Event) {
 func TestRequirePermissionRecordsDenials(t *testing.T) {
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermBranchCreate}}}
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	service := withLookup(licensedService(repo), lookup)
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
@@ -63,7 +63,7 @@ func TestRequirePermissionCommunityFallbackRecordsNothing(t *testing.T) {
 	// Without a license the refusal is the community admin-only gate, not an
 	// enterprise denial.
 	repo := newFakeRepo()
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	service := withLookup(unlicensedService(repo), lookup)
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)
@@ -75,7 +75,7 @@ func TestRequirePermissionCommunityFallbackRecordsNothing(t *testing.T) {
 
 func TestRequireAppVisibleRecordsDenials(t *testing.T) {
 	repo := newFakeRepo()
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	service := withLookup(licensedService(repo), lookup)
 	recorder := &fakeAuditRecorder{}
 	service.SetOnAuditEvent(recorder.Record)

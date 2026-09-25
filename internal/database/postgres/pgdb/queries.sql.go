@@ -499,7 +499,7 @@ type DeleteBranchByNameParams struct {
 
 // NOT protected: a protected branch cannot be deleted by anyone, admins
 // included, and lifting the protection is the explicit step. The guard runs
-// inside the DELETE itself so a concurrent protect cannot race it; the store
+// inside the DELETE itself so a concurrent protect cannot race it; the repository
 // disambiguates the 0-rows result into protected vs not-found.
 func (q *Queries) DeleteBranchByName(ctx context.Context, arg DeleteBranchByNameParams) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, deleteBranchByName, arg.Name, arg.AppID)
@@ -626,7 +626,7 @@ WHERE id = $1
 `
 
 // The FK from user_app_grants is ON DELETE RESTRICT: deleting a role that is
-// still assigned fails with a foreign-key violation the store maps to a
+// still assigned fails with a foreign-key violation the repository maps to a
 // friendly "role in use" error.
 func (q *Queries) DeleteRole(ctx context.Context, id pgtype.UUID) (pgconn.CommandTag, error) {
 	return q.db.Exec(ctx, deleteRole, id)

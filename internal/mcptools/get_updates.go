@@ -5,7 +5,7 @@ import (
 	"errors"
 	"log"
 	"time"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"xprem/internal/types"
 
@@ -97,7 +97,7 @@ func getUpdatesHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallToo
 
 		updates, err := deps.UpdateFeed.GetUpdateFeed(ctx, input.AppId, query)
 		if err != nil {
-			if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+			if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 				return nil, GetUpdatesOutput{}, errors.New("the update feed requires the control plane; this deployment runs in stateless mode")
 			}
 			log.Printf("mcp get_updates failed for app %s: %v", input.AppId, err)

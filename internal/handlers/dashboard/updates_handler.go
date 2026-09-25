@@ -12,8 +12,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -190,7 +190,7 @@ func renderPublishError(w http.ResponseWriter, err error, fallbackDetail string)
 		handlers.RenderError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+	if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 		handlers.RenderError(w, http.StatusBadRequest, "Publish groups require the database control plane. Republish the update by id instead.")
 		return
 	}
@@ -208,7 +208,7 @@ func renderPublishError(w http.ResponseWriter, err error, fallbackDetail string)
 }
 
 // validateBranchAndRuntime rejects the two path segments before they reach the
-// stores. Both end up as bucket path segments in stateless mode, so this is the
+// repositories. Both end up as bucket path segments in stateless mode, so this is the
 // same gate the read routes get through UpdateService.
 func validateBranchAndRuntime(w http.ResponseWriter, branchName string, runtimeVersion string) bool {
 	if err := validation.Name("branchName", branchName); err != nil {
@@ -382,7 +382,7 @@ func (h *UpdateHandler) GetPublishGroupsHandler(w http.ResponseWriter, r *http.R
 
 	page, err := h.updateService.GetPublishGroupsPage(r.Context(), appID, runtimeVersion, branchName, cursor, limit)
 	if err != nil {
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusNotFound, "Publish groups are not supported in stateless mode")
 			return
 		}

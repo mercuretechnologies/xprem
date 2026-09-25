@@ -55,7 +55,7 @@ type recordedRuntimeSignal struct {
 }
 
 type recordingMutator struct {
-	identity.Store
+	identity.Repository
 	sets         []map[string]any
 	unsets       [][]string
 	failures     []recordedFailure
@@ -505,7 +505,7 @@ func TestIngestEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM apps WHERE id = $1", appID) })
 
-	identityStore := identity.NewPostgresIdentityStore(&database.Engine{Queries: pgdb.New(pool), DB: pool})
+	identityStore := identity.NewPostgresIdentityRepository(&database.Engine{Queries: pgdb.New(pool), DB: pool})
 	for _, spec := range []identity.KeySpec{
 		{Key: "userId", Type: identity.ValueTypeString},
 		{Key: "seats", Type: identity.ValueTypeNumber},

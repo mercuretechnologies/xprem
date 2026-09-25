@@ -8,38 +8,38 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 )
 
 type fakeClientRepo struct {
-	inserted []store.InsertOAuthClientParameters
+	inserted []repository.InsertOAuthClientParameters
 }
 
-func (f *fakeClientRepo) InsertOAuthClient(_ context.Context, params store.InsertOAuthClientParameters) error {
+func (f *fakeClientRepo) InsertOAuthClient(_ context.Context, params repository.InsertOAuthClientParameters) error {
 	f.inserted = append(f.inserted, params)
 	return nil
 }
 
-func (f *fakeClientRepo) GetOAuthClient(_ context.Context, id string) (store.OAuthClient, error) {
+func (f *fakeClientRepo) GetOAuthClient(_ context.Context, id string) (repository.OAuthClient, error) {
 	for _, params := range f.inserted {
 		if params.ID == id {
-			return store.OAuthClient{Id: params.ID, Name: params.Name, RedirectURIs: params.RedirectURIs}, nil
+			return repository.OAuthClient{Id: params.ID, Name: params.Name, RedirectURIs: params.RedirectURIs}, nil
 		}
 	}
-	return store.OAuthClient{}, &store.ErrResourceNotFound{Resource: "oauth client", Identifier: id}
+	return repository.OAuthClient{}, &repository.ErrResourceNotFound{Resource: "oauth client", Identifier: id}
 }
 
 type fakeCodeRepo struct {
-	inserted []store.InsertOAuthAuthorizationCodeParameters
+	inserted []repository.InsertOAuthAuthorizationCodeParameters
 	consumed map[string]bool
 }
 
-func (f *fakeCodeRepo) InsertOAuthAuthorizationCode(_ context.Context, params store.InsertOAuthAuthorizationCodeParameters) error {
+func (f *fakeCodeRepo) InsertOAuthAuthorizationCode(_ context.Context, params repository.InsertOAuthAuthorizationCodeParameters) error {
 	f.inserted = append(f.inserted, params)
 	return nil
 }
 
-func (f *fakeCodeRepo) ConsumeOAuthAuthorizationCode(_ context.Context, id string) (store.OAuthAuthorizationCode, error) {
+func (f *fakeCodeRepo) ConsumeOAuthAuthorizationCode(_ context.Context, id string) (repository.OAuthAuthorizationCode, error) {
 	for i, params := range f.inserted {
 		if params.ID != id {
 			continue
@@ -51,7 +51,7 @@ func (f *fakeCodeRepo) ConsumeOAuthAuthorizationCode(_ context.Context, id strin
 			f.consumed = map[string]bool{}
 		}
 		f.consumed[id] = true
-		return store.OAuthAuthorizationCode{
+		return repository.OAuthAuthorizationCode{
 			ID:            params.ID,
 			ClientID:      params.ClientID,
 			UserID:        params.UserID,
@@ -61,7 +61,7 @@ func (f *fakeCodeRepo) ConsumeOAuthAuthorizationCode(_ context.Context, id strin
 			ExpiresAt:     f.inserted[i].ExpiresAt,
 		}, nil
 	}
-	return store.OAuthAuthorizationCode{}, &store.ErrResourceNotFound{Resource: "oauth authorization code", Identifier: id}
+	return repository.OAuthAuthorizationCode{}, &repository.ErrResourceNotFound{Resource: "oauth authorization code", Identifier: id}
 }
 
 func (f *fakeCodeRepo) DeleteExpiredOAuthAuthorizationCodes(_ context.Context) error {

@@ -121,7 +121,7 @@ LIMIT 1;
 -- name: DeleteBranchByName :execresult
 -- NOT protected: a protected branch cannot be deleted by anyone, admins
 -- included, and lifting the protection is the explicit step. The guard runs
--- inside the DELETE itself so a concurrent protect cannot race it; the store
+-- inside the DELETE itself so a concurrent protect cannot race it; the repository
 -- disambiguates the 0-rows result into protected vs not-found.
 DELETE FROM branches
 WHERE name = $1 AND app_id = $2 AND NOT protected;
@@ -1240,7 +1240,7 @@ WHERE id = $1;
 
 -- name: DeleteRole :execresult
 -- The FK from user_app_grants is ON DELETE RESTRICT: deleting a role that is
--- still assigned fails with a foreign-key violation the store maps to a
+-- still assigned fails with a foreign-key violation the repository maps to a
 -- friendly "role in use" error.
 DELETE FROM roles
 WHERE id = $1;

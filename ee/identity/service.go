@@ -58,9 +58,9 @@ const (
 	FailureTypeRuntime FailureType = "runtime_issue"
 )
 
-// Store is the full data surface the service needs: the ingest write path plus the
+// Repository is the full data surface the service needs: the ingest write path plus the
 // dashboard read/CRUD queries.
-type Store interface {
+type Repository interface {
 	IdentityMutator
 	GetSchema(ctx context.Context, appID string) (Schema, error)
 	UpsertSchemaKey(ctx context.Context, appID string, spec KeySpec) (KeySpec, error)
@@ -75,13 +75,13 @@ type Store interface {
 // Service owns the store. The ingest route calls Apply; the dashboard
 // handler calls the read/CRUD methods below.
 type Service struct {
-	store Store
+	store Repository
 	// licenseValid is a field, not a direct call, so tests can pin it without a signed key.
 	licenseValid func() bool
 }
 
 // NewService builds the identity service.
-func NewService(store Store) *Service {
+func NewService(store Repository) *Service {
 	return &Service{store: store, licenseValid: licensing.IsEnterprise}
 }
 

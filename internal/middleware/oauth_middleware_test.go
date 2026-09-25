@@ -10,24 +10,24 @@ import (
 	"time"
 	"xprem/internal/crypto"
 	"xprem/internal/oauth"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 type fakeOAuthUserRepo struct {
-	user store.User
+	user repository.User
 	err  error
 }
 
-func (f *fakeOAuthUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (f *fakeOAuthUserRepo) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	if f.err != nil {
-		return store.User{}, f.err
+		return repository.User{}, f.err
 	}
 	if f.user.Id != id {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return f.user, nil
 }
@@ -66,8 +66,8 @@ func doMCPRequest(handler http.Handler, token string) *httptest.ResponseRecorder
 	return res
 }
 
-func enabledUser() store.User {
-	return store.User{Id: "user-1", Email: "a@b.c", IsAdmin: false, Enabled: true, SessionVersion: 3}
+func enabledUser() repository.User {
+	return repository.User{Id: "user-1", Email: "a@b.c", IsAdmin: false, Enabled: true, SessionVersion: 3}
 }
 
 func TestOAuthMiddlewareMissingToken(t *testing.T) {

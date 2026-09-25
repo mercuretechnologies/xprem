@@ -28,26 +28,30 @@ var (
 	patchTestPatch  = []byte("bsdiff patch")
 )
 
-// fakePatchBucket holds one blob and the patches keyed by their object key.
-type fakePatchBucket struct {
-	fakeRolloutBucket
+// fakePatchBlobStore serves the one bundle every patch test starts from.
+type fakePatchBlobStore struct{ fakeBlobStore }
+
+func (fakePatchBlobStore) Get(context.Context, string, string) (*types.BucketFile, error) {
+	return &types.BucketFile{Reader: io.NopCloser(bytes.NewReader(patchTestBundle))}, nil
+}
+
+// recordingPatchStore holds the patches keyed by their object key and counts the
+// reads the protocol makes.
+type recordingPatchStore struct {
+	fakePatchStore
 	patches     map[string][]byte
 	existsCalls int
 	readCalls   int
 	readErr     error
 }
 
-func (b *fakePatchBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
-	return &types.BucketFile{Reader: io.NopCloser(bytes.NewReader(patchTestBundle))}, nil
-}
-
-func (b *fakePatchBucket) BSDiffExists(_ context.Context, appId, branch, target, source string) (bool, error) {
+func (b *recordingPatchStore) Exists(_ context.Context, appId, branch, target, source string) (bool, error) {
 	b.existsCalls++
 	_, ok := b.patches[bucket.BSDiffObjectKey(appId, branch, target, source)]
 	return ok, nil
 }
 
-func (b *fakePatchBucket) GetBSDiff(_ context.Context, appId, branch, target, source string) (*types.BucketFile, error) {
+func (b *recordingPatchStore) Get(_ context.Context, appId, branch, target, source string) (*types.BucketFile, error) {
 	b.readCalls++
 	if b.readErr != nil {
 		return nil, b.readErr
@@ -62,7 +66,7 @@ func (b *fakePatchBucket) GetBSDiff(_ context.Context, appId, branch, target, so
 // patchHarness seeds two checked updates on main plus one on another branch,
 // with a patch stored from the first main update to the second, and maps the
 // production channel to main.
-func patchHarness(t *testing.T) (*rolloutTestHarness, *ExpoProtocolService, *fakePatchBucket) {
+func patchHarness(t *testing.T) (*rolloutTestHarness, *ExpoProtocolService, *recordingPatchStore) {
 	t.Helper()
 	t.Setenv("DB_URL", "postgres://bsdiff-protocol-tests")
 	t.Setenv("BUNDLE_DIFFING", "true")
@@ -78,11 +82,11 @@ func patchHarness(t *testing.T) (*rolloutTestHarness, *ExpoProtocolService, *fak
 	h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 100, checked: true, uuid: patchTestCurrentUUID})
 	h.seed(seedRow{branch: "main", rtv: "1", platform: "ios", id: 200, checked: true, uuid: patchTestRequestedUUID})
 	h.seed(seedRow{branch: "internal", rtv: "1", platform: "ios", id: 300, checked: true, uuid: patchTestOtherUUID})
-	patchBucket := &fakePatchBucket{patches: map[string][]byte{
+	patchStore := &recordingPatchStore{patches: map[string][]byte{
 		bucket.BSDiffObjectKey(h.appId, "main", patchTestRequestedUUID, patchTestCurrentUUID): patchTestPatch,
 	}}
-	service := NewExpoProtocolService(fakeAppRepo{}, h.channelRepo, h.updateRepo, h.updateService, DefaultBranchRules(), patchBucket)
-	return h, service, patchBucket
+	service := NewExpoProtocolService(fakeAppRepo{}, h.channelRepo, h.updateRepo, h.updateService, DefaultBranchRules(), fakePatchBlobStore{}, patchStore)
+	return h, service, patchStore
 }
 
 // withGenericCDN points the resolved CDN at a base URL, the way an S3 bucket
@@ -151,7 +155,7 @@ func TestResolveAssetServesTheStoredPatch(t *testing.T) {
 func TestResolveAssetPatchRedirectsToTheCDN(t *testing.T) {
 	for _, keyPrefix := range []string{"", "prefix/"} {
 		t.Run("key prefix "+keyPrefix, func(t *testing.T) {
-			h, service, patchBucket := patchHarness(t)
+			h, service, patchStore := patchHarness(t)
 			t.Setenv("BUNDLE_DIFFING_CDN_REDIRECT", "true")
 			withGenericCDN(t, keyPrefix)
 
@@ -160,14 +164,14 @@ func TestResolveAssetPatchRedirectsToTheCDN(t *testing.T) {
 
 			assert.Equal(t, "https://cdn.example.com/"+keyPrefix+h.appId+"/bsdiff/main/"+patchTestRequestedUUID+"/"+patchTestCurrentUUID, result.RedirectToURL)
 			assert.Empty(t, result.Body)
-			assert.Equal(t, 0, patchBucket.readCalls, "a redirect must not read the patch")
-			assert.Equal(t, 1, patchBucket.existsCalls, "a redirect to a missing object would fail the download")
+			assert.Equal(t, 0, patchStore.readCalls, "a redirect must not read the patch")
+			assert.Equal(t, 1, patchStore.existsCalls, "a redirect to a missing object would fail the download")
 		})
 	}
 }
 
 func TestResolveAssetPatchStaysOnTheServerWhenCDNRedirectionIsPrevented(t *testing.T) {
-	h, service, patchBucket := patchHarness(t)
+	h, service, patchStore := patchHarness(t)
 	t.Setenv("BUNDLE_DIFFING_CDN_REDIRECT", "true")
 	withGenericCDN(t, "")
 	params := patchParams(h)
@@ -177,7 +181,7 @@ func TestResolveAssetPatchStaysOnTheServerWhenCDNRedirectionIsPrevented(t *testi
 	require.NoError(t, err)
 
 	assertPatchResult(t, result)
-	assert.Equal(t, 1, patchBucket.readCalls)
+	assert.Equal(t, 1, patchStore.readCalls)
 }
 
 func TestResolveAssetPatchStaysOnTheServerWhenRedirectIsOff(t *testing.T) {
@@ -215,8 +219,8 @@ func TestResolveAssetPatchServesDirectlyWhenTheCDNCannotRedirect(t *testing.T) {
 }
 
 func TestResolveAssetPatchReadErrorFallsBackToTheFullBundle(t *testing.T) {
-	h, service, patchBucket := patchHarness(t)
-	patchBucket.readErr = errors.New("bucket down")
+	h, service, patchStore := patchHarness(t)
+	patchStore.readErr = errors.New("bucket down")
 
 	result, err := service.ResolveAsset(context.Background(), patchParams(h))
 	require.NoError(t, err)
@@ -224,7 +228,7 @@ func TestResolveAssetPatchReadErrorFallsBackToTheFullBundle(t *testing.T) {
 }
 
 func TestResolveAssetCachesThePatchLookup(t *testing.T) {
-	h, service, patchBucket := patchHarness(t)
+	h, service, patchStore := patchHarness(t)
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -232,8 +236,8 @@ func TestResolveAssetCachesThePatchLookup(t *testing.T) {
 		require.NoError(t, err)
 		assertPatchResult(t, result)
 	}
-	assert.Equal(t, 1, patchBucket.existsCalls)
-	assert.Equal(t, 3, patchBucket.readCalls, "the patch body itself is not cached")
+	assert.Equal(t, 1, patchStore.existsCalls)
+	assert.Equal(t, 3, patchStore.readCalls, "the patch body itself is not cached")
 	assert.Equal(t, 2, h.updateRepo.uuidLookups(), "current and requested updates are each read once")
 
 	// A missing patch is remembered too: storing it afterwards does not
@@ -243,11 +247,11 @@ func TestResolveAssetCachesThePatchLookup(t *testing.T) {
 	result, err := service.ResolveAsset(ctx, params)
 	require.NoError(t, err)
 	assertFullBundleResult(t, result)
-	patchBucket.patches[bucket.BSDiffObjectKey(h.appId, "main", patchTestCurrentUUID, patchTestRequestedUUID)] = patchTestPatch
+	patchStore.patches[bucket.BSDiffObjectKey(h.appId, "main", patchTestCurrentUUID, patchTestRequestedUUID)] = patchTestPatch
 	result, err = service.ResolveAsset(ctx, params)
 	require.NoError(t, err)
 	assertFullBundleResult(t, result)
-	assert.Equal(t, 2, patchBucket.existsCalls)
+	assert.Equal(t, 2, patchStore.existsCalls)
 }
 
 func TestResolveAssetFallsBackToTheFullBundle(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 )
 
 const embeddedUpdateID = "00000000-0000-0000-0000-000000000000"
@@ -200,7 +200,7 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 	if len(filters) == 0 {
 		return ctx, false, nil
 	}
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return ctx, false, err
 	}
@@ -259,13 +259,13 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 	if len(query.UpdateGroupIDs) == 0 {
 		return query, false, nil
 	}
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return query, false, err
 	}
 	members := make([]string, 0, 2*len(query.UpdateGroupIDs))
 	for _, group := range query.UpdateGroupIDs {
-		groupUUID, err := store.ParsePgUUID(group)
+		groupUUID, err := repository.ParsePgUUID(group)
 		if err != nil {
 			return query, false, err
 		}

@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 )
 
 // CheckInQuery narrows a check-in read; unlike ExplorerQuery it carries no telemetry dimensions.
@@ -54,19 +54,19 @@ func (e *Explorer) locationParams(
 	activeSince time.Time,
 	query ExplorerQuery,
 ) (pgdb.ListObserveLocationsParams, error) {
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return pgdb.ListObserveLocationsParams{}, err
 	}
-	clientIDs, err := store.ParsePgUUIDs(query.EASClientIDs)
+	clientIDs, err := repository.ParsePgUUIDs(query.EASClientIDs)
 	if err != nil {
 		return pgdb.ListObserveLocationsParams{}, err
 	}
-	updateIDs, err := store.ParsePgUUIDs(query.UpdateIDs)
+	updateIDs, err := repository.ParsePgUUIDs(query.UpdateIDs)
 	if err != nil {
 		return pgdb.ListObserveLocationsParams{}, err
 	}
-	publishGroups, err := store.ParsePgUUIDs(query.UpdateGroupIDs)
+	publishGroups, err := repository.ParsePgUUIDs(query.UpdateGroupIDs)
 	if err != nil {
 		return pgdb.ListObserveLocationsParams{}, err
 	}
@@ -166,19 +166,19 @@ func (e *Explorer) ReadCheckIns(ctx context.Context, appID string, query CheckIn
 }
 
 func (e *Explorer) activeUsers(ctx context.Context, appID string, query ExplorerQuery) (uint64, error) {
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return 0, err
 	}
-	clientIDs, err := store.ParsePgUUIDs(query.EASClientIDs)
+	clientIDs, err := repository.ParsePgUUIDs(query.EASClientIDs)
 	if err != nil {
 		return 0, err
 	}
-	updateIDs, err := store.ParsePgUUIDs(query.UpdateIDs)
+	updateIDs, err := repository.ParsePgUUIDs(query.UpdateIDs)
 	if err != nil {
 		return 0, err
 	}
-	publishGroups, err := store.ParsePgUUIDs(query.UpdateGroupIDs)
+	publishGroups, err := repository.ParsePgUUIDs(query.UpdateGroupIDs)
 	if err != nil {
 		return 0, err
 	}

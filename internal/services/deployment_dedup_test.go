@@ -22,19 +22,21 @@ func newDedupTestHarness(t *testing.T) (*DeploymentService, *rolloutTestHarness)
 	t.Cleanup(bucket.ResetBucketInstance)
 
 	h := newRolloutTestHarness(t)
+	b := bucket.GetBucket()
 	svc := NewDeploymentService(
-		NewBranchService(fakeBranchRepo{}, h.channelRepo, h.updateRepo, h.rolloutRepo, fakeRolloutBucket{}),
+		NewBranchService(fakeBranchRepo{}, h.channelRepo, h.updateRepo, h.rolloutRepo, fakeUpdateStore{}, fakePatchStore{}),
 		h.updateService,
 		h.updateRepo,
-		bucket.GetBucket(),
-		NewBSDiffService(bucket.GetBucket(), nil, h.updateService, h.updateRepo, nil),
+		b.BlobStore,
+		b.UpdateStore,
+		NewBSDiffService(b.BlobStore, b.PatchStore, nil, h.updateService, h.updateRepo, nil),
 	)
 	return svc, h
 }
 
 func storeBlob(t *testing.T, appId string, file FileUploadItem) {
 	t.Helper()
-	require.NoError(t, bucket.GetBucket().PutBlob(context.Background(), appId, file.Hash, strings.NewReader(file.Path)))
+	require.NoError(t, bucket.GetBucket().BlobStore.Put(context.Background(), appId, file.Hash, strings.NewReader(file.Path)))
 }
 
 func requestedFilePaths(resp *RequestUploadURLResponse) []string {

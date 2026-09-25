@@ -10,15 +10,15 @@ import (
 	"net/http"
 	"xprem/internal/auditlog"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )
 
 // UserLookup resolves a user id to its row; nil in stateless mode.
 type UserLookup interface {
-	GetUserByID(ctx context.Context, id string) (store.User, error)
+	GetUserByID(ctx context.Context, id string) (repository.User, error)
 }
 
 // resolveSubject reads the dashboard account the auth middleware resolved. On

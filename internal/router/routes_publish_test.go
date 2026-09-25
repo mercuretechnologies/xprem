@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"xprem/internal/objectstore"
 
 	"xprem/ee/apikeyrestrictions"
 	"xprem/internal/bucket"
@@ -222,8 +223,8 @@ func mintUploadToken(t *testing.T, appId, branch string) string {
 	// The root the validation confines the path claim to: GetBucket() builds the
 	// local bucket from this env, so minting anywhere else is not "the way the
 	// local bucket does".
-	local := &bucket.LocalBucket{BasePath: os.Getenv("LOCAL_BUCKET_BASE_PATH")}
-	upload, err := local.RequestUploadUrlForFileUpdate(appId, branch, "1.0.0", "1", "bundle.js")
+	local := bucket.Open(objectstore.ModeLocal, os.Getenv("LOCAL_BUCKET_BASE_PATH"), "")
+	upload, err := local.UpdateStore.PresignPut(context.Background(), appId, branch, "1.0.0", "1", "bundle.js")
 	if err != nil {
 		t.Fatalf("could not mint an upload token: %v", err)
 	}

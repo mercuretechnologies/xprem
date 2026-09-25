@@ -9,8 +9,8 @@ import (
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
 	"xprem/internal/providers/expo"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/validation"
 
 	"github.com/gorilla/mux"
@@ -48,7 +48,7 @@ func (h *BranchHandler) CreateBranchHandler(w http.ResponseWriter, r *http.Reque
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
@@ -77,19 +77,19 @@ func (h *BranchHandler) DeleteBranchHandler(w http.ResponseWriter, r *http.Reque
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if branchErr := (*store.ErrBranchHasActiveChannels)(nil); errors.As(err, &branchErr) {
+		if branchErr := (*repository.ErrBranchHasActiveChannels)(nil); errors.As(err, &branchErr) {
 			handlers.RenderError(w, http.StatusConflict, branchErr.Error())
 			return
 		}
-		if protectedErr := (*store.ErrBranchProtected)(nil); errors.As(err, &protectedErr) {
+		if protectedErr := (*repository.ErrBranchProtected)(nil); errors.As(err, &protectedErr) {
 			handlers.RenderError(w, http.StatusConflict, protectedErr.Error())
 			return
 		}
-		if rolloutErr := (*store.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
+		if rolloutErr := (*repository.ErrBranchInActiveRollout)(nil); errors.As(err, &rolloutErr) {
 			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
 			return
 		}
@@ -198,11 +198,11 @@ func (h *BranchHandler) UpdateChannelBranchMappingHandler(w http.ResponseWriter,
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if rolloutErr := (*store.ErrChannelHasActiveRollout)(nil); errors.As(err, &rolloutErr) {
+		if rolloutErr := (*repository.ErrChannelHasActiveRollout)(nil); errors.As(err, &rolloutErr) {
 			handlers.RenderError(w, http.StatusConflict, rolloutErr.Error())
 			return
 		}

@@ -1,6 +1,6 @@
 // Service-level tests for publish-group-wide operations: the fan-out of one
 // group rollback or republish into per-platform rows sharing a fresh
-// server-minted group. SQL persistence is covered by the store integration
+// server-minted group. SQL persistence is covered by the repository integration
 // tests; here the fake repo exercises the orchestration.
 package services
 

@@ -15,7 +15,7 @@ import (
 
 // fakeMutator records the exact call the service dispatched, geo included.
 type fakeMutator struct {
-	Store
+	Repository
 	calledOp Op
 	raw      map[string]any
 	keys     []string

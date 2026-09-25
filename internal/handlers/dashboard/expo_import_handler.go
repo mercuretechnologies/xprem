@@ -11,7 +11,7 @@ import (
 	"xprem/internal/handlers"
 	"xprem/internal/helpers"
 	"xprem/internal/providers/expo"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/validation"
 
 	"github.com/gorilla/mux"
@@ -37,11 +37,11 @@ func renderExpoImportError(w http.ResponseWriter, err error) {
 		handlers.RenderError(w, expoErr.StatusHint, expoErr.Message)
 		return
 	}
-	if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+	if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 		handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 		return
 	}
-	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+	if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 		handlers.RenderError(w, http.StatusBadRequest, "Importing apps requires the control plane (set DB_URL).")
 		return
 	}

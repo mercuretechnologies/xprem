@@ -15,7 +15,7 @@ import (
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/helpers"
 	"xprem/internal/keyStore"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 
@@ -149,9 +149,9 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 
 	err = dbEngine.WithTx(ctx, func(qtx *pgdb.Queries) error {
 		resolvedBucket := bucket.GetBucket()
-		branchStore := store.NewBucketBranchStore(resolvedBucket)
-		channelStore := store.NewBucketChannelStore(resolvedBucket)
-		updateStore := store.NewBucketUpdateStore(resolvedBucket)
+		branchRepository := repository.NewBucketBranchRepository(resolvedBucket.UpdateStore)
+		channelRepository := repository.NewBucketChannelRepository()
+		updateRepository := repository.NewBucketUpdateRepository(resolvedBucket.UpdateStore)
 
 		for _, app := range apps {
 			// The apps table keys on a UUID, which only the control plane mints.
@@ -172,7 +172,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 			app.Id = parsedAppId.String()
 
 			params := pgdb.MigrateLegacyAppParams{
-				ID:                 store.ToPgUUID(app.Id),
+				ID:                 repository.ToPgUUID(app.Id),
 				Name:               app.Name,
 				KeysMode:           helpers.StringOrNil(string(app.Keys.Mode)),
 				SealedPublicKey:    helpers.StringOrNil(string(app.Keys.SealedPublicKey)),
@@ -194,7 +194,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 			}
 
 			// Fetch branches for the app
-			branches, err := branchStore.GetBranches(ctx, app.Id)
+			branches, err := branchRepository.GetBranches(ctx, app.Id)
 			if err != nil {
 				log.Printf("Error fetching branches for app '%s': %v", app.Id, err)
 				return err
@@ -205,7 +205,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 
 			for _, branch := range branches {
 				branchId, err := qtx.MigrateLegacyBranch(ctx, pgdb.MigrateLegacyBranchParams{
-					AppID: store.ToPgUUID(app.Id),
+					AppID: repository.ToPgUUID(app.Id),
 					Name:  branch.BranchName,
 				})
 				if err != nil {
@@ -216,7 +216,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 				branchNameToBranchId[branch.BranchName] = branchId
 
 				// Fetch runtime versions associated *specifically* with this branch context
-				runtimeVersionsForBranch, err := branchStore.GetRuntimeVersionsWithUpdateStats(ctx, app.Id, branch.BranchName)
+				runtimeVersionsForBranch, err := branchRepository.GetRuntimeVersionsWithUpdateStats(ctx, app.Id, branch.BranchName)
 				if err != nil {
 					log.Printf("Error fetching runtime versions for branch '%s' of app '%s': %v", branch.BranchName, app.Id, err)
 					return err
@@ -225,7 +225,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 				for _, rv := range runtimeVersionsForBranch {
 					if !insertedRuntimeVersions[rv.RuntimeVersion] {
 						rvParams := pgdb.MigrateLegacyRuntimeVersionParams{
-							AppID:     store.ToPgUUID(app.Id),
+							AppID:     repository.ToPgUUID(app.Id),
 							Version:   rv.RuntimeVersion,
 							CreatedAt: parseRFC3339ToTz(rv.CreatedAt, "createdAt"),
 							UpdatedAt: parseRFC3339ToTz(rv.LastUpdatedAt, "updatedAt"),
@@ -240,7 +240,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 					updatesForRV := make([]types.UpdateItem, 0)
 					var cursor *int64
 					for {
-						page, err := updateStore.GetUpdatesByRunTimeVersionAndBranchName(ctx, app.Id, rv.RuntimeVersion, branch.BranchName, cursor, 100)
+						page, err := updateRepository.GetUpdatesByRunTimeVersionAndBranchName(ctx, app.Id, rv.RuntimeVersion, branch.BranchName, cursor, 100)
 						if err != nil {
 							log.Printf("Error fetching updates for runtime version '%s' and branch '%s' of app '%s': %v", rv.RuntimeVersion, branch.BranchName, app.Id, err)
 							return err
@@ -262,7 +262,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 							log.Printf("Malformed update ID '%s': %v", update.UpdateId, err)
 							return err
 						}
-						updateType, err := updateStore.GetUpdateType(ctx, types.Update{
+						updateType, err := updateRepository.GetUpdateType(ctx, types.Update{
 							AppId:          app.Id,
 							Branch:         branch.BranchName,
 							RuntimeVersion: rv.RuntimeVersion,
@@ -279,7 +279,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 							messagePtr = &localMsg
 						}
 
-						checkedAtTime := update2.GetUpdateCheckStatus(types.Update{
+						checkedAtTime := update2.GetUpdateCheckStatus(ctx, types.Update{
 							AppId:          app.Id,
 							Branch:         branch.BranchName,
 							RuntimeVersion: rv.RuntimeVersion,
@@ -288,7 +288,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 
 						updateParams := pgdb.MigrateLegacyUpdateParams{
 							ID:         updateIdInt,
-							AppID:      store.ToPgUUID(app.Id),
+							AppID:      repository.ToPgUUID(app.Id),
 							Name:       branch.BranchName,
 							Version:    rv.RuntimeVersion,
 							UpdateType: int32(updateType),
@@ -296,7 +296,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 							CommitHash: update.CommitHash,
 							Message:    messagePtr,
 							CheckedAt:  toTimestamptz(checkedAtTime),
-							UpdateUuid: store.ToPgUUID(update.UpdateUUID),
+							UpdateUuid: repository.ToPgUUID(update.UpdateUUID),
 							CreatedAt:  parseRFC3339ToTz(update.CreatedAt, "createdAt"),
 						}
 
@@ -308,7 +308,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 				}
 			}
 
-			channels, err := channelStore.GetChannels(ctx, app.Id)
+			channels, err := channelRepository.GetChannels(ctx, app.Id)
 			if err != nil {
 				log.Printf("Error fetching channels for app '%s': %v", app.Id, err)
 				return err
@@ -316,7 +316,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 
 			for _, channel := range channels {
 				// Resolve via the channel's own branch, not a branch->channel map:
-				// BucketBranchStore.GetBranches keeps only the first channel of
+				// BucketBranchRepository.GetBranches keeps only the first channel of
 				// each branch, so every further channel sharing that branch would
 				// migrate with a NULL branch_id and silently stop serving updates.
 				var branchIDPtr *int64
@@ -328,7 +328,7 @@ func UpMigrateEnvJSON(ctx context.Context, tx *sql.Tx) error {
 				}
 
 				channelParams := pgdb.MigrateLegacyChannelParams{
-					AppID:    store.ToPgUUID(app.Id),
+					AppID:    repository.ToPgUUID(app.Id),
 					Name:     channel.ReleaseChannelName,
 					BranchID: branchIDPtr,
 				}

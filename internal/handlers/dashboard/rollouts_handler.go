@@ -8,8 +8,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
@@ -46,11 +46,11 @@ func renderRolloutError(w http.ResponseWriter, err error, fallbackDetail string)
 		handlers.RenderError(w, reqErr.Status, reqErr.Message)
 		return
 	}
-	if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+	if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 		handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 		return
 	}
-	if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+	if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 		handlers.RenderError(w, http.StatusConflict, "A rollout is already active on this channel. Promote or revert it before starting a new one.")
 		return
 	}

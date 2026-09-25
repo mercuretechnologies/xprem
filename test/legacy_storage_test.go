@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -103,11 +104,11 @@ func TestLegacyFolderStorageStillServed(t *testing.T) {
 	}
 	runBothAssetHandlers := func(t *testing.T, request assets.AssetsRequest, wantStatus int, wantBody string) {
 		t.Helper()
-		fileResponse, err := assets.HandleAssetsWithFile(request)
+		fileResponse, err := assets.HandleAssetsWithFile(context.Background(), request)
 		assert.Nil(t, err)
 		assert.Equal(t, wantStatus, fileResponse.StatusCode)
 		assert.Equal(t, wantBody, string(fileResponse.Body))
-		urlResponse, err := assets.HandleAssetsWithURL(request, &cdn.GenericCDN{})
+		urlResponse, err := assets.HandleAssetsWithURL(context.Background(), request, &cdn.GenericCDN{})
 		assert.Nil(t, err)
 		assert.Equal(t, wantStatus, urlResponse.StatusCode)
 		assert.Empty(t, urlResponse.URL)
@@ -155,7 +156,7 @@ func TestLegacyFolderStorageStillServed(t *testing.T) {
 	t.Run("CDN URL keeps the folder layout", func(t *testing.T) {
 		os.Setenv("CDN_BASE_URL", "https://cdn.example.com")
 		defer os.Unsetenv("CDN_BASE_URL")
-		response, err := assets.HandleAssetsWithURL(assets.AssetsRequest{
+		response, err := assets.HandleAssetsWithURL(context.Background(), assets.AssetsRequest{
 			AppId: "test-app-id", Branch: "branch-legacy", AssetName: "bundles/android-82adadb1fb6e489d04ad95fd79670deb.js",
 			RuntimeVersion: "1", Platform: "android", RequestID: "test", Update: legacyUpdate,
 		}, &cdn.GenericCDN{})

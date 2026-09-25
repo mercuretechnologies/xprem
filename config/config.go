@@ -313,7 +313,7 @@ var DefaultEnvValues = map[string]string{
 
 	// Audit archive (ee/audit): opt-in periodic NDJSON export of the audit
 	// log to a DEDICATED bucket/container/directory (per-provider name
-	// variables, see bucket.GetAuditLogsObjectStore). Off by default:
+	// variables, see ee/audit). Off by default:
 	// writing to the operator's storage must be a choice.
 	"ARCHIVE_AUDIT_LOGS":                 "false",
 	"AUDIT_LOGS_EXPORT_INTERVAL_SECONDS": "300",

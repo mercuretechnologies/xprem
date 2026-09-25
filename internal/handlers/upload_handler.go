@@ -184,14 +184,14 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		return
 	}
 
-	filePath, tokenAppId, _, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
+	key, tokenAppId, _, err := bucket.ValidateUploadToken(token)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error validating upload token: %v", requestID, err)
 		http.Error(w, "Error validating upload token", http.StatusBadRequest)
 		return
 	}
 	// No branch check here: the router already judged the branch this token
-	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
+	// claims, and ValidateUploadToken pins the key inside it.
 
 	file, err := firstMultipartFile(r)
 	if err != nil {
@@ -206,13 +206,13 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		AppID:      appId,
 		Token:      token,
 		Body:       file,
-		FilePath:   filePath,
+		Key:        key,
 		TokenAppID: tokenAppId,
 	}
 
 	if err := h.deploymentService.RequestUploadLocalFile(r.Context(), params); err != nil {
-		if errors.Is(err, services.ErrInvalidBucketType) {
-			http.Error(w, "Invalid bucket type", http.StatusInternalServerError)
+		if errors.Is(err, services.ErrInvalidStorageMode) {
+			http.Error(w, "Invalid storage mode", http.StatusInternalServerError)
 			return
 		}
 		if errors.Is(err, services.ErrInvalidToken) {

@@ -1,0 +1,224 @@
+package repository
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+)
+
+// User is a dashboard user account. PasswordHash is only populated by the
+// lookups the auth flows need (by email, by id), never by listings, and must
+// never leave the service layer.
+type User struct {
+	Id           string
+	Email        string
+	PasswordHash string
+	IsAdmin      bool
+	// Enabled gates every sign-in path. Accounts are enabled on creation; an
+	// admin can revoke access without deleting the account, and SSO manual
+	// validation provisions new accounts disabled until an admin approves them.
+	Enabled   bool
+	CreatedAt time.Time
+	// Nil until the account's first successful sign-in.
+	LastConnectedAt *time.Time
+	// SessionVersion is the account's security generation; every dashboard JWT
+	// carries the value it was minted with, and a mismatch means the session was
+	// revoked. Only the lookups that authenticate populate it; GetUsers does not.
+	SessionVersion int32
+}
+
+type InsertUserParameters struct {
+	ID           string
+	Email        string
+	PasswordHash string
+	IsAdmin      bool
+	Enabled      bool
+}
+
+// NormalizeEmail is the single place an email is canonicalized before hitting
+// the users table. Rows are always stored in this form, which is what lets the
+// plain UNIQUE(email) constraint enforce case-insensitive uniqueness.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+type PostgresUserRepository struct {
+	engine *database.Engine
+}
+
+func NewPostgresUserRepository(engine *database.Engine) *PostgresUserRepository {
+	return &PostgresUserRepository{
+		engine: engine,
+	}
+}
+
+func (s *PostgresUserRepository) InsertUser(ctx context.Context, params InsertUserParameters) (User, error) {
+	email := NormalizeEmail(params.Email)
+	row, err := s.engine.Queries.InsertUser(ctx, pgdb.InsertUserParams{
+		ID:           ToPgUUID(params.ID),
+		Email:        email,
+		PasswordHash: params.PasswordHash,
+		IsAdmin:      params.IsAdmin,
+		Enabled:      params.Enabled,
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return User{}, &ErrResourceAlreadyExists{Resource: "user", Identifier: email}
+		}
+		return User{}, fmt.Errorf("failed to insert user into database: %w", err)
+	}
+	return User{
+		Id:        row.ID.String(),
+		Email:     row.Email,
+		IsAdmin:   row.IsAdmin,
+		Enabled:   row.Enabled,
+		CreatedAt: row.CreatedAt.Time,
+	}, nil
+}
+
+func (s *PostgresUserRepository) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	normalizedEmail := NormalizeEmail(email)
+	row, err := s.engine.Queries.GetUserByEmail(ctx, normalizedEmail)
+	if err != nil {
+		if database.IsNoRows(err) {
+			return User{}, &ErrResourceNotFound{Resource: "user", Identifier: normalizedEmail}
+		}
+		return User{}, fmt.Errorf("failed to retrieve user from database: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+func (s *PostgresUserRepository) GetUserByID(ctx context.Context, id string) (User, error) {
+	row, err := s.engine.Queries.GetUserByID(ctx, ToPgUUID(id))
+	if err != nil {
+		if database.IsNoRows(err) {
+			return User{}, &ErrResourceNotFound{Resource: "user", Identifier: id}
+		}
+		return User{}, fmt.Errorf("failed to retrieve user from database: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+func (s *PostgresUserRepository) GetUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.engine.Queries.GetUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve users from database: %w", err)
+	}
+	users := make([]User, len(rows))
+	for i, row := range rows {
+		users[i] = User{
+			Id:              row.ID.String(),
+			Email:           row.Email,
+			IsAdmin:         row.IsAdmin,
+			Enabled:         row.Enabled,
+			CreatedAt:       row.CreatedAt.Time,
+			LastConnectedAt: FromPgTimestamptz(row.LastConnectedAt),
+		}
+	}
+	return users, nil
+}
+
+func (s *PostgresUserRepository) DeleteUserByID(ctx context.Context, id string) error {
+	commandTag, err := s.engine.Queries.DeleteUserByID(ctx, ToPgUUID(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete user from database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		// The guarded query matches no row both for a missing user and for the
+		// last remaining admin, so look the row up to tell the two apart.
+		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
+			return lookupErr
+		}
+		return ErrWouldLeaveNoAdmin
+	}
+	return nil
+}
+
+func (s *PostgresUserRepository) UpdateUserPassword(ctx context.Context, id string, passwordHash string) error {
+	commandTag, err := s.engine.Queries.UpdateUserPasswordByID(ctx, pgdb.UpdateUserPasswordByIDParams{
+		ID:           ToPgUUID(id),
+		PasswordHash: passwordHash,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update user password in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "user", Identifier: id}
+	}
+	return nil
+}
+
+func (s *PostgresUserRepository) UpdateUserIsAdmin(ctx context.Context, id string, isAdmin bool) error {
+	commandTag, err := s.engine.Queries.UpdateUserIsAdminByID(ctx, pgdb.UpdateUserIsAdminByIDParams{
+		ID:      ToPgUUID(id),
+		IsAdmin: isAdmin,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update user admin flag in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		// The guarded query matches no row both for a missing user and for the
+		// last remaining admin, so look the row up to tell the two apart.
+		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
+			return lookupErr
+		}
+		return ErrWouldLeaveNoAdmin
+	}
+	return nil
+}
+
+func (s *PostgresUserRepository) UpdateUserEnabled(ctx context.Context, id string, enabled bool) error {
+	commandTag, err := s.engine.Queries.UpdateUserEnabledByID(ctx, pgdb.UpdateUserEnabledByIDParams{
+		ID:      ToPgUUID(id),
+		Enabled: enabled,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update user enabled flag in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		// The guarded query matches no row both for a missing user and for the
+		// last remaining enabled admin, so look the row up to tell the two apart.
+		if _, lookupErr := s.GetUserByID(ctx, id); lookupErr != nil {
+			return lookupErr
+		}
+		return ErrWouldLeaveNoAdmin
+	}
+	return nil
+}
+
+// BumpUserSessionVersion revokes every session the account currently holds:
+// each of its live JWTs carries the previous generation and stops validating
+// on its next use, access tokens included.
+func (s *PostgresUserRepository) BumpUserSessionVersion(ctx context.Context, id string) error {
+	commandTag, err := s.engine.Queries.BumpUserSessionVersion(ctx, ToPgUUID(id))
+	if err != nil {
+		return fmt.Errorf("failed to bump user session version in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "user", Identifier: id}
+	}
+	return nil
+}
+
+func (s *PostgresUserRepository) TouchUserLastConnected(ctx context.Context, id string) error {
+	if err := s.engine.Queries.TouchUserLastConnectedAt(ctx, ToPgUUID(id)); err != nil {
+		return fmt.Errorf("failed to touch user last connection in database: %w", err)
+	}
+	return nil
+}
+
+func userFromRow(row pgdb.User) User {
+	return User{
+		Id:              row.ID.String(),
+		Email:           row.Email,
+		PasswordHash:    row.PasswordHash,
+		IsAdmin:         row.IsAdmin,
+		Enabled:         row.Enabled,
+		CreatedAt:       row.CreatedAt.Time,
+		LastConnectedAt: FromPgTimestamptz(row.LastConnectedAt),
+		SessionVersion:  row.SessionVersion,
+	}
+}

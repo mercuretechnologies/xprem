@@ -5,7 +5,7 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/auditlog"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +19,7 @@ type fakeMgmtAppRepo struct {
 	apps map[string]config.AppConfig
 }
 
-func (f *fakeMgmtAppRepo) InsertApp(_ context.Context, params store.InsertAppParameters) (string, error) {
+func (f *fakeMgmtAppRepo) InsertApp(_ context.Context, params repository.InsertAppParameters) (string, error) {
 	f.apps[params.ID] = config.AppConfig{Id: params.ID, Name: params.Name}
 	return params.ID, nil
 }
@@ -43,7 +43,7 @@ func (f *fakeMgmtAppRepo) UpdateAppGitURLByID(_ context.Context, id string, gitU
 func (f *fakeMgmtAppRepo) GetAppByID(_ context.Context, id string) (config.AppConfig, error) {
 	app, ok := f.apps[id]
 	if !ok {
-		return config.AppConfig{}, &store.ErrResourceNotFound{Resource: "app", Identifier: id}
+		return config.AppConfig{}, &repository.ErrResourceNotFound{Resource: "app", Identifier: id}
 	}
 	return app, nil
 }
@@ -196,7 +196,7 @@ func TestChannelEventsEmitAuditEvents(t *testing.T) {
 
 func TestBranchEventsEmitAuditEvents(t *testing.T) {
 	recorder := &fakeAuditRecorder{}
-	branchService := NewBranchService(&fakeMgmtBranchRepo{}, &fakeMgmtChannelRepo{}, nil, nil, nil)
+	branchService := NewBranchService(&fakeMgmtBranchRepo{}, &fakeMgmtChannelRepo{}, nil, nil, nil, nil)
 	branchService.SetOnAuditEvent(recorder.Record)
 	ctx := adminManagementCtx()
 
@@ -223,7 +223,7 @@ func TestManagementEventsResolveCliActor(t *testing.T) {
 	// The publish paths authenticate with app-scoped API keys, not dashboard
 	// sessions: the shared actor resolution must name them honestly.
 	recorder := &fakeAuditRecorder{}
-	branchService := NewBranchService(&fakeMgmtBranchRepo{}, &fakeMgmtChannelRepo{}, nil, nil, nil)
+	branchService := NewBranchService(&fakeMgmtBranchRepo{}, &fakeMgmtChannelRepo{}, nil, nil, nil, nil)
 	branchService.SetOnAuditEvent(recorder.Record)
 
 	// A named DB-mode key resolves to its identity, like the principal email.

@@ -8,7 +8,7 @@ import (
 	"net/mail"
 	"os"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/google/uuid"
 	"github.com/pressly/goose/v3"
@@ -22,7 +22,7 @@ func init() {
 // or malformed values are the fail-fast: goose surfaces the error and the
 // server refuses to boot until the operator sets them.
 func resolveSeedAdminCredentials() (email string, password string, err error) {
-	email = store.NormalizeEmail(os.Getenv("ADMIN_EMAIL"))
+	email = repository.NormalizeEmail(os.Getenv("ADMIN_EMAIL"))
 	password = os.Getenv("ADMIN_PASSWORD")
 	if email == "" || password == "" {
 		return "", "", fmt.Errorf("control-plane mode requires both ADMIN_EMAIL and ADMIN_PASSWORD to be set: " +

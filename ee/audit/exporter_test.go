@@ -7,28 +7,36 @@ package audit
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
 	"xprem/internal/auditlog"
+	"xprem/internal/objectstore"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type fakePutter struct {
+// fakeArchiveStore implements only Put; any other call panics.
+type fakeArchiveStore struct {
+	objectstore.Store
 	objects map[string]string
 	putErr  error
 }
 
-func (f *fakePutter) PutObject(_ context.Context, key string, body []byte) error {
+func (f *fakeArchiveStore) Put(_ context.Context, key string, body io.Reader) error {
 	if f.putErr != nil {
 		return f.putErr
+	}
+	content, err := io.ReadAll(body)
+	if err != nil {
+		return err
 	}
 	if f.objects == nil {
 		f.objects = map[string]string{}
 	}
-	f.objects[key] = string(body)
+	f.objects[key] = string(content)
 	return nil
 }
 
@@ -43,7 +51,7 @@ func seededExportRepo() *fakeAuditRepo {
 
 func TestArchiveExportsBatchesAndAdvancesTheCursor(t *testing.T) {
 	repo := seededExportRepo()
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := enabledService(repo)
 
 	exported, err := service.archiveNextBatch(context.Background(), putter)
@@ -75,7 +83,7 @@ func TestArchiveKeysAMultiDayBatchUnderItsFirstEventDate(t *testing.T) {
 		{ID: 2, OccurredAt: afterMidnight, Action: auditlog.ActionUserLogin, ActorType: auditlog.ActorUser, ActorID: "u-1", ActorDisplay: "axel@example.com", TargetType: "user", TargetID: "u-1", Outcome: auditlog.OutcomeSuccess},
 		{ID: 1, OccurredAt: beforeMidnight, Action: auditlog.ActionUserLogin, ActorType: auditlog.ActorUser, ActorID: "u-1", ActorDisplay: "axel@example.com", TargetType: "user", TargetID: "u-1", Outcome: auditlog.OutcomeSuccess},
 	}}
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := enabledService(repo)
 
 	_, err := service.archiveNextBatch(context.Background(), putter)
@@ -89,7 +97,7 @@ func TestArchiveLoopsUntilTheBacklogIsDrained(t *testing.T) {
 	t.Cleanup(func() { exportBatchSize = previousBatchSize })
 
 	repo := seededExportRepo()
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := enabledService(repo)
 
 	service.runArchive(context.Background(), putter)
@@ -102,7 +110,7 @@ func TestArchiveLoopsUntilTheBacklogIsDrained(t *testing.T) {
 
 func TestArchiveKeepsDrainingWithoutALicense(t *testing.T) {
 	repo := seededExportRepo()
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := NewAuditService(repo)
 	service.licenseValid = func() bool { return false }
 
@@ -115,7 +123,7 @@ func TestArchiveKeepsDrainingWithoutALicense(t *testing.T) {
 func TestArchiveSkipsTheTickWhenAnotherReplicaHoldsTheLock(t *testing.T) {
 	repo := seededExportRepo()
 	repo.lockBusy = true
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := enabledService(repo)
 
 	service.runArchive(context.Background(), putter)
@@ -128,7 +136,7 @@ func TestArchiveReleasesTheLockAfterTheTick(t *testing.T) {
 	repo := seededExportRepo()
 	service := enabledService(repo)
 
-	service.runArchive(context.Background(), &fakePutter{})
+	service.runArchive(context.Background(), &fakeArchiveStore{})
 
 	require.Equal(t, 1, repo.lockAcquired)
 	require.Equal(t, 1, repo.lockReleased)
@@ -137,7 +145,7 @@ func TestArchiveReleasesTheLockAfterTheTick(t *testing.T) {
 func TestArchiveYieldsWhenAnotherReplicaAdvances(t *testing.T) {
 	repo := seededExportRepo()
 	repo.casLoses = true
-	putter := &fakePutter{}
+	putter := &fakeArchiveStore{}
 	service := enabledService(repo)
 
 	exported, err := service.archiveNextBatch(context.Background(), putter)
@@ -150,7 +158,7 @@ func TestArchiveYieldsWhenAnotherReplicaAdvances(t *testing.T) {
 
 func TestArchivePutFailureLeavesTheCursorUntouched(t *testing.T) {
 	repo := seededExportRepo()
-	putter := &fakePutter{putErr: errors.New("bucket unreachable")}
+	putter := &fakeArchiveStore{putErr: errors.New("bucket unreachable")}
 	service := enabledService(repo)
 
 	_, err := service.archiveNextBatch(context.Background(), putter)
@@ -161,7 +169,7 @@ func TestArchivePutFailureLeavesTheCursorUntouched(t *testing.T) {
 func TestArchiveDeclinesToStartWithoutControlPlane(t *testing.T) {
 	service := NewAuditService(nil)
 	service.licenseValid = func() bool { return true }
-	service.startArchive(context.Background(), time.Minute, &fakePutter{})
+	service.startArchive(context.Background(), time.Minute, &fakeArchiveStore{})
 	require.False(t, service.archiveEnabled)
 }
 

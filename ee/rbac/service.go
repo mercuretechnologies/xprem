@@ -14,8 +14,8 @@ import (
 	"time"
 	"xprem/ee/licensing"
 	"xprem/internal/auditlog"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -535,7 +535,7 @@ func (s *RBACService) VisibleAppsForPrincipal(ctx context.Context, principal *se
 	if s.userLookup != nil {
 		user, err := s.userLookup.GetUserByID(ctx, principal.UserId)
 		if err != nil {
-			if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+			if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 				return true, map[string]bool{}, nil
 			}
 			return false, nil, err

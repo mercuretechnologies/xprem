@@ -14,8 +14,8 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/cache"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func (r *countingAppRepo) GetAppByID(_ context.Context, _ string) (config.AppCon
 	}
 	return config.AppConfig{}, nil
 }
-func (r *countingAppRepo) InsertApp(context.Context, store.InsertAppParameters) (string, error) {
+func (r *countingAppRepo) InsertApp(context.Context, repository.InsertAppParameters) (string, error) {
 	return "", nil
 }
 func (r *countingAppRepo) DeleteAppByID(context.Context, string) error             { return nil }

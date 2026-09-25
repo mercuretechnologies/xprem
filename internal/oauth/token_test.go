@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -15,14 +15,14 @@ import (
 const testVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 
 type fakeTokenUserRepo struct {
-	users  map[string]store.User
+	users  map[string]repository.User
 	bumped []string
 }
 
-func (f *fakeTokenUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (f *fakeTokenUserRepo) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	user, ok := f.users[id]
 	if !ok {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return user, nil
 }
@@ -35,17 +35,17 @@ func (f *fakeTokenUserRepo) BumpUserSessionVersion(_ context.Context, id string)
 	return nil
 }
 
-// fakeRefreshLedger mirrors the semantics of PostgresRefreshTokenStore.
+// fakeRefreshLedger mirrors the semantics of PostgresRefreshTokenRepository.
 type fakeRefreshLedger struct {
-	rows map[string]*store.RefreshToken
+	rows map[string]*repository.RefreshToken
 }
 
 func newFakeRefreshLedger() *fakeRefreshLedger {
-	return &fakeRefreshLedger{rows: map[string]*store.RefreshToken{}}
+	return &fakeRefreshLedger{rows: map[string]*repository.RefreshToken{}}
 }
 
-func (f *fakeRefreshLedger) InsertRefreshToken(_ context.Context, params store.InsertRefreshTokenParameters) error {
-	f.rows[params.ID] = &store.RefreshToken{
+func (f *fakeRefreshLedger) InsertRefreshToken(_ context.Context, params repository.InsertRefreshTokenParameters) error {
+	f.rows[params.ID] = &repository.RefreshToken{
 		Id:        params.ID,
 		UserId:    params.UserID,
 		FamilyId:  params.FamilyID,
@@ -54,16 +54,16 @@ func (f *fakeRefreshLedger) InsertRefreshToken(_ context.Context, params store.I
 	return nil
 }
 
-func (f *fakeRefreshLedger) RotateRefreshToken(_ context.Context, params store.RotateRefreshTokenParameters) (store.RefreshToken, error) {
+func (f *fakeRefreshLedger) RotateRefreshToken(_ context.Context, params repository.RotateRefreshTokenParameters) (repository.RefreshToken, error) {
 	row, ok := f.rows[params.OldID]
 	if !ok || row.UsedAt != nil || time.Now().After(row.ExpiresAt) {
-		return store.RefreshToken{}, &store.ErrResourceNotFound{Resource: "refresh token", Identifier: params.OldID}
+		return repository.RefreshToken{}, &repository.ErrResourceNotFound{Resource: "refresh token", Identifier: params.OldID}
 	}
 	now := time.Now()
 	row.UsedAt = &now
 	successor := params.NewID
 	row.ReplacedBy = &successor
-	f.rows[successor] = &store.RefreshToken{
+	f.rows[successor] = &repository.RefreshToken{
 		Id:        successor,
 		UserId:    row.UserId,
 		FamilyId:  row.FamilyId,
@@ -72,10 +72,10 @@ func (f *fakeRefreshLedger) RotateRefreshToken(_ context.Context, params store.R
 	return *row, nil
 }
 
-func (f *fakeRefreshLedger) GetRefreshToken(_ context.Context, id string, replayGrace time.Duration) (store.RefreshToken, error) {
+func (f *fakeRefreshLedger) GetRefreshToken(_ context.Context, id string, replayGrace time.Duration) (repository.RefreshToken, error) {
 	row, ok := f.rows[id]
 	if !ok {
-		return store.RefreshToken{}, &store.ErrResourceNotFound{Resource: "refresh token", Identifier: id}
+		return repository.RefreshToken{}, &repository.ErrResourceNotFound{Resource: "refresh token", Identifier: id}
 	}
 	result := *row
 	result.UsedRecently = row.UsedAt != nil && time.Since(*row.UsedAt) < replayGrace
@@ -103,7 +103,7 @@ func tokenTestSetup(t *testing.T) (*OAuthService, *fakeTokenUserRepo, *fakeRefre
 	t.Setenv("JWT_SECRET", "test-secret")
 	clientRepo := &fakeClientRepo{}
 	codeRepo := &fakeCodeRepo{}
-	userRepo := &fakeTokenUserRepo{users: map[string]store.User{
+	userRepo := &fakeTokenUserRepo{users: map[string]repository.User{
 		"user-1": {Id: "user-1", Email: "a@b.c", Enabled: true, SessionVersion: 3},
 	}}
 	ledger := newFakeRefreshLedger()

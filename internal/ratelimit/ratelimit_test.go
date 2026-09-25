@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/cache"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +64,7 @@ func TestRefusalIsIdenticalForAnUnknownAccount(t *testing.T) {
 
 // Case and surrounding whitespace do not make a new account, so they must not
 // make a new counter. Both login paths resolve the account through
-// store.NormalizeEmail, so without this an attacker walks past the per-account
+// repository.NormalizeEmail, so without this an attacker walks past the per-account
 // limit by respelling the address on each guess, and the per-account limit is
 // the only one that catches a distributed attack.
 func TestSpellingTheSameAccountDifferentlySharesTheCounter(t *testing.T) {
@@ -94,7 +94,7 @@ func TestASuccessClearsTheCounterWhateverTheSpelling(t *testing.T) {
 	require.True(t, limiter.CheckLogin("axel@example.com", ip).Allowed)
 }
 
-// The normalization here is a copy of store.NormalizeEmail, kept separate so
+// The normalization here is a copy of repository.NormalizeEmail, kept separate so
 // this package does not depend on the database store. This test is what stops
 // the copy from drifting: it is the only place the two definitions meet.
 func TestNormalizationMatchesTheAccountLookup(t *testing.T) {
@@ -106,8 +106,8 @@ func TestNormalizationMatchesTheAccountLookup(t *testing.T) {
 		"",
 		"Ünïcode@Example.COM",
 	} {
-		require.Equal(t, store.NormalizeEmail(raw), normalizeEmail(raw),
-			"normalizeEmail drifted from store.NormalizeEmail for %q", raw)
+		require.Equal(t, repository.NormalizeEmail(raw), normalizeEmail(raw),
+			"normalizeEmail drifted from repository.NormalizeEmail for %q", raw)
 	}
 }
 

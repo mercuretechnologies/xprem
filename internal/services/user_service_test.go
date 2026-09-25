@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 	"time"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,45 +14,45 @@ import (
 // fakeUserRepo is an in-memory UserRepository, enough to exercise the
 // service's business rules without a database.
 type fakeUserRepo struct {
-	users map[string]store.User
+	users map[string]repository.User
 }
 
 func newFakeUserRepo() *fakeUserRepo {
-	return &fakeUserRepo{users: map[string]store.User{}}
+	return &fakeUserRepo{users: map[string]repository.User{}}
 }
 
-func (r *fakeUserRepo) InsertUser(_ context.Context, params store.InsertUserParameters) (store.User, error) {
-	email := store.NormalizeEmail(params.Email)
+func (r *fakeUserRepo) InsertUser(_ context.Context, params repository.InsertUserParameters) (repository.User, error) {
+	email := repository.NormalizeEmail(params.Email)
 	for _, user := range r.users {
 		if user.Email == email {
-			return store.User{}, &store.ErrResourceAlreadyExists{Resource: "user", Identifier: email}
+			return repository.User{}, &repository.ErrResourceAlreadyExists{Resource: "user", Identifier: email}
 		}
 	}
-	user := store.User{Id: params.ID, Email: email, PasswordHash: params.PasswordHash, IsAdmin: params.IsAdmin, Enabled: params.Enabled}
+	user := repository.User{Id: params.ID, Email: email, PasswordHash: params.PasswordHash, IsAdmin: params.IsAdmin, Enabled: params.Enabled}
 	r.users[params.ID] = user
 	return user, nil
 }
 
-func (r *fakeUserRepo) GetUserByEmail(_ context.Context, email string) (store.User, error) {
-	normalizedEmail := store.NormalizeEmail(email)
+func (r *fakeUserRepo) GetUserByEmail(_ context.Context, email string) (repository.User, error) {
+	normalizedEmail := repository.NormalizeEmail(email)
 	for _, user := range r.users {
 		if user.Email == normalizedEmail {
 			return user, nil
 		}
 	}
-	return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: normalizedEmail}
+	return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: normalizedEmail}
 }
 
-func (r *fakeUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (r *fakeUserRepo) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	user, ok := r.users[id]
 	if !ok {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return user, nil
 }
 
-func (r *fakeUserRepo) GetUsers(_ context.Context) ([]store.User, error) {
-	users := make([]store.User, 0, len(r.users))
+func (r *fakeUserRepo) GetUsers(_ context.Context) ([]repository.User, error) {
+	users := make([]repository.User, 0, len(r.users))
 	for _, user := range r.users {
 		users = append(users, user)
 	}
@@ -62,10 +62,10 @@ func (r *fakeUserRepo) GetUsers(_ context.Context) ([]store.User, error) {
 func (r *fakeUserRepo) DeleteUserByID(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	if user.IsAdmin && r.adminCount() <= 1 {
-		return store.ErrWouldLeaveNoAdmin
+		return repository.ErrWouldLeaveNoAdmin
 	}
 	delete(r.users, id)
 	return nil
@@ -78,7 +78,7 @@ func (r *fakeUserRepo) DeleteUserByID(_ context.Context, id string) error {
 func (r *fakeUserRepo) UpdateUserPassword(_ context.Context, id string, passwordHash string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	user.PasswordHash = passwordHash
 	user.SessionVersion++
@@ -89,10 +89,10 @@ func (r *fakeUserRepo) UpdateUserPassword(_ context.Context, id string, password
 func (r *fakeUserRepo) UpdateUserIsAdmin(_ context.Context, id string, isAdmin bool) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	if user.IsAdmin && !isAdmin && r.adminCount() <= 1 {
-		return store.ErrWouldLeaveNoAdmin
+		return repository.ErrWouldLeaveNoAdmin
 	}
 	if user.IsAdmin && !isAdmin {
 		user.SessionVersion++
@@ -105,10 +105,10 @@ func (r *fakeUserRepo) UpdateUserIsAdmin(_ context.Context, id string, isAdmin b
 func (r *fakeUserRepo) UpdateUserEnabled(_ context.Context, id string, enabled bool) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	if user.IsAdmin && user.Enabled && !enabled && r.adminCount() <= 1 {
-		return store.ErrWouldLeaveNoAdmin
+		return repository.ErrWouldLeaveNoAdmin
 	}
 	if user.Enabled && !enabled {
 		user.SessionVersion++
@@ -121,7 +121,7 @@ func (r *fakeUserRepo) UpdateUserEnabled(_ context.Context, id string, enabled b
 func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	user.SessionVersion++
 	r.users[id] = user
@@ -131,7 +131,7 @@ func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) erro
 func (r *fakeUserRepo) TouchUserLastConnected(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	now := time.Now()
 	user.LastConnectedAt = &now
@@ -152,7 +152,7 @@ func (r *fakeUserRepo) adminCount() int64 {
 	return count
 }
 
-func seedUserService(t *testing.T) (*UserService, *fakeUserRepo, store.User, store.User) {
+func seedUserService(t *testing.T) (*UserService, *fakeUserRepo, repository.User, repository.User) {
 	t.Helper()
 	repo := newFakeUserRepo()
 	service := NewUserService(repo)
@@ -183,7 +183,7 @@ func TestCreateUserValidations(t *testing.T) {
 
 	// Same address in another casing is the same account.
 	_, err = service.CreateUser(context.Background(), "USER@example.com", "Sup3rSecret!", false)
-	alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil)
+	alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil)
 	assert.ErrorAs(t, err, &alreadyExistsErr)
 }
 
@@ -260,7 +260,7 @@ func TestDeleteUserGuardsSelfAndLastAdmin(t *testing.T) {
 
 	require.NoError(t, service.DeleteUser(ctx, admin.Id, member.Id))
 	_, err := repo.GetUserByID(ctx, member.Id)
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	assert.ErrorAs(t, err, &notFoundErr)
 }
 

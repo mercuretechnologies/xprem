@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -19,9 +20,9 @@ import (
 
 var ErrUpdateMetadataMissing = errors.New("metadata.json missing from storage")
 
-func GetUpdateCheckStatus(update types.Update) time.Time {
+func GetUpdateCheckStatus(ctx context.Context, update types.Update) time.Time {
 	resolvedBucket := bucket.GetBucket()
-	file, err := resolvedBucket.GetFile(update, ".check")
+	file, err := resolvedBucket.UpdateStore.GetFile(ctx, update, ".check")
 	if err != nil {
 		return time.Time{}
 	}
@@ -56,7 +57,7 @@ func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath s
 // made it to storage. mapping is nil for an update published before the files
 // moved to cas/, whose assets are then looked for in the update folder.
 func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error {
-	metadata, errMetadata := GetMetadata(update)
+	metadata, errMetadata := GetMetadata(ctx, update)
 	if errMetadata != nil {
 		return errMetadata
 	}
@@ -64,12 +65,12 @@ func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *typ
 		return fmt.Errorf("missing bundle path in metadata")
 	}
 	if mapping == nil {
-		return verifyFolderUploaded(update, metadata)
+		return verifyFolderUploaded(ctx, update, metadata)
 	}
 	return verifyBlobsUploaded(ctx, update.AppId, mapping)
 }
 
-func verifyFolderUploaded(update types.Update, metadata types.UpdateMetadata) error {
+func verifyFolderUploaded(ctx context.Context, update types.Update, metadata types.UpdateMetadata) error {
 	var files []string
 	for _, platformMetadata := range []types.PlatformMetadata{metadata.MetadataJSON.FileMetadata.IOS, metadata.MetadataJSON.FileMetadata.Android} {
 		if platformMetadata.Bundle == "" {
@@ -82,7 +83,7 @@ func verifyFolderUploaded(update types.Update, metadata types.UpdateMetadata) er
 	}
 	resolvedBucket := bucket.GetBucket()
 	for _, file := range files {
-		f, err := resolvedBucket.GetFile(update, file)
+		f, err := resolvedBucket.UpdateStore.GetFile(ctx, update, file)
 		if err != nil {
 			return fmt.Errorf("checking file %s: %w", file, err)
 		}
@@ -98,7 +99,7 @@ func verifyBlobsUploaded(ctx context.Context, appId string, mapping *types.Updat
 	resolvedBucket := bucket.GetBucket()
 	shaped := append([]types.ShapedAsset{mapping.LaunchAsset}, mapping.Assets...)
 	for _, asset := range shaped {
-		exists, err := resolvedBucket.BlobExists(ctx, appId, asset.Hash)
+		exists, err := resolvedBucket.BlobStore.Exists(ctx, appId, asset.Hash)
 		if err != nil {
 			return fmt.Errorf("checking blob %s: %w", asset.Hash, err)
 		}
@@ -153,9 +154,9 @@ func sameConfigFiles(stored, incoming []types.ConfigFile) bool {
 	return true
 }
 
-func GetExpoConfig(update types.Update) (json.RawMessage, error) {
+func GetExpoConfig(ctx context.Context, update types.Update) (json.RawMessage, error) {
 	resolvedBucket := bucket.GetBucket()
-	resp, err := resolvedBucket.GetFile(update, "expoConfig.json")
+	resp, err := resolvedBucket.UpdateStore.GetFile(ctx, update, "expoConfig.json")
 	if err != nil {
 		return nil, err
 	}
@@ -172,14 +173,14 @@ func GetExpoConfig(update types.Update) (json.RawMessage, error) {
 	return expoConfig, nil
 }
 
-func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
+func GetMetadata(ctx context.Context, update types.Update) (types.UpdateMetadata, error) {
 	metadataCacheKey := ComputeMetadataCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
 	metadataCache := cache2.GetCache()
 	if metadata, ok := cache2.GetJSON[types.UpdateMetadata](metadataCache, metadataCacheKey); ok {
 		return metadata, nil
 	}
 	resolvedBucket := bucket.GetBucket()
-	file, errFile := resolvedBucket.GetFile(update, "metadata.json")
+	file, errFile := resolvedBucket.UpdateStore.GetFile(ctx, update, "metadata.json")
 	if errFile != nil {
 		return types.UpdateMetadata{}, errFile
 	}
@@ -259,7 +260,7 @@ func GetAssetEndpoint() string {
 	return config.BaseURL() + "/assets"
 }
 
-func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset bool, platform types.Platform) (types.ManifestAsset, error) {
+func shapeManifestAsset(ctx context.Context, update types.Update, asset *types.Asset, isLaunchAsset bool, platform types.Platform) (types.ManifestAsset, error) {
 	cacheKey := ComputeManifestAssetCacheKey(update.AppId, update, asset.Path)
 	assetCache := cache2.GetCache()
 	if manifestAsset, ok := cache2.GetJSON[types.ManifestAsset](assetCache, cacheKey); ok {
@@ -267,7 +268,7 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 	}
 	resolvedBucket := bucket.GetBucket()
 	assetFilePath := asset.Path
-	assetFile, errAssetFile := resolvedBucket.GetFile(update, asset.Path)
+	assetFile, errAssetFile := resolvedBucket.UpdateStore.GetFile(ctx, update, asset.Path)
 	if errAssetFile != nil {
 		return types.ManifestAsset{}, errAssetFile
 	}
@@ -275,8 +276,8 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 		return types.ManifestAsset{}, fmt.Errorf("asset file not found: %s", asset.Path)
 	}
 
-	byteAsset, errAsset := bucket.ConvertReadCloserToBytes(assetFile.Reader)
 	defer assetFile.Reader.Close()
+	byteAsset, errAsset := io.ReadAll(assetFile.Reader)
 	if errAsset != nil {
 		return types.ManifestAsset{}, errAsset
 	}
@@ -328,6 +329,7 @@ func computeManifestMetadata(update types.Update) json.RawMessage {
 // mapping when the update has one, and by reading the update folder when it does
 // not.
 func manifestAssets(
+	ctx context.Context,
 	metadata *types.UpdateMetadata,
 	update types.Update,
 	mapping *types.UpdateAssetMapping,
@@ -336,7 +338,7 @@ func manifestAssets(
 	if mapping != nil {
 		return manifestAssetsFromMapping(mapping, platform)
 	}
-	return manifestAssetsFromFolder(metadata, update, platform)
+	return manifestAssetsFromFolder(ctx, metadata, update, platform)
 }
 
 // manifestAssetsFromMapping needs no storage at all: the publish stored every
@@ -373,6 +375,7 @@ func manifestAssetsFromMapping(mapping *types.UpdateAssetMapping, platform types
 // manifestAssetsFromFolder reads and hashes every file of the update, which is
 // the only way to shape an update published before the mapping existed.
 func manifestAssetsFromFolder(
+	ctx context.Context,
 	metadata *types.UpdateMetadata,
 	update types.Update,
 	platform types.Platform,
@@ -390,7 +393,7 @@ func manifestAssetsFromFolder(
 		wg.Add(1)
 		go func(index int, asset types.Asset) {
 			defer wg.Done()
-			shapedAsset, errShape := shapeManifestAsset(update, &asset, false, platform)
+			shapedAsset, errShape := shapeManifestAsset(ctx, update, &asset, false, platform)
 			if errShape != nil {
 				errs <- errShape
 				return
@@ -403,7 +406,7 @@ func manifestAssetsFromFolder(
 	if len(errs) > 0 {
 		return nil, types.ManifestAsset{}, <-errs
 	}
-	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{Path: platformSpecificMetadata.Bundle}, true, platform)
+	launchAsset, errShape := shapeManifestAsset(ctx, update, &types.Asset{Path: platformSpecificMetadata.Bundle}, true, platform)
 	if errShape != nil {
 		return nil, types.ManifestAsset{}, errShape
 	}
@@ -415,17 +418,18 @@ func manifestAssetsFromFolder(
 // for an update published before the files moved to cas/: its assets are then
 // shaped by reading them back out of the update folder, as they always were.
 func ComposeUpdateManifest(
+	ctx context.Context,
 	metadata *types.UpdateMetadata,
 	update types.Update,
 	storedMetadata *types.UpdateStoredMetadata,
 	mapping *types.UpdateAssetMapping,
 	platform types.Platform,
 ) (types.UpdateManifest, error) {
-	expoConfig, errConfig := GetExpoConfig(update)
+	expoConfig, errConfig := GetExpoConfig(ctx, update)
 	if errConfig != nil {
 		return types.UpdateManifest{}, errConfig
 	}
-	assets, launchAsset, err := manifestAssets(metadata, update, mapping, platform)
+	assets, launchAsset, err := manifestAssets(ctx, metadata, update, mapping, platform)
 	if err != nil {
 		return types.UpdateManifest{}, err
 	}
@@ -460,9 +464,9 @@ func CreateNoUpdateAvailableDirective() types.NoUpdateAvailableDirective {
 	}
 }
 
-func RetrieveUpdateStoredMetadata(update types.Update) (*types.UpdateStoredMetadata, error) {
+func RetrieveUpdateStoredMetadata(ctx context.Context, update types.Update) (*types.UpdateStoredMetadata, error) {
 	resolvedBucket := bucket.GetBucket()
-	file, err := resolvedBucket.GetFile(update, "update-metadata.json")
+	file, err := resolvedBucket.UpdateStore.GetFile(ctx, update, "update-metadata.json")
 	if err != nil {
 		return nil, err
 	}

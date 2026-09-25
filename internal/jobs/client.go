@@ -10,7 +10,7 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -93,7 +93,7 @@ func (c *Client) Stop() {
 // skipped the insert.
 func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error) {
 	if c == nil || c.riverClient == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	inserted, err := c.riverClient.Insert(ctx, args, nil)
 	if err != nil {

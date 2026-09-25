@@ -10,8 +10,8 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/jobs"
 	"xprem/internal/providers/expo"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -21,22 +21,24 @@ import (
 // Service creates a local app from an existing Expo project, under
 // the same project UUID. The Expo credential is never stored.
 type Service struct {
-	apps       *services.AppService
-	branches   *services.BranchService
-	channels   *services.ChannelService
-	updateRepo services.UpdateRepository
-	jobs       *jobs.Client
-	bucket     bucket.Bucket
+	apps        *services.AppService
+	branches    *services.BranchService
+	channels    *services.ChannelService
+	updateRepo  services.UpdateRepository
+	jobs        *jobs.Client
+	blobStore   *bucket.BlobStore
+	updateStore *bucket.UpdateStore
 }
 
-func NewService(apps *services.AppService, branches *services.BranchService, channels *services.ChannelService, updateRepo services.UpdateRepository, jobsClient *jobs.Client, bucket bucket.Bucket) *Service {
+func NewService(apps *services.AppService, branches *services.BranchService, channels *services.ChannelService, updateRepo services.UpdateRepository, jobsClient *jobs.Client, blobStore *bucket.BlobStore, updateStore *bucket.UpdateStore) *Service {
 	return &Service{
-		apps:       apps,
-		branches:   branches,
-		channels:   channels,
-		updateRepo: updateRepo,
-		jobs:       jobsClient,
-		bucket:     bucket,
+		apps:        apps,
+		branches:    branches,
+		channels:    channels,
+		updateRepo:  updateRepo,
+		jobs:        jobsClient,
+		blobStore:   blobStore,
+		updateStore: updateStore,
 	}
 }
 
@@ -81,7 +83,7 @@ func requireExpoAuth(auth types.Auth) error {
 
 func (s *Service) ListImportableApps(ctx context.Context, auth types.Auth) ([]expo.AccountApps, error) {
 	if !config.IsDBMode() {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	if err := requireExpoAuth(auth); err != nil {
 		return nil, err
@@ -91,7 +93,7 @@ func (s *Service) ListImportableApps(ctx context.Context, auth types.Auth) ([]ex
 
 func (s *Service) fetchImportStructure(ctx context.Context, auth types.Auth, expoAppId string) (uuid.UUID, *expo.ProjectStructure, error) {
 	if !config.IsDBMode() {
-		return uuid.UUID{}, nil, store.ErrNotSupportedInStatelessMode
+		return uuid.UUID{}, nil, repository.ErrNotSupportedInStatelessMode
 	}
 	if err := requireExpoAuth(auth); err != nil {
 		return uuid.UUID{}, nil, err

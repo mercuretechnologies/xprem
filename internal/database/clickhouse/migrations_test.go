@@ -100,7 +100,7 @@ func TestConcurrentMigratorsApplyOnce(t *testing.T) {
 }
 
 // requireLiveStores hands back the two store URLs, or stops the test. It SKIPS
-// on a developer machine and FAILS in CI: a store test that skips is a green
+// on a developer machine and FAILS in CI: a repository test that skips is a green
 // job having exercised none of the schema and none of the SQL it exists to
 // cover, which is exactly how a renamed column or a broken migration ships.
 // Same guard the identity store tests carry.
@@ -111,7 +111,7 @@ func requireLiveStores(t *testing.T) (clickhouseURL, postgresURL string) {
 		if os.Getenv("CI") != "" {
 			t.Fatal("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL must both be set in CI: these tests cover schema and queries no unit test can reach")
 		}
-		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; start a Postgres and a ClickHouse and set them to run the store tests")
+		t.Skip("TEST_CLICKHOUSE_URL and TEST_DATABASE_URL not both set; start a Postgres and a ClickHouse and set them to run the repository tests")
 	}
 	return clickhouseURL, postgresURL
 }

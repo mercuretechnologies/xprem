@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeStore is an in-memory identity.Store for handler tests.
+// fakeStore is an in-memory identity.Repository for handler tests.
 type fakeStore struct {
-	Store
+	Repository
 	schema  Schema
 	devices map[string]*Device
 	values  []ValueCount
@@ -87,7 +87,7 @@ func (f *fakeStore) UpdateHealthByIDs(_ context.Context, _ string, updateIDs []s
 }
 
 // licensedService builds a service with the enterprise gate open.
-func licensedService(store Store) *Service {
+func licensedService(store Repository) *Service {
 	service := NewService(store)
 	service.licenseValid = func() bool { return true }
 	return service

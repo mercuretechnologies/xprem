@@ -18,7 +18,8 @@ import (
 	"xprem/internal/crypto"
 	"xprem/internal/dashboard"
 	"xprem/internal/database"
-	"xprem/internal/store"
+	"xprem/internal/objectstore"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 
@@ -29,7 +30,7 @@ import (
 var (
 	ErrInvalidUpdate      = errors.New("invalid update")
 	ErrNoChangesDetected  = errors.New("no changes detected in the update from the previous one")
-	ErrInvalidBucketType  = errors.New("the configured storage engine does not support local uploads")
+	ErrInvalidStorageMode = errors.New("the configured storage engine does not support local uploads")
 	ErrInvalidToken       = errors.New("the provided upload token is invalid or expired")
 	ErrTokenAppMismatch   = errors.New("upload token does not match the requested application context")
 	ErrUploadFailed       = errors.New("failed to write upload file stream to destination storage")
@@ -62,7 +63,7 @@ type RequestLocalFileUploadParams struct {
 	AppID      string
 	Token      string
 	TokenAppID string
-	FilePath   string
+	Key        string
 	Body       multipart.File
 }
 
@@ -139,7 +140,7 @@ type RequestUploadURLParams struct {
 	// of devices (1-99).
 	RolloutPercentage *int
 	// Non-nil groups this update row with the other per-platform rows of the same
-	// eoas run. Control-plane only: the bucket store ignores it.
+	// eoas run. Control-plane only: the bucket repository ignores it.
 	PublishGroupID *string
 }
 
@@ -153,7 +154,8 @@ type DeploymentService struct {
 	updateService *UpdateService
 	updateRepo    UpdateRepository
 	bsDiffService *BsDiffService
-	bucket        bucket.Bucket
+	blobStore     BlobStore
+	updateStore   UpdateStore
 	// onAuditEvent is nil in community edition, where publishes, rollbacks and
 	// republishes leave no events.
 	onAuditEvent auditlog.RecordFunc
@@ -184,13 +186,14 @@ func (s *DeploymentService) recordDeliveryEvent(ctx context.Context, action audi
 	})
 }
 
-func NewDeploymentService(branchService *BranchService, updateService *UpdateService, updateRepo UpdateRepository, bucket bucket.Bucket, bsDiffService *BsDiffService) *DeploymentService {
+func NewDeploymentService(branchService *BranchService, updateService *UpdateService, updateRepo UpdateRepository, blobStore BlobStore, updateStore UpdateStore, bsDiffService *BsDiffService) *DeploymentService {
 	return &DeploymentService{
 		branchService: branchService,
 		updateService: updateService,
 		updateRepo:    updateRepo,
 		bsDiffService: bsDiffService,
-		bucket:        bucket,
+		blobStore:     blobStore,
+		updateStore:   updateStore,
 	}
 }
 
@@ -218,7 +221,7 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 	errorVerify := update2.VerifyUploadedUpdate(ctx, *currentUpdate, mapping)
 	if errorVerify != nil {
 		log.Printf("[RequestID: %s] Invalid update, deleting folder...", params.RequestID)
-		err := s.bucket.DeleteUpdateFolder(params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID)
+		err := s.updateStore.Delete(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID)
 		if err != nil {
 			log.Printf("[RequestID: %s] Error deleting update folder: %v", params.RequestID, err)
 			return "", err
@@ -238,8 +241,8 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 	return updateUUID, nil
 }
 
-func getUpdateUUIDFromMetadata(update types.Update) string {
-	metadata, err := update2.GetMetadata(update)
+func getUpdateUUIDFromMetadata(ctx context.Context, update types.Update) string {
+	metadata, err := update2.GetMetadata(ctx, update)
 	if err != nil {
 		return ""
 	}
@@ -261,7 +264,7 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	var updateUUID string
 	if updateType == types.NormalUpdate {
 		// Rollbacks have no stored metadata to derive a UUID from.
-		updateUUID = getUpdateUUIDFromMetadata(update)
+		updateUUID = getUpdateUUIDFromMetadata(ctx, update)
 		err = s.updateRepo.StoreUpdateUUIDInMetadata(ctx, update, updateUUID)
 		if err != nil {
 			return "", err
@@ -274,10 +277,10 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 		if database.IsUniqueViolation(err) {
 			return "", ErrActiveRolloutBlocksPublish
 		}
-		if errors.Is(err, store.ErrPublishBlockedByActiveRollout) {
+		if errors.Is(err, repository.ErrPublishBlockedByActiveRollout) {
 			return "", ErrActiveRolloutBlocksPublish
 		}
-		if errors.Is(err, store.ErrRolloutSupersededByNewerUpdate) {
+		if errors.Is(err, repository.ErrRolloutSupersededByNewerUpdate) {
 			return "", ErrRolloutSuperseded
 		}
 		return "", err
@@ -309,10 +312,10 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 }
 
 func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params RequestLocalFileUploadParams) error {
-	bucketType := bucket.ResolveBucketType()
-	if bucketType != bucket.LocalBucketType {
-		log.Printf("[RequestID: %s] Invalid bucket type: %s", params.RequestID, bucketType)
-		return ErrInvalidBucketType
+	storageMode := objectstore.ResolveMode()
+	if storageMode != objectstore.ModeLocal {
+		log.Printf("[RequestID: %s] Invalid storage mode: %s", params.RequestID, storageMode)
+		return ErrInvalidStorageMode
 	}
 
 	// The token claim must match the app id on the URL, or a token leaked from
@@ -322,7 +325,7 @@ func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params R
 		return ErrTokenAppMismatch
 	}
 
-	if err := bucket.HandleUploadFile(params.AppID, params.FilePath, params.Body); err != nil {
+	if err := bucket.HandleUpload(ctx, params.AppID, params.Key, params.Body); err != nil {
 		log.Printf("[RequestID: %s] Error handling upload file: %v", params.RequestID, err)
 		if errors.Is(err, bucket.ErrBlobHashMismatch) {
 			return ErrUploadHashMismatch
@@ -365,7 +368,7 @@ func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, appId
 		}
 		seen[file.Name] = struct{}{}
 		g.Go(func() error {
-			exists, err := s.bucket.BlobExists(ctx, appId, file.Hash)
+			exists, err := s.blobStore.Exists(ctx, appId, file.Hash)
 			if err != nil {
 				log.Printf("[RequestID: %s] Error while checking if blob exists, uploading %s: %v", requestID, file.Name, err)
 				return nil
@@ -446,6 +449,7 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 	}
 
 	updateRequests, err := bucket.RequestUploadUrlsForFileUpdates(
+		ctx,
 		params.AppID,
 		params.BranchName,
 		params.RuntimeVersion,
@@ -669,7 +673,7 @@ func (s *DeploymentService) republishUpdateInternal(ctx context.Context, previou
 	}
 
 	updateId := update2.GenerateUpdateTimestamp(platform)
-	_, err = s.bucket.CreateUpdateFrom(previousUpdate, update2.ConvertUpdateTimestampToString(updateId))
+	_, err = s.updateStore.CreateFrom(ctx, previousUpdate, update2.ConvertUpdateTimestampToString(updateId))
 	if err != nil {
 		return nil, err
 	}

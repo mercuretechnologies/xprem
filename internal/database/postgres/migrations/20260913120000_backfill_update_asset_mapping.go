@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"xprem/internal/bucket"
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 
 	"github.com/pressly/goose/v3"
@@ -35,11 +35,11 @@ func UpBackfillUpdateAssetMapping(ctx context.Context, _ *sql.DB) error {
 		if len(rows) == 0 {
 			return nil
 		}
-		updateStore := store.NewBucketUpdateStore(bucket.GetBucket())
+		updateRepository := repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore)
 		copied := 0
 		for _, row := range rows {
 			update := types.Update{AppId: row.AppID.String(), Branch: row.Branch, RuntimeVersion: row.RuntimeVersion, UpdateId: strconv.FormatInt(row.ID, 10)}
-			mapping, err := updateStore.GetUpdateAssetMapping(ctx, update)
+			mapping, err := updateRepository.GetUpdateAssetMapping(ctx, update)
 			if err != nil {
 				// Corrupt historical metadata must not block startup. Storage errors
 				// still abort the migration so it can be retried.

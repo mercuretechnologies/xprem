@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -245,7 +245,7 @@ func (c contextCapturingWriter) RetrieveAppCertificate(ctx context.Context, _ st
 
 func TestDeleteBranchSurfacesProtection(t *testing.T) {
 	deps, fake := writeDeps()
-	fake.deleteBranchErr = &store.ErrBranchProtected{BranchName: "main"}
+	fake.deleteBranchErr = &repository.ErrBranchProtected{BranchName: "main"}
 
 	_, _, err := deleteBranchHandler(deps)(context.Background(), callToolRequestFor(writePrincipal), DeleteBranchInput{AppId: "app-1", Branch: "main"})
 	if err == nil || !strings.Contains(err.Error(), "protected") {

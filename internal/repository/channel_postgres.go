@@ -1,0 +1,196 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"time"
+	"xprem/internal/database"
+	"xprem/internal/database/postgres/pgdb"
+	"xprem/internal/types"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type PostgresChannelRepository struct {
+	engine *database.Engine
+}
+
+func NewPostgresChannelRepository(engine *database.Engine) *PostgresChannelRepository {
+	return &PostgresChannelRepository{
+		engine: engine,
+	}
+}
+
+func (s *PostgresChannelRepository) InsertChannel(ctx context.Context, appId string, branchId *int64, channelName string) (int64, error) {
+	pgAppID := ToPgUUID(appId)
+	insertedId, err := s.engine.Queries.InsertChannel(ctx, pgdb.InsertChannelParams{
+		AppID:    pgAppID,
+		Name:     channelName,
+		BranchID: branchId,
+	})
+	if err != nil {
+		if database.IsUniqueViolation(err) {
+			return 0, &ErrResourceAlreadyExists{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
+		}
+		return 0, fmt.Errorf("failed to create channel in database: %w", err)
+	}
+	return insertedId, nil
+}
+
+func (s *PostgresChannelRepository) DeleteChannel(ctx context.Context, channelName string, appId string) error {
+	pgAppID := ToPgUUID(appId)
+	commandTag, err := s.engine.Queries.DeleteChannelByName(ctx, pgdb.DeleteChannelByNameParams{
+		AppID: pgAppID,
+		Name:  channelName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete channel from database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
+	}
+	return nil
+}
+
+func (s *PostgresChannelRepository) GetChannelNameByBranchName(ctx context.Context, appId string, branchName string) ([]string, error) {
+	pgAppID := ToPgUUID(appId)
+	return s.engine.Queries.GetChannelNamesByBranchName(ctx, pgdb.GetChannelNamesByBranchNameParams{
+		Name:  branchName,
+		AppID: pgAppID,
+	})
+}
+
+func (s *PostgresChannelRepository) GetChannels(ctx context.Context, appId string) ([]types.ChannelMapping, error) {
+	pgAppID := ToPgUUID(appId)
+	appChannels, err := s.engine.Queries.GetChannelsByAppID(ctx, pgAppID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve channels from database: %w", err)
+	}
+	channels := make([]types.ChannelMapping, len(appChannels))
+	for i, channel := range appChannels {
+		var branchIdPtr *string
+		if channel.BranchID != nil {
+			branchIdStr := strconv.FormatInt(*channel.BranchID, 10)
+			branchIdPtr = &branchIdStr
+		}
+		var createdAtStr *string
+		if channel.CreatedAt.Valid {
+			timeStr := channel.CreatedAt.Time.Format(time.RFC3339)
+			createdAtStr = &timeStr
+		}
+		mapping := types.ChannelMapping{
+			ReleaseChannelName: channel.Name,
+			ReleaseChannelId:   strconv.FormatInt(channel.ID, 10),
+			BranchName:         channel.BranchName,
+			BranchId:           branchIdPtr,
+			CreatedAt:          createdAtStr,
+			BranchCurrentUpdate: branchUpdateState(
+				channel.BranchCurrentRuntimeVersion,
+				channel.BranchCurrentCommitHash,
+				channel.BranchCurrentUpdateCreatedAt,
+				channel.BranchCurrentRolloutPercentage,
+			),
+			RolloutBranchCurrentUpdate: branchUpdateState(
+				channel.RolloutBranchCurrentRuntimeVersion,
+				channel.RolloutBranchCurrentCommitHash,
+				channel.RolloutBranchCurrentUpdateCreatedAt,
+				channel.RolloutBranchCurrentRolloutPercentage,
+			),
+			BranchSurfing: &types.BranchSurfing{
+				Enabled: channel.BranchSurfingEnabled,
+				Pattern: channel.BranchSurfingPattern,
+			},
+		}
+		if channel.RolloutID.Valid && channel.BranchName != nil && channel.RolloutBranchName != nil && channel.RolloutPercentage != nil {
+			mapping.Rollout = &types.ChannelRollout{
+				ID:                channel.RolloutID.String(),
+				ChannelName:       channel.Name,
+				DefaultBranchName: *channel.BranchName,
+				RolloutBranchName: *channel.RolloutBranchName,
+				Percentage:        int(*channel.RolloutPercentage),
+				CreatedAt:         channel.RolloutCreatedAt.Time.Format(time.RFC3339),
+				UpdatedAt:         channel.RolloutUpdatedAt.Time.Format(time.RFC3339),
+			}
+		}
+		channels[i] = mapping
+	}
+	return channels, nil
+}
+
+func (s *PostgresChannelRepository) GetBranchSurfing(ctx context.Context, appId string, channelName string) (*types.BranchSurfing, error) {
+	pgAppID := ToPgUUID(appId)
+	row, err := s.engine.Queries.GetChannelBranchSurfing(ctx, pgdb.GetChannelBranchSurfingParams{
+		AppID: pgAppID,
+		Name:  channelName,
+	})
+	if err != nil {
+		// An unknown channel is a 404 for the caller, not a server error; match
+		// GetChannelBranchMapping's (nil, nil).
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve channel branch surfing from database: %w", err)
+	}
+	return &types.BranchSurfing{
+		Enabled: row.BranchSurfingEnabled,
+		Pattern: row.BranchSurfingPattern,
+	}, nil
+}
+
+func (s *PostgresChannelRepository) SetBranchSurfing(ctx context.Context, appId string, channelName string, surfing types.BranchSurfing) error {
+	pgAppID := ToPgUUID(appId)
+	commandTag, err := s.engine.Queries.UpdateChannelBranchSurfing(ctx, pgdb.UpdateChannelBranchSurfingParams{
+		AppID:                pgAppID,
+		Name:                 channelName,
+		BranchSurfingEnabled: surfing.Enabled,
+		BranchSurfingPattern: surfing.Pattern,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update channel branch surfing in database: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return &ErrResourceNotFound{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
+	}
+	return nil
+}
+
+func (s *PostgresChannelRepository) GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string) ([]pgdb.GetUpdatesByByBranchNameAndRuntimeVersionRow, error) {
+	pgAppID := ToPgUUID(appId)
+	return s.engine.Queries.GetUpdatesByByBranchNameAndRuntimeVersion(ctx, pgdb.GetUpdatesByByBranchNameAndRuntimeVersionParams{
+		ID:      pgAppID,
+		Version: runtimeVersion,
+		Name:    branchName,
+	})
+}
+
+func (s *PostgresChannelRepository) GetChannelBranchMapping(ctx context.Context, appId string, channelName string) (*types.ChannelResolution, error) {
+	pgAppID := ToPgUUID(appId)
+	mapping, err := s.engine.Queries.GetChannelBranchMapping(ctx, pgdb.GetChannelBranchMappingParams{
+		AppID: pgAppID,
+		Name:  channelName,
+	})
+	if err != nil {
+		// An unknown channel, or one left unmapped, is a 404 for the caller, not a
+		// server error; match the bucket backend's (nil, nil) so ResolveUpdateForDevice's
+		// nil-check works in DB mode too.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to retrieve channel mapping from database: %w", err)
+	}
+	mappingStr := strconv.FormatInt(mapping.ID, 10)
+	result := &types.ChannelResolution{
+		Id:         mappingStr,
+		BranchName: mapping.BranchName,
+	}
+	if mapping.RolloutID.Valid && mapping.RolloutBranchName != nil && mapping.RolloutPercentage != nil {
+		result.Rollout = &types.ChannelRolloutInfo{
+			ID:         mapping.RolloutID.String(),
+			BranchName: *mapping.RolloutBranchName,
+			Percentage: int(*mapping.RolloutPercentage),
+		}
+	}
+	return result, nil
+}

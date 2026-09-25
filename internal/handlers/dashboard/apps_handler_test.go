@@ -11,8 +11,8 @@ import (
 	"xprem/config"
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +22,7 @@ type fakeAppRepo struct {
 	apps []config.AppDescriptor
 }
 
-func (f *fakeAppRepo) InsertApp(_ context.Context, _ store.InsertAppParameters) (string, error) {
+func (f *fakeAppRepo) InsertApp(_ context.Context, _ repository.InsertAppParameters) (string, error) {
 	panic("unused")
 }
 func (f *fakeAppRepo) DeleteAppByID(_ context.Context, _ string) error { panic("unused") }
@@ -99,7 +99,7 @@ type mutableAppRepo struct {
 	app config.AppConfig
 }
 
-func (f *mutableAppRepo) InsertApp(context.Context, store.InsertAppParameters) (string, error) {
+func (f *mutableAppRepo) InsertApp(context.Context, repository.InsertAppParameters) (string, error) {
 	panic("unused")
 }
 func (f *mutableAppRepo) DeleteAppByID(context.Context, string) error { panic("unused") }

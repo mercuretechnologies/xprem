@@ -237,7 +237,7 @@ func TestPurgeSparesUnarchivedRowsWhileArchiving(t *testing.T) {
 	repo := &fakeAuditRepo{}
 	service := NewAuditService(repo)
 	service.licenseValid = func() bool { return true }
-	service.startArchive(context.Background(), time.Hour, &fakePutter{})
+	service.startArchive(context.Background(), time.Hour, &fakeArchiveStore{})
 
 	_, err := service.PurgeOlderThan(context.Background(), 550*24*time.Hour)
 	require.NoError(t, err)

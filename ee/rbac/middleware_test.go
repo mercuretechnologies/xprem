@@ -9,21 +9,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeUserLookup struct {
-	users map[string]store.User
+	users map[string]repository.User
 }
 
-func (f *fakeUserLookup) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (f *fakeUserLookup) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	user, ok := f.users[id]
 	if !ok {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return user, nil
 }
@@ -89,7 +89,7 @@ func TestRequirePermissionCommunityFallbackWithoutLicense(t *testing.T) {
 	// community admin-only refusal.
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermBranchCreate}}}
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	mw := RequirePermission(withLookup(unlicensedService(repo), lookup), PermBranchCreate, FallbackAdminOnly)
 
 	recorder := performAppRequest(t, mw, &services.DashboardPrincipal{UserId: "member-1"})
@@ -100,7 +100,7 @@ func TestRequirePermissionCommunityFallbackWithoutLicense(t *testing.T) {
 func TestRequirePermissionEnforcedMember(t *testing.T) {
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermBranchCreate}}}
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	service := withLookup(licensedService(repo), lookup)
 	member := &services.DashboardPrincipal{UserId: "member-1"}
 
@@ -124,7 +124,7 @@ func TestRequirePermissionTrustsPrincipalAdminFlag(t *testing.T) {
 	// The auth layer reads IsAdmin from the users table on every request, so
 	// the middleware judges the principal as is: no second read, and the
 	// lookup is never consulted.
-	lookup := &fakeUserLookup{users: map[string]store.User{"user-1": {Id: "user-1", IsAdmin: false}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"user-1": {Id: "user-1", IsAdmin: false}}}
 	service := withLookup(licensedService(newFakeRepo()), lookup)
 	require.Equal(t, http.StatusOK,
 		performAppRequest(t, RequirePermission(service, PermBranchCreate, FallbackAdminOnly),
@@ -178,7 +178,7 @@ func TestRequirePermissionReusesGrantLoadedByRequireAppVisible(t *testing.T) {
 func TestRequireAppVisible(t *testing.T) {
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1"}}
-	lookup := &fakeUserLookup{users: map[string]store.User{
+	lookup := &fakeUserLookup{users: map[string]repository.User{
 		"member-1": {Id: "member-1"},
 		"admin-1":  {Id: "admin-1", IsAdmin: true},
 	}}
