@@ -204,7 +204,11 @@ func (u *UpdateStore) CreateFrom(ctx context.Context, previousUpdate *types.Upda
 		if relative == "update-metadata.json" || relative == ".check" {
 			continue
 		}
-		g.Go(func() error { return u.objectStore.Copy(ctx, key, targetPrefix+relative) })
+		g.Go(func() error {
+			copyCtx, cancel := context.WithTimeout(ctx, createFromCopyTimeout)
+			defer cancel()
+			return u.objectStore.Copy(copyCtx, key, targetPrefix+relative)
+		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err

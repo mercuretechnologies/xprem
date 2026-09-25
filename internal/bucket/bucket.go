@@ -14,6 +14,10 @@ import (
 // degrades into a regular upload instead of hanging the publish.
 const copyFileTimeout = 30 * time.Second
 
+// createFromCopyTimeout bounds each file copy of CreateFrom, which Azure may
+// report as pending indefinitely.
+const createFromCopyTimeout = 2 * time.Minute
+
 type Bucket struct {
 	// ObjectStore is the raw store, for the layout migrations that reshape it.
 	ObjectStore   objectstore.Store
