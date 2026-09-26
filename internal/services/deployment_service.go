@@ -221,6 +221,23 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 	}
 	errorVerify := update2.VerifyUploadedUpdate(ctx, *currentUpdate, mapping)
 	if errorVerify != nil {
+		if errors.Is(errorVerify, update2.ErrInvalidExpoConfig) {
+			// Malformed content: fail the publish and clear the folder so a
+			// re-publish starts from a clean slate.
+			log.Printf("[RequestID: %s] Invalid expoConfig.json, deleting folder...", params.RequestID)
+			if err := s.updateStore.Delete(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID); err != nil {
+				log.Printf("[RequestID: %s] Error deleting update folder: %v", params.RequestID, err)
+				return "", err
+			}
+			log.Printf("[RequestID: %s] Invalid expoConfig.json, folder deleted", params.RequestID)
+			return "", fmt.Errorf("%w: %s", ErrInvalidUpdate, errorVerify)
+		}
+		if errors.Is(errorVerify, update2.ErrExpoConfigUnreadable) {
+			// A transient storage/read failure must not destroy the uploaded
+			// files: surface it as a retryable error and keep the folder.
+			log.Printf("[RequestID: %s] expoConfig.json read failure, keeping folder: %v", params.RequestID, errorVerify)
+			return "", errorVerify
+		}
 		log.Printf("[RequestID: %s] Invalid update, deleting folder...", params.RequestID)
 		err := s.updateStore.Delete(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.UpdateID)
 		if err != nil {
