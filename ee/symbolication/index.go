@@ -59,6 +59,7 @@ func (h *header) fields() []*uint32 {
 	return []*uint32{&h.SegmentCount, &h.FunctionCount, &h.FenceCount, &h.SourcesBytes, &h.NamesBytes, &h.SegmentsOffset, &h.Lines, &h.TextsOffset}
 }
 
+// encode returns the fixed-size index header, including its format version.
 func (h header) encode() []byte {
 	buf := make([]byte, 0, headerSize)
 	buf = append(buf, indexMagic...)
@@ -69,6 +70,9 @@ func (h header) encode() []byte {
 	return append(buf, make([]byte, headerSize-len(buf))...)
 }
 
+// decodeHeader reads a header from at least 40 bytes. It returns
+// ErrInvalidIndex for an unrecognized format or a segments offset inside
+// the header; a shorter buffer may panic.
 func decodeHeader(b []byte) (header, error) {
 	if string(b[:4]) != indexMagic {
 		return header{}, fmt.Errorf("%w: bad magic", ErrInvalidIndex)
@@ -93,7 +97,9 @@ type fence struct{ line, column uint32 }
 // span locates one source text in the texts section.
 type span struct{ offset, length uint32 }
 
-// WriteIndex writes the index of m to w.
+// WriteIndex writes the index of m to w. Unsorted segments or a nonempty
+// SourcesContent list whose length differs from Sources return ErrInvalidMap.
+// Writer errors propagate and may leave a partial index in w.
 func WriteIndex(w io.Writer, m *Map) error {
 	if !sort.SliceIsSorted(m.Segments, func(i, j int) bool { return segmentLess(m.Segments[i], m.Segments[j]) }) {
 		return fmt.Errorf("%w: segments are not sorted", ErrInvalidMap)
@@ -162,6 +168,7 @@ func encodeTables(m *Map, sources, names []byte) []byte {
 	return buf
 }
 
+// fencesOf returns the generated position at each fenceStride boundary.
 func fencesOf(segments []Segment) []fence {
 	var fences []fence
 	for i := 0; i < len(segments); i += fenceStride {
@@ -187,6 +194,8 @@ func textSpans(m *Map) []span {
 	return spans
 }
 
+// writeSegments writes the binary segment records, returning the first writer
+// error; earlier records may already have been written.
 func writeSegments(w io.Writer, segments []Segment) error {
 	for first := 0; first < len(segments); first += fenceStride {
 		last := min(first+fenceStride, len(segments))
@@ -201,6 +210,7 @@ func writeSegments(w io.Writer, segments []Segment) error {
 	return nil
 }
 
+// appendSegment appends one binary segment record to buf.
 func appendSegment(buf []byte, s Segment) []byte {
 	for _, value := range []uint32{s.Line, s.Column, s.Source, s.OriginalLine, s.OriginalColumn, s.Name} {
 		buf = le.AppendUint32(buf, value)
@@ -208,6 +218,8 @@ func appendSegment(buf []byte, s Segment) []byte {
 	return buf
 }
 
+// decodeSegment reads one binary segment record; b must contain at least
+// segmentSize bytes or the read panics.
 func decodeSegment(b []byte) Segment {
 	return Segment{
 		Line:           le.Uint32(b[0:]),
@@ -219,6 +231,7 @@ func decodeSegment(b []byte) Segment {
 	}
 }
 
+// segmentLess orders segments by generated line, then column.
 func segmentLess(a, b Segment) bool {
 	if a.Line != b.Line {
 		return a.Line < b.Line
@@ -244,6 +257,8 @@ func encodeStrings(values []string) []byte {
 	return buf
 }
 
+// decodeStrings reads an index string table, returning ErrInvalidIndex for
+// truncated tables or string offsets outside the supplied data.
 func decodeStrings(b []byte) ([]string, error) {
 	// Even an empty table is 8 bytes: the count, then the end position.
 	if len(b) < 8 {
@@ -274,6 +289,8 @@ type tableReader struct {
 	err  error
 }
 
+// take consumes n bytes, or returns nil and records ErrInvalidIndex when n
+// is negative or exceeds the remaining data. After an error it consumes nothing.
 func (t *tableReader) take(n int) []byte {
 	if t.err != nil {
 		return nil
@@ -287,6 +304,8 @@ func (t *tableReader) take(n int) []byte {
 	return out
 }
 
+// strings consumes a string table of size bytes, returning nil and retaining
+// the error if reading or decoding fails.
 func (t *tableReader) strings(size uint32) []string {
 	raw := t.take(int(size))
 	if t.err != nil {
@@ -297,6 +316,8 @@ func (t *tableReader) strings(size uint32) []string {
 	return values
 }
 
+// flags consumes count bytes as flags, with only 1 meaning true. A read
+// failure leaves the error in t and returns an empty slice.
 func (t *tableReader) flags(count int) []bool {
 	raw := t.take(count)
 	flags := make([]bool, len(raw))
@@ -306,6 +327,8 @@ func (t *tableReader) flags(count int) []bool {
 	return flags
 }
 
+// uint32s consumes count little-endian values. A read failure leaves the
+// error in t and returns an empty slice.
 func (t *tableReader) uint32s(count uint32) []uint32 {
 	raw := t.take(4 * int(count))
 	values := make([]uint32, len(raw)/4)
@@ -326,7 +349,7 @@ func (t *tableReader) pairs(count int) [][2]uint32 {
 }
 
 // ReadSegmentCount reads how many segments an index holds from its header
-// alone.
+// alone. Read and header validation failures return ErrInvalidIndex.
 func ReadSegmentCount(r io.Reader) (int, error) {
 	head := make([]byte, headerSize)
 	if _, err := io.ReadFull(r, head); err != nil {
@@ -352,7 +375,8 @@ type Index struct {
 }
 
 // OpenIndex reads the header and the tables of an index. r must stay open
-// while the index is used.
+// while the index is used. Read and format failures return ErrInvalidIndex;
+// segment records and source text are not read or validated here.
 func OpenIndex(r io.ReaderAt) (*Index, error) {
 	head := make([]byte, headerSize)
 	if _, err := r.ReadAt(head, 0); err != nil {
@@ -391,7 +415,9 @@ func OpenIndex(r io.ReaderAt) (*Index, error) {
 // SegmentCount is how many segments the index holds.
 func (x *Index) SegmentCount() int { return int(x.h.SegmentCount) }
 
-// SourceText reads the text of one source; "" when the map carried none.
+// SourceText reads the text at a zero-based source index; "" when the map
+// carried none. An out-of-range source returns ErrInvalidIndex; underlying
+// read errors are wrapped and returned.
 func (x *Index) SourceText(source int) (string, error) {
 	if source < 0 || source >= len(x.texts) {
 		return "", fmt.Errorf("%w: source %d out of range", ErrInvalidIndex, source)
@@ -420,7 +446,8 @@ type Position struct {
 }
 
 // Lookup resolves a generated position, zero-based. ok is false when nothing
-// maps there: before the first segment, or a segment with no source.
+// maps there: before the first segment on that line, or a segment with no
+// valid source. Returned positions are one-based. Segment read errors propagate.
 func (x *Index) Lookup(line, column uint32) (pos Position, ok bool, err error) {
 	target := Segment{Line: line, Column: column}
 	fenceIndex, ok := x.fenceBefore(target)
@@ -488,7 +515,8 @@ func (x *Index) position(s Segment) Position {
 
 // LookupHermesFunction resolves a Hermes frame given as a function id and a
 // bytecode offset inside it, the minidump form; a plain virtual offset is
-// Lookup(0, offset).
+// Lookup(0, offset). An unknown function id returns ok=false without error;
+// lookup read errors propagate.
 func (x *Index) LookupHermesFunction(functionID, localOffset uint32) (Position, bool, error) {
 	if int(functionID) >= len(x.functionOffsets) {
 		return Position{}, false, nil

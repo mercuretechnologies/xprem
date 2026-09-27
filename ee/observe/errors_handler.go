@@ -52,6 +52,8 @@ type ErrorsHandler struct {
 	indexes IndexStateReader
 }
 
+// NewErrorsHandler binds error-group and index-state readers. A nil reader,
+// including a typed nil *Explorer, makes group requests report unavailable.
 func NewErrorsHandler(reader ErrorReader, indexes IndexStateReader) *ErrorsHandler {
 	// A nil *Explorer stored in an interface is itself non-nil.
 	if explorer, ok := reader.(*Explorer); ok && explorer == nil {
@@ -61,7 +63,8 @@ func NewErrorsHandler(reader ErrorReader, indexes IndexStateReader) *ErrorsHandl
 }
 
 // GetErrorGroupHandler answers GET /observe/errors/{FINGERPRINT}?updateId=:
-// the group of one error, or why it has none yet.
+// the group of one error, or why it has none yet. Invalid UUIDs yield 400;
+// reader failures yield 500. An unavailable reader yields a 200 status answer.
 func (h *ErrorsHandler) GetErrorGroupHandler(w http.ResponseWriter, r *http.Request) {
 	updateID, err := uuid.Parse(r.URL.Query().Get("updateId"))
 	if err != nil {
@@ -100,7 +103,8 @@ func (h *ErrorsHandler) GetErrorGroupHandler(w http.ResponseWriter, r *http.Requ
 }
 
 // missingGroupStatus tells from the update's index why the sweep has not
-// grouped the error, or that it simply has not passed yet.
+// grouped the error, or that it simply has not passed yet. Known index-state
+// errors become statuses; unexpected reader errors propagate.
 func (h *ErrorsHandler) missingGroupStatus(ctx context.Context, appID, updateID string) (ErrorGroupStatus, error) {
 	if h.indexes == nil {
 		return ErrorGroupUnavailable, nil

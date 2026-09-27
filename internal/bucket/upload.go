@@ -108,7 +108,9 @@ func IsSourcemapKey(key, appId string) bool {
 	return ok
 }
 
-// SourcemapKeyHash returns the hash a source map key of appId names.
+// SourcemapKeyHash returns the hash a source map key of appId names and
+// whether it is valid. A matching prefix with an invalid hash returns that
+// suffix and false; a mismatched prefix returns an empty string and false.
 func SourcemapKeyHash(key, appId string) (string, bool) {
 	prefix := appId + "/" + sourcemapsDir + "/"
 	if !strings.HasPrefix(key, prefix) {

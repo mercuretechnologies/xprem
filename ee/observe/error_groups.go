@@ -38,7 +38,8 @@ type groupedError struct {
 	ErrorGroup
 }
 
-// ReadErrorGroup answers nil when the error has no group yet.
+// ReadErrorGroup answers nil when the error has no group yet or ClickHouse
+// is not configured. Query, row-reading, and trace JSON errors propagate.
 func (e *Explorer) ReadErrorGroup(ctx context.Context, appID, updateID, fingerprint string) (*ErrorGroup, error) {
 	if e.clickhouse == nil {
 		return nil, nil
@@ -93,8 +94,9 @@ func (e *Explorer) pendingErrorGroups(ctx context.Context, since time.Time, limi
 	return pending, rows.Err()
 }
 
-// oneTraceOf reads the exception of the latest occurrence of an error; every
-// occurrence has the same trace, which is what the fingerprint says.
+// oneTraceOf reads the latest stored exception for an error fingerprint.
+// Query/scan errors, including a missing row, and malformed attribute JSON
+// are returned to the caller.
 func (e *Explorer) oneTraceOf(ctx context.Context, key errorKey) (exception, error) {
 	var eventName, body, attributes string
 	err := e.clickhouse.Conn.QueryRow(ctx, `
@@ -114,6 +116,8 @@ func (e *Explorer) oneTraceOf(ctx context.Context, key errorKey) (exception, err
 	return exceptionOf(eventName, body, parsed), nil
 }
 
+// writeErrorGroups inserts the groups as a batch; an empty slice is a no-op.
+// Batch preparation, trace encoding, append, and send errors propagate.
 func (e *Explorer) writeErrorGroups(ctx context.Context, groups []groupedError) error {
 	if len(groups) == 0 {
 		return nil

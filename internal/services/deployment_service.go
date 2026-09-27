@@ -229,6 +229,9 @@ func NewDeploymentService(branchService *BranchService, updateService *UpdateSer
 
 // ProcessUploadedUpdate verifies and publishes an uploaded update, and returns
 // its manifest id (the value expo-updates exposes as Updates.updateId).
+// Publishing ignores caller cancellation. Asset or declared source-map
+// verification failures delete the update folder and return ErrInvalidUpdate,
+// unless deletion fails. Other repository and publication errors propagate.
 func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params ProcessUpdateParams) (string, error) {
 	// Once started, publishing runs to the end even if the CLI disconnects.
 	ctx = context.WithoutCancel(ctx)
@@ -276,7 +279,8 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 }
 
 // verifySourcemapUploaded fails when the update names a source map the store
-// does not hold.
+// does not hold, or when uploads are disabled for a declared map. Updates
+// without a declared map are accepted; repository and storage errors propagate.
 func (s *DeploymentService) verifySourcemapUploaded(ctx context.Context, update types.Update) error {
 	hash, err := s.updateRepo.GetUpdateSourcemapHash(ctx, update)
 	if err != nil {
@@ -308,7 +312,12 @@ func getUpdateUUIDFromMetadata(ctx context.Context, update types.Update) string 
 }
 
 // MarkUpdateAsChecked publishes the update and returns its manifest id, empty
-// for a rollback.
+// for a rollback or unreadable manifest metadata. Missing stored metadata
+// returns an empty id without publishing. Repository errors propagate, with
+// rollout conflicts mapped to ErrActiveRolloutBlocksPublish or ErrRolloutSuperseded.
+// Successful publication invalidates caches and schedules cache warming,
+// bundle patches, and source-map indexing as configured. Background failures
+// do not fail publication.
 func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update types.Update, updateType types.UpdateType) (string, error) {
 	cache := cache.GetCache()
 	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey(update.AppId)
@@ -384,6 +393,10 @@ func (s *DeploymentService) MarkUpdateAsChecked(ctx context.Context, update type
 	return updateUUID, nil
 }
 
+// RequestUploadLocalFile stores a local upload using its previously validated
+// token key. It returns ErrInvalidStorageMode outside local mode,
+// ErrTokenAppMismatch for another app, ErrUploadHashMismatch for mismatched
+// content, and ErrUploadFailed for other write failures.
 func (s *DeploymentService) RequestUploadLocalFile(ctx context.Context, params RequestLocalFileUploadParams) error {
 	storageMode := objectstore.ResolveMode()
 	if storageMode != objectstore.ModeLocal {
@@ -421,7 +434,9 @@ func (s *DeploymentService) handleLocalUpload(ctx context.Context, params Reques
 }
 
 // requestSourcemapUpload records the source map on the update and hands back
-// the request that uploads it; nil when the store already holds it.
+// the request that uploads it; nil when the store already holds it. The map
+// and store must be non-nil. Repository and storage errors propagate; the
+// association may remain recorded if a later storage operation fails.
 func (s *DeploymentService) requestSourcemapUpload(ctx context.Context, params RequestUploadURLParams, update types.Update) (*bucket.FileUploadRequest, error) {
 	sourcemap := *params.Sourcemap
 	if err := s.updateRepo.StoreUpdateSourcemapHash(ctx, update, sourcemap.Hash); err != nil {
@@ -521,6 +536,12 @@ func (s *DeploymentService) isIdenticalToLatest(ctx context.Context, params Requ
 	return update2.AreUpdatesIdentical(stored, incoming)
 }
 
+// RequestUploadURLs creates an unchecked update and returns requests for
+// files that need uploading. A supplied source map is recorded only when its
+// store is configured and reused when already present. Active rollouts and
+// unchanged assets return ErrActiveRolloutBlocksPublish and ErrNoChangesDetected.
+// Validation, repository, and upload-request errors propagate; errors after
+// creation can leave an unchecked update.
 func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params RequestUploadURLParams) (*RequestUploadURLResponse, error) {
 	err := s.branchService.UpsertBranchAndRuntimeVersion(ctx, params.AppID, params.BranchName, params.RuntimeVersion)
 	if err != nil {
@@ -759,6 +780,10 @@ func (s *DeploymentService) RepublishUpdate(ctx context.Context, previousUpdate 
 }
 
 // republishUpdateInternal is RepublishUpdate without the active-rollout guard.
+// It copies the update folder and preserves the asset mapping and source-map
+// hash before publishing the new update. Source eligibility errors become
+// RepublishError values; other repository, storage, and publication errors
+// propagate and may leave a partially created update.
 func (s *DeploymentService) republishUpdateInternal(ctx context.Context, previousUpdate *types.Update, platform types.Platform, commitHash string, publishGroup *string) (*types.Update, error) {
 	existing, err := s.updateRepo.GetUpdate(ctx, previousUpdate.AppId, previousUpdate.Branch, previousUpdate.RuntimeVersion, previousUpdate.UpdateId)
 	if err != nil {

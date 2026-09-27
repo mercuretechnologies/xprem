@@ -60,7 +60,8 @@ const (
 )
 
 // Symbolicate reads a stack trace and maps every frame it can through the
-// index. A nil index leaves the frames as they are.
+// index. A nil index leaves the frames as they are. Lookup failures leave
+// a frame without an origin; source text failures omit its context.
 func Symbolicate(index *Index, stacktrace string) Trace {
 	trace := ReadTrace(stacktrace)
 	if index == nil {
@@ -111,6 +112,8 @@ func ReadTrace(stacktrace string) Trace {
 	return trace
 }
 
+// sameFrame compares frame identity for repetition folding, ignoring repeat
+// counts and origins. Entries with a nonzero skipped count do not match.
 func sameFrame(a, b TraceFrame) bool {
 	return a.Skipped == 0 && b.Skipped == 0 && a.Function == b.Function && a.File == b.File &&
 		a.Line == b.Line && a.Column == b.Column && a.Native == b.Native && a.Bytecode == b.Bytecode
@@ -118,6 +121,7 @@ func sameFrame(a, b TraceFrame) bool {
 
 // originOf looks one frame up in the index. A bytecode frame is looked up by
 // its offset, a source frame by its line and column made zero-based.
+// Missing mappings and lookup errors return nil; context is optional.
 func originOf(index *Index, frame Frame, sources *sourceLines) *Origin {
 	var pos Position
 	var ok bool
@@ -144,6 +148,9 @@ type sourceLines struct {
 	lines map[int][]string
 }
 
+// around returns up to five lines before and after a one-based source line,
+// trimming long lines around column. source is a zero-based source index.
+// Missing text, read errors, and out-of-range lines return nil; reads are cached.
 func (s *sourceLines) around(source, line, column int) *Context {
 	lines, seen := s.lines[source]
 	if !seen {
@@ -196,8 +203,9 @@ func trimLine(text string, column int) string {
 // does: by its type and the in-app frames it went through, each frame by its
 // file and its line of code, or its function when the code is unknown. The
 // line number is left out, since the same code moves from one update to the
-// next. Without in-app frames every mapped frame counts; without frames at
-// all, the message does.
+// next. Without in-app frames every mapped frame counts, then unmapped
+// non-native frames are used if none are mapped. With none of those, the
+// normalized message does.
 func GroupFingerprint(errorType, message string, trace Trace) uuid.UUID {
 	frames := groupKeys(trace, func(frame TraceFrame) bool { return frame.Origin != nil && frame.Origin.InApp })
 	if len(frames) == 0 {
@@ -235,6 +243,9 @@ func groupKeys(trace Trace, keep func(TraceFrame) bool) []string {
 // frame; a longer one is minified or generated.
 const maxGroupingLineRunes = 120
 
+// originKey prefers a nonempty source line of at most 120 runes after
+// whitespace normalization, then the mapped name, then the frame function.
+// When context is present, it must contain origin.Line.
 func originKey(frame TraceFrame, origin *Origin) string {
 	if origin.Context != nil {
 		line := strings.Join(strings.Fields(origin.Context.Lines[origin.Line-origin.Context.FirstLine]), " ")
@@ -249,7 +260,8 @@ func originKey(frame TraceFrame, origin *Origin) string {
 }
 
 // Culprit names where an error comes from: the first in-app frame, as
-// "file in function".
+// "file in function", or just the file when no function is known. It returns
+// an empty string when no in-app frame is mapped.
 func Culprit(trace Trace) string {
 	for _, frame := range trace.Frames {
 		origin := frame.Origin

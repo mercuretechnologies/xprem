@@ -56,6 +56,9 @@ func (c *Client) AddPeriodic(job *river.PeriodicJob) {
 	c.periodic = append(c.periodic, job)
 }
 
+// Start migrates the River schema and starts registered workers and periodic
+// jobs. Migration-lock, migration, client-configuration, and startup errors
+// are returned to the caller.
 func (c *Client) Start(ctx context.Context) error {
 	driver := riverpgxv5.New(c.pool)
 	migrator, err := rivermigrate.New(driver, nil)

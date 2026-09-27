@@ -40,10 +40,13 @@ type PostgresIndexRepository struct {
 	engine *database.Engine
 }
 
+// NewPostgresIndexRepository binds index records to the database engine.
 func NewPostgresIndexRepository(engine *database.Engine) *PostgresIndexRepository {
 	return &PostgresIndexRepository{engine: engine}
 }
 
+// updateID parses the decimal update id as an int64, wrapping syntax and
+// range errors from strconv.ParseInt.
 func updateID(update types.Update) (int64, error) {
 	id, err := strconv.ParseInt(update.UpdateId, 10, 64)
 	if err != nil {
@@ -53,7 +56,8 @@ func updateID(update types.Update) (int64, error) {
 }
 
 // MarkPending records an index job about to be scheduled, resetting the row
-// if the map was already handled.
+// if the map was already handled. Invalid numeric update ids, database
+// failures, and missing branches return errors.
 func (r *PostgresIndexRepository) MarkPending(ctx context.Context, update types.Update, hash string) error {
 	id, err := updateID(update)
 	if err != nil {
@@ -74,6 +78,9 @@ func (r *PostgresIndexRepository) MarkPending(ctx context.Context, update types.
 	return nil
 }
 
+// MarkRunning marks the index job running and increments its attempt count.
+// It returns errors for invalid numeric update ids, database failures, or a
+// missing index record.
 func (r *PostgresIndexRepository) MarkRunning(ctx context.Context, update types.Update) error {
 	id, err := updateID(update)
 	if err != nil {
@@ -93,7 +100,9 @@ func (r *PostgresIndexRepository) MarkRunning(ctx context.Context, update types.
 	return nil
 }
 
-// Finish records how the job ended. reason is empty for a stored index.
+// Finish records how the job ended. reason is empty for a stored index;
+// segments and indexSize (bytes) may be nil when unknown. Invalid numeric
+// update ids, database failures, and missing index records return errors.
 func (r *PostgresIndexRepository) Finish(ctx context.Context, update types.Update, status types.SourcemapIndexStatus, reason string, segments *int, indexSize *int64) error {
 	id, err := updateID(update)
 	if err != nil {
@@ -126,6 +135,9 @@ func (r *PostgresIndexRepository) Finish(ctx context.Context, update types.Updat
 	return nil
 }
 
+// GetUpdateSourcemap reads the map hash and optional index record. It returns
+// nil, nil for a missing update, and a nil Hash for an update without a map.
+// Invalid numeric update ids and database failures return errors.
 func (r *PostgresIndexRepository) GetUpdateSourcemap(ctx context.Context, appId, branch, runtimeVersion, updateId string) (*UpdateSourcemap, error) {
 	id, err := updateID(types.Update{UpdateId: updateId})
 	if err != nil {
@@ -168,6 +180,9 @@ func (r *PostgresIndexRepository) GetUpdateSourcemap(ctx context.Context, appId,
 	return sourcemap, nil
 }
 
+// GetUpdateSourcemapByUUID reads the map for the UUID reported by a device,
+// filling only Hash and Status on its index record. It returns nil, nil for
+// a missing update and propagates database errors.
 func (r *PostgresIndexRepository) GetUpdateSourcemapByUUID(ctx context.Context, appId, updateUUID string) (*UpdateSourcemap, error) {
 	row, err := r.engine.Queries.GetUpdateSourcemapByUUID(ctx, pgdb.GetUpdateSourcemapByUUIDParams{
 		AppID:      repository.ToPgUUID(appId),

@@ -37,12 +37,15 @@ type ErrorGroupsSweep struct {
 	indexes  IndexOpener
 }
 
+// NewErrorGroupsSweep binds the error explorer and index opener for a sweep;
+// it does not schedule or run a pass.
 func NewErrorGroupsSweep(explorer *Explorer, indexes IndexOpener) *ErrorGroupsSweep {
 	return &ErrorGroupsSweep{explorer: explorer, indexes: indexes}
 }
 
 // Run is one pass. An error whose update has no usable index is left for a
-// later pass, when the index may exist.
+// later pass, when the index may exist. Pending-list, unexpected index, and
+// batch-write errors propagate; individual exception-read failures are skipped.
 func (s *ErrorGroupsSweep) Run(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, errorGroupsSweepTimeout)
 	defer cancel()
@@ -94,6 +97,8 @@ func (s *ErrorGroupsSweep) indexOf(ctx context.Context, indexes map[string]*symb
 	return index, nil
 }
 
+// symbolicate builds a group from the latest stored exception, returning
+// exception-read errors. Frame lookup failures leave unmapped frames.
 func (s *ErrorGroupsSweep) symbolicate(ctx context.Context, index *symbolication.Index, key errorKey) (ErrorGroup, error) {
 	found, err := s.explorer.oneTraceOf(ctx, key)
 	if err != nil {
@@ -113,6 +118,7 @@ func (s *ErrorGroupsSweep) symbolicate(ctx context.Context, index *symbolication
 
 type errorGroupsSweepArgs struct{}
 
+// Kind identifies error-group sweeps to River.
 func (errorGroupsSweepArgs) Kind() string { return "error-groups-sweep" }
 
 // A run still going when the next is due is not doubled.
@@ -136,10 +142,12 @@ type errorGroupsWorker struct {
 	sweep *ErrorGroupsSweep
 }
 
+// Work runs one error-group sweep and returns its error to River.
 func (w *errorGroupsWorker) Work(ctx context.Context, _ *river.Job[errorGroupsSweepArgs]) error {
 	return w.sweep.Run(ctx)
 }
 
+// RegisterErrorGroupsWorker adds the sweep worker before the job client starts.
 func RegisterErrorGroupsWorker(workers *river.Workers, sweep *ErrorGroupsSweep) {
 	river.AddWorker(workers, &errorGroupsWorker{sweep: sweep})
 }

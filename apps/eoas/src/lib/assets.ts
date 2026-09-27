@@ -86,6 +86,9 @@ export function buildUploadFiles(files: AssetToUpload[], platform: string): File
     });
 }
 
+/**
+ * Returns the first source map for the platform, or undefined when none was exported.
+ */
 export function buildSourcemapUpload(
   files: AssetToUpload[],
   platform: string
@@ -139,6 +142,12 @@ function toServerPath(relativePath: string): string {
   return relativePath.replace(/\\/g, '/');
 }
 
+/**
+ * Reads and hashes the selected platforms' bundles, assets, optional adjacent
+ * .map files, and shared config files under the export directory.
+ * Rejects on an unresolved directory, invalid metadata, an escaping file path,
+ * or a file-read/hash failure.
+ */
 export async function computeFilesRequests(
   projectDir: string,
   outputDir: string,
@@ -432,6 +441,13 @@ function outdatedServerHint(): string {
   )}`;
 }
 
+/**
+ * Requests upload destinations for one platform, including its optional source map.
+ * Returns the validated response with updateId normalized to a string.
+ * Rejects with NoChangesDetectedError on 406, and errors for rollout conflicts,
+ * other HTTP failures, invalid responses, or an ignored rollout percentage.
+ * URL, authentication, network, and response-decoding errors also propagate.
+ */
 export async function requestUploadUrls({
   body,
   requestUploadUrl,

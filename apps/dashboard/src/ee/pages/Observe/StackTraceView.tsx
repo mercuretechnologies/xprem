@@ -35,6 +35,9 @@ const tokenColors: Record<CodeToken['kind'], string> = {
   plain: '',
 };
 
+/**
+ * Highlights a source line while preserving spacing; an empty line occupies one space.
+ */
 const CodeLine = ({ text }: { text: string }) => (
   <code className="whitespace-pre pr-3">
     {text
@@ -47,6 +50,10 @@ const CodeLine = ({ text }: { text: string }) => (
   </code>
 );
 
+/**
+ * Shows numbered source context and highlights the origin line; returns null
+ * when the origin has no context.
+ */
 const SourceContext = ({ origin }: { origin: TraceOrigin }) => {
   if (!origin.context) return null;
   return (
@@ -70,6 +77,10 @@ const SourceContext = ({ origin }: { origin: TraceOrigin }) => {
   );
 };
 
+/**
+ * Shows a frame or skipped count, with optional expandable source context.
+ * showContext sets the initial expansion state.
+ */
 const FrameRow = ({ entry, showContext }: { entry: StackEntry; showContext: boolean }) => {
   const [contextOpen, setContextOpen] = useState(showContext);
   if (entry.type === 'skipped') {
@@ -168,6 +179,11 @@ const SourceStatus = ({ status }: { status?: ErrorGroupStatus }) => {
   );
 };
 
+/**
+ * Displays parsed frames with a raw-text toggle and optional source-map results.
+ * When errorGroup is supplied, polls every ten seconds while waiting or indexing;
+ * parsed frames remain visible until a ready group arrives, including on query errors.
+ */
 export const StackTraceView = ({
   title,
   trace,

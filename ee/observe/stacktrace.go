@@ -26,7 +26,9 @@ const (
 
 // trimStacktrace reports whether value is a stack trace, that is holds at
 // least two frames, and returns it with the frames past the ones kept replaced
-// by a single "... skipping N frames" line.
+// by a single "... skipping N frames" line. It scans at most 256 KiB, ending
+// at a line break, and caps recognized traces at 32 Ki runes. The returned
+// value may already be shortened even when fewer than two frames are found.
 func trimStacktrace(value string) (string, bool) {
 	if !strings.Contains(value, "\n") {
 		return value, false

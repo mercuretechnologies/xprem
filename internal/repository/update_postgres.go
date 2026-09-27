@@ -615,6 +615,9 @@ func (s *PostgresUpdateRepository) GetUpdateAssetMapping(ctx context.Context, up
 	return mapping, nil
 }
 
+// GetUpdateSourcemapHash reads the map hash by app, branch, and numeric
+// update id. Missing updates and unset hashes return nil, nil; invalid ids
+// and database failures return errors.
 func (s *PostgresUpdateRepository) GetUpdateSourcemapHash(ctx context.Context, update types.Update) (*string, error) {
 	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
 	if err != nil {
@@ -634,6 +637,9 @@ func (s *PostgresUpdateRepository) GetUpdateSourcemapHash(ctx context.Context, u
 	return hash, nil
 }
 
+// StoreUpdateSourcemapHash associates a map with an update by app, branch,
+// and numeric update id. Invalid ids, database failures, and missing updates
+// return errors; this does not verify that the map exists in storage.
 func (s *PostgresUpdateRepository) StoreUpdateSourcemapHash(ctx context.Context, update types.Update, hash string) error {
 	updateIdInt, err := strconv.ParseInt(update.UpdateId, 10, 64)
 	if err != nil {

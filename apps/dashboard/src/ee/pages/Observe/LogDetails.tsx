@@ -42,6 +42,11 @@ const splitStackTraces = (attributes: Json | null) => {
   return { traces, rest };
 };
 
+/**
+ * Expands a log into metadata, stack traces, JSON documents, and plain text.
+ * Only recognized exception attributes with an error fingerprint request
+ * symbolicated frames; other traces display their parsed frames.
+ */
 export const LogDetails = ({ log }: { log: ObserveLog }) => {
   const body = log.body.trim();
   const bodyTrace = body ? parseStackTrace(body) : null;

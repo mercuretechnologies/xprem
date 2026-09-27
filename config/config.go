@@ -228,7 +228,8 @@ func LoadConfig() {
 }
 
 // IsSourcemapUploadEnabled reports whether publishes store the bundle's source
-// map alongside the update (UPLOAD_SOURCEMAPS=true, off by default).
+// map alongside the update (UPLOAD_SOURCEMAPS=true, off by default). It is
+// always false without the database control plane; invalid booleans are false.
 func IsSourcemapUploadEnabled() bool {
 	if !IsDBMode() {
 		return false

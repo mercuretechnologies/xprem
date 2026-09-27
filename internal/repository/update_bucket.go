@@ -313,10 +313,14 @@ func (s *BucketUpdateRepository) GetUpdateAssetMapping(ctx context.Context, upda
 	return stored.AssetMapping, nil
 }
 
+// GetUpdateSourcemapHash returns nil, nil: stateless updates have no stored
+// source-map association.
 func (s *BucketUpdateRepository) GetUpdateSourcemapHash(ctx context.Context, update types.Update) (*string, error) {
 	return nil, nil
 }
 
+// StoreUpdateSourcemapHash returns ErrNotSupportedInStatelessMode without
+// writing an association.
 func (s *BucketUpdateRepository) StoreUpdateSourcemapHash(ctx context.Context, update types.Update, hash string) error {
 	return ErrNotSupportedInStatelessMode
 }

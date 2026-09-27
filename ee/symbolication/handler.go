@@ -18,10 +18,15 @@ type Handler struct {
 	service *Service
 }
 
+// NewHandler binds source-map endpoints to service; a nil service reports
+// indexing as unavailable.
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
+// GetUpdateSourcemapHandler returns the map hash and index record as JSON.
+// Unavailable indexing or invalid names yield 400, missing updates or maps
+// yield 404, and other service failures yield 500.
 func (h *Handler) GetUpdateSourcemapHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sourcemap, err := h.service.GetUpdateSourcemap(r.Context(), vars["APP_ID"], vars["BRANCH"], vars["RUNTIME_VERSION"], vars["UPDATE_ID"])
@@ -36,6 +41,9 @@ type reindexResponse struct {
 	Scheduled bool `json:"scheduled"`
 }
 
+// ReindexUpdateSourcemapHandler requests a rebuild and returns scheduled=true
+// on success. Unavailable indexing or invalid names yield 400, missing updates
+// or maps yield 404, and other service failures yield 500.
 func (h *Handler) ReindexUpdateSourcemapHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if err := h.service.Reindex(r.Context(), vars["APP_ID"], vars["BRANCH"], vars["RUNTIME_VERSION"], vars["UPDATE_ID"]); err != nil {
@@ -45,6 +53,8 @@ func (h *Handler) ReindexUpdateSourcemapHandler(w http.ResponseWriter, r *http.R
 	handlers.RenderJSON(w, http.StatusOK, reindexResponse{Scheduled: true})
 }
 
+// renderError translates known service errors to 400 or 404 responses; other
+// errors produce a 500 response containing fallbackDetail.
 func renderError(w http.ResponseWriter, err error, fallbackDetail string) {
 	var valErr *validation.Error
 	switch {

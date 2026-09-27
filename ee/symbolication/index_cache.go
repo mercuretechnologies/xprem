@@ -28,10 +28,13 @@ type cachedIndex struct {
 	size  int
 }
 
+// newIndexCache creates an empty cache of opened indexes.
 func newIndexCache() *indexCache {
 	return &indexCache{items: map[string]cachedIndex{}}
 }
 
+// get returns a cached index and marks it as most recently used; a cache
+// miss returns nil, false.
 func (c *indexCache) get(hash string) (*Index, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -42,7 +45,9 @@ func (c *indexCache) get(hash string) (*Index, bool) {
 	return item.index, ok
 }
 
-// put opens an index over data and keeps it while it fits.
+// put opens an index over data, returning OpenIndex errors. Indexes larger
+// than the cache budget are returned without being cached; otherwise older
+// entries are evicted as needed. The returned index retains data.
 func (c *indexCache) put(hash string, data []byte) (*Index, error) {
 	index, err := OpenIndex(bytes.NewReader(data))
 	if err != nil {

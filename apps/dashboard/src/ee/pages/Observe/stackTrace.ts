@@ -104,6 +104,11 @@ const skippedPatterns = [/^\s*\.\.\. skipping (\d+) frames$/, /^\s*… \+(\d+) m
 
 const maxLineLength = 4096;
 
+/**
+ * Parses a supported stack frame, or returns null for unrecognized text or lines
+ * longer than 4096 UTF-16 code units. Source positions are one-based; Hermes
+ * bytecode columns are offsets.
+ */
 const parseFrame = (line: string): StackFrame | null => {
   if (line.length > maxLineLength) return null;
   for (const format of frameFormats) {
@@ -113,6 +118,9 @@ const parseFrame = (line: string): StackFrame | null => {
   return null;
 };
 
+/**
+ * Reads a Hermes or expo-observe skipped-frame count, or null for other text.
+ */
 const parseSkipped = (line: string): number | null => {
   for (const pattern of skippedPatterns) {
     const match = pattern.exec(line);
@@ -121,6 +129,9 @@ const parseSkipped = (line: string): number | null => {
   return null;
 };
 
+/**
+ * Compares frame kind, function, file, and position for repetition folding.
+ */
 const sameFrame = (a: StackFrame, b: StackFrame) =>
   a.kind === b.kind &&
   a.functionName === b.functionName &&

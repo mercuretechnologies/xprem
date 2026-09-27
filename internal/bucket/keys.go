@@ -117,6 +117,8 @@ func ValidateUploadFile(name, hash string) error {
 	return ValidateBlobHash(hash)
 }
 
+// ReservedBranchName reports whether a name is reserved for blobs, bundle
+// patches, or source maps instead of a branch.
 func ReservedBranchName(branch string) bool {
 	return branch == casDir || branch == bsDiffDir || branch == sourcemapsDir
 }
@@ -130,8 +132,8 @@ func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
 }
 
-// SourcemapObjectKey is {appId}/sourcemaps/{hash}: the source map of the
-// bundle blob with that hash.
+// SourcemapObjectKey is {appId}/sourcemaps/{hash}, without the bucket key
+// prefix. hash identifies the source-map bytes, not the bundle.
 func SourcemapObjectKey(appId, hash string) string {
 	return appId + "/" + sourcemapsDir + "/" + hash
 }

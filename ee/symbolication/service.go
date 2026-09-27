@@ -48,6 +48,8 @@ type Service struct {
 	licenseValid func() bool
 }
 
+// NewService connects source-map storage, index records, and the job queue
+// with an empty index cache. Workers must be registered separately.
 func NewService(store IndexStore, indexes IndexRepository, jobsClient *jobs.Client) *Service {
 	return &Service{store: store, indexes: indexes, jobs: jobsClient, cache: newIndexCache(), licenseValid: licensing.IsEnterprise}
 }
@@ -57,7 +59,10 @@ func (s *Service) available() bool {
 	return s != nil && s.store != nil && s.indexes != nil && s.jobs != nil && s.licenseValid()
 }
 
-// GetUpdateSourcemap answers ErrNoSourcemap for an update published without a map.
+// GetUpdateSourcemap reads the map hash and index record for an update.
+// It returns ErrUnavailable when indexing is disabled, ErrUpdateNotFound
+// for a missing update, and ErrNoSourcemap for an update without a map.
+// Branch/update-id validation and repository errors propagate.
 func (s *Service) GetUpdateSourcemap(ctx context.Context, appId, branch, runtimeVersion, updateId string) (*UpdateSourcemap, error) {
 	if !s.available() {
 		return nil, ErrUnavailable
@@ -65,7 +70,9 @@ func (s *Service) GetUpdateSourcemap(ctx context.Context, appId, branch, runtime
 	return s.updateSourcemap(ctx, appId, branch, runtimeVersion, updateId)
 }
 
-// Reindex schedules the index of an update's map again, as its publish did.
+// Reindex schedules a rebuild even if the map already has an index.
+// It returns the same lookup errors as GetUpdateSourcemap and propagates
+// pending-record and enqueue failures; an already active job is accepted.
 func (s *Service) Reindex(ctx context.Context, appId, branch, runtimeVersion, updateId string) error {
 	if !s.available() {
 		return ErrUnavailable
@@ -114,8 +121,11 @@ type indexArgs struct {
 	Rebuild bool `json:"rebuild"`
 }
 
+// Kind identifies source-map indexing jobs to River.
 func (indexArgs) Kind() string { return indexJobKind }
 
+// InsertOpts selects the source-map queue and five attempts, suppressing
+// concurrent jobs for the same app, branch, and update.
 func (indexArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
 		Queue:       jobs.QueueSourcemapIndex,
@@ -139,21 +149,27 @@ type indexWorker struct {
 	service *Service
 }
 
+// Work builds or reuses the index and returns the job outcome to River.
 func (w *indexWorker) Work(ctx context.Context, job *river.Job[indexArgs]) error {
 	return w.service.runIndexJob(ctx, job)
 }
 
+// RegisterWorker adds the source-map index worker before the job client starts.
 func RegisterWorker(workers *river.Workers, service *Service) {
 	river.AddWorker(workers, &indexWorker{service: service})
 }
 
 // ScheduleIndex records the update's map as pending, then inserts the job: the
 // worker can start the moment the job exists, and must find the row. A no-op
-// when indexing is unavailable.
+// when indexing is unavailable. Pending-record and enqueue errors propagate;
+// an already active job is accepted. An enqueue failure may leave a pending row.
 func (s *Service) ScheduleIndex(ctx context.Context, update types.Update, hash string) error {
 	return s.scheduleIndex(ctx, update, hash, false)
 }
 
+// scheduleIndex records and queues an index job; rebuild requests replacement
+// of a stored index. It is a no-op when unavailable, accepts active duplicates,
+// and returns other repository or enqueue errors.
 func (s *Service) scheduleIndex(ctx context.Context, update types.Update, hash string, rebuild bool) error {
 	if !s.available() {
 		return nil
@@ -284,8 +300,10 @@ func (s *Service) existingIndex(ctx context.Context, appId, hash string) (indexO
 }
 
 // OpenUpdateIndex opens the index of the update a device reports by UUID.
-// An update whose index is not there yet is ErrIndexNotReady, one that never
-// will have one is ErrNoSourcemap or ErrIndexFailed.
+// It returns ErrUnavailable when disabled, ErrUpdateNotFound for a missing
+// update, ErrNoSourcemap without a map, ErrIndexNotReady before storage, and
+// ErrIndexFailed for failed or cancelled jobs. Repository, store, read, and
+// OpenIndex errors propagate. Successful reads may populate the index cache.
 func (s *Service) OpenUpdateIndex(ctx context.Context, appId, updateUUID string) (*Index, error) {
 	if !s.available() {
 		return nil, ErrUnavailable
@@ -312,8 +330,9 @@ func (s *Service) OpenUpdateIndex(ctx context.Context, appId, updateUUID string)
 	return s.cache.put(hash, data)
 }
 
-// UpdateIndexState is OpenUpdateIndex's answer without opening anything: nil
-// when the index is ready to use.
+// UpdateIndexState returns nil when the database records the index as stored;
+// it does not verify the stored file. It returns ErrUnavailable when disabled,
+// otherwise the state or repository errors from storedIndexHash.
 func (s *Service) UpdateIndexState(ctx context.Context, appId, updateUUID string) error {
 	if !s.available() {
 		return ErrUnavailable
@@ -322,7 +341,10 @@ func (s *Service) UpdateIndexState(ctx context.Context, appId, updateUUID string
 	return err
 }
 
-// storedIndexHash is the hash of the update's map once its index is stored.
+// storedIndexHash returns the map hash when its index is recorded as stored.
+// Missing updates, maps, pending indexes, and failed/cancelled jobs return
+// ErrUpdateNotFound, ErrNoSourcemap, ErrIndexNotReady, and ErrIndexFailed,
+// respectively. Repository errors propagate.
 func (s *Service) storedIndexHash(ctx context.Context, appId, updateUUID string) (string, error) {
 	sourcemap, err := s.indexes.GetUpdateSourcemapByUUID(ctx, appId, updateUUID)
 	if err != nil {

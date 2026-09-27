@@ -93,7 +93,8 @@ var frameFormats = []frameFormat{
 	},
 }
 
-// ParseFrame reads one line of a stack trace.
+// ParseFrame reads one line of a stack trace. It returns false for an
+// unrecognized line or one longer than 4096 bytes.
 func ParseFrame(line string) (Frame, bool) {
 	if len(line) > maxFrameLineBytes {
 		return Frame{}, false
@@ -113,7 +114,8 @@ var skippedFramesPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*… \+(\d+) more frames$`),
 }
 
-// SkippedFrames reads a line saying how many frames a stack trace left out.
+// SkippedFrames reads a Hermes or expo-observe skipped-frame marker. It
+// returns false for an unrecognized line or one longer than 4096 bytes.
 func SkippedFrames(line string) (int, bool) {
 	if len(line) > maxFrameLineBytes {
 		return 0, false
@@ -131,8 +133,8 @@ func SkippedFramesLine(count int) string {
 	return "    ... skipping " + strconv.Itoa(count) + " frames"
 }
 
-// atoi reads a number the patterns already matched as digits; one too large
-// for an int reads as 0.
+// atoi reads matched digits, discarding conversion errors. Empty input
+// yields 0; a positive value beyond the int range yields the maximum int.
 func atoi(digits string) int {
 	n, _ := strconv.Atoi(digits)
 	return n

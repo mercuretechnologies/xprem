@@ -31,6 +31,9 @@ const legacyPeriods: Record<string, string> = {
 // query, so nothing is ever served from cache. liveMs is the refresh cadence.
 export type WindowSpec = { windowMs: number; snapMs: number; liveMs: number };
 
+/**
+ * Chooses snapping and refresh intervals for a duration; all values are milliseconds.
+ */
 const windowSpec = (windowMs: number): WindowSpec => {
   if (windowMs <= HOUR) return { windowMs, snapMs: 60_000, liveMs: 5_000 };
   if (windowMs <= DAY) return { windowMs, snapMs: 300_000, liveMs: 15_000 };
@@ -305,6 +308,12 @@ const queryForScopes = (state: FilterState, scopes: FilterScope[]): ObserveQuery
   return applied;
 };
 
+/**
+ * Synchronizes Observe filters and time ranges with URL parameters, returning
+ * scoped queries and controls that replace browser history entries. maxWindow
+ * caps the query duration in milliseconds; live relative ranges advance on
+ * snap boundaries. Invalid URL ranges fall back to a legacy period or 24 hours.
+ */
 export const useObserveFilters = (scopes: FilterScope[], maxWindow: number) => {
   const [searchParams, setSearchParams] = useSearchParams();
 

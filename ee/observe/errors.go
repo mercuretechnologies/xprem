@@ -30,7 +30,9 @@ type UpdateErrors struct {
 // its most frequent ones.
 const maxUpdateErrors = 200
 
-// ReadUpdateErrors lists the errors of an update, most frequent first.
+// ReadUpdateErrors lists up to 200 errors of an update, most frequent first.
+// Without ClickHouse it returns Available=false and an empty list; query
+// and row-reading errors otherwise propagate.
 func (e *Explorer) ReadUpdateErrors(ctx context.Context, appID, updateID string) (UpdateErrors, error) {
 	result := UpdateErrors{Available: e.clickhouse != nil, Errors: []UpdateError{}}
 	if e.clickhouse == nil {

@@ -33,6 +33,10 @@ const sameDay = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
+/**
+ * Shows a calendar with weeks starting Monday and emits a selected day at local
+ * midnight. Dates after today are disabled.
+ */
 const MonthCalendar = ({
   selected,
   onPick,
@@ -102,6 +106,10 @@ const MonthCalendar = ({
   );
 };
 
+/**
+ * Edits a time expression with an optional calendar; onPickDay converts the
+ * chosen local date to the string passed to onChange.
+ */
 const RangeField = ({
   label,
   value,
@@ -150,6 +158,9 @@ const RangeField = ({
   );
 };
 
+/**
+ * Returns the browser time-zone name and its current UTC offset.
+ */
 const browserZone = () => {
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const minutes = -new Date().getTimezoneOffset();

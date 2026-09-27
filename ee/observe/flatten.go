@@ -330,7 +330,9 @@ var (
 
 // marshalAttributes serializes the non-envelope attributes as JSON.
 // encoding/json sorts map keys, so the output (and therefore the content
-// hash) is deterministic across retries of the same batch.
+// hash) is deterministic across retries of the same batch. Recognized stack
+// traces have a separate size budget. Unencodable non-string values are
+// skipped; an empty result or a final encoding failure returns an empty string.
 func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 	names := make([]string, 0, len(attrs))
 	for key, value := range attrs {

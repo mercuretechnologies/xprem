@@ -27,6 +27,10 @@ const patterns: Array<{ kind: CodeToken['kind']; pattern: RegExp }> = [
   { kind: 'plain', pattern: /^\s+|^./ },
 ];
 
+/**
+ * Tokenizes one line for lightweight JavaScript/TypeScript highlighting.
+ * Classification is heuristic and carries no comment or string state across lines.
+ */
 export const tokenizeCode = (line: string): CodeToken[] => {
   const tokens: CodeToken[] = [];
   let rest = line;

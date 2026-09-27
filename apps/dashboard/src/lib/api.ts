@@ -1767,6 +1767,11 @@ export class ApiClient {
       method: 'GET',
     });
   }
+  /**
+   * Reads an error group or its processing status for the selected app.
+   * updateId is the device-reported UUID and fingerprint identifies the error.
+   * Rejects without an app or on request, token-refresh, or response-decoding errors.
+   */
   public async getErrorGroup(updateId: string, fingerprint: string) {
     const search = new URLSearchParams({ updateId });
     return this.request<ErrorGroupAnswer>(
@@ -1849,6 +1854,11 @@ export class ApiClient {
     );
   }
 
+  /**
+   * Reads an update's source-map hash and optional index record for the selected app.
+   * updateId is the server update id, not its device-reported UUID.
+   * Rejects without an app or on request, token-refresh, or response-decoding errors.
+   */
   public async getUpdateSourcemap(branch: string, runtimeVersion: string, updateId: string) {
     return this.request<UpdateSourcemapRecord>(
       `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/sourcemap`,

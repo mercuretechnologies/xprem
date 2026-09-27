@@ -23,6 +23,9 @@ export const quickRanges: Array<TimeRange & { label: string }> = [
   { from: 'now-30d', to: 'now', label: 'Last 30 days' },
 ];
 
+/**
+ * Checks for a trimmed "now" prefix; this does not validate the expression.
+ */
 export const isRelative = (expression: string) => expression.trim().startsWith('now');
 
 const pad = (value: number) => String(value).padStart(2, '0');
@@ -31,7 +34,12 @@ const pad = (value: number) => String(value).padStart(2, '0');
 export const formatAbsolute = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
-// Reads one end of a range; null when it is neither a relative expression nor a date.
+/**
+ * Resolves now or now-N[mhdw] against now in Unix milliseconds, or reads a
+ * local YYYY-MM-DD date with optional HH:mm[:ss]. Calendar fields use Date
+ * normalization. Unrecognized syntax or an invalid absolute date returns null;
+ * relative arithmetic can produce an invalid Date for out-of-range values.
+ */
 export const parseTimeExpression = (expression: string, now: number): Date | null => {
   const text = expression.trim();
   if (text === 'now') return new Date(now);
@@ -83,7 +91,11 @@ export const describeRange = (range: TimeRange) => {
   return `${start} → ${dayLabel.format(to)} ${timeLabel.format(to)}`;
 };
 
-// Moves the window one length back or forward; the result is absolute.
+/**
+ * Moves a resolved window one length backward (-1) or forward (1), clamping
+ * its end to now in Unix milliseconds. Returns local absolute bounds with
+ * second precision, or null when the range cannot be resolved.
+ */
 export const shiftRange = (range: TimeRange, direction: -1 | 1, now: number): TimeRange | null => {
   const resolved = resolveRange(range, now);
   if (!resolved) return null;
@@ -98,8 +110,12 @@ export const rangeLengthMs = (range: TimeRange, now: number) => {
   return resolved ? resolved.to.getTime() - resolved.from.getTime() : 0;
 };
 
-// Doubles the window around its middle, never past maxMs; a window ending now
-// keeps ending now.
+/**
+ * Expands a resolved window to twice its duration, capped at maxMs milliseconds,
+ * and clamps its end to now in Unix milliseconds. An end of "now" is retained;
+ * other bounds become local absolute times with second precision. Returns null
+ * when the range cannot be resolved.
+ */
 export const zoomOutRange = (range: TimeRange, now: number, maxMs = Infinity): TimeRange | null => {
   const resolved = resolveRange(range, now);
   if (!resolved) return null;
@@ -113,8 +129,11 @@ export const zoomOutRange = (range: TimeRange, now: number, maxMs = Infinity): T
 
 const recentKey = 'timeRangePicker.recent';
 
-// The last absolute ranges applied from the fields, newest first. Browser
-// storage can be missing or refuse writes; the list is then simply empty.
+/**
+ * Reads recent ranges from browser storage, retaining entries with string bounds
+ * without validating their expressions. Missing, unreadable, or malformed storage
+ * returns an empty list.
+ */
 export const readRecentRanges = (): TimeRange[] => {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(recentKey) ?? '[]');
@@ -129,6 +148,10 @@ export const readRecentRanges = (): TimeRange[] => {
   }
 };
 
+/**
+ * Stores a range first in a deduplicated history of at most four entries, unless
+ * both bounds have a "now" prefix. Browser storage failures are ignored.
+ */
 export const rememberRange = (range: TimeRange) => {
   if (isRelative(range.from) && isRelative(range.to)) return;
   const recent = [

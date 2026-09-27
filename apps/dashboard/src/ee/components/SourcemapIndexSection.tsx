@@ -46,21 +46,34 @@ const REASONS: Record<string, string> = {
   map_too_large: 'Source map above the size limit for indexing',
 };
 
+/**
+ * Maps a known reason prefix to a label, retaining any longer reason as hover
+ * detail. Unknown reasons remain the label.
+ */
 const describeReason = (reason: string) => {
   const code = reason.split(':')[0].trim();
   const label = REASONS[code];
   return label ? { label, detail: reason === code ? undefined : reason } : { label: reason };
 };
 
+/**
+ * Formats a byte count using B, KB, or MB labels with powers of 1024.
+ */
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+/**
+ * Reports whether an index record is queued or running and should keep polling.
+ */
 const isLive = (record: UpdateSourcemapRecord | undefined) =>
   record?.index?.status === 'pending' || record?.index?.status === 'running';
 
+/**
+ * Displays the recorded index status, result, and attempts, or explains a missing job.
+ */
 const IndexOutcome = ({ record }: { record: UpdateSourcemapRecord }) => {
   const index = record.index;
   if (!index) {
@@ -106,6 +119,11 @@ const IndexOutcome = ({ record }: { record: UpdateSourcemapRecord }) => {
   );
 };
 
+/**
+ * Shows source-map indexing for an update, polling every three seconds while
+ * queued or running. Users with publish permission can request reindexing;
+ * request failures appear in the section or a toast.
+ */
 export const SourcemapIndexSection = ({
   branch,
   runtimeVersion,

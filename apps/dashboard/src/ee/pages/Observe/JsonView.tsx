@@ -7,6 +7,9 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/**
+ * Renders a JSON scalar with type coloring and preserves line breaks in strings.
+ */
 const Scalar = ({ value }: { value: Json }) => {
   if (value === null) return <span className="text-violet-600 dark:text-violet-300">null</span>;
   if (typeof value === 'boolean')
@@ -21,6 +24,10 @@ const Scalar = ({ value }: { value: Json }) => {
   );
 };
 
+/**
+ * Renders a JSON value recursively; containers initially expand only at depths
+ * zero and one, and can be toggled independently.
+ */
 const Node = ({ name, value, depth }: { name?: string; value: Json; depth: number }) => {
   const isContainer = value !== null && typeof value === 'object';
   const [open, setOpen] = useState(depth < 2);
@@ -74,6 +81,9 @@ const Node = ({ name, value, depth }: { name?: string; value: Json; depth: numbe
   );
 };
 
+/**
+ * Displays a JSON value as an expandable tree with type coloring.
+ */
 export const JsonView = ({ value }: { value: Json }) => (
   <div className="overflow-x-auto rounded-lg border bg-card p-3 pl-7 font-mono text-[11px] leading-relaxed text-foreground">
     <Node value={value} depth={0} />

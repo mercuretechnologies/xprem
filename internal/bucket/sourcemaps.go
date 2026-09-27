@@ -52,6 +52,8 @@ func OpenSourcemapStore() (*SourcemapStore, error) {
 	}, nil
 }
 
+// key validates the app id and canonical source-map hash, returning the
+// unprefixed object key or the validation error.
 func (s *SourcemapStore) key(appId, hash string) (string, error) {
 	if err := validateSegment("appId", appId); err != nil {
 		return "", err
@@ -71,6 +73,8 @@ func (s *SourcemapStore) indexKey(appId, hash string) (string, error) {
 	return key + ".idx", nil
 }
 
+// Exists reports whether the map is stored, propagating key-validation and
+// object-store errors.
 func (s *SourcemapStore) Exists(ctx context.Context, appId, hash string) (bool, error) {
 	key, err := s.key(appId, hash)
 	if err != nil {
@@ -79,7 +83,8 @@ func (s *SourcemapStore) Exists(ctx context.Context, appId, hash string) (bool, 
 	return s.objectStore.Exists(ctx, key)
 }
 
-// Get returns nil, nil when the store holds no map with that hash.
+// Get returns nil, nil when the store holds no map with that hash. The caller
+// must close a returned Reader. Key-validation and object-store errors propagate.
 func (s *SourcemapStore) Get(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
 	key, err := s.key(appId, hash)
 	if err != nil {
@@ -88,6 +93,8 @@ func (s *SourcemapStore) Get(ctx context.Context, appId, hash string) (*types.Bu
 	return s.objectStore.Get(ctx, key)
 }
 
+// IndexExists reports whether the map has a stored index, propagating
+// key-validation and object-store errors.
 func (s *SourcemapStore) IndexExists(ctx context.Context, appId, hash string) (bool, error) {
 	key, err := s.indexKey(appId, hash)
 	if err != nil {
@@ -96,7 +103,8 @@ func (s *SourcemapStore) IndexExists(ctx context.Context, appId, hash string) (b
 	return s.objectStore.Exists(ctx, key)
 }
 
-// GetIndex returns nil, nil when the map has no index yet.
+// GetIndex returns nil, nil when the map has no index yet. The caller must
+// close a returned Reader. Key-validation and object-store errors propagate.
 func (s *SourcemapStore) GetIndex(ctx context.Context, appId, hash string) (*types.BucketFile, error) {
 	key, err := s.indexKey(appId, hash)
 	if err != nil {
@@ -105,6 +113,8 @@ func (s *SourcemapStore) GetIndex(ctx context.Context, appId, hash string) (*typ
 	return s.objectStore.Get(ctx, key)
 }
 
+// PutIndex writes the index bytes for the map hash without validating their
+// format, propagating key-validation and object-store errors.
 func (s *SourcemapStore) PutIndex(ctx context.Context, appId, hash string, body io.Reader) error {
 	key, err := s.indexKey(appId, hash)
 	if err != nil {
@@ -113,7 +123,8 @@ func (s *SourcemapStore) PutIndex(ctx context.Context, appId, hash string, body 
 	return s.objectStore.Put(ctx, key, body)
 }
 
-// Put stores a source map, refusing bytes that do not hash to hash.
+// Put stores a source map, refusing bytes that do not hash to hash with
+// ErrBlobHashMismatch. Key-validation, body-read, and object-store errors propagate.
 func (s *SourcemapStore) Put(ctx context.Context, appId, hash string, body io.Reader) error {
 	key, err := s.key(appId, hash)
 	if err != nil {
