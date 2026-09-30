@@ -21,7 +21,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const ACTION_VALUE = '__combobox_action__';
 
 interface ComboboxProps {
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: React.ReactNode }[];
   value: string;
   onChange: (value: string) => void;
   loading?: boolean;
@@ -41,6 +41,7 @@ export function Combobox(props: ComboboxProps) {
   const { options, value, onChange, loading, label, disabled, action, clearable, className } =
     props;
   const [open, setOpen] = React.useState(false);
+  const selected = options.find(opt => opt.value === value);
   // Disabling only blocks the trigger: a popover already open when disabled
   // flips to true (e.g. the surrounding form starts saving) would stay
   // interactive, so close it.
@@ -56,10 +57,9 @@ export function Combobox(props: ComboboxProps) {
           aria-expanded={disabled ? false : open}
           disabled={disabled}
           className={cn('w-max justify-between font-normal', className)}>
+          {selected?.icon}
           <span className="min-w-0 flex-1 truncate text-left">
-            {value
-              ? options.find(opt => opt.value === value)?.label || value
-              : label || 'Select option'}
+            {value ? selected?.label || value : label || 'Select option'}
           </span>
           {clearable && value && (
             // Pointer-only shortcut: a focusable control nested in the trigger
@@ -107,6 +107,7 @@ export function Combobox(props: ComboboxProps) {
                       value === opt.value ? 'opacity-100' : 'opacity-0'
                     )}
                   />
+                  {opt.icon}
                   {opt.label}
                 </CommandItem>
               ))}

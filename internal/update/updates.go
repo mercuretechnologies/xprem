@@ -53,6 +53,16 @@ func ComputeManifestAssetCacheKey(appId string, update types.Update, assetPath s
 	return cache2.Key("asset", version.Version, appId, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
+// ErrInvalidExpoConfig marks an expoConfig.json whose *content* is invalid.
+// Storage or read failures are deliberately NOT wrapped with this sentinel:
+// the publish path treats them as transient instead of deleting the folder.
+var ErrInvalidExpoConfig = errors.New("invalid expoConfig.json")
+
+// ErrExpoConfigUnreadable marks a transient storage/read failure while
+// reading expoConfig.json: the folder must survive it so a re-publish can
+// retry instead of silently losing the uploaded files.
+var ErrExpoConfigUnreadable = errors.New("expoConfig.json could not be read")
+
 // VerifyUploadedUpdate reports whether every file the update announces actually
 // made it to storage. mapping is nil for an update published before the files
 // moved to cas/, whose assets are then looked for in the update folder.
@@ -63,6 +73,11 @@ func VerifyUploadedUpdate(ctx context.Context, update types.Update, mapping *typ
 	}
 	if metadata.MetadataJSON.FileMetadata.IOS.Bundle == "" && metadata.MetadataJSON.FileMetadata.Android.Bundle == "" {
 		return fmt.Errorf("missing bundle path in metadata")
+	}
+	// Fail fast on a malformed expoConfig.json: a publish with one would
+	// otherwise succeed and then 500 every device poll that follows.
+	if _, errConfig := GetExpoConfig(ctx, update); errConfig != nil {
+		return errConfig
 	}
 	if mapping == nil {
 		return verifyFolderUploaded(ctx, update, metadata)
@@ -158,19 +173,40 @@ func GetExpoConfig(ctx context.Context, update types.Update) (json.RawMessage, e
 	resolvedBucket := bucket.GetBucket()
 	resp, err := resolvedBucket.UpdateStore.GetFile(ctx, update, "expoConfig.json")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrExpoConfigUnreadable, err)
 	}
 	if resp == nil {
 		// Return empty JSON if the file is not found
 		return json.RawMessage("{}"), nil
 	}
 	defer resp.Reader.Close()
+	decoder := json.NewDecoder(resp.Reader)
 	var expoConfig json.RawMessage
-	err = json.NewDecoder(resp.Reader).Decode(&expoConfig)
-	if err != nil {
-		return nil, err
+	if err := decoder.Decode(&expoConfig); err != nil {
+		return nil, classifyExpoConfigError(err)
+	}
+	// Reject anything after the first JSON value: the publish flow writes a
+	// single document, and trailing data would otherwise be served as-is.
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("%w: trailing content after the JSON document", ErrInvalidExpoConfig)
+		}
+		return nil, classifyExpoConfigError(err)
 	}
 	return expoConfig, nil
+}
+
+// classifyExpoConfigError tells a decode failure of expoConfig.json apart:
+// json.Decoder returns *json.SyntaxError for malformed content and passes
+// reader failures through untouched, so only the former is invalid content;
+// anything else (including an empty file) is treated as unreadable.
+func classifyExpoConfigError(err error) error {
+	var syntaxErr *json.SyntaxError
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &syntaxErr) {
+		return fmt.Errorf("%w: %w", ErrInvalidExpoConfig, err)
+	}
+	return fmt.Errorf("%w: %w", ErrExpoConfigUnreadable, err)
 }
 
 func GetMetadata(ctx context.Context, update types.Update) (types.UpdateMetadata, error) {

@@ -613,6 +613,17 @@ environment:
     value: ""
     enabled: true
     required: false
+  # Telemetry batches accepted per minute, from one address to one app and for
+  # one app in total. Default server-side to 120 and 6000 when unset; 0
+  # disables a limit.
+  - name: "OBSERVE_INGEST_LIMIT_PER_IP"
+    value: ""
+    enabled: true
+    required: false
+  - name: "OBSERVE_INGEST_LIMIT_PER_APP"
+    value: ""
+    enabled: true
+    required: false
   # Set to "true" to locate devices from the visitor-location headers your
   # CDN or load balancer adds (Cloudflare, CloudFront, Vercel, Akamai, or the
   # generic X-Geo-* set), instead of a local GeoIP database. Only enable it

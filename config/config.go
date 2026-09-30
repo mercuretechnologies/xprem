@@ -225,6 +225,11 @@ func LoadConfig() {
 	if _, err := parseBundleDiffingPatchMaxRatio(); err != nil {
 		log.Fatalf("Invalid BUNDLE_DIFFING_PATCH_MAX_RATIO: %v", err)
 	}
+	for _, key := range []string{"OBSERVE_INGEST_LIMIT_PER_IP", "OBSERVE_INGEST_LIMIT_PER_APP"} {
+		if _, err := parseLimit(GetEnv(key)); err != nil {
+			log.Fatalf("Invalid %s: %v", key, err)
+		}
+	}
 }
 
 // IsSourcemapUploadEnabled reports whether publishes store the bundle's source
@@ -288,6 +293,37 @@ func parseBundleDiffingPatchMaxRatio() (float64, error) {
 	return parseRatio(GetEnv("BUNDLE_DIFFING_PATCH_MAX_RATIO"))
 }
 
+// ObserveIngestLimitPerIP is how many telemetry batches one address may send
+// to one app per minute (OBSERVE_INGEST_LIMIT_PER_IP, default 120, 0 disables).
+func ObserveIngestLimitPerIP() int {
+	return limitOrDefault("OBSERVE_INGEST_LIMIT_PER_IP")
+}
+
+// ObserveIngestLimitPerApp is how many telemetry batches one app may receive
+// per minute (OBSERVE_INGEST_LIMIT_PER_APP, default 6000, 0 disables).
+func ObserveIngestLimitPerApp() int {
+	return limitOrDefault("OBSERVE_INGEST_LIMIT_PER_APP")
+}
+
+func limitOrDefault(key string) int {
+	limit, err := parseLimit(GetEnv(key))
+	if err != nil {
+		limit, _ = parseLimit(DefaultEnvValues[key])
+	}
+	return limit
+}
+
+func parseLimit(value string) (int, error) {
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	if limit < 0 {
+		return 0, fmt.Errorf("%d is negative", limit)
+	}
+	return limit, nil
+}
+
 func parseMB(value string) (int64, error) {
 	mb, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
@@ -349,6 +385,12 @@ var DefaultEnvValues = map[string]string{
 	// Client-controlled CDN bypass: opt-in because every asset client can use
 	// the header once it is enabled.
 	"ENABLE_PREVENT_CDN_REDIRECTION_HEADER": "false",
+
+	// Telemetry ingestion budgets, in batches per minute. The SDK sends a few
+	// batches each time the app goes to the background, so the per-app default
+	// leaves room for about 100K monthly active users.
+	"OBSERVE_INGEST_LIMIT_PER_IP":  "120",
+	"OBSERVE_INGEST_LIMIT_PER_APP": "6000",
 
 	// Default address to bind to
 	"BIND_TO_ADDRESS": "0.0.0.0",

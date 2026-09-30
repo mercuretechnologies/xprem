@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
   BadgeCheck,
+  Bot,
   Box,
   ChevronDown,
   ChartNoAxesCombined,
@@ -257,7 +258,7 @@ const ExpandableSection = ({
   );
 };
 
-const serverPaths = ['/settings', '/license', '/account'];
+const serverPaths = ['/settings', '/license', '/mcp', '/account'];
 
 const accessSecurityPaths = ['/users', '/roles', '/sso', '/audit-logs'];
 
@@ -449,6 +450,11 @@ export function AppSidebar({
               {CONTROL_PLANE_ENABLED && (
                 <SubNavLink to="/license" icon={BadgeCheck} onNavigate={onNavigate}>
                   License
+                </SubNavLink>
+              )}
+              {CONTROL_PLANE_ENABLED && (
+                <SubNavLink to="/mcp" icon={Bot} onNavigate={onNavigate}>
+                  MCP
                 </SubNavLink>
               )}
               <SubNavLink to="/account" icon={CircleUser} onNavigate={onNavigate}>

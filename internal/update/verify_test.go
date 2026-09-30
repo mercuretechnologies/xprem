@@ -64,3 +64,55 @@ func TestVerifyUploadedUpdate_NilMappingReportsAMissingFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing file: assets/a")
 }
+
+func TestVerifyUploadedUpdate_ValidExpoConfigPasses(t *testing.T) {
+	base := setupLocalBucket(t)
+	u := types.Update{AppId: "app", Branch: "main", RuntimeVersion: "1", UpdateId: "102"}
+	writeFolderUpdate(t, base, u, true)
+	writeUpdateFile(t, base, u, "expoConfig.json", `{"name":"demo","slug":"demo"}`)
+
+	assert.NoError(t, VerifyUploadedUpdate(context.Background(), u, nil))
+}
+
+func TestVerifyUploadedUpdate_MalformedExpoConfigFails(t *testing.T) {
+	base := setupLocalBucket(t)
+	u := types.Update{AppId: "app", Branch: "main", RuntimeVersion: "1", UpdateId: "103"}
+	writeFolderUpdate(t, base, u, true)
+	writeUpdateFile(t, base, u, "expoConfig.json", "{")
+
+	err := VerifyUploadedUpdate(context.Background(), u, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid expoConfig.json")
+}
+
+func TestVerifyUploadedUpdate_MissingExpoConfigIsTolerated(t *testing.T) {
+	// expoConfig.json is a later addition to the publish flow: updates that
+	// predate it must keep publishing, so a missing file is not an error.
+	base := setupLocalBucket(t)
+	u := types.Update{AppId: "app", Branch: "main", RuntimeVersion: "1", UpdateId: "104"}
+	writeFolderUpdate(t, base, u, true)
+
+	assert.NoError(t, VerifyUploadedUpdate(context.Background(), u, nil))
+}
+
+func TestVerifyUploadedUpdate_TrailingExpoConfigDataFails(t *testing.T) {
+	base := setupLocalBucket(t)
+	u := types.Update{AppId: "app", Branch: "main", RuntimeVersion: "1", UpdateId: "105"}
+	writeFolderUpdate(t, base, u, true)
+	writeUpdateFile(t, base, u, "expoConfig.json", `{"name":"demo"} garbage`)
+
+	err := VerifyUploadedUpdate(context.Background(), u, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid expoConfig.json")
+}
+
+func TestVerifyUploadedUpdate_EmptyExpoConfigFails(t *testing.T) {
+	base := setupLocalBucket(t)
+	u := types.Update{AppId: "app", Branch: "main", RuntimeVersion: "1", UpdateId: "106"}
+	writeFolderUpdate(t, base, u, true)
+	writeUpdateFile(t, base, u, "expoConfig.json", "")
+
+	err := VerifyUploadedUpdate(context.Background(), u, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid expoConfig.json")
+}

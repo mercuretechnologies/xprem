@@ -27,6 +27,7 @@ const (
 	resultBadRequest  = "bad_request"
 	resultTooLarge    = "too_large"
 	resultUnavailable = "unavailable"
+	resultThrottled   = "throttled"
 )
 
 // maxBatchBodyBytes caps the size of one ingestion body; oversized bodies get

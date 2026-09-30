@@ -99,3 +99,38 @@ func TestCachedAppResolverRejectsMalformedID(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Equal(t, int64(0), atomic.LoadInt64(&repo.calls))
 }
+
+func limitedChain(perIP, perApp int) http.Handler {
+	router := mux.NewRouter()
+	sub := router.PathPrefix("/observe/{APP_ID}").Subrouter()
+	sub.Use(CachedAppResolverMiddleware(&countingAppRepo{}))
+	sub.Use(IngestLimitMiddleware(perIP, perApp))
+	sub.HandleFunc("/{PROJECT_ID}/v1/logs", NewIngestHandler(nil, nil, nil, nil).HandleLogs).Methods(http.MethodPost)
+	return router
+}
+
+func TestIngestLimitThrottlesAnAddressThenTheApp(t *testing.T) {
+	resetObserveCache(t)
+	h := limitedChain(2, 3)
+	path := "/observe/limited-app/proj/v1/logs"
+
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.30:1").Code)
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.30:1").Code)
+	rec := post(h, path, "203.0.113.30:1")
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.Equal(t, "60", rec.Header().Get("Retry-After"))
+
+	// The refused request did not count against the app: a third batch still fits.
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.31:1").Code)
+	require.Equal(t, http.StatusTooManyRequests, post(h, path, "203.0.113.32:1").Code)
+
+	require.Equal(t, http.StatusNoContent, post(h, "/observe/other-app/proj/v1/logs", "203.0.113.30:1").Code)
+}
+
+func TestIngestLimitOfZeroDisablesIt(t *testing.T) {
+	resetObserveCache(t)
+	h := limitedChain(0, 0)
+	for i := 0; i < 10; i++ {
+		require.Equal(t, http.StatusNoContent, post(h, "/observe/open-app/proj/v1/logs", "203.0.113.40:1").Code)
+	}
+}

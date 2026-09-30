@@ -14,6 +14,7 @@ import { AppInfo } from '@/pages/AppInfo';
 import { ApiTokens } from '@/pages/ApiTokens';
 import { Users } from '@/pages/Users';
 import { Account } from '@/pages/Account';
+import { Mcp } from '@/pages/Mcp';
 import { License } from '@/ee/pages/License';
 import { Sso } from '@/ee/pages/Sso';
 import { Roles } from '@/ee/pages/Roles';
@@ -153,6 +154,14 @@ export const App = () => {
                         <Route path="/audit-logs" element={withLayout(<AuditLog />)} />
                         <Route path="/sso" element={withLayout(<Sso />)} />
                         <Route path="/license" element={withLayout(<License />)} />
+                        <Route
+                          path="/mcp"
+                          element={withLayout(
+                            <RequiresControlPlane>
+                              <Mcp />
+                            </RequiresControlPlane>
+                          )}
+                        />
                         <Route path="/account" element={withLayout(<Account />)} />
                         <Route path="/logout" element={withLayout(<Logout />)} />
                       </Routes>
