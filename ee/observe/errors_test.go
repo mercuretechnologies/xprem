@@ -5,11 +5,13 @@
 package observe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
+	"xprem/ee/symbolication"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres/pgdb"
 
@@ -157,6 +159,118 @@ func TestErrorsLiveReconcilesCountsFiltersAndCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fatal.Errors, 1)
 	assert.EqualValues(t, 1, fatal.Errors[0].Occurrences)
+}
+
+func TestErrorsSweepRecoversOlderPendingGroups(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+	explorer := &Explorer{clickhouse: engine}
+
+	var indexBytes bytes.Buffer
+	require.NoError(t, symbolication.WriteIndex(&indexBytes, &symbolication.Map{
+		Sources:        []string{"src/LabScreen.tsx"},
+		SourcesContent: []string{"const onPress = () => {\n  throw new Error('Checkout failed')\n  submitCheckout()\n}\n"},
+		Names:          []string{"onPress"},
+		Ignored:        []bool{false},
+		Segments: []symbolication.Segment{
+			{Column: 100, Source: 0, OriginalLine: 1, OriginalColumn: 2, Name: 0},
+			{Column: 200, Source: 0, OriginalLine: 2, OriginalColumn: 2, Name: 0},
+		},
+	}))
+	index, err := symbolication.OpenIndex(bytes.NewReader(indexBytes.Bytes()))
+	require.NoError(t, err)
+	crashAt := func(offset int) map[string]any {
+		return errorAttributes("Error", "Checkout failed", fmt.Sprintf("Error: Checkout failed\n    at onPress (address at /data/app.bundle:1:%d)", offset))
+	}
+	app, recent, sixDays, nineDays, oldest, noMap := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	deviceA, deviceB := uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	fixture := []LogRow{
+		errorLogRow(app, recent, deviceA, crashAt(120), 17, false, now.Add(-3*time.Hour)),
+		errorLogRow(app, recent, deviceA, crashAt(120), 21, true, now),
+		errorLogRow(app, sixDays, deviceA, crashAt(120), 21, true, now.Add(-6*24*time.Hour)),
+		errorLogRow(app, nineDays, deviceB, crashAt(120), 17, false, now.Add(-9*24*time.Hour)),
+		// The ingestion hour begins before the oldest permitted event time.
+		errorLogRow(app, oldest, deviceA, crashAt(120), 21, true, now.Add(-ErrorsMaxWindow+time.Minute)),
+		// An identical message at a different throw site must stay separate.
+		errorLogRow(app, nineDays, deviceA, crashAt(220), 17, false, now.Add(-9*24*time.Hour)),
+		errorLogRow(app, noMap, deviceA, crashAt(120), 21, true, now.Add(-6*24*time.Hour)),
+	}
+	// Set ingestion times explicitly: inserting old events through the sink now
+	// would make their occurrence counters recent and hide the sweep regression.
+	batch, err := engine.Conn.PrepareBatch(ctx, `INSERT INTO observe_logs
+		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at,
+		 content_key, event_name, severity_number, is_fatal, attributes, error_fingerprint)`)
+	require.NoError(t, err)
+	defer batch.Close()
+	for _, row := range append(fixture, fixture[0]) {
+		require.NoError(t, batch.Append(row.AppID, row.UpdateID, row.EASClientID, row.SessionID,
+			row.Timestamp, row.Timestamp, row.ContentKey, row.EventName, row.SeverityNumber,
+			row.IsFatal, row.Attributes, row.ErrorFingerprint))
+	}
+	require.NoError(t, batch.Send())
+	trace := symbolication.Symbolicate(index, exceptionOf(fixture[0].EventName, fixture[0].Body, crashAt(120)).stacktrace)
+	require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
+		errorKey: errorKey{appID: app, updateID: recent, fingerprint: fixture[0].ErrorFingerprint.String()},
+		ErrorGroup: ErrorGroup{GroupFingerprint: symbolication.GroupFingerprint("Error", "Checkout failed", trace).String(),
+			ErrorType: "Error", Message: "Checkout failed", Culprit: symbolication.Culprit(trace), Trace: trace, SymbolicatedAt: now},
+	}}))
+	query := ExplorerQuery{From: now.Add(-ErrorsMaxWindow), To: now, Bucket: 24 * time.Hour}
+	before, err := explorer.readErrors(ctx, app, ErrorsQuery{ExplorerQuery: query, IncludeSeries: true})
+	require.NoError(t, err)
+	require.Len(t, before.Errors, 6)
+	var oldID string
+	for _, summary := range before.Errors {
+		if summary.FirstSeen.Equal(fixture[4].Timestamp) {
+			oldID = summary.ErrorID
+		}
+	}
+	require.NotEmpty(t, oldID)
+	ready := false
+	sweep := NewErrorGroupsSweep(explorer, indexOpenerFunc(func(_ context.Context, appID, update string) (*symbolication.Index, error) {
+		if appID != app || update == noMap {
+			return nil, symbolication.ErrNoSourcemap
+		}
+		if !ready {
+			return nil, symbolication.ErrIndexNotReady
+		}
+		return index, nil
+	}))
+	require.NoError(t, sweep.Run(ctx))
+	ready = true
+	require.NoError(t, sweep.Run(ctx))
+	page, err := explorer.readErrors(ctx, app, ErrorsQuery{ExplorerQuery: query, IncludeSeries: true})
+	require.NoError(t, err)
+	require.Len(t, page.Errors, 3, "pending and mapped occurrences join after their source map becomes available")
+	summary := page.Errors[0]
+	assert.Equal(t, ErrorGroupReady, summary.SymbolicationStatus)
+	assert.EqualValues(t, 5, summary.Occurrences, "ingestion retries do not add occurrences")
+	assert.EqualValues(t, 2, summary.ImpactedDevices)
+	assert.EqualValues(t, 3, summary.CrashOccurrences)
+	assert.True(t, summary.FirstSeen.Equal(fixture[4].Timestamp), "the oldest hourly bucket is recovered")
+	var seriesCount uint64
+	for _, point := range summary.Series {
+		seriesCount += point.Count
+	}
+	assert.Equal(t, summary.Occurrences, seriesCount)
+	statuses := map[ErrorGroupStatus]int{}
+	for _, row := range page.Errors {
+		statuses[row.SymbolicationStatus]++
+	}
+	assert.Equal(t, 2, statuses[ErrorGroupReady], "different throw sites remain separate")
+	assert.Equal(t, 1, statuses[ErrorGroupNoSourcemap], "an error with no map is not merged by its message")
+	details, err := explorer.readErrorDetails(ctx, app, oldID, ErrorDetailsQuery{ExplorerQuery: query})
+	require.NoError(t, err)
+	require.NotNil(t, details.Summary)
+	assert.Equal(t, summary.ErrorID, details.Summary.ErrorID, "old links resolve to the recovered group")
+	assert.Equal(t, summary.Occurrences, details.Summary.Occurrences)
+	assert.Equal(t, summary.ImpactedDevices, details.Summary.ImpactedDevices)
+	require.Len(t, details.Occurrences, 5)
+	require.Len(t, details.Updates, 4)
 }
 
 func TestErrorsLiveLegacyCrashAndEmbeddedIdentity(t *testing.T) {

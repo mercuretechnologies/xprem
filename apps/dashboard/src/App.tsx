@@ -56,7 +56,7 @@ const RequiresControlPlane = ({ children }: { children: ReactNode }) => {
 };
 
 // Observe is a set of pages behind one sub-navigation, so the same element
-// serves both routes: /observe only exists to catch the bare URL and redirect
+// serves their routes: /observe only exists to catch the bare URL and redirect
 // to the default page. Control-plane only like the update feed, because every
 // view reads the device registry, which is a database table.
 //
@@ -147,6 +147,7 @@ export const App = () => {
                         />
                         <Route path="/observe" element={observeRoute} />
                         <Route path="/observe/:page" element={observeRoute} />
+                        <Route path="/observe/errors/:errorId" element={observeRoute} />
                         <Route path="/app-info" element={withLayout(withApp(<AppInfo />))} />
                         <Route path="/tokens" element={withLayout(withApp(<ApiTokens />))} />
                         <Route path="/users" element={withLayout(<Users />)} />

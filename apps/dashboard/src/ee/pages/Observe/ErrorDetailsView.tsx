@@ -4,15 +4,16 @@
 
 import { useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router';
+import { Link, useLocation, useSearchParams } from 'react-router';
 import { AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
-import { api, type ErrorFatality } from '@/lib/api';
+import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { liveInterval, type ObserveFilters } from './filters';
 import { exactNumber } from './format';
 import { shortUUID, logTime } from './logRecords';
+import { occurrenceEventsHref } from './occurrenceEvents';
 import { deviceName } from './deviceNames';
-import { ErrorFatalitySelect } from './ErrorsView';
+import { errorFatality, errorsListHref } from './errorNavigation';
 import { ErrorBreakdown } from './ErrorBreakdown';
 import { OccurrenceHistogram } from './OccurrenceHistogram';
 import { LogDetails } from './LogDetails';
@@ -23,14 +24,14 @@ type OccurrencePageParam = { cursor?: string; from?: string; to?: string };
 
 export const ErrorDetailsView = ({
   errorId,
-  fatality,
   filters,
 }: {
   errorId: string;
-  fatality: ErrorFatality;
   filters: ObserveFilters;
 }) => {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const { state } = useLocation();
+  const fatality = errorFatality(params.get('errorFatality'));
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const updateNames = useUpdateNames();
   const query = useInfiniteQuery({
@@ -77,35 +78,25 @@ export const ErrorDetailsView = ({
     occurrences.find(log => log.eventKey === selectedKey) ??
     details?.representativeOccurrence ??
     occurrences[0];
-  const back = new URLSearchParams(params);
-  back.delete('errorId');
+  // Router state restores the live/relative list exactly. Directly opened
+  // detail links fall back to their own frozen selection.
+  const back = new URLSearchParams(
+    typeof state?.errorsSearch === 'string' ? state.errorsSearch : params
+  );
   const pausedWhileReading =
     filters.live && (selectedKey !== null || (query.data?.pages.length ?? 0) > 1);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <header className="space-y-3">
         <Link
-          to={`/observe/errors${back.size ? `?${back}` : ''}`}
+          to={errorsListHref(back)}
           className="inline-flex items-center gap-2 text-xs text-primary hover:underline">
           <ArrowLeft className="h-3.5 w-3.5" />
           All errors
         </Link>
-        <ErrorFatalitySelect
-          value={fatality}
-          onChange={value =>
-            setParams(
-              current => {
-                const next = new URLSearchParams(current);
-                if (value === 'all') next.delete('errorFatality');
-                else next.set('errorFatality', value);
-                return next;
-              },
-              { replace: true }
-            )
-          }
-        />
-      </div>
+        <h1 className="font-display text-[26px] font-semibold tracking-tight">Error details</h1>
+      </header>
       {query.isPending && (
         <p className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -183,25 +174,25 @@ export const ErrorDetailsView = ({
               title="Updates"
               dimension="updates"
               segments={details.updates}
-              filters={filters}
+              listParams={back}
             />
             <ErrorBreakdown
               title="Device models"
               dimension="deviceModels"
               segments={details.deviceModels}
-              filters={filters}
+              listParams={back}
             />
             <ErrorBreakdown
               title="OS versions"
               dimension="osVersions"
               segments={details.osVersions}
-              filters={filters}
+              listParams={back}
             />
             <ErrorBreakdown
               title="Runtimes"
               dimension="runtimes"
               segments={details.runtimes}
-              filters={filters}
+              listParams={back}
             />
           </div>
           <section className="overflow-hidden rounded-xl border bg-card shadow-card">
@@ -217,11 +208,13 @@ export const ErrorDetailsView = ({
               <table className="w-full text-left text-xs">
                 <thead className="border-b text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    {['Date / time', 'Update', 'Runtime', 'Device', 'OS', 'Fatality'].map(label => (
-                      <th key={label} className="whitespace-nowrap px-4 py-2 font-medium">
-                        {label}
-                      </th>
-                    ))}
+                    {['Date / time', 'Update', 'Runtime', 'Device', 'OS', 'Fatality', 'Trace'].map(
+                      label => (
+                        <th key={label} className="whitespace-nowrap px-4 py-2 font-medium">
+                          {label}
+                        </th>
+                      )
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -230,15 +223,14 @@ export const ErrorDetailsView = ({
                       key={log.eventKey}
                       className={`border-b border-border/50 last:border-0 ${selected?.eventKey === log.eventKey ? 'bg-primary/[0.06]' : 'hover:bg-accent/30'}`}>
                       <td className="whitespace-nowrap px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedKey(log.eventKey)}
-                          aria-pressed={selected?.eventKey === log.eventKey}
-                          className="rounded font-mono text-primary hover:underline">
+                        <Link
+                          to={occurrenceEventsHref(log)}
+                          title="View this event and the events leading up to it"
+                          className="rounded font-mono text-primary hover:underline focus-visible:outline focus-visible:outline-ring">
                           <time dateTime={log.timestamp} title={log.timestamp}>
                             {logTime.format(new Date(log.timestamp))}
                           </time>
-                        </button>
+                        </Link>
                       </td>
                       <td className="max-w-52 truncate px-4 py-3 font-mono" title={log.updateId}>
                         {updateNames.get(log.updateId) ||
@@ -260,6 +252,15 @@ export const ErrorDetailsView = ({
                       </td>
                       <td className="whitespace-nowrap px-4 py-3">
                         {log.isFatal || log.eventName === 'xprem_js_crash' ? 'Fatal' : 'Non-fatal'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedKey(log.eventKey)}
+                          aria-pressed={selected?.eventKey === log.eventKey}
+                          className="rounded text-primary hover:underline focus-visible:outline focus-visible:outline-ring">
+                          View trace
+                        </button>
                       </td>
                     </tr>
                   ))}

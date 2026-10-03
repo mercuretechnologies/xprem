@@ -116,7 +116,9 @@ export const MultiSelect = ({
       </PopoverTrigger>
       {/* Wide enough that two publishes sharing a message prefix stay
           distinguishable, and never wider than the screen. */}
-      <PopoverContent align="start" className="w-[min(30rem,calc(100vw-2rem))] p-0">
+      <PopoverContent
+        align="start"
+        className="observe-workspace w-[min(30rem,calc(100vw-2rem))] p-0">
         <Command>
           <CommandInput placeholder={`Search ${label.toLowerCase()}…`} />
           <CommandList>

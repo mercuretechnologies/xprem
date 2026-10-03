@@ -5,18 +5,24 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router';
-import { AlertCircle, Bug, Loader2, Search } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowDownWideNarrow,
+  Bug,
+  ChevronRight,
+  Code2,
+  Loader2,
+  Search,
+  X,
+} from 'lucide-react';
 import { api, type ErrorFatality, type ErrorSort } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { liveInterval, type ObserveFilters } from './filters';
 import { exactNumber, sinceLabel } from './format';
 import { OccurrenceHistogram } from './OccurrenceHistogram';
-import { ErrorDetailsView } from './ErrorDetailsView';
+import { errorDetailsHref, errorFatality } from './errorNavigation';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
-
-const errorFatality = (value: string | null): ErrorFatality =>
-  value === 'fatal' || value === 'nonfatal' ? value : 'all';
 
 export const ErrorFatalitySelect = ({
   value,
@@ -29,7 +35,7 @@ export const ErrorFatalitySelect = ({
     aria-label="Error fatality"
     value={value}
     onChange={event => onChange(event.target.value as ErrorFatality)}
-    className="h-9 rounded-md border border-input bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20">
+    className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
     <option value="all">All errors</option>
     <option value="fatal">Fatal only</option>
     <option value="nonfatal">Non-fatal only</option>
@@ -38,7 +44,6 @@ export const ErrorFatalitySelect = ({
 
 export const ErrorsView = ({ filters }: { filters: ObserveFilters }) => {
   const [params] = useSearchParams();
-  const errorId = params.get('errorId');
   const fatality = errorFatality(params.get('errorFatality'));
   const search = params.get('errorSearch') ?? '';
   const sortParam = params.get('errorSort');
@@ -54,11 +59,8 @@ export const ErrorsView = ({ filters }: { filters: ObserveFilters }) => {
     fatality,
     search,
     sort,
-    errorId,
   ]);
-  return errorId ? (
-    <ErrorDetailsView key={signature} errorId={errorId} fatality={fatality} filters={filters} />
-  ) : (
+  return (
     <ErrorsList
       signature={signature}
       search={search}
@@ -133,24 +135,11 @@ const ErrorsList = ({
     refetchInterval: liveInterval(filters.live, filters.periodSpec),
   });
   const page = query.data;
-  const errorHref = (errorId: string) => {
-    const next = new URLSearchParams(params);
-    next.set('errorId', errorId);
-    // Freeze the exact response window, rather than resolving a relative
-    // range again after navigation. This makes paused links shareable.
-    if (!filters.live && page) {
-      next.set('from', page.from);
-      next.set('to', page.to);
-      next.delete('period');
-      next.set('live', '0');
-    }
-    return `/observe/errors?${next}`;
-  };
   if (page?.available === false) return <TelemetryUnavailable />;
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card shadow-card">
-      <header className="flex flex-wrap items-center gap-3 border-b bg-muted/30 p-3">
+      <header className="flex flex-wrap items-center gap-2.5 border-b p-3">
         <div className="relative min-w-48 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -158,22 +147,34 @@ const ErrorsList = ({
             value={draft}
             onChange={event => setDraft(event.target.value)}
             placeholder="Search type, message or location…"
-            className="pl-9"
+            className="bg-muted/40 pl-9 pr-9 shadow-none dark:bg-muted/40"
           />
+          {draft && (
+            <button
+              type="button"
+              aria-label="Clear error search"
+              onClick={() => setDraft('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-ring">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <ErrorFatalitySelect
           value={fatality}
           onChange={value => write('errorFatality', value === 'all' ? '' : value)}
         />
-        <select
-          aria-label="Sort errors"
-          value={sort}
-          onChange={event => write('errorSort', event.target.value)}
-          className="h-9 rounded-md border border-input bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-ring/20">
-          <option value="occurrences">Most occurrences</option>
-          <option value="impactedDevices">Most impacted devices</option>
-          <option value="lastSeen">Last seen</option>
-        </select>
+        <div className="relative">
+          <ArrowDownWideNarrow className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <select
+            aria-label="Sort errors"
+            value={sort}
+            onChange={event => write('errorSort', event.target.value)}
+            className="h-9 rounded-md border border-input bg-card pl-9 pr-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
+            <option value="occurrences">Most occurrences</option>
+            <option value="impactedDevices">Most impacted devices</option>
+            <option value="lastSeen">Last seen</option>
+          </select>
+        </div>
       </header>
       {query.isPending && (
         <p className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground">
@@ -191,25 +192,35 @@ const ErrorsList = ({
         </p>
       )}
       {page && page.errors.length === 0 && (
-        <div className="flex flex-col items-center p-12 text-muted-foreground">
-          <Bug className="h-7 w-7" />
-          <p className="mt-3 text-sm">No error matches these filters.</p>
+        <div className="flex flex-col items-center px-6 py-16 text-center">
+          <span className="rounded-2xl bg-primary/10 p-3 text-primary">
+            <Bug className="h-6 w-6" />
+          </span>
+          <p className="mt-4 text-sm font-medium">No errors here</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Try another time range or adjust your filters.
+          </p>
         </div>
       )}
       {page && page.errors.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="border-b bg-muted/20 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <table className="w-full text-left text-[13px]">
+            <caption className="sr-only">Error groups in the selected time range</caption>
+            <thead className="border-b bg-muted/60 text-xs text-muted-foreground">
               <tr>
                 {[
                   'Error',
-                  'Occurrences',
-                  'Impacted devices',
-                  'Crashes',
-                  'Histogram',
                   'Last seen',
+                  'First seen',
+                  'Trend',
+                  'Occurrences',
+                  'Devices',
+                  'Crashes',
                 ].map(label => (
-                  <th key={label} className="whitespace-nowrap px-4 py-2 font-medium">
+                  <th
+                    key={label}
+                    scope="col"
+                    className={`whitespace-nowrap px-4 py-3 font-medium ${['Occurrences', 'Devices', 'Crashes'].includes(label) ? 'text-right' : ''}`}>
                     {label}
                   </th>
                 ))}
@@ -219,45 +230,75 @@ const ErrorsList = ({
               {page.errors.map(error => (
                 <tr
                   key={error.errorId}
-                  className="border-b border-border/50 last:border-0 hover:bg-accent/30">
-                  <td className="min-w-64 max-w-md px-4 py-3">
+                  className="group border-b border-border/70 last:border-0 hover:bg-primary/[0.035] focus-within:bg-primary/[0.035]">
+                  <td className="w-full min-w-80 max-w-lg px-4 py-4">
                     <Link
-                      to={errorHref(error.errorId)}
-                      className="block rounded focus-visible:outline focus-visible:outline-ring">
-                      <span className="font-medium text-primary">{error.errorType || 'Error'}</span>
-                      <span className="mt-0.5 block truncate text-foreground" title={error.message}>
-                        {error.message || 'No message'}
+                      to={errorDetailsHref(error.errorId, params, page)}
+                      state={{ errorsSearch: params.toString() }}
+                      className="flex items-center gap-4 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2 font-semibold">
+                          <span
+                            aria-hidden="true"
+                            className="h-2 w-2 shrink-0 rounded-full bg-primary/80"
+                          />
+                          {error.errorType || 'Error'}
+                        </span>
+                        <span
+                          className={`ml-3.5 mt-1 block truncate border-l-2 pl-2 ${error.crashOccurrences > 0 ? 'border-amber-500/80' : 'border-primary/35'}`}
+                          title={error.message}>
+                          {error.message || 'No message'}
+                        </span>
+                        <span className="ml-3.5 mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Code2 aria-hidden="true" className="h-3 w-3 shrink-0" />
+                          <span className="truncate" title={error.culprit}>
+                            {error.culprit ||
+                              (error.symbolicationStatus === 'ready'
+                                ? 'Unknown location'
+                                : error.symbolicationStatus === 'waiting'
+                                  ? 'Symbolication pending'
+                                  : 'Source map unavailable')}
+                          </span>
+                        </span>
                       </span>
-                      <span
-                        className="mt-1 block truncate font-mono text-[10px] text-muted-foreground"
-                        title={error.culprit}>
-                        {error.culprit ||
-                          (error.symbolicationStatus === 'ready'
-                            ? 'Unknown location'
-                            : error.symbolicationStatus === 'waiting'
-                              ? 'Symbolication pending'
-                              : 'Source map unavailable')}
-                      </span>
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-primary"
+                      />
                     </Link>
                   </td>
-                  <td className="px-4 py-3 font-mono tabular-nums">
-                    {exactNumber.format(error.occurrences)}
-                  </td>
-                  <td className="px-4 py-3 font-mono tabular-nums">
-                    {exactNumber.format(error.impactedDevices)}
-                  </td>
-                  <td className="px-4 py-3 font-mono tabular-nums">
-                    {exactNumber.format(error.crashOccurrences)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <OccurrenceHistogram compact series={error.series ?? []} />
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-4 text-muted-foreground">
                     <time
                       dateTime={error.lastSeen}
                       title={new Date(error.lastSeen).toLocaleString()}>
                       {sinceLabel(new Date(error.lastSeen))}
                     </time>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-4 text-muted-foreground">
+                    <time
+                      dateTime={error.firstSeen}
+                      title={new Date(error.firstSeen).toLocaleString()}>
+                      {sinceLabel(new Date(error.firstSeen))}
+                    </time>
+                  </td>
+                  <td className="px-4 py-4">
+                    <OccurrenceHistogram compact series={error.series ?? []} />
+                  </td>
+                  <td className="px-4 py-4 text-right font-medium tabular-nums">
+                    {exactNumber.format(error.occurrences)}
+                  </td>
+                  <td className="px-4 py-4 text-right tabular-nums">
+                    {exactNumber.format(error.impactedDevices)}
+                  </td>
+                  <td className="px-4 py-4 text-right tabular-nums">
+                    <span
+                      className={
+                        error.crashOccurrences > 0
+                          ? 'rounded-md bg-amber-500/10 px-2 py-0.5 text-amber-800 dark:text-amber-300'
+                          : 'text-muted-foreground/60'
+                      }>
+                      {exactNumber.format(error.crashOccurrences)}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -265,10 +306,10 @@ const ErrorsList = ({
           </table>
         </div>
       )}
-      <footer className="flex items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
+      <footer className="flex items-center justify-between gap-3 border-t bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
         <span>
           {page && page.errors.length > 0
-            ? `${offset + 1}–${offset + page.errors.length} errors`
+            ? `${offset + 1}–${offset + page.errors.length} error groups`
             : 'No errors loaded'}
           {page?.hasMore && offset + limit > 10_000 && ' · Narrow filters to see more'}
         </span>

@@ -2,7 +2,7 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
 import { AlertCircle, ChevronDown, CirclePause, CirclePlay, Loader2, Search } from 'lucide-react';
@@ -110,7 +110,11 @@ const EventRow = ({
 
 export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // `event` filters by name; `eventKey` opens one occurrence while retaining
+  // the surrounding event stream.
+  const focusedEventKey = searchParams.get('eventKey');
+  const [expanded, setExpanded] = useState<string | null>(focusedEventKey);
+  const appliedFocus = useRef('');
   const [device, setDevice] = useState<ObserveLog | null>(null);
   // Joined then split so the array is the same object across renders: it feeds
   // a query key and a stream signature, and a fresh array on every render
@@ -191,7 +195,10 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
     () => JSON.stringify([filters.state, filters.range, selectedEvents, search, severity]),
     [filters.state, filters.range, selectedEvents, search, severity]
   );
-  useEffect(() => setExpanded(null), [streamSignature]);
+  useEffect(() => {
+    setExpanded(focusedEventKey);
+    appliedFocus.current = '';
+  }, [streamSignature, focusedEventKey]);
 
   const { scrollRef, logs, headQuery, older, paused, setPaused, resume, virtualizer } =
     useLogStream({
@@ -201,6 +208,32 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
       periodSpec: filters.periodSpec,
       rowHeight: 30,
     });
+
+  useEffect(() => {
+    if (!focusedEventKey || headQuery.isPlaceholderData || logs.length === 0) return;
+    const focusSignature = JSON.stringify([streamSignature, focusedEventKey]);
+    if (appliedFocus.current === focusSignature) return;
+    const index = logs.findIndex(log => log.eventKey === focusedEventKey);
+    if (index < 0) {
+      // Equal timestamps can put the occurrence beyond the first page. Move
+      // to the tail so the existing stream loader fetches the next page.
+      if (older.hasMore && !older.failed) {
+        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
+      }
+      return;
+    }
+    setExpanded(focusedEventKey);
+    virtualizer.scrollToIndex(index, { align: 'start' });
+    appliedFocus.current = focusSignature;
+  }, [
+    focusedEventKey,
+    headQuery.isPlaceholderData,
+    logs,
+    older.hasMore,
+    older.failed,
+    streamSignature,
+    virtualizer,
+  ]);
 
   const updateNames = useUpdateNames();
   const tailing = filters.live && !paused;
