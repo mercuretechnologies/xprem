@@ -10,9 +10,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TimeSeriesChart, type TimeSeriesChartProps } from '@/ee/components/charts/TimeSeriesChart';
-import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
-import { HealthBySegment } from './HealthBySegment';
-import { HealthPlaceholder } from './HealthPlaceholder';
 import { liveInterval, type ObserveFilters } from './filters';
 import { ObserveNotice } from './ObserveNotice';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
@@ -33,7 +30,6 @@ import {
 import {
   branchesByUpdateId,
   buildUpdateGroups,
-  groupContext,
   groupTitle,
   platformLabel,
   subjectLine,
@@ -606,85 +602,6 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     : reported;
   const withheld = reported.length - metrics.length;
 
-  // Health over time needs a scope. Without one, every update of the period
-  // would collapse into a single curve mixing what is served today with what
-  // was served last week, which answers nothing.
-  // Lengths, not truthiness: these are always arrays, and an empty array is
-  // truthy, so testing the values themselves makes this constantly true and
-  // the guard never fires.
-  const scoped =
-    filters.state.branch.length > 0 ||
-    filters.state.channel.length > 0 ||
-    filters.state.updateId.length > 0 ||
-    filters.state.updateGroupId.length > 0;
-  // Health comes from update_health_snapshots, which the server aggregates per
-  // update: the manifest poll it is built from carries the update, its branch
-  // and the platform, and nothing about the hardware. So the split drives this
-  // chart for the dimensions the snapshots actually hold, and says so for the
-  // rest rather than silently ignoring the choice.
-  // Update group needs nothing here: the per-group curves are what this chart
-  // draws by default, so splitting by it is already the unsplit view.
-  const segmentSplit = (
-    ['deviceModel', 'osVersion', 'country', 'appVersion', 'platform'] as string[]
-  ).includes(dimension ?? '')
-    ? (dimension as ObserveBreakdownDimension)
-    : undefined;
-  // Screen is the one split the health events cannot follow: a route belongs to
-  // a navigation timing, and an adoption or a launch failure has none.
-  const unsupportedSplit = dimension === 'route' ? 'route' : undefined;
-
-  const healthSeries = useMemo(() => {
-    if (!scoped) return [];
-    // The history endpoint takes at most 20 update ids. Asking for every group
-    // of the period earns a 400 and an empty chart, and would be meaningless
-    // anyway: adoption is a question about what shipped recently, so the
-    // newest publishes are the ones that get plotted.
-    const recent = updateGroups.slice(0, 8);
-    const withinRequestBudget = <T extends { updateUUIDs: string[] }>(entries: T[]) => {
-      const kept: T[] = [];
-      let ids = 0;
-      for (const entry of entries) {
-        if (kept.length >= seriesColors.length) break;
-        const trimmed = { ...entry, updateUUIDs: entry.updateUUIDs.slice(0, 20 - ids) };
-        if (trimmed.updateUUIDs.length === 0) break;
-        ids += trimmed.updateUUIDs.length;
-        kept.push(trimmed);
-      }
-      return kept;
-    };
-    // What a publish is, in the words that let you recognise it: which branch
-    // it went out on, which runtime it needs, and when it shipped. The platform
-    // is deliberately absent, a group is both platforms by construction.
-    const describe = (group: UpdateGroup) =>
-      groupContext(group, (date: Date) => publishedAt.format(date), { branch: false });
-    const colored = (
-      entries: Array<{
-        key: string;
-        label: string;
-        detail?: string;
-        group?: string;
-        updateUUIDs: string[];
-      }>
-    ) =>
-      withinRequestBudget(entries).map((entry, index) => ({
-        ...entry,
-        color: seriesColors[index % seriesColors.length],
-      }));
-
-    // One curve per publish, so a rollout and the control it runs against stay
-    // apart. The history endpoint takes at most 20 update ids, which is what
-    // bounds how many publishes can be compared at once.
-    return colored(
-      recent.map(group => ({
-        key: group.key,
-        label: groupTitle(group),
-        detail: describe(group),
-        group: group.branch,
-        updateUUIDs: group.updateUUIDs,
-      }))
-    );
-  }, [scoped, updateGroups]);
-
   // Publish markers, restricted to the window on screen: one off the left edge
   // would pin itself to the axis and read as a publish that never happened.
   const windowStart = filters.query.from ? new Date(filters.query.from).getTime() : 0;
@@ -705,14 +622,6 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     () => branchesByUpdateId(updateGroups),
     [updateGroups]
   );
-
-  // A row of the health table narrows the page to what it names, the same move
-  // the segment table offers. Splitting by update plots one curve per platform
-  // row, so there the key is the update itself rather than its group.
-  const selectHealthSeries = (key: string) => {
-    const group = updateGroups.find(entry => entry.key === key);
-    if (group) filters.setFilters(updateGroupFilter(group));
-  };
 
   const renderMarkedGroups: TimeSeriesChartProps['renderAnnotationDetails'] = (cluster, close) => (
     <PublishedHere
@@ -749,41 +658,6 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
   return (
     <div className="space-y-5">
       {overview?.available === false && <TelemetryUnavailable />}
-
-      {scoped ? (
-        healthSeries.length > 0 &&
-        (unsupportedSplit ? (
-          <HealthPlaceholder
-            title="Health cannot be split by screen"
-            detail="A route belongs to a navigation timing. Adoption and launch failures come from the manifest polls every client makes, which know the update, its branch, the platform and the device, but never which screen was open. The split still applies to the timings below."
-          />
-        ) : segmentSplit ? (
-          <HealthBySegment
-            filters={filters}
-            updateUUIDs={healthSeries.flatMap(entry => entry.updateUUIDs).slice(0, 20)}
-            dimension={segmentSplit}
-            annotations={updateGroupMarkers}
-            renderAnnotationDetails={renderMarkedGroups}
-          />
-        ) : (
-          <UpdateHealthHistory
-            series={healthSeries}
-            annotations={updateGroupMarkers}
-            annotationNoun="update groups"
-            renderAnnotationDetails={renderMarkedGroups}
-            breakdownLabel="Update group"
-            onBreakdownSelect={selectHealthSeries}
-            from={filters.query.from}
-            to={filters.query.to}
-            live={filters.live}
-          />
-        ))
-      ) : (
-        <HealthPlaceholder
-          title="Pick what you want the health of"
-          detail="Choose a branch, a channel or an update group above, and adoption and launch failures appear here over time. Without a scope, every update of the period would collapse into a single curve mixing what ships today with what shipped last week."
-        />
-      )}
 
       {overview?.available && metrics.length === 0 && (
         <div className="flex h-56 flex-col items-center justify-center rounded-xl border border-dashed bg-card text-center">

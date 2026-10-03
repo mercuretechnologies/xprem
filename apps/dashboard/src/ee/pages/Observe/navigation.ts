@@ -60,7 +60,7 @@ export const observeNavigation: Array<{
     value: 'metrics',
     permission: 'observe:read',
     label: 'Metrics',
-    question: 'Is the served update group healthy, and is the app fast for everyone?',
+    question: 'Is the app fast for everyone?',
     icon: Gauge,
     scopes: ['telemetry', 'timings'],
   },

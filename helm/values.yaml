@@ -601,10 +601,6 @@ environment:
     required: false
   # Path to a GeoLite2 .mmdb file inside the container, used to locate devices
   # in the Identity dashboard. Unset leaves devices unlocated.
-  - name: "GEOIP_MMDB_PATH"
-    value: ""
-    enabled: true
-    required: false
   # Set to "true" to record nothing about the devices being served: no device
   # registry, no update-health state, no telemetry ingestion. Updates are
   # delivered exactly the same; the Observe and Identity dashboards report the
