@@ -94,3 +94,30 @@ test('return navigation preserves context when URLSearchParams.size is unavailab
     }
   }
 });
+
+test('release breakdown navigation replaces both spellings of the previous release selection', () => {
+  const params = new URLSearchParams(
+    'channel=staging&group=old-group&group=another-group&update=old-update&live=0'
+  );
+  const original = params.toString();
+  for (const patch of [{ updateId: 'new-update' }, { updateGroupId: 'new-group' }]) {
+    const destination = new URL(errorsListHref(params, patch), 'https://dashboard.test');
+    assert.deepEqual(
+      destination.searchParams.getAll('update'),
+      patch.updateId ? [patch.updateId] : []
+    );
+    assert.deepEqual(
+      destination.searchParams.getAll('group'),
+      patch.updateGroupId ? [patch.updateGroupId] : []
+    );
+    assert.equal(destination.searchParams.get('channel'), 'staging');
+    assert.equal(destination.searchParams.get('live'), '0');
+  }
+  assert.equal(params.toString(), original);
+  const runtime = new URL(
+    errorsListHref(params, { runtimeVersion: '1.2.3' }),
+    'https://dashboard.test'
+  );
+  assert.deepEqual(runtime.searchParams.getAll('group'), ['old-group', 'another-group']);
+  assert.equal(runtime.searchParams.get('update'), 'old-update');
+});

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,12 +22,14 @@ import (
 )
 
 // Opt in with OBSERVE_ERRORS_PERF_ROWS=1000000 and the usual live-store URLs.
+// That count covers the 31-day window; another 10% historical events exercise
+// global reads of a dominant group with a fixed ingestion snapshot.
 // Use a disposable database: this fixture deliberately leaves its isolated app
 // behind so EXPLAIN and system.query_log can be inspected after the test.
 func TestErrorsPerformance31Days(t *testing.T) {
 	raw := os.Getenv("OBSERVE_ERRORS_PERF_ROWS")
 	if raw == "" {
-		t.Skip("set OBSERVE_ERRORS_PERF_ROWS to run the 31-day load fixture")
+		t.Skip("set OBSERVE_ERRORS_PERF_ROWS to run the windowed and global load fixture")
 	}
 	count, err := strconv.ParseUint(raw, 10, 64)
 	require.NoError(t, err)
@@ -40,16 +43,19 @@ func TestErrorsPerformance31Days(t *testing.T) {
 	appID := uuid.NewString()
 	from := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(ErrorsMaxWindow)
+	asOf := time.Now().UTC().Truncate(time.Second)
+	ingestedAt := asOf.Add(-time.Minute)
 	// One in ten logs is an error. A group occurs across sixteen updates;
 	// devices recur across updates, with a mix of models, OS and runtimes.
 	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
-		(app_id, update_id, eas_client_id, session_id, timestamp, content_key,
+		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at, content_key,
 		 event_name, severity_number, is_fatal, body, attributes,
 		 error_fingerprint, platform, runtime_version, device_model, os_name, os_version)
 		SELECT toUUID(?), reinterpretAsUUID(MD5(concat('update', toString(intDiv(number,1000)%16)))),
 		 reinterpretAsUUID(MD5(concat('device',toString(number%20000)))),
 		 reinterpretAsUUID(MD5(concat('session',toString(intDiv(number,50))))),
 		 toDateTime64(?,9) + toIntervalSecond(intDiv(number*2678400,?)),
+		 toDateTime(?),
 		 reinterpretAsUUID(MD5(concat(?,toString(number)))),
 		 if(number%10=0,'exception','navigation'),if(number%10=0,17,9),
 		 toUInt8(number%110=0),'Synthetic production-shaped telemetry event',
@@ -59,7 +65,34 @@ func TestErrorsPerformance31Days(t *testing.T) {
 		 if(intDiv(number,1000)%2=0,'ios','android'),concat('runtime-',toString(intDiv(number,100)%4)),
 		 concat('model-',toString(intDiv(number,10)%12)),if(intDiv(number,1000)%2=0,'iOS','Android'),
 		 concat('18.',toString(intDiv(number,10)%3)) FROM numbers(?)`,
-		appID, from, count, appID, ZeroUpdateID, count))
+		appID, from, count, ingestedAt, appID, ZeroUpdateID, count))
+	// Add a dominant historical error on an existing update/raw fingerprint.
+	// Its events span six older months, outside the windowed cases below. The
+	// explicit ingestion time makes the fixed global snapshot usable immediately.
+	var historicalUpdate, historicalFingerprint string
+	require.NoError(t, engine.Conn.QueryRow(ctx, `SELECT toString(update_id),toString(error_fingerprint)
+		FROM observe_logs WHERE app_id=? ORDER BY timestamp LIMIT 1`, appID).Scan(&historicalUpdate, &historicalFingerprint))
+	historicalCount := count / 10
+	historicalFrom := from.Add(-365 * 24 * time.Hour)
+	attributes, err := json.Marshal(map[string]string{
+		"exception.type":       "TypeError",
+		"exception.message":    "Failure 0",
+		"exception.stacktrace": strings.Repeat("at renderScreen (app.js:12345:67)\n", 32),
+	})
+	require.NoError(t, err)
+	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
+		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at, content_key,
+		 event_name, severity_number, is_fatal, body, attributes,
+		 error_fingerprint, platform, runtime_version, device_model, os_name, os_version)
+		SELECT toUUID(?),toUUID(?),reinterpretAsUUID(MD5(concat('device',toString(number%20000)))),
+		 reinterpretAsUUID(MD5(concat('historical-session',toString(intDiv(number,50))))),
+		 toDateTime64(?,9)+toIntervalSecond(intDiv(number*15552000,?)),toDateTime(?),
+		 reinterpretAsUUID(MD5(concat(?,'historical',toString(number)))),
+		 'exception',17,toUInt8(number%11=0),'Synthetic historical error',?,
+		 toUUID(?),'ios',concat('runtime-',toString(number%4)),
+		 concat('model-',toString(number%12)),'iOS',concat('18.',toString(number%3))
+		 FROM numbers(?)`, appID, historicalUpdate, historicalFrom, historicalCount, from.Add(-90*24*time.Hour),
+		appID, string(attributes), historicalFingerprint, historicalCount))
 	// Retries retain their content key and event time, but arrive later.
 	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs SELECT * REPLACE (ingested_at + INTERVAL 1 SECOND AS ingested_at)
 		FROM observe_logs WHERE app_id = ? AND sipHash64(content_key)%10=0`, appID))
@@ -71,7 +104,9 @@ func TestErrorsPerformance31Days(t *testing.T) {
 		GROUP BY app_id,update_id,error_fingerprint`, appID, ZeroUpdateID))
 	var stored uint64
 	require.NoError(t, engine.Conn.QueryRow(ctx, "SELECT count() FROM observe_logs WHERE app_id=?", appID).Scan(&stored))
-	t.Logf("fixture app=%s distinct_logs=%d stored_logs=%d expected_errors=%d period=%s..%s", appID, count, stored, (count+9)/10, from.Format(time.RFC3339), to.Format(time.RFC3339))
+	t.Logf("fixture app=%s window_logs=%d historical_logs=%d stored_logs=%d window_errors=%d period=%s..%s historical_from=%s as_of=%s historical_attributes_bytes=%d",
+		appID, count, historicalCount, stored, (count+9)/10, from.Format(time.RFC3339), to.Format(time.RFC3339),
+		historicalFrom.Format(time.RFC3339), asOf.Format(time.RFC3339), len(attributes))
 	tracked := &errorsMeasuredConn{Conn: engine.Conn}
 	explorer := &Explorer{clickhouse: &clickhouse.Engine{Conn: tracked}}
 	base := ExplorerQuery{From: from, To: to, Bucket: 24 * time.Hour}
@@ -165,6 +200,76 @@ func TestErrorsPerformance31Days(t *testing.T) {
 	for _, call := range tracked.calls {
 		reportErrorsQuery(t, engine.Conn, call)
 	}
+
+	globalID := encodeErrorID("g:" + historicalFingerprint)
+	expectedGlobal := historicalCount + (count-1)/1000 + 1
+	var globalHead ErrorDetails
+	for _, limit := range []int{1, 100} {
+		globalHead = measureErrorsGlobalRead(t, explorer, tracked, appID, globalID,
+			ErrorDetailsQuery{Global: true, AsOf: asOf, Limit: limit}, expectedGlobal, 3, "head")
+		require.True(t, globalHead.From.Equal(historicalFrom))
+		require.Greater(t, globalHead.To.Sub(globalHead.From), ErrorsMaxWindow)
+	}
+	cursor, err := DecodeLogCursor(globalHead.NextCursor)
+	require.NoError(t, err)
+	require.NotNil(t, cursor)
+	second := measureErrorsGlobalRead(t, explorer, tracked, appID, globalID,
+		ErrorDetailsQuery{Global: true, AsOf: asOf, Limit: 100, Cursor: cursor}, expectedGlobal, 3, "cursor")
+	require.Equal(t, globalHead.Summary, second.Summary)
+	require.Equal(t, globalHead.Series, second.Series)
+	seen := make(map[string]bool, len(globalHead.Occurrences))
+	for _, occurrence := range globalHead.Occurrences {
+		seen[occurrence.EventKey] = true
+	}
+	for _, occurrence := range second.Occurrences {
+		require.False(t, seen[occurrence.EventKey], "cursor pages must not repeat an occurrence")
+	}
+	fallback, err = json.Marshal([]string{historicalUpdate, historicalFingerprint, "", "", "", "", "", "v1"})
+	require.NoError(t, err)
+	resolved := measureErrorsGlobalRead(t, explorer, tracked, appID, encodeErrorID("f:"+string(fallback)),
+		ErrorDetailsQuery{Global: true, AsOf: asOf, Limit: 100}, expectedGlobal, 4, "fallback")
+	require.Equal(t, globalID, resolved.Summary.ErrorID)
+}
+
+func measureErrorsGlobalRead(t *testing.T, explorer *Explorer, tracked *errorsMeasuredConn, appID, errorID string, query ErrorDetailsQuery, expected uint64, budget int, label string) ErrorDetails {
+	t.Helper()
+	tracked.calls = nil
+	started := time.Now()
+	details, err := explorer.ReadErrorDetails(context.Background(), appID, errorID, query)
+	require.NoError(t, err)
+	t.Logf("global %s limit=%d wall_ms=%d queries=%d", label, query.Limit, time.Since(started).Milliseconds(), len(tracked.calls))
+	require.Len(t, tracked.calls, budget)
+	require.NotNil(t, details.Summary)
+	require.Equal(t, expected, details.Summary.Occurrences)
+	require.NotNil(t, details.AsOf)
+	require.True(t, details.AsOf.Equal(query.AsOf))
+	require.Len(t, details.Occurrences, query.Limit)
+	require.LessOrEqual(t, len(details.Series), maxErrorsBuckets)
+	var sum uint64
+	for _, point := range details.Series {
+		sum += point.Count
+	}
+	require.Equal(t, expected, sum)
+	for _, segments := range [][]ErrorBreakdown{details.Updates, details.DeviceModels, details.OSVersions, details.Runtimes} {
+		sum = 0
+		var percentage float64
+		for _, segment := range segments {
+			sum += segment.Occurrences
+			percentage += segment.Percentage
+		}
+		require.Equal(t, expected, sum)
+		require.InDelta(t, 100, percentage, 0.000001)
+	}
+	started = time.Now()
+	cached, err := explorer.ReadErrorDetails(context.Background(), appID, errorID, query)
+	require.NoError(t, err)
+	require.Equal(t, details, cached)
+	require.Len(t, tracked.calls, budget, "an identical global read must add no queries")
+	t.Logf("global %s cache_hit limit=%d wall_us=%d queries=0", label, query.Limit, time.Since(started).Microseconds())
+	for _, call := range tracked.calls {
+		reportErrorsQuery(t, tracked.Conn, call)
+	}
+	return details
 }
 
 type errorsMeasuredQuery struct {

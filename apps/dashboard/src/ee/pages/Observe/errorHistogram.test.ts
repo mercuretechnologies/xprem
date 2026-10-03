@@ -56,6 +56,26 @@ test('without a snapshot endpoint the real bucket duration closes each interval'
   assert.deepEqual(histogramBuckets([], 60), []);
 });
 
+test('fractional UTC and offset timestamps retain a partial last bucket at chart precision', () => {
+  const buckets = histogramBuckets(
+    [
+      { timestamp: '2026-10-03T10:00:00.123456789Z', count: 2 },
+      { timestamp: '2026-10-03T12:01:00.123456789+02:00', count: 3 },
+    ],
+    60,
+    '2026-10-03T10:01:20.987654321Z'
+  );
+  assert.equal(buckets[0].timestamp.toISOString(), '2026-10-03T10:00:00.123Z');
+  assert.equal(buckets[0].end.toISOString(), '2026-10-03T10:01:00.123Z');
+  assert.equal(buckets[1].timestamp.toISOString(), '2026-10-03T10:01:00.123Z');
+  assert.equal(buckets[1].end.toISOString(), '2026-10-03T10:01:20.987Z');
+  assert.equal(buckets[1].center.toISOString(), '2026-10-03T10:01:10.555Z');
+  assert.equal(
+    buckets.reduce((total, bucket) => total + bucket.count, 0),
+    5
+  );
+});
+
 test('occurrence axes use unique evenly spaced integers including zero and the maximum', () => {
   for (const maximum of [0, 1, 2, 3, 4, 5, 13, 25, 100, 999, 1_000_000]) {
     const ticks = occurrenceTicks(maximum);

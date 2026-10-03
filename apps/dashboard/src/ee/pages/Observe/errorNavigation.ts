@@ -25,6 +25,12 @@ export const errorsListHref = (
 ) => {
   const next = new URLSearchParams(params);
   next.delete('errorId');
+  // The release picker treats update IDs and publish groups as alternative
+  // selections. A breakdown from the global detail can select another release.
+  if (patch.updateId !== undefined || patch.updateGroupId !== undefined) {
+    next.delete(filterParam('updateId'));
+    next.delete(filterParam('updateGroupId'));
+  }
   for (const [key, value] of Object.entries(patch)) {
     next.set(filterParam(key as FilterKey), value);
   }

@@ -124,6 +124,10 @@ const DetailedHistogram = ({ series, from, to, bucketSeconds = 60 }: HistogramPr
                     barPadding={Math.max(0.25, 1 - (14 * buckets.length) / plotWidth)}
                     radius={2}
                     radiusTop
+                    // visx only makes bars focusable when focus handlers exist.
+                    // Its series handler displays the same tooltip on focus.
+                    onFocus={() => undefined}
+                    onBlur={() => undefined}
                   />
                 </g>
                 <Tooltip<(typeof buckets)[number]>
@@ -165,6 +169,27 @@ const DetailedHistogram = ({ series, from, to, bucketSeconds = 60 }: HistogramPr
       <p className="mt-2 text-[11px] text-muted-foreground">
         {histogramIntervalLabel(bucketSeconds)}
       </p>
+      <div className="sr-only">
+        <table>
+          <caption>Occurrences over time</caption>
+          <thead>
+            <tr>
+              <th scope="col">Interval start</th>
+              <th scope="col">Interval end</th>
+              <th scope="col">Occurrences</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buckets.map((point, index) => (
+              <tr key={index}>
+                <td>{intervalTime.format(point.timestamp)}</td>
+                <td>{intervalTime.format(point.end)}</td>
+                <td>{exactNumber.format(point.count)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
