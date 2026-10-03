@@ -57,9 +57,7 @@ func (e *Explorer) ReadErrorDetails(ctx context.Context, appID, errorID string, 
 }
 
 func errorDetailsReadCacheKey(appID, errorID string, query ErrorDetailsQuery) string {
-	// fmt prints a pointer nested in a struct as its address. Key cursor pages
-	// by their values so equivalent decoded cursors share an answer, and a
-	// reused allocation cannot return a different occurrence page's cache.
+	// fmt prints nested pointers as addresses; cache by cursor value.
 	var cursor LogCursor
 	hasCursor := query.Cursor != nil
 	if hasCursor {
@@ -75,8 +73,6 @@ func (e *Explorer) readErrorDetails(ctx context.Context, appID, errorID string, 
 		return ErrorDetails{}, err
 	}
 	if query.Global {
-		// A group opened directly describes all retained occurrences, independent
-		// of any period or predicates supplied by its originating list.
 		query.ExplorerQuery, query.Fatality = ExplorerQuery{}, ""
 		if query.Cursor != nil && query.AsOf.IsZero() {
 			return ErrorDetails{}, fmt.Errorf("%w: asOf is required for global cursor pages", ErrInvalidErrorsQuery)
@@ -169,8 +165,6 @@ func errorDetailsSource(appID, key string, query ErrorDetailsQuery) (sqlFragment
 	return errorsSource(appID, query.ExplorerQuery, query.Fatality, []string{key})
 }
 
-// Only the requested group's candidate raw keys are scanned for its extent.
-// Metadata retains its latest mapping; AsOf freezes log ingestion for paging.
 func (e *Explorer) globalErrorExtent(ctx context.Context, appID, key string, asOf time.Time) (ExplorerQuery, bool, error) {
 	source, args := errorsSource(appID, ExplorerQuery{}, "", []string{key}, asOf)
 	var first, last time.Time
@@ -195,11 +189,7 @@ func (e *Explorer) globalErrorExtent(ctx context.Context, appID, key string, asO
 	return ExplorerQuery{From: first.UTC(), To: end.UTC(), Bucket: bucket}, false, nil
 }
 
-// GROUPING SETS computes the summary, histogram and all four breakdowns from
-// the same filtered, deduplicated stream in one pass. Returned groups are
-// bounded; omitted breakdown values are reconciled against the full total.
-// A publish group is metadata, not part of the update/platform identity:
-// older events may lack it even when newer events refer to the same update.
+// Exclude publish groups from segment identity: older events may lack them.
 func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, query ErrorDetailsQuery, details *ErrorDetails) error {
 	source, args := errorDetailsSource(appID, key, query)
 	sql := sqlf(`WITH %s
@@ -322,8 +312,7 @@ func (e *Explorer) readErrorOccurrences(ctx context.Context, appID, key string, 
 		selectedArgs = append(selectedArgs, query.Cursor.Timestamp.UnixNano(), query.Cursor.Timestamp.UnixNano(), query.Cursor.EventKey)
 	}
 	selectedArgs = append(selectedArgs, query.Limit+1)
-	// Only fetch body/attributes for the selected keys. Large stack payloads
-	// never enter the aggregation for every occurrence of the group.
+	// Fetch stack payloads only after selecting the page's keys.
 	var where sqlFragment
 	var payloadArgs []any
 	if query.Global {
@@ -387,8 +376,6 @@ func (e *Explorer) readErrorOccurrences(ctx context.Context, appID, key string, 
 	return nil
 }
 
-// One bounded PostgreSQL lookup enriches existing updates. Deleted releases
-// retain the exact update UUID from the event as a useful, filterable label.
 func (e *Explorer) enrichErrorUpdates(ctx context.Context, appID string, segments []ErrorBreakdown) error {
 	if e.postgres == nil || e.postgres.DB == nil {
 		return nil

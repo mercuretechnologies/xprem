@@ -47,8 +47,7 @@ func NewErrorGroupsSweep(explorer *Explorer, indexes IndexOpener) *ErrorGroupsSw
 func (s *ErrorGroupsSweep) Run(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, errorGroupsSweepTimeout)
 	defer cancel()
-	// Occurrences are indexed by ingestion hour. Include the partial oldest
-	// hour, and recover errors still visible when their map becomes ready late.
+	// Include the oldest partial ingestion hour.
 	since := time.Now().Add(-errorGroupsLookback).Truncate(time.Hour)
 	known := map[string]error{}
 	symbolicated, skipped := 0, 0

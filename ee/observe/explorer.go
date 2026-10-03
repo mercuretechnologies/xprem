@@ -291,8 +291,7 @@ func telemetryWhere(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFra
 	return telemetryWhereWithTimeBounds(table, query, cohort, "?", query.From.UTC(), query.To.UTC())
 }
 
-// Positional time.Time arguments in the ClickHouse driver default to seconds.
-// Build nanosecond bounds with their matching arguments instead of rewriting SQL.
+// The ClickHouse driver truncates positional time.Time arguments to seconds.
 func telemetryWhereNanoseconds(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFragment, []any) {
 	return telemetryWhereWithTimeBounds(table, query, cohort, "fromUnixTimestamp64Nano(?)", query.From.UnixNano(), query.To.UnixNano())
 }

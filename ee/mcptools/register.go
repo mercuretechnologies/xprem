@@ -48,8 +48,7 @@ type Deps struct {
 	// stateless mode and under DISABLE_DEVICE_TELEMETRY; present but serving
 	// degraded answers without ClickHouse.
 	Explorer observe.ExplorerReader
-	// LicenseValid rechecks the active deployment license on every Errors call.
-	// Nil uses the licensing service's current activation state.
+	// LicenseValid defaults to licensing.IsEnterprise when nil.
 	LicenseValid func() bool
 }
 

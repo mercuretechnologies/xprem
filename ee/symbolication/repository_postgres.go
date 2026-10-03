@@ -25,8 +25,7 @@ type IndexRepository interface {
 	Finish(ctx context.Context, update types.Update, status types.SourcemapIndexStatus, reason string, segments *int, indexSize *int64) error
 	// GetUpdateSourcemap answers nil when the update does not exist.
 	GetUpdateSourcemap(ctx context.Context, appId, branch, runtimeVersion, updateId string) (*UpdateSourcemap, error)
-	// GetUpdateSourcemapByUUID is GetUpdateSourcemap for the UUID a device
-	// reports; the internal update identity is included for index repair.
+	// GetUpdateSourcemapByUUID includes the update identity and index status.
 	GetUpdateSourcemapByUUID(ctx context.Context, appId, updateUUID string) (*UpdateSourcemap, error)
 }
 
@@ -34,7 +33,6 @@ type IndexRepository interface {
 // the map it carries, nil when it was published without one, and the index
 // record once a job handled it.
 type UpdateSourcemap struct {
-	// Update is filled by the UUID lookup for jobs that rebuild a derived index.
 	Update types.Update          `json:"-"`
 	Hash   *string               `json:"hash"`
 	Index  *types.SourcemapIndex `json:"index"`

@@ -40,8 +40,6 @@ type GetErrorDetailsInput struct {
 	IncludeSeries bool   `json:"includeSeries,omitempty" jsonschema:"include the complete occurrence histogram; defaults to false"`
 }
 
-// Each execution rechecks app permission, telemetry and the active license;
-// tool registration and a reader's cache cannot authorize a later call.
 func (deps Deps) requireErrorsTelemetry(ctx context.Context, req *mcpprot.CallToolRequest, appID string) error {
 	if err := deps.requireTelemetry(ctx, req, appID); err != nil {
 		return err

@@ -117,8 +117,7 @@ func TestGlobalErrorDetailsReadsRetainedGroupWithStableSnapshot(t *testing.T) {
 	foreign := fixture[2]
 	foreign.AppID, foreign.ContentKey, foreign.Timestamp = otherApp, uuid.New(), now.Add(2*time.Hour)
 	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, []LogRow{foreign}))
-	// Ingestion has second precision: place the retained fixture before the
-	// snapshot's completed-second boundary, without waiting for the clock.
+	// Place fixtures before the ingestion snapshot's second boundary.
 	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
 		SELECT * REPLACE (toDateTime(?) AS ingested_at) FROM observe_logs WHERE app_id IN (?, ?)`, now.Add(-time.Minute), app, otherApp))
 	require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
@@ -170,7 +169,6 @@ func TestGlobalErrorDetailsReadsRetainedGroupWithStableSnapshot(t *testing.T) {
 		require.Contains(t, call.sql, "group_fingerprint IN ?", "raw scans are narrowed to candidate group keys")
 	}
 
-	// The existing API still reads only the requested period and filters.
 	windowed, err := explorer.readErrorDetails(ctx, app, details.Summary.ErrorID, ErrorDetailsQuery{
 		ExplorerQuery: ExplorerQuery{From: now.Add(-2 * time.Hour), To: now, Platform: []string{"ios"}}, Fatality: "fatal",
 	})
@@ -178,16 +176,14 @@ func TestGlobalErrorDetailsReadsRetainedGroupWithStableSnapshot(t *testing.T) {
 	require.EqualValues(t, 1, windowed.Summary.Occurrences)
 	require.Nil(t, windowed.AsOf)
 
-	// A backdated event arriving in the snapshot's current second must not
-	// change later pages, even though ingestion stores no subsecond precision.
+	// A backdated arrival in the current second must not change later pages.
 	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
 		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at, content_key,
 		 event_name, severity_number, attributes, error_fingerprint)
 		VALUES (?, ?, ?, ?, ?, fromUnixTimestamp64Nano(?), ?, 'js.exception', 17, ?, ?)`,
 		app, updateA, deviceB, uuid.NewString(), now.Add(-100*24*time.Hour), asOf.UnixNano(),
 		uuid.NewString(), fixture[0].Attributes, fixture[0].ErrorFingerprint))
-	// Latest mapping metadata remains readable after replacing rows merge;
-	// the snapshot freezes log ingestion, not historical mapping versions.
+	// The snapshot freezes ingestion, not mapping versions.
 	require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
 		errorKey:   errorKey{appID: app, updateID: updateB, fingerprint: fixture[0].ErrorFingerprint.String()},
 		ErrorGroup: ErrorGroup{GroupFingerprint: group, ErrorType: "Error", Message: "updated title", SymbolicatedAt: asOf.Add(time.Hour)},
@@ -244,7 +240,6 @@ func TestErrorsLiveReconcilesCountsFiltersAndCursor(t *testing.T) {
 	fixture[2].DeviceModel = "Tablet"
 	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, append(fixture, fixture[0])))
 	base := ExplorerQuery{From: now.Add(-24 * time.Hour), To: now.Add(time.Hour), Bucket: time.Hour}
-	// Before symbolication each update's raw fingerprint remains a separate group.
 	before, err := explorer.ReadErrors(ctx, app, ErrorsQuery{ExplorerQuery: base, IncludeSeries: true})
 	require.NoError(t, err)
 	require.Len(t, before.Errors, 2)
@@ -348,8 +343,7 @@ func TestErrorsSweepRecoversOlderPendingGroups(t *testing.T) {
 		errorLogRow(app, nineDays, deviceA, crashAt(220), 17, false, now.Add(-9*24*time.Hour)),
 		errorLogRow(app, noMap, deviceA, crashAt(120), 21, true, now.Add(-6*24*time.Hour)),
 	}
-	// Set ingestion times explicitly: inserting old events through the sink now
-	// would make their occurrence counters recent and hide the sweep regression.
+	// Set old ingestion times to exercise the sweep's lookback.
 	batch, err := engine.Conn.PrepareBatch(ctx, `INSERT INTO observe_logs
 		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at,
 		 content_key, event_name, severity_number, is_fatal, attributes, error_fingerprint)`)
@@ -447,7 +441,6 @@ func TestErrorsLiveLegacyCrashAndEmbeddedIdentity(t *testing.T) {
 		assert.EqualValues(t, 1, row.Occurrences)
 		assert.EqualValues(t, 1, row.CrashOccurrences)
 	}
-	// IDs are opaque, but retain enough build context for an exact round trip.
 	key, err := decodeErrorID(page.Errors[0].ErrorID)
 	require.NoError(t, err)
 	var parts []string
@@ -565,8 +558,7 @@ func TestErrorsLiveUpdateBreakdownCombinesLegacyPublishGroups(t *testing.T) {
 		}}))
 	}
 
-	// No PostgreSQL row can enrich these deleted releases: preserve any known
-	// publish group from their events without treating it as a segment identity.
+	// Deleted releases must retain publish groups from their events.
 	details, err := explorer.readErrorDetails(ctx, app, encodeErrorID("g:"+errorGroup), ErrorDetailsQuery{
 		ExplorerQuery: ExplorerQuery{From: now.Add(-time.Hour), To: now.Add(time.Hour)},
 	})

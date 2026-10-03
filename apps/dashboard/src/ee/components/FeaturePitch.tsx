@@ -12,7 +12,6 @@ import { EnterpriseFeature } from '@/ee/lib/enterpriseFeatures';
 
 export type FeaturePitchPoint = { icon: LucideIcon; text: string };
 
-// A full-width page selling a locked enterprise feature, with an illustration beside the copy.
 export const FeaturePitch = ({
   feature,
   title,
@@ -75,7 +74,6 @@ export const FeaturePitch = ({
   );
 };
 
-// The browser window a wireframe illustration sits in.
 export const SketchWindow = ({ path, children }: { path: string; children: ReactNode }) => (
   <div className="overflow-hidden rounded-xl border bg-background shadow-elevated">
     <div className="flex items-center gap-3 border-b bg-muted/50 px-4 py-2.5">
@@ -92,7 +90,6 @@ export const SketchWindow = ({ path, children }: { path: string; children: React
   </div>
 );
 
-// A placeholder bar; width is a percentage of its row.
 export const SketchBar = ({
   w,
   className = 'bg-muted-foreground/15',

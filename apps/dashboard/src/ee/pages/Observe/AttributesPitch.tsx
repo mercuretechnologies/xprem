@@ -5,7 +5,6 @@
 import { FeaturePitch, SketchWindow } from '@/ee/components/FeaturePitch';
 import { identityAttributesFeature } from '@/ee/lib/enterpriseFeatures';
 
-// What the Attributes page shows in place of the allowlist without an enterprise license.
 export const AttributesPitch = () => (
   <FeaturePitch
     feature={identityAttributesFeature}
@@ -23,7 +22,6 @@ const SKETCH_FILTERS = [
 const SKETCH_LINE =
   'M0 22 L10 20 L20 21 L30 17 L40 18 L50 14 L60 15 L70 11 L80 12 L90 8 L100 9 L110 6 L120 7';
 
-// One cohort on the Overview page, narrowed by three attributes.
 const AttributesSketch = () => (
   <SketchWindow path="observe/overview">
     <div className="flex flex-wrap items-center gap-1.5 border-b px-4 py-3">

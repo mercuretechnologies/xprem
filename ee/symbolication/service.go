@@ -338,10 +338,6 @@ func (s *Service) OpenUpdateIndex(ctx context.Context, appId, updateUUID string)
 	return index, err
 }
 
-// repairIndex rebuilds a missing or unreadable derived index from its original
-// source map. The worker owns status changes: changing the record here could
-// strand it as pending after a failed enqueue, or overwrite a fast worker's
-// completed result. River deduplicates concurrent repairs for the update.
 func (s *Service) repairIndex(ctx context.Context, sourcemap *UpdateSourcemap) error {
 	err := s.scheduleIndex(ctx, sourcemap.Update, *sourcemap.Hash, true)
 	if err != nil && !errors.Is(err, jobs.ErrAlreadyRunning) {
@@ -350,15 +346,12 @@ func (s *Service) repairIndex(ctx context.Context, sourcemap *UpdateSourcemap) e
 	return ErrIndexNotReady
 }
 
-// UpdateIndexState also checks the derived file: a stored database record may
-// refer to an index removed from storage or written by an older server.
+// UpdateIndexState verifies the stored index and queues a rebuild if needed.
 func (s *Service) UpdateIndexState(ctx context.Context, appId, updateUUID string) error {
 	_, err := s.OpenUpdateIndex(ctx, appId, updateUUID)
 	return err
 }
 
-// storedUpdateSourcemap includes the update identity needed to repair its
-// derived index, without resolving the device's UUID in a second query.
 func (s *Service) storedUpdateSourcemap(ctx context.Context, appId, updateUUID string) (*UpdateSourcemap, error) {
 	sourcemap, err := s.indexes.GetUpdateSourcemapByUUID(ctx, appId, updateUUID)
 	if err != nil {

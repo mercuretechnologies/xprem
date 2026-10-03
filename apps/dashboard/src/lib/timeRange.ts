@@ -46,9 +46,7 @@ export const parseTimeExpression = (expression: string, now: number): Date | nul
     const date = new Date(now - Number(relative[1]) * unitMs[relative[2]]);
     return Number.isNaN(date.getTime()) ? null : date;
   }
-  // API bounds carry a timezone and may include fractional seconds. Parse
-  // those independently of local input so navigation preserves the instant,
-  // including milliseconds, rather than interpreting UTC as browser time.
+  // Parse zoned API timestamps separately from browser-local input.
   const zoned = zonedTimePattern.exec(text);
   if (zoned) {
     const [, year, month, day, hours, minutes, seconds, fraction = '', zone] = zoned;
@@ -56,8 +54,7 @@ export const parseTimeExpression = (expression: string, now: number): Date | nul
     const date = new Date(0);
     date.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
     date.setUTCHours(Number(hours), Number(minutes), Number(seconds), milliseconds);
-    // Date constructors normalize impossible calendar dates and hours. Reject
-    // them just as the local date parser below does.
+    // Date normalizes invalid dates and hours; reject them instead.
     if (
       date.getUTCFullYear() !== Number(year) ||
       date.getUTCMonth() !== Number(month) - 1 ||
@@ -99,8 +96,7 @@ export const parseTimeExpression = (expression: string, now: number): Date | nul
   return exact ? date : null;
 };
 
-// A validated zoned bound can travel unchanged on the wire. Date is useful
-// for display and range arithmetic, but it truncates API nanoseconds.
+// Preserve the original bound on the wire; Date truncates API nanoseconds.
 export const isZonedAbsolute = (expression: string) =>
   zonedTimePattern.test(expression.trim()) && parseTimeExpression(expression, 0) !== null;
 

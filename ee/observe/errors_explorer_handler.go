@@ -16,7 +16,6 @@ import (
 	"xprem/internal/handlers"
 )
 
-// Errors is licensed at request time, before a reader can return cached data.
 func (h *ExplorerHandler) requireErrorsLicense(w http.ResponseWriter) bool {
 	if h.licenseValid == nil || !h.licenseValid() {
 		handlers.RenderError(w, http.StatusForbidden, "Error tracking requires a valid Enterprise license.")
@@ -59,8 +58,6 @@ func (h *ExplorerHandler) renderErrorsQueryError(w http.ResponseWriter, err erro
 	}
 }
 
-// Reader validation failures are expected client errors, including the shared
-// Observe filters; only unexpected read failures belong in the server logs.
 func isErrorsValidationError(err error) bool {
 	return errors.Is(err, ErrInvalidErrorID) || errors.Is(err, ErrInvalidErrorsQuery) ||
 		errors.Is(err, errInvalidObserveRange) || errors.Is(err, errInvalidObservePlatform) ||

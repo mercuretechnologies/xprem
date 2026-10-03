@@ -53,9 +53,7 @@ type ErrorsPage struct {
 	Errors        []ErrorSummary `json:"errors"`
 }
 
-// All surfaces validate the window here, including callers outside HTTP/MCP.
-// Anchoring buckets to From retains both partial edge buckets and caps the
-// response size independently of the caller's requested bucket duration.
+// Anchor buckets to From to retain partial edge buckets.
 func normalizeErrorsQuery(query ExplorerQuery) (ExplorerQuery, error) {
 	if len(query.Conditions) > 0 {
 		return query, fmt.Errorf("%w: conditions are only supported on timing reads", ErrInvalidErrorsQuery)

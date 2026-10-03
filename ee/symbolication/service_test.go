@@ -279,8 +279,6 @@ func TestScheduleIndexIsANoOpWhenUnavailable(t *testing.T) {
 	assert.Nil(t, indexes.record)
 }
 
-// The queue implements River's active-job uniqueness for a single update.
-// It records accepted jobs independently of enqueue attempts.
 type fakeIndexQueue struct {
 	mu       sync.Mutex
 	accepted []indexArgs
@@ -348,7 +346,6 @@ func TestOpenUpdateIndexRepairsMissingAndInvalidIndexes(t *testing.T) {
 			assert.True(t, args.Rebuild)
 			assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status, "enqueue does not race the worker's status writes")
 
-			// An active duplicate still reads as indexing, not as a server error.
 			require.ErrorIs(t, service.UpdateIndexState(ctx, "app-1", "update-uuid"), ErrIndexNotReady)
 			require.Len(t, queue.accepted, 1)
 			require.NoError(t, service.runIndexJob(ctx, &river.Job[indexArgs]{
@@ -434,7 +431,7 @@ func TestIndexRepairRequiresAvailableService(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnavailable)
 	assert.Zero(t, queue.attempts)
 
-	// Converting a nil *jobs.Client to the queue interface must not enable it.
+	// A nil client must leave the queue interface nil.
 	withoutJobs := NewService(newFakeStore(), &fakeIndexes{}, nil)
 	withoutJobs.licenseValid = func() bool { return true }
 	assert.False(t, withoutJobs.available())

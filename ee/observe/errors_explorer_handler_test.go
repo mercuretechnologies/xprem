@@ -130,8 +130,6 @@ func TestErrorsHandlerUsesCurrentLicenseOnEachRequest(t *testing.T) {
 	require.Equal(t, 1, reader.errorsCalls)
 }
 
-// Embedding the interface leaves unrelated reads unused while exercising both
-// error endpoints against the same reader failure.
 type failingErrorsExplorer struct {
 	ExplorerReader
 	err error

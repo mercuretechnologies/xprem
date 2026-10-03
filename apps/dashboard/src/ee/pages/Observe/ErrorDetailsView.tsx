@@ -44,8 +44,7 @@ export const ErrorDetailsView = ({ errorId }: { errorId: string }) => {
       }),
     getNextPageParam: (last, pages): OccurrencePageParam | undefined =>
       last.nextCursor ? { cursor: last.nextCursor, asOf: pages[0].asOf } : undefined,
-    // Global history and older pages share the server's snapshot. Keep a
-    // selected occurrence stable while somebody is reading its stack.
+    // Keep the selected occurrence stable while its stack is open.
     refetchOnWindowFocus: false,
   });
   const details = query.data?.pages[0];
@@ -152,8 +151,6 @@ export const ErrorDetailsView = ({ errorId }: { errorId: string }) => {
                   {new Date(selected.timestamp).toLocaleString()}
                 </time>
               </header>
-              {/* LogDetails delegates exception stacks to StackTraceView using
-                  this occurrence's update ID and raw fingerprint. */}
               <LogDetails key={`${selected.eventKey}:${selection?.revision ?? 0}`} log={selected} />
             </section>
           )}

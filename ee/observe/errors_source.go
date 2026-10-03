@@ -15,8 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// IDs contain the original qualified fallback, so a bookmark opened before
-// symbolication can resolve to the cross-update group afterwards.
+// Preserve fallback keys so bookmarks survive later symbolication.
 func encodeErrorID(key string) string { return base64.RawURLEncoding.EncodeToString([]byte(key)) }
 func decodeErrorID(id string) (string, error) {
 	if len(id) > 8192 {
@@ -47,9 +46,7 @@ func decodeErrorID(id string) (string, error) {
 	return key, nil
 }
 
-// errorsSource projects only aggregate dimensions. The key subquery reads no payloads. ClickHouse CTEs
-// are expanded, so this entails two filtered log scans, not a materialization.
-// Every error_groups read is restricted to this application's relevant keys.
+// ClickHouse expands CTEs, so this scans filtered logs twice.
 func errorsSource(appID string, query ExplorerQuery, fatality string, keys []string, snapshot ...time.Time) (sqlFragment, []any) {
 	var where sqlFragment
 	var args []any
@@ -77,8 +74,7 @@ func errorsSource(appID string, query ExplorerQuery, fatality string, keys []str
 		"toUInt8(is_fatal = 1 OR event_name = 'xprem_js_crash')",
 		"coalesce(nullIf(JSONExtractString(attributes, 'exception.type'), ''), JSONExtractString(attributes, 'name'))",
 		"coalesce(nullIf(JSONExtractString(attributes, 'exception.message'), ''), nullIf(JSONExtractString(attributes, 'message'), ''), nullIf(body, ''), event_name)",
-		// Historical records predate fingerprint ingestion. Hash their actual error
-		// identity, never the zero UUID shared by every historical record.
+		// Older records have no fingerprint; hash their error content.
 		"if(error_fingerprint = toUUID('00000000-0000-0000-0000-000000000000'), hex(SHA256(concat(event_name, '\\0', body, '\\0', attributes))), toString(error_fingerprint))",
 	}
 	names := []sqlFragment{"timestamp", "eas_client_id", "update_id", "error_fingerprint", "update_group_id", "platform", "runtime_version", "app_version", "app_build_number", "eas_build_id", "device_model", "os_name", "os_version", "is_fatal", "raw_error_type", "raw_message", "raw_identity"}
@@ -86,8 +82,7 @@ func errorsSource(appID string, query ExplorerQuery, fatality string, keys []str
 	for i, name := range names {
 		projections = append(projections, sqlFragment(fmt.Sprintf("record.%d AS %s", i+1, name)))
 	}
-	// The fallback qualifies embedded bundles by their build context; actual
-	// updates already carry a globally unique update ID.
+	// Embedded bundles lack an update ID, so include their build context.
 	fallback := sqlFragment(`concat('f:', toJSONString([toString(d.update_id), d.raw_identity,
  if(d.update_id = toUUID('00000000-0000-0000-0000-000000000000'), d.platform, ''),
  if(d.update_id = toUUID('00000000-0000-0000-0000-000000000000'), d.runtime_version, ''),
@@ -137,8 +132,7 @@ func (e *Explorer) resolveErrorID(ctx context.Context, appID, key string) (strin
 	if err != nil || fingerprint == uuid.Nil {
 		return key, nil
 	}
-	// Use the original app/update/raw fingerprint even if it is now outside the
-	// requested filters. The final statistics still use the filtered log source.
+	// Resolve the original fingerprint even when filters exclude its update.
 	var group string
 	err = e.clickhouse.Conn.QueryRow(ctx, `SELECT toString(argMax(group_fingerprint,
  tuple(symbolicated_at, group_fingerprint != toUUID('00000000-0000-0000-0000-000000000000'))))
@@ -152,10 +146,7 @@ func (e *Explorer) resolveErrorID(ctx context.Context, appID, key string) (strin
 	return key, nil
 }
 
-// Candidate mappings narrow raw logs before deduplication. Old mapping versions
-// may admit extra keys, but the latest-version join and final group predicate
-// still decide membership. This is an index-friendly superset, not a grouping
-// decision based on a stale symbolication record.
+// Stale mappings may admit extra keys; the latest mapping decides membership.
 func errorsScope(appID string, keys []string) (sqlFragment, []any) {
 	if len(keys) == 0 {
 		return "", nil
@@ -201,8 +192,7 @@ func errorsTelemetryWhere(query ExplorerQuery) (sqlFragment, []any) {
 	return telemetryWhereNanoseconds("l", query, len(query.MetadataFilter) > 0)
 }
 
-// Ingestion has second precision. A strict bound at a completed second keeps
-// later arrivals, including backdated events and retries, out of cursor pages.
+// Ingestion has second precision; exclude the current second to stabilize paging.
 func errorsSnapshotWhere(asOf time.Time) (sqlFragment, []any) {
 	return "l.app_id = ? AND l.ingested_at < fromUnixTimestamp64Nano(?)", []any{asOf.UnixNano()}
 }

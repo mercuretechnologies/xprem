@@ -21,11 +21,8 @@ import (
 	"xprem/internal/database/clickhouse"
 )
 
-// Opt in with OBSERVE_ERRORS_PERF_ROWS=1000000 and the usual live-store URLs.
-// That count covers the 31-day window; another 10% historical events exercise
-// global reads of a dominant group with a fixed ingestion snapshot.
-// Use a disposable database: this fixture deliberately leaves its isolated app
-// behind so EXPLAIN and system.query_log can be inspected after the test.
+// Run with OBSERVE_ERRORS_PERF_ROWS=1000000 and live-store URLs.
+// Use a disposable database; fixtures remain for EXPLAIN and query_log inspection.
 func TestErrorsPerformance31Days(t *testing.T) {
 	raw := os.Getenv("OBSERVE_ERRORS_PERF_ROWS")
 	if raw == "" {
@@ -45,8 +42,6 @@ func TestErrorsPerformance31Days(t *testing.T) {
 	to := from.Add(ErrorsMaxWindow)
 	asOf := time.Now().UTC().Truncate(time.Second)
 	ingestedAt := asOf.Add(-time.Minute)
-	// One in ten logs is an error. A group occurs across sixteen updates;
-	// devices recur across updates, with a mix of models, OS and runtimes.
 	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
 		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at, content_key,
 		 event_name, severity_number, is_fatal, body, attributes,
@@ -66,9 +61,7 @@ func TestErrorsPerformance31Days(t *testing.T) {
 		 concat('model-',toString(intDiv(number,10)%12)),if(intDiv(number,1000)%2=0,'iOS','Android'),
 		 concat('18.',toString(intDiv(number,10)%3)) FROM numbers(?)`,
 		appID, from, count, ingestedAt, appID, ZeroUpdateID, count))
-	// Add a dominant historical error on an existing update/raw fingerprint.
-	// Its events span six older months, outside the windowed cases below. The
-	// explicit ingestion time makes the fixed global snapshot usable immediately.
+	// Historical events exercise global reads beyond the 31-day window.
 	var historicalUpdate, historicalFingerprint string
 	require.NoError(t, engine.Conn.QueryRow(ctx, `SELECT toString(update_id),toString(error_fingerprint)
 		FROM observe_logs WHERE app_id=? ORDER BY timestamp LIMIT 1`, appID).Scan(&historicalUpdate, &historicalFingerprint))

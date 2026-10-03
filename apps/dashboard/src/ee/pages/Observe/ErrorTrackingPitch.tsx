@@ -30,7 +30,6 @@ const POINTS: FeaturePitchPoint[] = [
   },
 ];
 
-// What the Errors page shows in place of the explorer without an enterprise license.
 export const ErrorTrackingPitch = () => (
   <FeaturePitch
     feature={errorTrackingFeature}
@@ -59,7 +58,6 @@ const SKETCH_BREAKDOWN = [
   ['Runtime', '2.4.0', '92%'],
 ];
 
-// The Errors page as a wireframe: the error list beside one error's details.
 const ErrorsSketch = () => (
   <SketchWindow path="observe/errors">
     <div className="grid grid-cols-4 divide-x border-b">

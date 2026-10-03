@@ -56,8 +56,7 @@ export const ErrorsView = ({ filters }: { filters: ObserveFilters }) => {
   const sortParam = params.get('errorSort');
   const sort: ErrorSort =
     sortParam === 'occurrences' || sortParam === 'impactedDevices' ? sortParam : 'lastSeen';
-  // Remount pagination and selection when the question changes. A live tick
-  // alone keeps the page being read; a filter edit starts again at the head.
+  // Reset pagination on filter edits, but keep the current page on live ticks.
   const signature = JSON.stringify([
     api.getAppId(),
     filters.state,
