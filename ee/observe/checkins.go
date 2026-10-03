@@ -183,6 +183,7 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInStat
 		OSName:     strings.TrimSpace(checkIn.OSName),
 		OSVersion:  strings.TrimSpace(checkIn.OSVersion),
 		AppVersion: strings.TrimSpace(checkIn.AppVersion),
+		Channel:    strings.TrimSpace(checkIn.ChannelName),
 	}
 	return state
 }
@@ -190,11 +191,13 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInStat
 // deviceFingerprint condenses the reported hardware and store version.
 // Zero info fingerprints to "", which reads as "unknown" everywhere below.
 func deviceFingerprint(device identity.DeviceInfo) string {
-	if device.IsZero() {
+	// Channel stays out: a manifest poll carries only it, which would read as a hardware change.
+	parts := []string{device.Model, device.OSName, device.OSVersion, device.AppVersion}
+	if strings.Join(parts, "") == "" {
 		return ""
 	}
 	h := fnv.New64a()
-	for _, part := range []string{device.Model, device.OSName, device.OSVersion, device.AppVersion} {
+	for _, part := range parts {
 		_, _ = h.Write([]byte(part))
 		_, _ = h.Write([]byte{0})
 	}

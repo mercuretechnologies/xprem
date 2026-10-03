@@ -145,18 +145,20 @@ type CurrentUpdate struct {
 	ObservedAt time.Time
 }
 
-// DeviceInfo is the hardware and OS a device reports; only telemetry carries it, so every
-// field is optional and empty means "not reported".
+// DeviceInfo is what a device reports about itself; every field is optional and empty
+// means "not reported".
 type DeviceInfo struct {
 	Model     string
 	OSName    string
 	OSVersion string
 	// AppVersion is the store version of the binary, not the OTA update.
 	AppVersion string
+	// Channel is the update channel the device polls with; only manifest polls carry it.
+	Channel string
 }
 
 func (d DeviceInfo) IsZero() bool {
-	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == ""
+	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == "" && d.Channel == ""
 }
 
 // PlaceOf reads the country and the city centroid the geo middleware stamped

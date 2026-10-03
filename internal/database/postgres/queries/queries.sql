@@ -1765,6 +1765,7 @@ UPDATE device_identity SET
     os_name = COALESCE(sqlc.narg('os_name'), device_identity.os_name),
     os_version = COALESCE(sqlc.narg('os_version'), device_identity.os_version),
     app_version = COALESCE(sqlc.narg('app_version'), device_identity.app_version),
+    channel_name = COALESCE(sqlc.narg('channel_name'), device_identity.channel_name),
     current_update_observed_at = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN device_identity.current_update_observed_at ELSE sqlc.arg('observed_at')::timestamptz END,
     -- Moved onto, not heard from. The watermark above advances on every poll,
@@ -1821,7 +1822,7 @@ WITH origin AS (
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version, app_version, current_update_observed_at,
+    device_model, os_name, os_version, app_version, channel_name, current_update_observed_at,
     current_update_arrived_at,
     branch_name, runtime_version, platform, publish_group
 )
@@ -1829,6 +1830,7 @@ VALUES (
     $1, $2, sqlc.narg('country_code'), sqlc.narg('city'), sqlc.narg('lat'),
     sqlc.narg('lng'), (SELECT update_uuid FROM origin), sqlc.narg('device_model'),
     sqlc.narg('os_name'), sqlc.narg('os_version'), sqlc.narg('app_version'),
+    sqlc.narg('channel_name'),
     CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN NULL ELSE sqlc.arg('observed_at')::timestamptz END,
     -- A first sighting IS an arrival.
@@ -1860,6 +1862,7 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
     os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
     app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
+    channel_name = COALESCE(EXCLUDED.channel_name, device_identity.channel_name),
     current_update_observed_at = CASE WHEN sqlc.narg('current_update_id')::uuid IS NULL
         THEN device_identity.current_update_observed_at
         ELSE EXCLUDED.current_update_observed_at END,

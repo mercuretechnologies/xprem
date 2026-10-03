@@ -1653,7 +1653,7 @@ func (q *Queries) GetChannelsByAppID(ctx context.Context, appID pgtype.UUID) ([]
 }
 
 const getDeviceIdentity = `-- name: GetDeviceIdentity :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at, channel_name FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 `
 
@@ -1686,12 +1686,13 @@ func (q *Queries) GetDeviceIdentity(ctx context.Context, arg GetDeviceIdentityPa
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
 		&i.CurrentUpdateArrivedAt,
+		&i.ChannelName,
 	)
 	return i, err
 }
 
 const getDeviceIdentityForUpdate = `-- name: GetDeviceIdentityForUpdate :one
-SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at FROM device_identity
+SELECT app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at, channel_name FROM device_identity
 WHERE app_id = $1 AND eas_client_id = $2
 FOR UPDATE
 `
@@ -1725,6 +1726,7 @@ func (q *Queries) GetDeviceIdentityForUpdate(ctx context.Context, arg GetDeviceI
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
 		&i.CurrentUpdateArrivedAt,
+		&i.ChannelName,
 	)
 	return i, err
 }
@@ -4275,7 +4277,7 @@ func (q *Queries) ListDeviceHealthOutbox(ctx context.Context, limit int32) ([]Li
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version, d.current_update_observed_at, d.current_update_arrived_at
+SELECT d.app_id, d.eas_client_id, d.metadata, d.country_code, d.city, d.lat, d.lng, d.first_seen_at, d.last_seen_at, d.current_update_id, d.device_model, d.os_name, d.os_version, d.branch_name, d.runtime_version, d.platform, d.publish_group, d.app_version, d.current_update_observed_at, d.current_update_arrived_at, d.channel_name
 FROM device_identity d
 WHERE d.app_id = $1
   AND (coalesce(cardinality($2::jsonb[]), 0) = 0 OR d.metadata @> ANY($2::jsonb[]))
@@ -4380,6 +4382,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Dev
 			&i.AppVersion,
 			&i.CurrentUpdateObservedAt,
 			&i.CurrentUpdateArrivedAt,
+			&i.ChannelName,
 		); err != nil {
 			return nil, err
 		}
@@ -5391,12 +5394,12 @@ WITH origin AS (
     FROM updates u
     INNER JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
     LEFT JOIN runtime_versions rv ON rv.id = u.runtime_version_id
-    WHERE u.update_uuid = $11::uuid
+    WHERE u.update_uuid = $12::uuid
     LIMIT 1
 )
 INSERT INTO device_identity (
     app_id, eas_client_id, country_code, city, lat, lng, current_update_id,
-    device_model, os_name, os_version, app_version, current_update_observed_at,
+    device_model, os_name, os_version, app_version, channel_name, current_update_observed_at,
     current_update_arrived_at,
     branch_name, runtime_version, platform, publish_group
 )
@@ -5404,37 +5407,39 @@ VALUES (
     $1, $2, $3, $4, $5,
     $6, (SELECT update_uuid FROM origin), $7,
     $8, $9, $10,
-    CASE WHEN $11::uuid IS NULL
-        THEN NULL ELSE $12::timestamptz END,
+    $11,
+    CASE WHEN $12::uuid IS NULL
+        THEN NULL ELSE $13::timestamptz END,
     -- A first sighting IS an arrival.
-    CASE WHEN $11::uuid IS NULL
-        THEN NULL ELSE $12::timestamptz END,
+    CASE WHEN $12::uuid IS NULL
+        THEN NULL ELSE $13::timestamptz END,
     (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
     (SELECT platform FROM origin), (SELECT publish_group FROM origin)
 )
 ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     last_seen_at = CURRENT_TIMESTAMP,
-    current_update_id = CASE WHEN $11::uuid IS NULL
+    current_update_id = CASE WHEN $12::uuid IS NULL
         THEN device_identity.current_update_id ELSE EXCLUDED.current_update_id END,
-    branch_name = CASE WHEN $11::uuid IS NULL
+    branch_name = CASE WHEN $12::uuid IS NULL
         THEN device_identity.branch_name ELSE EXCLUDED.branch_name END,
-    runtime_version = CASE WHEN $11::uuid IS NULL
+    runtime_version = CASE WHEN $12::uuid IS NULL
         THEN device_identity.runtime_version ELSE EXCLUDED.runtime_version END,
-    platform = CASE WHEN $11::uuid IS NULL
+    platform = CASE WHEN $12::uuid IS NULL
         THEN device_identity.platform ELSE EXCLUDED.platform END,
-    publish_group = CASE WHEN $11::uuid IS NULL
+    publish_group = CASE WHEN $12::uuid IS NULL
         THEN device_identity.publish_group ELSE EXCLUDED.publish_group END,
     device_model = COALESCE(EXCLUDED.device_model, device_identity.device_model),
     os_name = COALESCE(EXCLUDED.os_name, device_identity.os_name),
     os_version = COALESCE(EXCLUDED.os_version, device_identity.os_version),
     app_version = COALESCE(EXCLUDED.app_version, device_identity.app_version),
-    current_update_observed_at = CASE WHEN $11::uuid IS NULL
+    channel_name = COALESCE(EXCLUDED.channel_name, device_identity.channel_name),
+    current_update_observed_at = CASE WHEN $12::uuid IS NULL
         THEN device_identity.current_update_observed_at
         ELSE EXCLUDED.current_update_observed_at END,
     -- Same distinction as TouchDeviceIdentity: the arrival only moves when the
     -- update does.
     current_update_arrived_at = CASE
-        WHEN $11::uuid IS NULL
+        WHEN $12::uuid IS NULL
             THEN device_identity.current_update_arrived_at
         WHEN device_identity.current_update_id IS DISTINCT FROM EXCLUDED.current_update_id
             THEN EXCLUDED.current_update_arrived_at
@@ -5442,7 +5447,7 @@ ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
         -- NULL included.
         ELSE device_identity.current_update_arrived_at
     END
-WHERE $11::uuid IS NULL
+WHERE $12::uuid IS NULL
    OR device_identity.current_update_observed_at IS NULL
    OR EXCLUDED.current_update_observed_at >= device_identity.current_update_observed_at
 `
@@ -5458,6 +5463,7 @@ type RegisterDeviceParams struct {
 	OsName          *string            `json:"os_name"`
 	OsVersion       *string            `json:"os_version"`
 	AppVersion      *string            `json:"app_version"`
+	ChannelName     *string            `json:"channel_name"`
 	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
 	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
 }
@@ -5486,6 +5492,7 @@ func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) 
 		arg.OsName,
 		arg.OsVersion,
 		arg.AppVersion,
+		arg.ChannelName,
 		arg.CurrentUpdateID,
 		arg.ObservedAt,
 	)
@@ -6066,8 +6073,9 @@ UPDATE device_identity SET
     os_name = COALESCE($9, device_identity.os_name),
     os_version = COALESCE($10, device_identity.os_version),
     app_version = COALESCE($11, device_identity.app_version),
+    channel_name = COALESCE($12, device_identity.channel_name),
     current_update_observed_at = CASE WHEN $7::uuid IS NULL
-        THEN device_identity.current_update_observed_at ELSE $12::timestamptz END,
+        THEN device_identity.current_update_observed_at ELSE $13::timestamptz END,
     -- Moved onto, not heard from. The watermark above advances on every poll,
     -- because that is what makes it able to order racing observations; this one
     -- stands still for as long as the device stays where it is, which is what
@@ -6076,7 +6084,7 @@ UPDATE device_identity SET
         WHEN $7::uuid IS NULL
             THEN device_identity.current_update_arrived_at
         WHEN device_identity.current_update_id IS DISTINCT FROM (SELECT o.update_uuid FROM origin o)
-            THEN $12::timestamptz
+            THEN $13::timestamptz
         -- Unchanged means unchanged, including when nothing is recorded yet.
         -- Filling a NULL here with the current instant would have dated the
         -- whole pre-existing fleet at the deploy that introduced the column,
@@ -6102,7 +6110,7 @@ WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
   -- which update runs, so it has nothing to be stale about.
   AND ($7::uuid IS NULL
        OR device_identity.current_update_observed_at IS NULL
-       OR $12::timestamptz >= device_identity.current_update_observed_at)
+       OR $13::timestamptz >= device_identity.current_update_observed_at)
 `
 
 type TouchDeviceIdentityParams struct {
@@ -6117,6 +6125,7 @@ type TouchDeviceIdentityParams struct {
 	OsName          *string            `json:"os_name"`
 	OsVersion       *string            `json:"os_version"`
 	AppVersion      *string            `json:"app_version"`
+	ChannelName     *string            `json:"channel_name"`
 	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
 }
 
@@ -6142,6 +6151,7 @@ func (q *Queries) TouchDeviceIdentity(ctx context.Context, arg TouchDeviceIdenti
 		arg.OsName,
 		arg.OsVersion,
 		arg.AppVersion,
+		arg.ChannelName,
 		arg.ObservedAt,
 	)
 	if err != nil {
@@ -6308,7 +6318,7 @@ UPDATE device_identity SET
     lng = COALESCE($7, lng),
     last_seen_at = CURRENT_TIMESTAMP
 WHERE app_id = $1 AND eas_client_id = $2
-RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at
+RETURNING app_id, eas_client_id, metadata, country_code, city, lat, lng, first_seen_at, last_seen_at, current_update_id, device_model, os_name, os_version, branch_name, runtime_version, platform, publish_group, app_version, current_update_observed_at, current_update_arrived_at, channel_name
 `
 
 type UpdateDeviceIdentityParams struct {
@@ -6356,6 +6366,7 @@ func (q *Queries) UpdateDeviceIdentity(ctx context.Context, arg UpdateDeviceIden
 		&i.AppVersion,
 		&i.CurrentUpdateObservedAt,
 		&i.CurrentUpdateArrivedAt,
+		&i.ChannelName,
 	)
 	return i, err
 }

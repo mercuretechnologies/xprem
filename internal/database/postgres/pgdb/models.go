@@ -149,6 +149,7 @@ type DeviceIdentity struct {
 	AppVersion              *string            `json:"app_version"`
 	CurrentUpdateObservedAt pgtype.Timestamptz `json:"current_update_observed_at"`
 	CurrentUpdateArrivedAt  pgtype.Timestamptz `json:"current_update_arrived_at"`
+	ChannelName             *string            `json:"channel_name"`
 }
 
 type DeviceUpdateFailure struct {

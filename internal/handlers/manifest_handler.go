@@ -50,6 +50,8 @@ type DeviceCheckIn struct {
 	OSName      string
 	OSVersion   string
 	AppVersion  string
+	// ChannelName is the expo-channel-name header; empty on telemetry check-ins.
+	ChannelName string
 	// ObservedAt is when the device was running CurrentUpdateID. Zero means
 	// "as this arrives", which is what a manifest poll means: it answers the
 	// device live. Telemetry sets it to the newest record of the batch, which
@@ -227,6 +229,7 @@ func (h *ExpoProtocolHandler) HandleManifest(w http.ResponseWriter, r *http.Requ
 			CurrentUpdateID:    params.CurrentUpdateID,
 			FailedUpdateIDsRaw: params.RecentFailedUpdateIDs,
 			FatalError:         params.ExpoFatalError,
+			ChannelName:        params.ChannelName,
 		})
 	}
 
