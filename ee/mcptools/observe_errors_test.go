@@ -166,10 +166,18 @@ func TestErrorsToolsDeclareReadOnly(t *testing.T) {
 	clientTransport, serverTransport := mcpprot.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	require.NoError(t, err)
-	defer serverSession.Close()
+	t.Cleanup(func() {
+		if err := serverSession.Close(); err != nil {
+			t.Errorf("closing MCP server session: %v", err)
+		}
+	})
 	clientSession, err := mcpprot.NewClient(&mcpprot.Implementation{Name: "test-client", Version: "0"}, nil).Connect(ctx, clientTransport, nil)
 	require.NoError(t, err)
-	defer clientSession.Close()
+	t.Cleanup(func() {
+		if err := clientSession.Close(); err != nil {
+			t.Errorf("closing MCP client session: %v", err)
+		}
+	})
 	list, err := clientSession.ListTools(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, list.Tools, 2)

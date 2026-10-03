@@ -190,12 +190,6 @@ func errorsScope(appID string, keys []string) (sqlFragment, []any) {
 	return " AND (" + joinFragments(alternatives, " OR ") + ")", args
 }
 
-// Positional time.Time arguments in the ClickHouse driver default to seconds.
-// Preserve event-time bounds to the nanosecond while reusing every Observe
-// dimension predicate from telemetryWhere.
 func errorsTelemetryWhere(query ExplorerQuery) (sqlFragment, []any) {
-	where, args := telemetryWhere("l", query, len(query.MetadataFilter) > 0)
-	where = sqlFragment(strings.Replace(string(where), "l.timestamp >= ? AND l.timestamp <= ?", "l.timestamp >= fromUnixTimestamp64Nano(?) AND l.timestamp <= fromUnixTimestamp64Nano(?)", 1))
-	args[0], args[1] = query.From.UnixNano(), query.To.UnixNano()
-	return where, args
+	return telemetryWhereNanoseconds("l", query, len(query.MetadataFilter) > 0)
 }

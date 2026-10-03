@@ -166,11 +166,7 @@ func (e *Explorer) ReadLogs(ctx context.Context, appID string, query LogsQuery) 
 		return page, nil
 	}
 	cohort := len(query.MetadataFilter) > 0
-	where, args := telemetryWhere("l", query.ExplorerQuery, cohort)
-	// Positional time.Time parameters are rounded to seconds by the driver.
-	// Preserve an occurrence link's exact bounds, as error-detail reads do.
-	where = sqlFragment(strings.Replace(string(where), "l.timestamp >= ? AND l.timestamp <= ?", "l.timestamp >= fromUnixTimestamp64Nano(?) AND l.timestamp <= fromUnixTimestamp64Nano(?)", 1))
-	args[0], args[1] = query.From.UnixNano(), query.To.UnixNano()
+	where, args := telemetryWhereNanoseconds("l", query.ExplorerQuery, cohort)
 	if predicate := severityPredicate(query.Severity); predicate != "" {
 		where += " AND " + predicate
 	}

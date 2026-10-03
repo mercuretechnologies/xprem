@@ -5,7 +5,12 @@
 package observe
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"github.com/stretchr/testify/require"
+	"log"
 	"net/http"
 	"testing"
 	"xprem/ee/licensing"
@@ -85,4 +90,59 @@ func TestErrorsHandlerUsesCurrentLicenseOnEachRequest(t *testing.T) {
 	licensing.Deactivate()
 	require.Equal(t, http.StatusForbidden, serveExplorer(handler, "/observe/errors").Code)
 	require.Equal(t, 1, reader.errorsCalls)
+}
+
+// Embedding the interface leaves unrelated reads unused while exercising both
+// error endpoints against the same reader failure.
+type failingErrorsExplorer struct {
+	ExplorerReader
+	err error
+}
+
+func (reader failingErrorsExplorer) ReadErrors(context.Context, string, ErrorsQuery) (ErrorsPage, error) {
+	return ErrorsPage{}, reader.err
+}
+
+func (reader failingErrorsExplorer) ReadErrorDetails(context.Context, string, string, ErrorDetailsQuery) (ErrorDetails, error) {
+	return ErrorDetails{}, reader.err
+}
+
+func TestErrorsHandlersKeepReaderFailuresPrivateAndLogOnlyUnexpectedErrors(t *testing.T) {
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	cases := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"error ID", ErrInvalidErrorID, http.StatusBadRequest},
+		{"errors query", ErrInvalidErrorsQuery, http.StatusBadRequest},
+		{"range", errInvalidObserveRange, http.StatusBadRequest},
+		{"platform", errInvalidObservePlatform, http.StatusBadRequest},
+		{"observe filter", errInvalidObserveFilter, http.StatusBadRequest},
+		{"identity filter", errInvalidIdentityFilter, http.StatusBadRequest},
+		{"identity cohort", errObserveCohortTooLarge, http.StatusBadRequest},
+		{"unexpected", errors.New("database failed"), http.StatusInternalServerError},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			privateDetail := "private database or filter detail"
+			handler := NewExplorerHandler(failingErrorsExplorer{err: fmt.Errorf("%w: %s", testCase.err, privateDetail)}, nil)
+			handler.licenseValid = func() bool { return true }
+			for _, path := range []string{"/observe/errors", "/observe/errors/groups/group-id"} {
+				logs.Reset()
+				response := serveExplorer(handler, path)
+				require.Equal(t, testCase.status, response.Code, response.Body.String())
+				require.NotContains(t, response.Body.String(), privateDetail)
+				if testCase.status == http.StatusBadRequest {
+					require.Empty(t, logs.String(), "reader validation failures must not be logged")
+				} else {
+					require.Contains(t, response.Body.String(), "An internal error occurred.")
+					require.Contains(t, logs.String(), privateDetail, "unexpected failures remain available in server logs")
+				}
+			}
+		})
+	}
 }

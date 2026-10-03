@@ -35,5 +35,6 @@ export const errorsListHref = (
   for (const [key, value] of Object.entries(patch)) {
     next.set(filterParam(key as FilterKey), value);
   }
-  return `/observe/errors${next.size ? `?${next}` : ''}`;
+  const queryString = next.toString();
+  return `/observe/errors${queryString ? `?${queryString}` : ''}`;
 };

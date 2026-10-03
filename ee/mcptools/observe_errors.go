@@ -84,7 +84,7 @@ func queryErrorsHandler(deps Deps) func(context.Context, *mcpprot.CallToolReques
 		if err := deps.requireErrorsTelemetry(ctx, req, input.AppId); err != nil {
 			return nil, observe.ErrorsPage{}, err
 		}
-		if err := input.ObserveFilters.rejectConditions(); err != nil {
+		if err := input.rejectConditions(); err != nil {
 			return nil, observe.ErrorsPage{}, err
 		}
 		query, err := deps.explorerQuery(ctx, input.AppId, input.ObserveFilters, input.From, input.To, observe.ErrorsMaxWindow)
@@ -134,7 +134,7 @@ func getErrorDetailsHandler(deps Deps) func(context.Context, *mcpprot.CallToolRe
 		if err := deps.requireErrorsTelemetry(ctx, req, input.AppId); err != nil {
 			return nil, observe.ErrorDetails{}, err
 		}
-		if err := input.ObserveFilters.rejectConditions(); err != nil {
+		if err := input.rejectConditions(); err != nil {
 			return nil, observe.ErrorDetails{}, err
 		}
 		query, err := deps.explorerQuery(ctx, input.AppId, input.ObserveFilters, input.From, input.To, observe.ErrorsMaxWindow)

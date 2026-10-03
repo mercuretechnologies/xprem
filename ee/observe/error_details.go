@@ -119,6 +119,8 @@ func (e *Explorer) readErrorDetails(ctx context.Context, appID, errorID string, 
 // GROUPING SETS computes the summary, histogram and all four breakdowns from
 // the same filtered, deduplicated stream in one pass. Returned groups are
 // bounded; omitted breakdown values are reconciled against the full total.
+// A publish group is metadata, not part of the update/platform identity:
+// older events may lack it even when newer events refer to the same update.
 func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, query ErrorDetailsQuery, details *ErrorDetails) error {
 	source, args := errorsSource(appID, query.ExplorerQuery, query.Fatality, []string{key})
 	sql := sqlf(`WITH %s
@@ -126,10 +128,11 @@ func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, q
  grouping(device_model) = 0, 'models', grouping(os_key) = 0, 'os', grouping(runtime_version) = 0, 'runtimes', 'summary') AS kind,
  bucket, update_key, device_model, os_key, runtime_version,
  count() AS occurrences, uniqExactIf(eas_client_id, eas_client_id != toUUID('00000000-0000-0000-0000-000000000000')), countIf(is_fatal = 1), min(timestamp), max(timestamp),
- argMax(error_type, timestamp), argMax(message, timestamp), argMax(culprit, timestamp), argMax(symbolication_status, timestamp)
+ argMax(error_type, timestamp), argMax(message, timestamp), argMax(culprit, timestamp), argMax(symbolication_status, timestamp),
+ argMaxIf(toString(update_group_id), timestamp, update_group_id != toUUID('00000000-0000-0000-0000-000000000000'))
  FROM (
  SELECT *, intDiv(toUnixTimestamp64Nano(timestamp) - ?, ?) AS bucket,
- toJSONString([toString(update_id), toString(update_group_id), platform]) AS update_key,
+ toJSONString([toString(update_id), platform]) AS update_key,
  toJSONString([os_name, os_version]) AS os_key
  FROM errors_source WHERE group_key = ?
  )
@@ -143,10 +146,10 @@ func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, q
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var kind, updateKey, model, osKey, runtime, status string
+		var kind, updateKey, model, osKey, runtime, status, updateGroup string
 		var bucket int64
 		var summary ErrorSummary
-		if err := rows.Scan(&kind, &bucket, &updateKey, &model, &osKey, &runtime, &summary.Occurrences, &summary.ImpactedDevices, &summary.CrashOccurrences, &summary.FirstSeen, &summary.LastSeen, &summary.ErrorType, &summary.Message, &summary.Culprit, &status); err != nil {
+		if err := rows.Scan(&kind, &bucket, &updateKey, &model, &osKey, &runtime, &summary.Occurrences, &summary.ImpactedDevices, &summary.CrashOccurrences, &summary.FirstSeen, &summary.LastSeen, &summary.ErrorType, &summary.Message, &summary.Culprit, &status, &updateGroup); err != nil {
 			return err
 		}
 		summary.SymbolicationStatus = ErrorGroupStatus(status)
@@ -163,14 +166,12 @@ func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, q
 			}
 		case "updates":
 			var parts []string
-			if err := json.Unmarshal([]byte(updateKey), &parts); err != nil || len(parts) != 3 {
+			if err := json.Unmarshal([]byte(updateKey), &parts); err != nil || len(parts) != 2 {
 				return fmt.Errorf("invalid update breakdown")
 			}
-			segment.Key, segment.UpdateID, segment.Label = parts[0], parts[0], parts[0]
-			segment.Platform = parts[2]
-			if parts[1] != ZeroUpdateID {
-				segment.UpdateGroupID = parts[1]
-			}
+			segment.Key, segment.UpdateID, segment.Label = updateKey, parts[0], parts[0]
+			segment.Platform = parts[1]
+			segment.UpdateGroupID = updateGroup
 			if parts[0] == ZeroUpdateID {
 				segment.Label = "Embedded bundle"
 			}

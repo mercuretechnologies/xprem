@@ -60,3 +60,28 @@ test('breakdown navigation filters the list while preserving its other filters',
   assert.equal(params.get('os'), 'Android', 'the detail context must not be mutated');
   assert.equal(errorsListHref(new URLSearchParams()), '/observe/errors');
 });
+
+test('return navigation preserves context when URLSearchParams.size is unavailable', () => {
+  const sizeDescriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, 'size');
+  Reflect.deleteProperty(URLSearchParams.prototype, 'size');
+  try {
+    const params = new URLSearchParams(
+      'errorId=g:checkout&channel=staging&channel=preview&from=2026-10-02T00:00:00.123456789Z&to=2026-10-03T00:00:00Z&live=0&errorSearch=Checkout&errorFatality=fatal&errorSort=lastSeen'
+    );
+    const original = params.toString();
+    const expected = new URLSearchParams(params);
+    expected.delete('errorId');
+    assert.equal(errorsListHref(params), `/observe/errors?${expected}`);
+    assert.equal(
+      errorsListHref(params, { runtimeVersion: '1.2.3' }),
+      `/observe/errors?${expected}&runtime=1.2.3`
+    );
+    assert.equal(params.toString(), original, 'the detail context must not be mutated');
+    assert.equal(errorsListHref(new URLSearchParams()), '/observe/errors');
+    assert.equal(errorsListHref(new URLSearchParams('errorId=g:checkout')), '/observe/errors');
+  } finally {
+    if (sizeDescriptor) {
+      Object.defineProperty(URLSearchParams.prototype, 'size', sizeDescriptor);
+    }
+  }
+});

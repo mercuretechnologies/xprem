@@ -58,6 +58,15 @@ func (h *ExplorerHandler) renderErrorsQueryError(w http.ResponseWriter, err erro
 	}
 }
 
+// Reader validation failures are expected client errors, including the shared
+// Observe filters; only unexpected read failures belong in the server logs.
+func isErrorsValidationError(err error) bool {
+	return errors.Is(err, ErrInvalidErrorID) || errors.Is(err, ErrInvalidErrorsQuery) ||
+		errors.Is(err, errInvalidObserveRange) || errors.Is(err, errInvalidObservePlatform) ||
+		errors.Is(err, errInvalidObserveFilter) || errors.Is(err, errInvalidIdentityFilter) ||
+		errors.Is(err, errObserveCohortTooLarge)
+}
+
 func (h *ExplorerHandler) GetErrorsHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireErrorsLicense(w) {
 		return
@@ -125,7 +134,9 @@ func (h *ExplorerHandler) GetErrorsHandler(w http.ResponseWriter, r *http.Reques
 		Limit: limit, Offset: offset, IncludeSeries: includeSeries,
 	})
 	if err != nil {
-		log.Printf("observe: reading errors failed: %v", err)
+		if !isErrorsValidationError(err) {
+			log.Printf("observe: reading errors failed: %v", err)
+		}
 		h.renderErrorsQueryError(w, err)
 		return
 	}
@@ -175,7 +186,9 @@ func (h *ExplorerHandler) GetErrorDetailsHandler(w http.ResponseWriter, r *http.
 		ExplorerQuery: base, Fatality: fatality, Limit: limit, Cursor: cursor,
 	})
 	if err != nil {
-		log.Printf("observe: reading error details failed: %v", err)
+		if !isErrorsValidationError(err) {
+			log.Printf("observe: reading error details failed: %v", err)
+		}
 		h.renderErrorsQueryError(w, err)
 		return
 	}

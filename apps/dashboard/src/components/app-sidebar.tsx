@@ -153,7 +153,8 @@ const ObserveNav = ({
   // walk performance, events and logs on that same slice.
   const params = new URLSearchParams(isActive ? search : '');
   params.delete('errorId');
-  const carried = params.size ? `?${params}` : '';
+  const queryString = params.toString();
+  const carried = queryString ? `?${queryString}` : '';
   const errorsReturn =
     pathname.startsWith('/observe/errors/') && typeof state?.errorsSearch === 'string'
       ? errorsListHref(new URLSearchParams(state.errorsSearch))

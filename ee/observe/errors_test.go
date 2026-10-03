@@ -380,3 +380,79 @@ func TestErrorsEnrichUpdatesUsesAppScopeAndDeletedFallback(t *testing.T) {
 	require.NoError(t, explorer.enrichErrorUpdates(ctx, uuid.NewString(), otherAppSegments))
 	assert.Equal(t, update, otherAppSegments[0].Label)
 }
+
+func TestErrorsLiveUpdateBreakdownCombinesLegacyPublishGroups(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+
+	app, updateA, updateB, device := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	publishGroup, errorGroup := uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	attrs := map[string]any{"exception.type": "Error", "exception.message": "shared across updates"}
+	var fixture []LogRow
+	for i, event := range []struct{ update, platform, publishGroup string }{
+		{updateA, "ios", ""},
+		{updateA, "ios", publishGroup},
+		// The most recent occurrence lacks the newer publish-group metadata.
+		{updateA, "ios", ""},
+		{updateA, "android", publishGroup},
+		{updateB, "ios", ""},
+		{updateB, "ios", ""},
+	} {
+		row := errorLogRow(app, event.update, device, attrs, 17, false, now.Add(time.Duration(i)*time.Second))
+		row.Platform, row.UpdateGroupID = event.platform, event.publishGroup
+		fixture = append(fixture, row)
+	}
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, append(fixture, fixture[0])))
+	tracked := &errorsMeasuredConn{Conn: engine.Conn}
+	explorer := &Explorer{clickhouse: &clickhouse.Engine{Conn: tracked}}
+	for _, update := range []string{updateA, updateB} {
+		require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
+			errorKey:   errorKey{appID: app, updateID: update, fingerprint: fixture[0].ErrorFingerprint.String()},
+			ErrorGroup: ErrorGroup{GroupFingerprint: errorGroup, ErrorType: "Error", Message: "shared across updates", SymbolicatedAt: now},
+		}}))
+	}
+
+	// No PostgreSQL row can enrich these deleted releases: preserve any known
+	// publish group from their events without treating it as a segment identity.
+	details, err := explorer.readErrorDetails(ctx, app, encodeErrorID("g:"+errorGroup), ErrorDetailsQuery{
+		ExplorerQuery: ExplorerQuery{From: now.Add(-time.Hour), To: now.Add(time.Hour)},
+	})
+	require.NoError(t, err)
+	require.Len(t, tracked.calls, 2, "one aggregate and one occurrence query, regardless of the number of update segments")
+	require.NotNil(t, details.Summary)
+	require.EqualValues(t, 6, details.Summary.Occurrences)
+	require.Len(t, details.Updates, 3, "publish-group backfill must not split the same update and platform")
+
+	keys := make(map[string]bool)
+	var occurrences uint64
+	var percentage float64
+	for _, segment := range details.Updates {
+		require.False(t, keys[segment.Key], "each update/platform segment needs a unique client key")
+		keys[segment.Key] = true
+		occurrences += segment.Occurrences
+		percentage += segment.Percentage
+		switch {
+		case segment.UpdateID == updateA && segment.Platform == "ios":
+			assert.EqualValues(t, 3, segment.Occurrences)
+			assert.Equal(t, 50.0, segment.Percentage)
+			assert.Equal(t, publishGroup, segment.UpdateGroupID)
+		case segment.UpdateID == updateA && segment.Platform == "android":
+			assert.EqualValues(t, 1, segment.Occurrences)
+			assert.InDelta(t, 100.0/6, segment.Percentage, 0.000001)
+			assert.Equal(t, publishGroup, segment.UpdateGroupID)
+		case segment.UpdateID == updateB && segment.Platform == "ios":
+			assert.EqualValues(t, 2, segment.Occurrences)
+			assert.InDelta(t, 100.0/3, segment.Percentage, 0.000001)
+			assert.Empty(t, segment.UpdateGroupID)
+		default:
+			t.Fatalf("unexpected update segment: %+v", segment)
+		}
+	}
+	assert.Equal(t, details.Summary.Occurrences, occurrences)
+	assert.InDelta(t, 100, percentage, 0.000001)
+}

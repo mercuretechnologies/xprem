@@ -288,9 +288,19 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 }
 
 func telemetryWhere(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFragment, []any) {
+	return telemetryWhereWithTimeBounds(table, query, cohort, "?", query.From.UTC(), query.To.UTC())
+}
+
+// Positional time.Time arguments in the ClickHouse driver default to seconds.
+// Build nanosecond bounds with their matching arguments instead of rewriting SQL.
+func telemetryWhereNanoseconds(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFragment, []any) {
+	return telemetryWhereWithTimeBounds(table, query, cohort, "fromUnixTimestamp64Nano(?)", query.From.UnixNano(), query.To.UnixNano())
+}
+
+func telemetryWhereWithTimeBounds(table sqlFragment, query ExplorerQuery, cohort bool, timeParameter sqlFragment, from, to any) (sqlFragment, []any) {
 	// app_id is prepended by callers so unions can reuse this helper cleanly.
-	where := table + ".app_id = ? AND " + table + ".timestamp >= ? AND " + table + ".timestamp <= ?"
-	args := []any{query.From.UTC(), query.To.UTC()}
+	where := table + ".app_id = ? AND " + table + ".timestamp >= " + timeParameter + " AND " + table + ".timestamp <= " + timeParameter
+	args := []any{from, to}
 	inFilter := func(column sqlFragment, values []string) {
 		if len(values) == 0 {
 			return
