@@ -733,6 +733,18 @@ export type ObserveErrorsPage = {
   hasMore: boolean;
   errors: ErrorSummary[];
 };
+export type UpdateErrorSummary = ErrorSummary & {
+  // Unknown until symbolication allows the error to be matched across updates.
+  new: boolean | null;
+};
+export type UpdateErrorsPage = {
+  available: boolean;
+  updateId: string;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  errors: UpdateErrorSummary[];
+};
 export type ErrorBreakdownSegment = {
   key: string;
   label: string;
@@ -1854,6 +1866,15 @@ export class ApiClient {
     return this.request<ObserveErrorsPage>(`${this.appScope()}/observe/errors?${search}`, {
       method: 'GET',
     });
+  }
+  public async getUpdateErrors(updateId: string, query: { limit?: number; offset?: number } = {}) {
+    const search = new URLSearchParams();
+    if (query.limit !== undefined) search.set('limit', String(query.limit));
+    if (query.offset !== undefined) search.set('offset', String(query.offset));
+    return this.request<UpdateErrorsPage>(
+      `${this.appScope()}/observe/updates/${encodeURIComponent(updateId)}/errors?${search}`,
+      { method: 'GET' }
+    );
   }
   public async getObserveErrorDetails(errorId: string, query: ObserveErrorDetailsQuery = {}) {
     const search = observeSearchParams(query);

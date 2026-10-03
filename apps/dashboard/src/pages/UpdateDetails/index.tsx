@@ -28,6 +28,7 @@ import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 import { BundlePatchesSection } from './BundlePatchesSection';
 import { SourcemapIndexSection } from '@/ee/components/SourcemapIndexSection';
+import { UpdateErrorsSection } from '@/ee/components/UpdateErrorsSection';
 
 const CopyButton = ({ value, label }: { value: string; label: string }) => {
   const [copied, setCopied] = useState(false);
@@ -341,6 +342,10 @@ export const UpdateDetails = () => {
             updateId={data.updateId}
             sourcemapHash={data.sourcemapHash}
           />
+        )}
+
+        {CONTROL_PLANE_ENABLED && !isRollback && isUuid(data.updateUUID) && (
+          <UpdateErrorsSection updateUUID={data.updateUUID} />
         )}
       </div>
     </div>

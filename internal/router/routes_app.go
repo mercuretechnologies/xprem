@@ -141,6 +141,8 @@ func registerAppRoutes(
 		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 	app.route(http.MethodGet, "/observe/errors", container.ObserveExplorerHandler.GetErrorsHandler,
 		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/updates/{UPDATE_ID}/errors", container.ObserveExplorerHandler.GetUpdateErrorsHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 	app.route(http.MethodGet, "/observe/errors/groups/{ERROR_ID}", container.ObserveExplorerHandler.GetErrorDetailsHandler,
 		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 	app.route(http.MethodGet, "/observe/errors/{FINGERPRINT}", container.ObserveErrorsHandler.GetErrorGroupHandler,

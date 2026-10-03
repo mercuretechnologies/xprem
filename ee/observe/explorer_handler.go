@@ -44,6 +44,7 @@ const (
 
 type ExplorerReader interface {
 	ReadErrors(ctx context.Context, appID string, query ErrorsQuery) (ErrorsPage, error)
+	ReadUpdateErrors(ctx context.Context, appID, updateID string, limit, offset int) (UpdateErrorsPage, error)
 	ReadErrorDetails(ctx context.Context, appID, errorID string, query ErrorDetailsQuery) (ErrorDetails, error)
 	ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error)
 	ReadCheckIns(ctx context.Context, appID string, query CheckInQuery) (CheckInFeed, error)

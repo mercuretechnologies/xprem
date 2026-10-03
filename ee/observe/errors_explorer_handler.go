@@ -141,6 +141,50 @@ func (h *ExplorerHandler) GetErrorsHandler(w http.ResponseWriter, r *http.Reques
 	handlers.RenderJSON(w, http.StatusOK, page)
 }
 
+func (h *ExplorerHandler) GetUpdateErrorsHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.requireErrorsLicense(w) {
+		return
+	}
+	limit, offset := 25, 0
+	values := r.URL.Query()
+	if raw := values.Get("limit"); raw != "" {
+		parsed, err := parseErrorLimit(raw)
+		if err != nil {
+			h.renderErrorsQueryError(w, err)
+			return
+		}
+		limit = parsed
+	}
+	if raw := values.Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed > 10000 {
+			h.renderErrorsQueryError(w, ErrInvalidErrorsQuery)
+			return
+		}
+		offset = parsed
+	}
+	appID, updateID, limit, err := normalizeUpdateErrorsQuery(mux.Vars(r)["APP_ID"], mux.Vars(r)["UPDATE_ID"], limit, offset)
+	if err != nil {
+		handlers.RenderError(w, http.StatusBadRequest, "The app and update IDs must be nonzero UUIDs.")
+		return
+	}
+	reader := h.reader
+	if reader == nil {
+		reader = (*Explorer)(nil)
+	}
+	ctx, cancel := boundedRead(r)
+	defer cancel()
+	page, err := reader.ReadUpdateErrors(ctx, appID, updateID, limit, offset)
+	if err != nil {
+		if !isErrorsValidationError(err) {
+			log.Printf("observe: reading update errors failed: %v", err)
+		}
+		h.renderErrorsQueryError(w, err)
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, page)
+}
+
 func (h *ExplorerHandler) GetErrorDetailsHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireErrorsLicense(w) {
 		return
