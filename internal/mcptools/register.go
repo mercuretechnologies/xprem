@@ -95,6 +95,12 @@ type DeploymentWriter interface {
 	RepublishPublishGroup(ctx context.Context, appId, branchName, runtimeVersion, publishGroup string) (*services.GroupOperationResult, error)
 }
 
+type ApiKeyManager interface {
+	GetApiKeysMetadata(ctx context.Context, appId string) ([]types.ApiKeyMetadata, error)
+	GenerateAPIKey(ctx context.Context, appId string, name string) (string, error)
+	RevokeApiKey(ctx context.Context, appId string, apiKeyId string) error
+}
+
 // Deps carries what tools need from the composition root: MIT data access
 // injected as-is, and decision functions whose implementations live in ee.
 // Every field is a plain method value; wire assembles the struct without a
@@ -111,6 +117,10 @@ type Deps struct {
 	BranchWriter   BranchWriter
 	ChannelWriter  ChannelWriter
 	Deployments    DeploymentWriter
+	ApiKeys        ApiKeyManager
+	// OnApiKeysChanged drops the app's cached API key list, as the dashboard
+	// routes do after a create or a revoke.
+	OnApiKeysChanged func(appID string)
 	// SSOEnabled reports whether enterprise SSO is active; get_server_config
 	// surfaces it.
 	SSOEnabled func(ctx context.Context) bool
@@ -151,6 +161,9 @@ var registrations = []struct {
 	{register: registerDeleteChannel, access: &channelDeleteAccess},
 	{register: registerRollback, access: &publishAccess},
 	{register: registerRepublish, access: &publishAccess},
+	{register: registerGetApiKeys},
+	{register: registerCreateApiKey, access: &apiKeysManageAccess},
+	{register: registerRevokeApiKey, access: &apiKeysManageAccess},
 }
 
 // DeclaredPermissions lists the permission strings the tool table gates on.
