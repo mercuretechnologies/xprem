@@ -67,7 +67,7 @@ func decodeHeader(b []byte) (header, error) {
 		return header{}, fmt.Errorf("%w: bad magic", ErrInvalidIndex)
 	}
 	if version := le.Uint32(b[4:]); version != indexVersion {
-		return header{}, fmt.Errorf("%w: unsupported version %d", ErrInvalidIndex, version)
+		return header{}, fmt.Errorf("%w: version %d, expected %d", ErrInvalidIndex, version, indexVersion)
 	}
 	var h header
 	for i, field := range h.fields() {
