@@ -699,6 +699,72 @@ export type ObserveLogsQuery = ObserveQuery & {
   limit?: number;
 };
 
+export type ErrorFatality = 'all' | 'fatal' | 'nonfatal';
+export type ErrorSort = 'occurrences' | 'impactedDevices' | 'lastSeen';
+export type ErrorSeriesPoint = { timestamp: string; count: number };
+export type ErrorSummary = {
+  errorId: string;
+  errorType: string;
+  message: string;
+  culprit: string;
+  symbolicationStatus: ErrorGroupStatus;
+  occurrences: number;
+  impactedDevices: number;
+  crashOccurrences: number;
+  firstSeen: string;
+  lastSeen: string;
+  series?: ErrorSeriesPoint[];
+};
+export type ObserveErrorsQuery = ObserveQuery & {
+  search?: string;
+  fatality?: ErrorFatality;
+  sort?: ErrorSort;
+  limit?: number;
+  offset?: number;
+  includeSeries?: boolean;
+};
+export type ObserveErrorsPage = {
+  available: boolean;
+  from: string;
+  to: string;
+  bucketSeconds: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  errors: ErrorSummary[];
+};
+export type ErrorBreakdownSegment = {
+  key: string;
+  label: string;
+  occurrences: number;
+  percentage: number;
+  updateId?: string;
+  updateGroupId?: string;
+  platform?: string;
+  osName?: string;
+  osVersion?: string;
+};
+export type ObserveErrorDetailsQuery = ObserveQuery & {
+  fatality?: ErrorFatality;
+  limit?: number;
+  cursor?: string;
+};
+export type ObserveErrorDetails = {
+  available: boolean;
+  from: string;
+  to: string;
+  bucketSeconds: number;
+  summary: ErrorSummary | null;
+  series: ErrorSeriesPoint[];
+  updates: ErrorBreakdownSegment[];
+  deviceModels: ErrorBreakdownSegment[];
+  osVersions: ErrorBreakdownSegment[];
+  runtimes: ErrorBreakdownSegment[];
+  occurrences: ObserveLog[];
+  nextCursor?: string;
+  representativeOccurrence?: ObserveLog;
+};
+
 export type UpdateDetailsRecord = {
   updateUUID: string;
   createdAt: string;
@@ -1779,6 +1845,19 @@ export class ApiClient {
     return this.request<ObserveLogsPage>(`${this.appScope()}/observe/logs?${search.toString()}`, {
       method: 'GET',
     });
+  }
+  public async getObserveErrors(query: ObserveErrorsQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveErrorsPage>(`${this.appScope()}/observe/errors?${search}`, {
+      method: 'GET',
+    });
+  }
+  public async getObserveErrorDetails(errorId: string, query: ObserveErrorDetailsQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveErrorDetails>(
+      `${this.appScope()}/observe/errors/groups/${encodeURIComponent(errorId)}?${search}`,
+      { method: 'GET' }
+    );
   }
   public async getIdentityDevices(query: IdentityDeviceQuery = {}, cursor?: string, limit = 50) {
     const search = observeSearchParams(query);

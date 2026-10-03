@@ -6,14 +6,21 @@ import { startTransition, useCallback, useEffect, useMemo, useState } from 'reac
 import { useSearchParams } from 'react-router';
 import type { ObserveQuery } from '@/lib/api';
 import type { FilterScope } from './navigation';
-import { defaultRange, isRelative, resolveRange, type TimeRange } from '@/lib/timeRange';
+import {
+  defaultRange,
+  isRelative,
+  isZonedAbsolute,
+  resolveRange,
+  type TimeRange,
+} from '@/lib/timeRange';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 // The longest window a page may ask for, as ee/observe enforces it:
 // maxLogsWindow for the event table, maxOverviewWindow everywhere else.
-export const maxWindowMs = (page: string) => (page === 'events' ? 31 * DAY : 90 * DAY);
+export const maxWindowMs = (page: string) =>
+  page === 'events' || page === 'errors' ? 31 * DAY : 90 * DAY;
 
 // Old ?period= links, honored as a range ending now.
 const legacyPeriods: Record<string, string> = {
@@ -469,11 +476,13 @@ export const useObserveFilters = (scopes: FilterScope[], maxWindow: number) => {
     const resolved = resolveRange(range, windowTick) ?? resolveRange(defaultRange, windowTick)!;
     // A relative end moves with windowTick, so it snaps; an absolute one is already stable.
     const bound = (expression: string, date: Date) =>
-      new Date(
-        isRelative(expression)
-          ? Math.floor(date.getTime() / periodSpec.snapMs) * periodSpec.snapMs
-          : date.getTime()
-      ).toISOString();
+      isZonedAbsolute(expression)
+        ? expression.trim()
+        : new Date(
+            isRelative(expression)
+              ? Math.floor(date.getTime() / periodSpec.snapMs) * periodSpec.snapMs
+              : date.getTime()
+          ).toISOString();
     // Snapping moves the start earlier, and a range wider than the page allows
     // is a 400: the start never goes past the earliest the server accepts,
     // with one snap of margin when the head is the server's own now.

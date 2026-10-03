@@ -260,7 +260,11 @@ func (deps Deps) requireTelemetry(ctx context.Context, req *mcpprot.CallToolRequ
 	if err := deps.requireAppPermission(ctx, req, appID, observeAccess); err != nil {
 		return err
 	}
-	if deps.Explorer == nil {
+	explorer := deps.Explorer
+	if concrete, ok := explorer.(*observe.Explorer); ok && concrete == nil {
+		explorer = nil
+	}
+	if explorer == nil {
 		return errors.New("this deployment collects no telemetry (stateless mode, or device telemetry disabled)")
 	}
 	return nil

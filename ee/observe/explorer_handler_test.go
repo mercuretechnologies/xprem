@@ -25,10 +25,14 @@ import (
 )
 
 type recordingExplorer struct {
-	overviewQuery  ExplorerQuery
-	logsQuery      LogsQuery
-	breakdownQuery BreakdownQuery
-	checkInQuery   CheckInQuery
+	overviewQuery     ExplorerQuery
+	logsQuery         LogsQuery
+	breakdownQuery    BreakdownQuery
+	checkInQuery      CheckInQuery
+	errorsQuery       ErrorsQuery
+	errorDetailsQuery ErrorDetailsQuery
+	errorDetailsID    string
+	errorsCalls       int
 }
 
 func (r *recordingExplorer) ReadCheckIns(_ context.Context, _ string, query CheckInQuery) (CheckInFeed, error) {
@@ -56,6 +60,19 @@ func (r *recordingExplorer) ReadBreakdown(_ context.Context, _ string, query Bre
 	return Breakdown{Available: true, Segments: []BreakdownSegment{}}, nil
 }
 
+func (r *recordingExplorer) ReadErrors(_ context.Context, _ string, query ErrorsQuery) (ErrorsPage, error) {
+	r.errorsQuery = query
+	r.errorsCalls++
+	return ErrorsPage{}, nil
+}
+
+func (r *recordingExplorer) ReadErrorDetails(_ context.Context, _ string, errorID string, query ErrorDetailsQuery) (ErrorDetails, error) {
+	r.errorDetailsQuery = query
+	r.errorDetailsID = errorID
+	r.errorsCalls++
+	return ErrorDetails{}, nil
+}
+
 type staticSchema struct {
 	schema identity.Schema
 }
@@ -67,6 +84,8 @@ func (s staticSchema) GetSchema(context.Context, string) (identity.Schema, error
 func serveExplorer(handler *ExplorerHandler, path string) *httptest.ResponseRecorder {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/apps/{APP_ID}/observe/overview", handler.GetOverviewHandler)
+	router.HandleFunc("/api/apps/{APP_ID}/observe/errors", handler.GetErrorsHandler)
+	router.HandleFunc("/api/apps/{APP_ID}/observe/errors/groups/{ERROR_ID}", handler.GetErrorDetailsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/events", handler.GetEventsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/logs", handler.GetLogsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/breakdown", handler.GetBreakdownHandler)

@@ -150,7 +150,9 @@ const ObserveNav = ({
   // Filters, period and live state all live in the query string. Carrying it
   // across sub-pages is the whole point: you narrow to a branch once, then
   // walk performance, events and logs on that same slice.
-  const carried = isActive ? search : '';
+  const params = new URLSearchParams(isActive ? search : '');
+  params.delete('errorId');
+  const carried = params.size ? `?${params}` : '';
 
   return (
     <ExpandableSection

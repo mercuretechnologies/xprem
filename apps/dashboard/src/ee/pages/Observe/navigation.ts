@@ -3,14 +3,21 @@
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
 import { Permission } from '@/ee/lib/PermissionsContext';
-import { Braces, Smartphone, ChartNoAxesCombined, Gauge, MousePointerClick } from 'lucide-react';
+import {
+  Braces,
+  Bug,
+  Smartphone,
+  ChartNoAxesCombined,
+  Gauge,
+  MousePointerClick,
+} from 'lucide-react';
 
 // Each page answers one question an app team actually asks, which is why they
 // are named after the question and not after the table behind them. The order
 // is the order those questions come up: "is it healthy right now", "is my last
 // release fast and did it break anything", "what did the app record", "who is
 // running it", then the attribute allowlist that feeds the filters.
-export type ObservePage = 'overview' | 'metrics' | 'events' | 'devices' | 'attributes';
+export type ObservePage = 'overview' | 'metrics' | 'errors' | 'events' | 'devices' | 'attributes';
 
 // Which filters mean anything on a page. Update-group health is answered from the
 // Postgres device registry, which knows nothing about builds, environments or
@@ -56,6 +63,15 @@ export const observeNavigation: Array<{
     question: 'Is the served update group healthy, and is the app fast for everyone?',
     icon: Gauge,
     scopes: ['telemetry', 'timings'],
+  },
+  {
+    value: 'errors',
+    permission: 'observe:read',
+    label: 'Errors',
+    question: 'Which errors affect devices, and where do they happen?',
+    icon: Bug,
+    scopes: ['telemetry'],
+    enterprise: true,
   },
   {
     value: 'events',

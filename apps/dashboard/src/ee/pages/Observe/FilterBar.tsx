@@ -440,7 +440,7 @@ export const FilterBar = ({
           </PopoverContent>
         </Popover>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex w-full min-w-0 max-w-full items-center gap-2 sm:w-auto">
           <Button
             variant={live ? 'ghost' : 'outline'}
             size="sm"
@@ -468,6 +468,7 @@ export const FilterBar = ({
             )}
           </Button>
           <TimeRangePicker
+            className="min-w-0 flex-1"
             value={range}
             maxRangeMs={filters.maxWindow}
             onChange={next => next && setRange(next)}

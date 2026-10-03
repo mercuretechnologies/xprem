@@ -88,7 +88,16 @@ export const LogDetails = ({ log }: { log: ObserveLog }) => {
         <div className="mt-4">
           <div className="mb-1.5 text-[10px] text-muted-foreground">Message</div>
           {bodyTrace ? (
-            <StackTraceView title="Stack trace" trace={bodyTrace} raw={body} />
+            <StackTraceView
+              title="Stack trace"
+              trace={bodyTrace}
+              raw={body}
+              errorGroup={
+                log.errorFingerprint
+                  ? { updateId: log.updateId, fingerprint: log.errorFingerprint }
+                  : undefined
+              }
+            />
           ) : bodyDocument !== null ? (
             <JsonView value={bodyDocument} />
           ) : (

@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"xprem/ee/identity"
+	"xprem/ee/licensing"
 	"xprem/internal/handlers"
 )
 
@@ -42,6 +43,8 @@ const (
 )
 
 type ExplorerReader interface {
+	ReadErrors(ctx context.Context, appID string, query ErrorsQuery) (ErrorsPage, error)
+	ReadErrorDetails(ctx context.Context, appID, errorID string, query ErrorDetailsQuery) (ErrorDetails, error)
 	ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error)
 	ReadCheckIns(ctx context.Context, appID string, query CheckInQuery) (CheckInFeed, error)
 	ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error)
@@ -54,8 +57,9 @@ type IdentitySchemaReader interface {
 }
 
 type ExplorerHandler struct {
-	reader ExplorerReader
-	schema IdentitySchemaReader
+	reader       ExplorerReader
+	schema       IdentitySchemaReader
+	licenseValid func() bool
 }
 
 func NewExplorerHandler(reader ExplorerReader, schema IdentitySchemaReader) *ExplorerHandler {
@@ -66,7 +70,7 @@ func NewExplorerHandler(reader ExplorerReader, schema IdentitySchemaReader) *Exp
 	if service, ok := schema.(*identity.Service); ok && service == nil {
 		schema = nil
 	}
-	return &ExplorerHandler{reader: reader, schema: schema}
+	return &ExplorerHandler{reader: reader, schema: schema, licenseValid: licensing.IsEnterprise}
 }
 
 func parseExplorerTimes(values map[string][]string, maximum time.Duration) (time.Time, time.Time, error) {

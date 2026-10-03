@@ -234,6 +234,7 @@ export const TimeRangePicker = ({
         <PopoverTrigger asChild>
           <button
             type="button"
+            title={label}
             className="flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-sm hover:bg-accent">
             <Clock className="h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="truncate whitespace-nowrap tabular-nums">{label}</span>

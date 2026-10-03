@@ -10,6 +10,8 @@ import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { FilterBar } from './FilterBar';
 import { maxWindowMs, useObserveFilters } from './filters';
 import { isObservePage, observePage } from './navigation';
+import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { errorTrackingFeature } from '@/ee/lib/enterpriseFeatures';
 
 const OverviewView = lazy(() =>
   import('./OverviewView').then(module => ({ default: module.OverviewView }))
@@ -19,6 +21,9 @@ const MetricsView = lazy(() =>
 );
 const EventsView = lazy(() =>
   import('./EventsView').then(module => ({ default: module.EventsView }))
+);
+const ErrorsView = lazy(() =>
+  import('./ErrorsView').then(module => ({ default: module.ErrorsView }))
 );
 const DevicesView = lazy(() =>
   import('./DevicesView').then(module => ({ default: module.DevicesView }))
@@ -80,6 +85,11 @@ export const Observe = () => {
         <Suspense fallback={<Skeleton className="h-[520px] rounded-xl" />}>
           {page.value === 'overview' && <OverviewView filters={filters} />}
           {page.value === 'metrics' && <MetricsView filters={filters} />}
+          {page.value === 'errors' && (
+            <EnterpriseFeatureGate feature={errorTrackingFeature}>
+              <ErrorsView filters={filters} />
+            </EnterpriseFeatureGate>
+          )}
           {page.value === 'events' && <EventsView filters={filters} />}
           {page.value === 'devices' && <DevicesView filters={filters} />}
           {page.value === 'attributes' && <IdentityAttributes />}

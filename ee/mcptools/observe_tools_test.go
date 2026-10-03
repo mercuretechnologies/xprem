@@ -266,7 +266,7 @@ func TestObserveToolsAreVisibleAndReadOnly(t *testing.T) {
 		return access.Perm == "observe:read" && access.Fallback == mittools.FallbackAnyMember
 	}
 	tools := registeredTools(t, deps, healthPrincipal)
-	for _, name := range []string{"query_logs", "get_observe_overview", "get_metric_breakdown", "get_observe_events"} {
+	for _, name := range []string{"query_logs", "get_observe_overview", "get_metric_breakdown", "get_observe_events", "query_errors", "get_error_details"} {
 		if !tools[name] {
 			t.Errorf("%s must be registered for a principal holding observe:read", name)
 		}
