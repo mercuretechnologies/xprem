@@ -44,8 +44,6 @@ type header struct {
 	NamesBytes     uint32
 	SegmentsOffset uint32
 	TextsOffset    uint32
-	// v1 stored an obsolete Hermes function-offset table before the fences.
-	legacyFunctionCount uint32
 }
 
 // fields lists the header values in their order in the file, after the magic
@@ -68,27 +66,17 @@ func decodeHeader(b []byte) (header, error) {
 	if string(b[:4]) != indexMagic {
 		return header{}, fmt.Errorf("%w: bad magic", ErrInvalidIndex)
 	}
-	var h header
-	switch version := le.Uint32(b[4:]); version {
-	case 1:
-		h = header{
-			SegmentCount: le.Uint32(b[8:]), legacyFunctionCount: le.Uint32(b[12:]),
-			FenceCount: le.Uint32(b[16:]), SourcesBytes: le.Uint32(b[20:]),
-			NamesBytes: le.Uint32(b[24:]), SegmentsOffset: le.Uint32(b[28:]),
-			TextsOffset: le.Uint32(b[36:]), // v1's unused line count occupied bytes 32–35.
-		}
-	case indexVersion:
-		for i, field := range h.fields() {
-			*field = le.Uint32(b[8+4*i:])
-		}
-	default:
+	if version := le.Uint32(b[4:]); version != indexVersion {
 		return header{}, fmt.Errorf("%w: unsupported version %d", ErrInvalidIndex, version)
+	}
+	var h header
+	for i, field := range h.fields() {
+		*field = le.Uint32(b[8+4*i:])
 	}
 	if h.SegmentsOffset < headerSize || h.SegmentsOffset > h.TextsOffset ||
 		uint64(h.TextsOffset-h.SegmentsOffset) != uint64(segmentSize)*uint64(h.SegmentCount) ||
 		uint64(h.FenceCount) != (uint64(h.SegmentCount)+fenceStride-1)/fenceStride ||
-		h.SegmentsOffset-headerSize > maxIndexCacheBytes ||
-		uint64(h.legacyFunctionCount)*4 > uint64(h.SegmentsOffset-headerSize) {
+		h.SegmentsOffset-headerSize > maxIndexCacheBytes {
 		return header{}, fmt.Errorf("%w: inconsistent header", ErrInvalidIndex)
 	}
 	return h, nil
@@ -367,7 +355,6 @@ func OpenIndex(r io.ReaderAt) (*Index, error) {
 	x.Sources = t.strings(h.SourcesBytes)
 	x.Names = t.strings(h.NamesBytes)
 	x.Ignored = t.flags(len(x.Sources))
-	t.take(4 * int(h.legacyFunctionCount))
 	for _, p := range t.pairs(int(h.FenceCount)) {
 		x.fences = append(x.fences, fence{line: p[0], column: p[1]})
 	}

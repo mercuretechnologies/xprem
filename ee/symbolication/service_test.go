@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"xprem/internal/jobs"
 	"xprem/internal/types"
@@ -69,6 +70,7 @@ func (s *fakeStore) PutIndex(_ context.Context, _, hash string, body io.Reader) 
 // fakeIndexes records the last status written for the update; finishErr makes
 // every Finish fail.
 type fakeIndexes struct {
+	update    types.Update
 	record    *types.SourcemapIndex
 	finishErr error
 }
@@ -98,7 +100,7 @@ func (r *fakeIndexes) GetUpdateSourcemapByUUID(context.Context, string, string) 
 	if r.record == nil {
 		return &UpdateSourcemap{}, nil
 	}
-	return &UpdateSourcemap{Hash: &r.record.Hash, Index: r.record}, nil
+	return &UpdateSourcemap{Hash: &r.record.Hash, Index: r.record, Update: r.update}, nil
 }
 
 func (r *fakeIndexes) GetUpdateSourcemap(context.Context, string, string, string, string) (*UpdateSourcemap, error) {
@@ -111,7 +113,7 @@ func (r *fakeIndexes) GetUpdateSourcemap(context.Context, string, string, string
 const testHash = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
 
 func newTestService(store *fakeStore) (*Service, *fakeIndexes) {
-	indexes := &fakeIndexes{}
+	indexes := &fakeIndexes{update: types.Update{AppId: "app-1", Branch: "main", RuntimeVersion: "1", UpdateId: "100"}}
 	service := &Service{store: store, indexes: indexes, cache: newIndexCache(), licenseValid: func() bool { return true }}
 	return service, indexes
 }
@@ -233,16 +235,16 @@ func TestIndexJobFailsUntilTheStoredRecordIsWritten(t *testing.T) {
 	require.ErrorContains(t, err, "connection reset")
 	assert.Equal(t, 1, store.puts, "the index itself was stored")
 	assert.Equal(t, types.SourcemapIndexRunning, indexes.record.Status)
-	_, err = service.storedIndexHash(context.Background(), "app-1", "update-uuid")
+	_, err = service.storedUpdateSourcemap(context.Background(), "app-1", "update-uuid")
 	assert.ErrorIs(t, err, ErrIndexNotReady)
 
 	indexes.finishErr = nil
 	require.NoError(t, runJob(t, service, indexes, 2))
 	assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status)
 	assert.Equal(t, 1, store.puts, "the retry reuses the stored index")
-	hash, err := service.storedIndexHash(context.Background(), "app-1", "update-uuid")
+	sourcemap, err := service.storedUpdateSourcemap(context.Background(), "app-1", "update-uuid")
 	require.NoError(t, err)
-	assert.Equal(t, testHash, hash)
+	assert.Equal(t, testHash, *sourcemap.Hash)
 }
 
 func TestIndexingIsUnavailableWithoutALicense(t *testing.T) {
@@ -275,4 +277,165 @@ func TestScheduleIndexIsANoOpWhenUnavailable(t *testing.T) {
 	service, indexes := newTestService(newFakeStore())
 	require.NoError(t, service.ScheduleIndex(context.Background(), types.Update{AppId: "app-1", Branch: "main", UpdateId: "100"}, testHash))
 	assert.Nil(t, indexes.record)
+}
+
+// The queue implements River's active-job uniqueness for a single update.
+// It records accepted jobs independently of enqueue attempts.
+type fakeIndexQueue struct {
+	mu       sync.Mutex
+	accepted []indexArgs
+	active   map[string]bool
+	attempts int
+	err      error
+}
+
+func (q *fakeIndexQueue) Enqueue(_ context.Context, jobArgs river.JobArgs) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.attempts++
+	if q.err != nil {
+		return "", q.err
+	}
+	args := jobArgs.(indexArgs)
+	key := args.AppId + "/" + args.Branch + "/" + args.UpdateId
+	if q.active[key] {
+		return "", jobs.ErrAlreadyRunning
+	}
+	if q.active == nil {
+		q.active = make(map[string]bool)
+	}
+	q.active[key] = true
+	q.accepted = append(q.accepted, args)
+	return "job", nil
+}
+
+func storedTestService(store *fakeStore) (*Service, *fakeIndexes, *fakeIndexQueue) {
+	service, indexes := newTestService(store)
+	indexes.record = &types.SourcemapIndex{Hash: testHash, Status: types.SourcemapIndexStored}
+	queue := &fakeIndexQueue{}
+	service.jobs = queue
+	return service, indexes, queue
+}
+
+func TestOpenUpdateIndexRepairsMissingAndInvalidIndexes(t *testing.T) {
+	for _, condition := range []string{"missing", "unsupported version", "corrupt"} {
+		t.Run(condition, func(t *testing.T) {
+			store := newFakeStore()
+			store.maps[testHash] = []byte(cartMap)
+			if condition == "unsupported version" {
+				m, err := Parse(store.maps[testHash])
+				require.NoError(t, err)
+				var encoded bytes.Buffer
+				require.NoError(t, WriteIndex(&encoded, m))
+				data := encoded.Bytes()
+				le.PutUint32(data[4:], 1)
+				store.indexes[testHash] = data
+			} else if condition == "corrupt" {
+				store.indexes[testHash] = []byte("truncated")
+			}
+			service, indexes, queue := storedTestService(store)
+			ctx := context.Background()
+			index, err := service.OpenUpdateIndex(ctx, "app-1", "update-uuid")
+			require.ErrorIs(t, err, ErrIndexNotReady)
+			require.Nil(t, index)
+			require.Len(t, queue.accepted, 1)
+			args := queue.accepted[0]
+			assert.Equal(t, "app-1", args.AppId)
+			assert.Equal(t, "main", args.Branch)
+			assert.Equal(t, "1", args.RuntimeVersion)
+			assert.Equal(t, "100", args.UpdateId)
+			assert.Equal(t, testHash, args.Hash)
+			assert.True(t, args.Rebuild)
+			assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status, "enqueue does not race the worker's status writes")
+
+			// An active duplicate still reads as indexing, not as a server error.
+			require.ErrorIs(t, service.UpdateIndexState(ctx, "app-1", "update-uuid"), ErrIndexNotReady)
+			require.Len(t, queue.accepted, 1)
+			require.NoError(t, service.runIndexJob(ctx, &river.Job[indexArgs]{
+				JobRow: &rivertype.JobRow{Attempt: 1, MaxAttempts: 5}, Args: args,
+			}))
+			assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status)
+			assert.Equal(t, []byte(cartMap), store.maps[testHash], "rebuilding preserves the uploaded source map")
+			index, err = service.OpenUpdateIndex(ctx, "app-1", "update-uuid")
+			require.NoError(t, err)
+			require.NotNil(t, index)
+			position, ok, err := index.Lookup(0, 40)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, "cart.js", position.Source)
+			require.NoError(t, service.UpdateIndexState(ctx, "app-1", "update-uuid"))
+			require.Len(t, queue.accepted, 1)
+			assert.Equal(t, 1, store.puts)
+		})
+	}
+}
+
+func TestIndexStateTriggersRepairAndConcurrentReadsDeduplicate(t *testing.T) {
+	service, indexes, queue := storedTestService(newFakeStore())
+	ctx := context.Background()
+	require.ErrorIs(t, service.UpdateIndexState(ctx, "app-1", "update-uuid"), ErrIndexNotReady)
+	const readers = 16
+	errs := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := service.OpenUpdateIndex(ctx, "app-1", "update-uuid")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.ErrorIs(t, err, ErrIndexNotReady)
+	}
+	require.Len(t, queue.accepted, 1)
+	assert.Equal(t, readers+1, queue.attempts)
+	assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status)
+}
+
+func TestRepairEnqueueFailureLeavesStoredRecordRetryable(t *testing.T) {
+	service, indexes, queue := storedTestService(newFakeStore())
+	queue.err = errors.New("queue unavailable")
+	_, err := service.OpenUpdateIndex(context.Background(), "app-1", "update-uuid")
+	require.ErrorIs(t, err, queue.err)
+	assert.Equal(t, types.SourcemapIndexStored, indexes.record.Status)
+	assert.Empty(t, queue.accepted)
+	queue.err = nil
+	_, err = service.OpenUpdateIndex(context.Background(), "app-1", "update-uuid")
+	require.ErrorIs(t, err, ErrIndexNotReady)
+	require.Len(t, queue.accepted, 1)
+}
+
+func TestRepairWithMissingSourceMapStopsAfterWorkerCancellation(t *testing.T) {
+	service, indexes, queue := storedTestService(newFakeStore())
+	ctx := context.Background()
+	_, err := service.OpenUpdateIndex(ctx, "app-1", "update-uuid")
+	require.ErrorIs(t, err, ErrIndexNotReady)
+	require.Len(t, queue.accepted, 1)
+	err = service.runIndexJob(ctx, &river.Job[indexArgs]{
+		JobRow: &rivertype.JobRow{Attempt: 1, MaxAttempts: 5}, Args: queue.accepted[0],
+	})
+	var cancel *river.JobCancelError
+	require.ErrorAs(t, err, &cancel)
+	assert.Equal(t, types.SourcemapIndexCancelled, indexes.record.Status)
+	assert.Contains(t, indexes.record.Reason, types.SourcemapIndexReasonMapMissing)
+	_, err = service.OpenUpdateIndex(ctx, "app-1", "update-uuid")
+	require.ErrorIs(t, err, ErrIndexFailed)
+	require.ErrorIs(t, service.UpdateIndexState(ctx, "app-1", "update-uuid"), ErrIndexFailed)
+	assert.Equal(t, 1, queue.attempts, "a terminal map failure must not start another repair on every read")
+}
+
+func TestIndexRepairRequiresAvailableService(t *testing.T) {
+	service, _, queue := storedTestService(newFakeStore())
+	service.licenseValid = func() bool { return false }
+	_, err := service.OpenUpdateIndex(context.Background(), "app-1", "update-uuid")
+	require.ErrorIs(t, err, ErrUnavailable)
+	assert.Zero(t, queue.attempts)
+
+	// Converting a nil *jobs.Client to the queue interface must not enable it.
+	withoutJobs := NewService(newFakeStore(), &fakeIndexes{}, nil)
+	withoutJobs.licenseValid = func() bool { return true }
+	assert.False(t, withoutJobs.available())
 }

@@ -6,7 +6,6 @@ package symbolication
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"math/rand"
 	"os"
@@ -75,43 +74,19 @@ func TestOpenIndexRefusesForeignFiles(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidIndex)
 }
 
-// A v1 index keeps two Hermes function offsets between its ignore flags and
-// fences. Keep the old bytes independent of WriteIndex, which now writes v2.
-const legacyIndexFixture = "WFNNSQEAAAACAAAAAgAAAAEAAAA8AAAAHwAAAK0AAAABAAAA3QAAAAAAAAAAAAAAAgAAAAAAAAARAAAALAAAAHNyYy9MYWJTY3JlZW4udHN4bm9kZV9tb2R1bGVzL3JlYWN0L2luZGV4LmpzAgAAAAAAAAAJAAAADwAAAExhYlNjcmVlbnJlbmRlcgABZAAAAMgAAAAAAAAAZAAAAAAAAAA7AAAAOwAAABUAAAAAAAAAZAAAAAAAAAABAAAAAgAAAAAAAAAAAAAAyAAAAAEAAAAAAAAAAAAAAAEAAABmdW5jdGlvbiBMYWJTY3JlZW4oKSB7CiAgdGhyb3cgbmV3IEVycm9yKCdyZW5kZXIgY3Jhc2gnKQp9CmZ1bmN0aW9uIHJlbmRlcigpIHt9Cg=="
-
-func TestLegacyIndexResolvesCrashAndSourceContext(t *testing.T) {
-	stored, err := base64.StdEncoding.DecodeString(legacyIndexFixture)
+func TestIndexReadersRejectUnsupportedVersions(t *testing.T) {
+	m, err := Parse([]byte(cartMap))
 	require.NoError(t, err)
-	index, err := OpenIndex(bytes.NewReader(stored))
-	require.NoError(t, err)
-	count, err := ReadSegmentCount(bytes.NewReader(stored))
-	require.NoError(t, err)
-	assert.Equal(t, 2, count)
-
-	trace := Symbolicate(index, "Error: render crash\n    at LabScreen (address at app.hbc:1:120)\n    at render (address at app.hbc:1:220)")
-	require.Len(t, trace.Frames, 2)
-	for _, frame := range trace.Frames {
-		require.NotNil(t, frame.Origin)
-	}
-	assert.Equal(t, "LabScreen.tsx in LabScreen", Culprit(trace))
-	assert.Equal(t, &Origin{
-		Source: "src/LabScreen.tsx", Line: 2, Column: 3, Name: "LabScreen", InApp: true,
-		Context: &Context{FirstLine: 1, Lines: []string{"function LabScreen() {", "  throw new Error('render crash')", "}"}},
-	}, trace.Frames[0].Origin)
-	assert.False(t, trace.Frames[1].Origin.InApp, "legacy ignore flags are preserved")
-}
-
-func TestLegacyIndexRejectsInvalidHeaderAndTables(t *testing.T) {
-	for name, corrupt := range map[string]func([]byte){
-		"unsupported version":           func(stored []byte) { le.PutUint32(stored[4:], 3) },
-		"function table exceeds tables": func(stored []byte) { le.PutUint32(stored[12:], ^uint32(0)) },
-		"inconsistent segments":         func(stored []byte) { le.PutUint32(stored[36:], 48) },
-	} {
+	var buf bytes.Buffer
+	require.NoError(t, WriteIndex(&buf, m))
+	require.Equal(t, uint32(2), le.Uint32(buf.Bytes()[4:]), "new indexes keep format v2")
+	for name, version := range map[string]uint32{"old version": 1, "future version": 3} {
 		t.Run(name, func(t *testing.T) {
-			stored, err := base64.StdEncoding.DecodeString(legacyIndexFixture)
-			require.NoError(t, err)
-			corrupt(stored)
-			_, err = OpenIndex(bytes.NewReader(stored))
+			stored := append([]byte(nil), buf.Bytes()...)
+			le.PutUint32(stored[4:], version)
+			_, err := OpenIndex(bytes.NewReader(stored))
+			assert.ErrorIs(t, err, ErrInvalidIndex)
+			_, err = ReadSegmentCount(bytes.NewReader(stored))
 			assert.ErrorIs(t, err, ErrInvalidIndex)
 		})
 	}

@@ -406,10 +406,12 @@ JOIN branches b ON u.branch_id = b.id
 WHERE u.id = $1 AND b.app_id = $2 AND b.name = $3;
 
 -- name: GetUpdateSourcemapByUUID :one
--- The map hash and index status of the update a device reports by UUID.
-SELECT u.sourcemap_hash, COALESCE(si.status, '') AS index_status
+-- The map, index status and job identity of the update a device reports by UUID.
+SELECT u.sourcemap_hash, COALESCE(si.status, '') AS index_status,
+       u.id, b.name AS branch_name, r.version AS runtime_version
 FROM updates u
 JOIN branches b ON b.id = u.branch_id
+JOIN runtime_versions r ON r.id = u.runtime_version_id
 LEFT JOIN sourcemap_indexes si ON si.branch_id = u.branch_id AND si.update_id = u.id
 WHERE b.app_id = sqlc.arg('app_id')
   AND u.update_uuid = sqlc.arg('update_uuid');

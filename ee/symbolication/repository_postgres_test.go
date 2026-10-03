@@ -6,6 +6,7 @@ package symbolication
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"xprem/internal/database"
@@ -142,4 +143,36 @@ func TestIndexRecordFollowsTheUpdatePostgres(t *testing.T) {
 	var count int
 	require.NoError(t, f.pool.QueryRow(ctx, "SELECT count(*) FROM sourcemap_indexes si JOIN branches b ON b.id = si.branch_id WHERE b.app_id = $1", f.appId).Scan(&count))
 	assert.Equal(t, 0, count)
+}
+
+func TestUpdateSourcemapUUIDCarriesRepairIdentityForUncheckedUpdate(t *testing.T) {
+	f := newPostgresFixture(t)
+	ctx := context.Background()
+	update := f.createUpdate(t, 100)
+	require.NoError(t, f.updates.StoreUpdateSourcemapHash(ctx, update, testHash))
+	updateUUID := uuid.NewString()
+	_, err := f.pool.Exec(ctx, `UPDATE updates u SET update_uuid=$1, checked_at=NULL
+		FROM branches b WHERE b.id=u.branch_id AND b.app_id=$2 AND u.id=100`, updateUUID, f.appId)
+	require.NoError(t, err)
+	require.NoError(t, f.indexes.MarkPending(ctx, update, testHash))
+	require.NoError(t, f.indexes.Finish(ctx, update, types.SourcemapIndexStored, "", nil, nil))
+
+	sourcemap, err := f.indexes.GetUpdateSourcemapByUUID(ctx, f.appId, updateUUID)
+	require.NoError(t, err)
+	require.NotNil(t, sourcemap, "symbolication can resolve existing updates before checked_at is populated")
+	require.Equal(t, testHash, *sourcemap.Hash)
+	require.Equal(t, types.SourcemapIndexStored, sourcemap.Index.Status)
+	assert.Equal(t, f.appId, sourcemap.Update.AppId)
+	assert.Equal(t, "main", sourcemap.Update.Branch)
+	assert.Equal(t, "1", sourcemap.Update.RuntimeVersion)
+	assert.Equal(t, "100", sourcemap.Update.UpdateId)
+	payload, err := json.Marshal(sourcemap)
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "Update")
+	assert.NotContains(t, string(payload), "branch")
+	assert.NotContains(t, string(payload), f.appId)
+
+	foreign, err := f.indexes.GetUpdateSourcemapByUUID(ctx, uuid.NewString(), updateUUID)
+	require.NoError(t, err)
+	assert.Nil(t, foreign, "another application cannot resolve the repair identity")
 }
