@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -49,8 +50,14 @@ func decodeErrorID(id string) (string, error) {
 // errorsSource projects only aggregate dimensions. The key subquery reads no payloads. ClickHouse CTEs
 // are expanded, so this entails two filtered log scans, not a materialization.
 // Every error_groups read is restricted to this application's relevant keys.
-func errorsSource(appID string, query ExplorerQuery, fatality string, keys []string) (sqlFragment, []any) {
-	where, args := errorsTelemetryWhere(query)
+func errorsSource(appID string, query ExplorerQuery, fatality string, keys []string, snapshot ...time.Time) (sqlFragment, []any) {
+	var where sqlFragment
+	var args []any
+	if len(snapshot) > 0 {
+		where, args = errorsSnapshotWhere(snapshot[0])
+	} else {
+		where, args = errorsTelemetryWhere(query)
+	}
 	where += ` AND (l.error_fingerprint != toUUID('00000000-0000-0000-0000-000000000000')
  OR l.severity_number >= 17 OR l.is_fatal = 1 OR l.event_name = 'xprem_js_crash')`
 	switch fatality {
@@ -192,4 +199,10 @@ func errorsScope(appID string, keys []string) (sqlFragment, []any) {
 
 func errorsTelemetryWhere(query ExplorerQuery) (sqlFragment, []any) {
 	return telemetryWhereNanoseconds("l", query, len(query.MetadataFilter) > 0)
+}
+
+// Ingestion has second precision. A strict bound at a completed second keeps
+// later arrivals, including backdated events and retries, out of cursor pages.
+func errorsSnapshotWhere(asOf time.Time) (sqlFragment, []any) {
+	return "l.app_id = ? AND l.ingested_at < fromUnixTimestamp64Nano(?)", []any{asOf.UnixNano()}
 }

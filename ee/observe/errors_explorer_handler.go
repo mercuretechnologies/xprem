@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"xprem/internal/handlers"
@@ -147,19 +148,37 @@ func (h *ExplorerHandler) GetErrorDetailsHandler(w http.ResponseWriter, r *http.
 	if !h.requireErrorsLicense(w) {
 		return
 	}
-	base, err := h.parseBaseQuery(r, ErrorsMaxWindow)
-	if err != nil {
-		h.renderQueryError(w, err)
+	values := r.URL.Query()
+	query := ErrorDetailsQuery{Global: values.Get("scope") == "all"}
+	if scope := values.Get("scope"); scope != "" && scope != "all" {
+		handlers.RenderError(w, http.StatusBadRequest, "'scope' must be all or omitted.")
 		return
 	}
-	if len(base.Conditions) > 0 {
-		h.renderErrorsQueryError(w, ErrInvalidErrorsQuery)
-		return
-	}
-	fatality, ok := parseErrorFatality(r.URL.Query().Get("fatality"))
-	if !ok {
-		handlers.RenderError(w, http.StatusBadRequest, "'fatality' must be all, fatal or non_fatal.")
-		return
+	if query.Global {
+		if raw := values.Get("asOf"); raw != "" {
+			asOf, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil || asOf.Before(time.Unix(0, 0)) || asOf.After(time.Now()) {
+				handlers.RenderError(w, http.StatusBadRequest, "'asOf' must be a past RFC3339 timestamp.")
+				return
+			}
+			query.AsOf = asOf.UTC()
+		}
+	} else {
+		base, err := h.parseBaseQuery(r, ErrorsMaxWindow)
+		if err != nil {
+			h.renderQueryError(w, err)
+			return
+		}
+		if len(base.Conditions) > 0 {
+			h.renderErrorsQueryError(w, ErrInvalidErrorsQuery)
+			return
+		}
+		fatality, ok := parseErrorFatality(values.Get("fatality"))
+		if !ok {
+			handlers.RenderError(w, http.StatusBadRequest, "'fatality' must be all, fatal or non_fatal.")
+			return
+		}
+		query.ExplorerQuery, query.Fatality = base, fatality
 	}
 	limit, err := parseErrorLimit(r.URL.Query().Get("limit"))
 	if err != nil {
@@ -175,6 +194,11 @@ func (h *ExplorerHandler) GetErrorDetailsHandler(w http.ResponseWriter, r *http.
 		handlers.RenderError(w, http.StatusBadRequest, "'cursor' is invalid.")
 		return
 	}
+	if query.Global && cursor != nil && query.AsOf.IsZero() {
+		handlers.RenderError(w, http.StatusBadRequest, "'asOf' is required when paging all occurrences.")
+		return
+	}
+	query.Limit, query.Cursor = limit, cursor
 
 	ctx, cancel := boundedRead(r)
 	defer cancel()
@@ -182,9 +206,7 @@ func (h *ExplorerHandler) GetErrorDetailsHandler(w http.ResponseWriter, r *http.
 	if reader == nil {
 		reader = (*Explorer)(nil)
 	}
-	details, err := reader.ReadErrorDetails(ctx, mux.Vars(r)["APP_ID"], mux.Vars(r)["ERROR_ID"], ErrorDetailsQuery{
-		ExplorerQuery: base, Fatality: fatality, Limit: limit, Cursor: cursor,
-	})
+	details, err := reader.ReadErrorDetails(ctx, mux.Vars(r)["APP_ID"], mux.Vars(r)["ERROR_ID"], query)
 	if err != nil {
 		if !isErrorsValidationError(err) {
 			log.Printf("observe: reading error details failed: %v", err)

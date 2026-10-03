@@ -8,22 +8,15 @@ import { filterParam, type FilterKey } from './filters';
 export const errorFatality = (value: string | null): ErrorFatality =>
   value === 'fatal' || value === 'nonfatal' ? value : 'all';
 
-export const errorDetailsHref = (
-  errorId: string,
-  params: URLSearchParams,
-  responseWindow?: { from: string; to: string }
-) => {
-  const next = new URLSearchParams(params);
-  next.delete('errorId');
-  // Details have no live controls. Keep the exact response window stable
-  // even when the list is live, so the counts and stack stay consistent.
-  next.set('live', '0');
-  if (responseWindow) {
-    next.set('from', responseWindow.from);
-    next.set('to', responseWindow.to);
-    next.delete('period');
-  }
-  return `/observe/errors/${encodeURIComponent(errorId)}?${next}`;
+export const errorDetailsHref = (errorId: string) =>
+  `/observe/errors/${encodeURIComponent(errorId)}`;
+
+// The detail URL always describes the global group. Only navigation state
+// remembers the list selection; pasted detail links return to the default list.
+export const errorsListParams = (state: unknown) => {
+  const search =
+    state && typeof state === 'object' && 'errorsSearch' in state ? state.errorsSearch : null;
+  return new URLSearchParams(typeof search === 'string' ? search : '');
 };
 
 export const errorsListHref = (

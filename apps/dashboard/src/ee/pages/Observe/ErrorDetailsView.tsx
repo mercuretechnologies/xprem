@@ -2,69 +2,50 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { liveInterval, type ObserveFilters } from './filters';
 import { exactNumber } from './format';
 import { shortUUID, logTime } from './logRecords';
 import { occurrenceEventsHref } from './occurrenceEvents';
 import { deviceName } from './deviceNames';
-import { errorFatality, errorsListHref } from './errorNavigation';
+import { errorsListHref, errorsListParams } from './errorNavigation';
 import { ErrorBreakdown } from './ErrorBreakdown';
 import { OccurrenceHistogram } from './OccurrenceHistogram';
 import { LogDetails } from './LogDetails';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
 import { useUpdateNames } from './useUpdateNames';
 
-type OccurrencePageParam = { cursor?: string; from?: string; to?: string };
+type OccurrencePageParam = { cursor?: string; asOf?: string };
 
-export const ErrorDetailsView = ({
-  errorId,
-  filters,
-}: {
-  errorId: string;
-  filters: ObserveFilters;
-}) => {
-  const [params] = useSearchParams();
+export const ErrorDetailsView = ({ errorId }: { errorId: string }) => {
   const { state } = useLocation();
-  const fatality = errorFatality(params.get('errorFatality'));
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // A new revision reopens a trace only on an explicit View trace click.
+  const [selection, setSelection] = useState<{ eventKey: string; revision: number } | null>(null);
+  const tracePanel = useRef<HTMLElement>(null);
+  const tracePanelId = useId();
+  useEffect(() => {
+    if (!selection) return;
+    tracePanel.current?.focus({ preventScroll: true });
+    tracePanel.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }, [selection]);
   const updateNames = useUpdateNames();
   const query = useInfiniteQuery({
-    // A live tick advances the next read, but does not discard pages while
-    // somebody is reading a stack. Explicit filter changes remount this view.
-    queryKey: [
-      'observe',
-      'error-details',
-      api.getAppId(),
-      errorId,
-      filters.state,
-      filters.range,
-      filters.live,
-      fatality,
-    ],
+    queryKey: ['observe', 'error-details', api.getAppId(), errorId],
     initialPageParam: {} as OccurrencePageParam,
     queryFn: ({ pageParam }) =>
       api.getObserveErrorDetails(errorId, {
-        ...filters.query,
-        fatality,
+        scope: 'all',
         limit: 50,
         ...pageParam,
       }),
     getNextPageParam: (last, pages): OccurrencePageParam | undefined =>
-      last.nextCursor
-        ? { cursor: last.nextCursor, from: pages[0].from, to: pages[0].to }
-        : undefined,
-    // Once an occurrence or older page is selected, keep all panels on the
-    // head's exact window. Cursor pages use those same absolute bounds.
-    refetchInterval: state =>
-      selectedKey !== null || (state.state.data?.pages.length ?? 0) > 1
-        ? false
-        : liveInterval(filters.live, filters.periodSpec),
+      last.nextCursor ? { cursor: last.nextCursor, asOf: pages[0].asOf } : undefined,
+    // Global history and older pages share the server's snapshot. Keep a
+    // selected occurrence stable while somebody is reading its stack.
     refetchOnWindowFocus: false,
   });
   const details = query.data?.pages[0];
@@ -75,16 +56,10 @@ export const ErrorDetailsView = ({
     ).values(),
   ];
   const selected =
-    occurrences.find(log => log.eventKey === selectedKey) ??
-    details?.representativeOccurrence ??
-    occurrences[0];
-  // Router state restores the live/relative list exactly. Directly opened
-  // detail links fall back to their own frozen selection.
-  const back = new URLSearchParams(
-    typeof state?.errorsSearch === 'string' ? state.errorsSearch : params
-  );
-  const pausedWhileReading =
-    filters.live && (selectedKey !== null || (query.data?.pages.length ?? 0) > 1);
+    occurrences.find(log => log.eventKey === selection?.eventKey) ??
+    occurrences[0] ??
+    details?.representativeOccurrence;
+  const back = errorsListParams(state);
 
   return (
     <div className="space-y-4">
@@ -96,6 +71,7 @@ export const ErrorDetailsView = ({
           All errors
         </Link>
         <h1 className="font-display text-[26px] font-semibold tracking-tight">Error details</h1>
+        <p className="text-sm text-muted-foreground">All retained occurrences of this error.</p>
       </header>
       {query.isPending && (
         <p className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
@@ -115,7 +91,7 @@ export const ErrorDetailsView = ({
       {details?.available === false && <TelemetryUnavailable />}
       {details?.available && !summary && (
         <p className="rounded-xl border bg-card p-8 text-sm text-muted-foreground">
-          This error has no occurrences in the selected period and filters.
+          This error has no retained occurrences.
         </p>
       )}
       {details?.available && summary && (
@@ -154,19 +130,31 @@ export const ErrorDetailsView = ({
           </section>
           <section className="rounded-xl border bg-card p-5 shadow-card">
             <h3 className="mb-4 text-sm font-medium">Occurrences over time</h3>
-            <OccurrenceHistogram series={details.series} from={details.from} to={details.to} />
+            <OccurrenceHistogram
+              series={details.series}
+              from={details.from}
+              to={details.to}
+              bucketSeconds={details.bucketSeconds}
+            />
           </section>
           {selected && (
-            <section className="overflow-hidden rounded-xl border bg-card shadow-card">
+            <section
+              ref={tracePanel}
+              id={tracePanelId}
+              tabIndex={-1}
+              aria-labelledby={`${tracePanelId}-heading`}
+              className="scroll-mt-6 overflow-hidden rounded-xl border bg-card shadow-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
               <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-                <h3 className="text-sm font-medium">Selected occurrence</h3>
+                <h3 id={`${tracePanelId}-heading`} className="text-sm font-medium">
+                  Selected occurrence
+                </h3>
                 <time dateTime={selected.timestamp} className="text-[11px] text-muted-foreground">
                   {new Date(selected.timestamp).toLocaleString()}
                 </time>
               </header>
               {/* LogDetails delegates exception stacks to StackTraceView using
                   this occurrence's update ID and raw fingerprint. */}
-              <LogDetails key={selected.eventKey} log={selected} />
+              <LogDetails key={`${selected.eventKey}:${selection?.revision ?? 0}`} log={selected} />
             </section>
           )}
           <div className="grid gap-4 lg:grid-cols-2">
@@ -198,11 +186,7 @@ export const ErrorDetailsView = ({
           <section className="overflow-hidden rounded-xl border bg-card shadow-card">
             <header className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-3">
               <h3 className="text-sm font-medium">Occurrences</h3>
-              <span className="text-[11px] text-muted-foreground">
-                {pausedWhileReading
-                  ? 'Live refresh paused while you read'
-                  : `${occurrences.length} loaded`}
-              </span>
+              <span className="text-[11px] text-muted-foreground">{occurrences.length} loaded</span>
             </header>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -256,7 +240,13 @@ export const ErrorDetailsView = ({
                       <td className="whitespace-nowrap px-4 py-3">
                         <button
                           type="button"
-                          onClick={() => setSelectedKey(log.eventKey)}
+                          onClick={() =>
+                            setSelection(current => ({
+                              eventKey: log.eventKey,
+                              revision: (current?.revision ?? 0) + 1,
+                            }))
+                          }
+                          aria-controls={tracePanelId}
                           aria-pressed={selected?.eventKey === log.eventKey}
                           className="rounded text-primary hover:underline focus-visible:outline focus-visible:outline-ring">
                           View trace
@@ -270,7 +260,7 @@ export const ErrorDetailsView = ({
             <footer className="flex items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
               <span>
                 {exactNumber.format(occurrences.length)} occurrences loaded
-                {!query.hasNextPage && ' · end of range'}
+                {!query.hasNextPage && ' · end of history'}
               </span>
               <Button
                 size="sm"

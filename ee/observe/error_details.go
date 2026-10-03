@@ -13,6 +13,8 @@ import (
 
 type ErrorDetailsQuery struct {
 	ExplorerQuery
+	Global   bool
+	AsOf     time.Time
 	Fatality string
 	Cursor   *LogCursor
 	Limit    int
@@ -32,6 +34,7 @@ type ErrorBreakdown struct {
 
 type ErrorDetails struct {
 	Available                bool                `json:"available"`
+	AsOf                     *time.Time          `json:"asOf,omitempty"`
 	From                     time.Time           `json:"from"`
 	To                       time.Time           `json:"to"`
 	BucketSeconds            int64               `json:"bucketSeconds"`
@@ -47,6 +50,9 @@ type ErrorDetails struct {
 }
 
 func (e *Explorer) ReadErrorDetails(ctx context.Context, appID, errorID string, query ErrorDetailsQuery) (ErrorDetails, error) {
+	if query.Global {
+		query.ExplorerQuery, query.Fatality = ExplorerQuery{}, ""
+	}
 	return cachedRead(ctx, errorDetailsReadCacheKey(appID, errorID, query), func(ctx context.Context) (ErrorDetails, error) { return e.readErrorDetails(ctx, appID, errorID, query) })
 }
 
@@ -68,13 +74,30 @@ func (e *Explorer) readErrorDetails(ctx context.Context, appID, errorID string, 
 	if err != nil {
 		return ErrorDetails{}, err
 	}
-	query.ExplorerQuery, err = normalizeErrorsQuery(query.ExplorerQuery)
-	if err != nil {
-		return ErrorDetails{}, err
-	}
-	query.Fatality, err = normalizeErrorFatality(query.Fatality)
-	if err != nil {
-		return ErrorDetails{}, err
+	if query.Global {
+		// A group opened directly describes all retained occurrences, independent
+		// of any period or predicates supplied by its originating list.
+		query.ExplorerQuery, query.Fatality = ExplorerQuery{}, ""
+		if query.Cursor != nil && query.AsOf.IsZero() {
+			return ErrorDetails{}, fmt.Errorf("%w: asOf is required for global cursor pages", ErrInvalidErrorsQuery)
+		}
+		now := time.Now().UTC()
+		if query.AsOf.IsZero() {
+			query.AsOf = now
+		}
+		if query.AsOf.Before(time.Unix(0, 0)) || query.AsOf.After(now) {
+			return ErrorDetails{}, fmt.Errorf("%w: asOf must be a past timestamp", ErrInvalidErrorsQuery)
+		}
+		query.AsOf = query.AsOf.UTC().Truncate(time.Second)
+	} else {
+		query.ExplorerQuery, err = normalizeErrorsQuery(query.ExplorerQuery)
+		if err != nil {
+			return ErrorDetails{}, err
+		}
+		query.Fatality, err = normalizeErrorFatality(query.Fatality)
+		if err != nil {
+			return ErrorDetails{}, err
+		}
 	}
 	query.Limit, err = errorsPageLimit(query.Limit)
 	if err != nil {
@@ -83,23 +106,46 @@ func (e *Explorer) readErrorDetails(ctx context.Context, appID, errorID string, 
 	if query.Cursor != nil && (query.Cursor.Timestamp.IsZero() || !isCursorKey(query.Cursor.EventKey)) {
 		return ErrorDetails{}, ErrInvalidErrorsQuery
 	}
-	details := ErrorDetails{Available: e != nil && e.clickhouse != nil, From: query.From, To: query.To, BucketSeconds: int64(query.Bucket / time.Second), Series: emptyErrorSeries(query.ExplorerQuery), Updates: []ErrorBreakdown{}, DeviceModels: []ErrorBreakdown{}, OSVersions: []ErrorBreakdown{}, Runtimes: []ErrorBreakdown{}, Occurrences: []ObserveLog{}}
+	details := ErrorDetails{Available: e != nil && e.clickhouse != nil, Series: []ObserveEventPoint{}, Updates: []ErrorBreakdown{}, DeviceModels: []ErrorBreakdown{}, OSVersions: []ErrorBreakdown{}, Runtimes: []ErrorBreakdown{}, Occurrences: []ObserveLog{}}
+	if query.Global {
+		details.AsOf = &query.AsOf
+		details.From, details.To = query.AsOf, query.AsOf
+	} else {
+		details.From, details.To = query.From, query.To
+		details.BucketSeconds = int64(query.Bucket / time.Second)
+		details.Series = emptyErrorSeries(query.ExplorerQuery)
+	}
 	if !details.Available {
 		return details, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, telemetryReadTimeout)
 	defer cancel()
-	ctx, resolved, empty, err := e.prepareTelemetryRead(ctx, appID, query.ExplorerQuery)
-	if err != nil {
-		return ErrorDetails{}, err
+	if !query.Global {
+		var empty bool
+		ctx, query.ExplorerQuery, empty, err = e.prepareTelemetryRead(ctx, appID, query.ExplorerQuery)
+		if err != nil {
+			return ErrorDetails{}, err
+		}
+		if empty {
+			return details, nil
+		}
 	}
-	if empty {
-		return details, nil
-	}
-	query.ExplorerQuery = resolved
 	key, err = e.resolveErrorID(ctx, appID, key)
 	if err != nil {
 		return ErrorDetails{}, err
+	}
+	if query.Global {
+		var empty bool
+		query.ExplorerQuery, empty, err = e.globalErrorExtent(ctx, appID, key, query.AsOf)
+		if err != nil {
+			return ErrorDetails{}, err
+		}
+		if empty {
+			return details, nil
+		}
+		details.From, details.To = query.From, query.To
+		details.BucketSeconds = int64(query.Bucket / time.Second)
+		details.Series = emptyErrorSeries(query.ExplorerQuery)
 	}
 	if err = e.readErrorAggregates(ctx, appID, key, query, &details); err != nil {
 		return ErrorDetails{}, err
@@ -116,13 +162,46 @@ func (e *Explorer) readErrorDetails(ctx context.Context, appID, errorID string, 
 	return details, nil
 }
 
+func errorDetailsSource(appID, key string, query ErrorDetailsQuery) (sqlFragment, []any) {
+	if query.Global {
+		return errorsSource(appID, query.ExplorerQuery, "", []string{key}, query.AsOf)
+	}
+	return errorsSource(appID, query.ExplorerQuery, query.Fatality, []string{key})
+}
+
+// Only the requested group's candidate raw keys are scanned for its extent.
+// Metadata retains its latest mapping; AsOf freezes log ingestion for paging.
+func (e *Explorer) globalErrorExtent(ctx context.Context, appID, key string, asOf time.Time) (ExplorerQuery, bool, error) {
+	source, args := errorsSource(appID, ExplorerQuery{}, "", []string{key}, asOf)
+	var first, last time.Time
+	var count uint64
+	err := e.clickhouse.Conn.QueryRow(ctx, sqlf(`WITH %s
+	 SELECT min(timestamp), max(timestamp), count() FROM errors_source WHERE group_key = ?`, source), append(args, key)...).Scan(&first, &last, &count)
+	if err != nil {
+		return ExplorerQuery{}, false, fmt.Errorf("reading the error's retained extent: %w", err)
+	}
+	if count == 0 {
+		return ExplorerQuery{}, true, nil
+	}
+	end := asOf
+	if last.After(end) {
+		end = last
+	}
+	if end.Sub(first) < time.Second {
+		end = first.Add(time.Second)
+	}
+	// One extra point closes the last bucket, so reserve it within the cap.
+	bucket := (end.Sub(first) / (maxErrorsBuckets - 1)).Truncate(time.Second) + time.Second
+	return ExplorerQuery{From: first.UTC(), To: end.UTC(), Bucket: bucket}, false, nil
+}
+
 // GROUPING SETS computes the summary, histogram and all four breakdowns from
 // the same filtered, deduplicated stream in one pass. Returned groups are
 // bounded; omitted breakdown values are reconciled against the full total.
 // A publish group is metadata, not part of the update/platform identity:
 // older events may lack it even when newer events refer to the same update.
 func (e *Explorer) readErrorAggregates(ctx context.Context, appID, key string, query ErrorDetailsQuery, details *ErrorDetails) error {
-	source, args := errorsSource(appID, query.ExplorerQuery, query.Fatality, []string{key})
+	source, args := errorDetailsSource(appID, key, query)
 	sql := sqlf(`WITH %s
  SELECT multiIf(grouping(bucket) = 0, 'series', grouping(update_key) = 0, 'updates',
  grouping(device_model) = 0, 'models', grouping(os_key) = 0, 'os', grouping(runtime_version) = 0, 'runtimes', 'summary') AS kind,
@@ -235,7 +314,7 @@ func completeErrorBreakdown(segments []ErrorBreakdown, total uint64) []ErrorBrea
 }
 
 func (e *Explorer) readErrorOccurrences(ctx context.Context, appID, key string, query ErrorDetailsQuery, details *ErrorDetails) error {
-	source, args := errorsSource(appID, query.ExplorerQuery, query.Fatality, []string{key})
+	source, args := errorDetailsSource(appID, key, query)
 	cursor := sqlFragment("")
 	selectedArgs := []any{key}
 	if query.Cursor != nil {
@@ -244,8 +323,17 @@ func (e *Explorer) readErrorOccurrences(ctx context.Context, appID, key string, 
 	}
 	selectedArgs = append(selectedArgs, query.Limit+1)
 	// Only fetch body/attributes for the selected keys. Large stack payloads
-	// never enter the aggregation for every occurrence in the 31-day window.
-	where, payloadArgs := errorsTelemetryWhere(query.ExplorerQuery)
+	// never enter the aggregation for every occurrence of the group.
+	var where sqlFragment
+	var payloadArgs []any
+	if query.Global {
+		where, payloadArgs = errorsSnapshotWhere(query.AsOf)
+		scoped, scopedArgs := errorsScope(appID, []string{key})
+		where += scoped
+		payloadArgs = append(payloadArgs, scopedArgs...)
+	} else {
+		where, payloadArgs = errorsTelemetryWhere(query.ExplorerQuery)
+	}
 	sql := sqlf(`WITH %s,
  selected_occurrences AS (
  SELECT event_key FROM errors_source WHERE group_key = ? %s

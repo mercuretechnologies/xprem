@@ -13,13 +13,15 @@ import { EnterpriseExplainerDialog } from '@/ee/components/EnterpriseExplainerDi
 import { EnterpriseFeature } from '@/ee/lib/enterpriseFeatures';
 
 // Wraps an enterprise-only block. With a valid license the children render
-// untouched; without one a panel naming the feature takes their place.
+// untouched; without one `fallback`, or a panel naming the feature, takes their place.
 export const EnterpriseFeatureGate = ({
   children,
   feature,
+  fallback,
 }: {
   children: ReactNode;
   feature: EnterpriseFeature;
+  fallback?: ReactNode;
 }) => {
   const [isExplainerOpen, setIsExplainerOpen] = useState(false);
 
@@ -33,6 +35,9 @@ export const EnterpriseFeatureGate = ({
   }
   if (licenseQuery.data?.valid) {
     return <>{children}</>;
+  }
+  if (fallback) {
+    return <>{fallback}</>;
   }
 
   return (

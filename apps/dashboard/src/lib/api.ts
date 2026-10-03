@@ -745,12 +745,15 @@ export type ErrorBreakdownSegment = {
   osVersion?: string;
 };
 export type ObserveErrorDetailsQuery = ObserveQuery & {
+  scope?: 'all';
+  asOf?: string;
   fatality?: ErrorFatality;
   limit?: number;
   cursor?: string;
 };
 export type ObserveErrorDetails = {
   available: boolean;
+  asOf?: string;
   from: string;
   to: string;
   bucketSeconds: number;

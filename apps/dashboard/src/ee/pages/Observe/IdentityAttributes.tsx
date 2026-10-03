@@ -22,6 +22,7 @@ import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
 import { identityAttributesFeature } from '@/ee/lib/enterpriseFeatures';
+import { AttributesPitch } from './AttributesPitch';
 
 type Draft = {
   originalKey?: string;
@@ -83,7 +84,7 @@ export const IdentityAttributes = () => {
 
   return (
     <div className="space-y-5">
-      <EnterpriseFeatureGate feature={identityAttributesFeature}>
+      <EnterpriseFeatureGate feature={identityAttributesFeature} fallback={<AttributesPitch />}>
         <section className="overflow-hidden rounded-xl border bg-card shadow-card">
           <div className="flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl">
@@ -134,8 +135,8 @@ export const IdentityAttributes = () => {
               </div>
               <h3 className="mt-4 text-sm font-medium">Could not load Identity attributes</h3>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                The server did not answer, so the declared keys are unknown. This is not the same
-                as an empty allowlist.
+                The server did not answer, so the declared keys are unknown. This is not the same as
+                an empty allowlist.
               </p>
             </div>
           )}

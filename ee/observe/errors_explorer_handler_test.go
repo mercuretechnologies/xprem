@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"log"
 	"net/http"
+	"net/url"
 	"testing"
+	"time"
 	"xprem/ee/licensing"
 )
 
@@ -24,10 +26,10 @@ func TestErrorsHandlerRechecksLicenseBeforeReader(t *testing.T) {
 	handler.licenseValid = func() bool { checks++; return valid }
 	require.Equal(t, http.StatusOK, serveExplorer(handler, "/observe/errors").Code)
 	valid = false
-	for _, path := range []string{"/observe/errors", "/observe/errors/groups/error-id"} {
+	for _, path := range []string{"/observe/errors", "/observe/errors/groups/error-id", "/observe/errors/groups/error-id?scope=all"} {
 		require.Equal(t, http.StatusForbidden, serveExplorer(handler, path).Code)
 	}
-	require.Equal(t, 3, checks)
+	require.Equal(t, 4, checks)
 	require.Equal(t, 1, reader.errorsCalls, "a reader may cache the initial answer; loss of license must prevent subsequent reads")
 }
 
@@ -53,6 +55,42 @@ func TestErrorsHandlerSharedFiltersAndPagination(t *testing.T) {
 	require.Equal(t, reader.errorsQuery.From, reader.errorDetailsQuery.From)
 	require.Equal(t, reader.errorsQuery.To, reader.errorDetailsQuery.To)
 	require.Equal(t, reader.errorsQuery.Platform, reader.errorDetailsQuery.Platform)
+}
+
+func TestGlobalErrorDetailsIgnoresListPeriodAndFilters(t *testing.T) {
+	reader := &recordingExplorer{}
+	handler := NewExplorerHandler(reader, nil)
+	handler.licenseValid = func() bool { return true }
+	response := serveExplorer(handler, "/observe/errors/groups/group-id?scope=all&from=invalid&to=invalid&platform=windows&attr=invalid&fatality=invalid&limit=25")
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Equal(t, "group-id", reader.errorDetailsID)
+	require.Equal(t, ExplorerQuery{}, reader.errorDetailsQuery.ExplorerQuery)
+	require.Empty(t, reader.errorDetailsQuery.Fatality)
+	require.Equal(t, 25, reader.errorDetailsQuery.Limit)
+	require.True(t, reader.errorDetailsQuery.Global)
+}
+
+func TestGlobalErrorDetailsHandlerValidatesSnapshotPagination(t *testing.T) {
+	reader := &recordingExplorer{}
+	handler := NewExplorerHandler(reader, nil)
+	handler.licenseValid = func() bool { return true }
+	path := "/observe/errors/groups/group-id?scope=all"
+	require.Equal(t, http.StatusBadRequest, serveExplorer(handler, "/observe/errors/groups/group-id?scope=invalid").Code)
+	cursor := EncodeLogCursor(LogCursor{Timestamp: time.Now().UTC(), EventKey: "123"})
+	for _, suffix := range []string{
+		"&limit=101", "&cursor=invalid", "&cursor=" + cursor,
+		"&asOf=invalid", "&asOf=" + url.QueryEscape(time.Now().Add(time.Hour).Format(time.RFC3339Nano)),
+	} {
+		require.Equal(t, http.StatusBadRequest, serveExplorer(handler, path+suffix).Code)
+	}
+	require.Zero(t, reader.errorsCalls)
+	asOf := time.Now().UTC().Add(-time.Minute)
+	response := serveExplorer(handler, path+"&limit=100&cursor="+cursor+"&asOf="+url.QueryEscape(asOf.Format(time.RFC3339Nano)))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.True(t, reader.errorDetailsQuery.Global)
+	require.True(t, asOf.Equal(reader.errorDetailsQuery.AsOf))
+	require.NotNil(t, reader.errorDetailsQuery.Cursor)
+	require.Equal(t, 100, reader.errorDetailsQuery.Limit)
 }
 
 func TestErrorsHandlersRejectInvalidQueriesBeforeRead(t *testing.T) {

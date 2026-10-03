@@ -70,6 +70,154 @@ func TestErrorDetailsCacheKeyUsesCursorValues(t *testing.T) {
 	require.NotEqual(t, key, errorDetailsReadCacheKey("app", "error", query))
 }
 
+func TestGlobalErrorDetailsValidatesSnapshotAndCursor(t *testing.T) {
+	id := encodeErrorID("g:" + uuid.NewString())
+	cursor := &LogCursor{Timestamp: time.Now().UTC(), EventKey: uuid.NewString()}
+	for _, query := range []ErrorDetailsQuery{
+		{Global: true, Cursor: cursor},
+		{Global: true, AsOf: time.Now().Add(time.Hour)},
+		{Global: true, AsOf: time.Unix(-1, 0)},
+		{Global: true, AsOf: time.Now().UTC(), Cursor: &LogCursor{EventKey: uuid.NewString()}},
+		{Global: true, Limit: 101},
+	} {
+		_, err := (*Explorer)(nil).ReadErrorDetails(context.Background(), uuid.NewString(), id, query)
+		require.ErrorIs(t, err, ErrInvalidErrorsQuery)
+	}
+	zone := time.FixedZone("UTC+1", 3600)
+	asOf := time.Now().Add(-time.Minute).In(zone)
+	details, err := (*Explorer)(nil).ReadErrorDetails(context.Background(), uuid.NewString(), id, ErrorDetailsQuery{Global: true, AsOf: asOf})
+	require.NoError(t, err)
+	require.NotNil(t, details.AsOf)
+	require.Equal(t, asOf.UTC().Truncate(time.Second), *details.AsOf)
+}
+
+func TestGlobalErrorDetailsReadsRetainedGroupWithStableSnapshot(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+	explorer := &Explorer{clickhouse: engine}
+	app, otherApp, updateA, updateB, deviceA, deviceB, group := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	attrs := map[string]any{"exception.type": "Error", "exception.message": "render crash"}
+	fixture := []LogRow{
+		errorLogRow(app, updateA, deviceA, attrs, 17, false, now.Add(-400*24*time.Hour)),
+		errorLogRow(app, updateA, deviceB, attrs, 21, true, now.Add(-time.Hour)),
+		// All retained events count, including an SDK clock ahead of the server.
+		errorLogRow(app, updateB, deviceA, attrs, 17, false, now.Add(time.Hour)),
+	}
+	for i := range fixture {
+		fixture[i].Platform = "ios"
+		fixture[i].DeviceModel = fmt.Sprintf("Phone-%d", i%2)
+		fixture[i].RuntimeVersion = fmt.Sprintf("runtime-%d", i%2)
+	}
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, append(fixture, fixture[0])))
+	foreign := fixture[2]
+	foreign.AppID, foreign.ContentKey, foreign.Timestamp = otherApp, uuid.New(), now.Add(2*time.Hour)
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, []LogRow{foreign}))
+	// Ingestion has second precision: place the retained fixture before the
+	// snapshot's completed-second boundary, without waiting for the clock.
+	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
+		SELECT * REPLACE (toDateTime(?) AS ingested_at) FROM observe_logs WHERE app_id IN (?, ?)`, now.Add(-time.Minute), app, otherApp))
+	require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
+		errorKey:   errorKey{appID: otherApp, updateID: updateB, fingerprint: foreign.ErrorFingerprint.String()},
+		ErrorGroup: ErrorGroup{GroupFingerprint: group, ErrorType: "Error", Message: "other app", SymbolicatedAt: now.Add(-time.Hour)},
+	}}))
+	for _, update := range []string{updateA, updateB} {
+		require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
+			errorKey:   errorKey{appID: app, updateID: update, fingerprint: fixture[0].ErrorFingerprint.String()},
+			ErrorGroup: ErrorGroup{GroupFingerprint: group, ErrorType: "Error", Message: "render crash", SymbolicatedAt: now.Add(-time.Hour)},
+		}}))
+	}
+	oldKey, err := json.Marshal([]string{updateA, fixture[0].ErrorFingerprint.String(), "", "", "", "", "", "v1"})
+	require.NoError(t, err)
+	oldID := encodeErrorID("f:" + string(oldKey))
+	tracked := &errorsMeasuredConn{Conn: engine.Conn}
+	explorer.clickhouse = &clickhouse.Engine{Conn: tracked}
+	asOf := time.Now().UTC().Truncate(time.Second)
+	query := ErrorDetailsQuery{
+		Global: true, AsOf: asOf, Limit: 2, Fatality: "invalid",
+		ExplorerQuery: ExplorerQuery{From: now, To: now, Platform: []string{"android"}, UpdateIDs: []string{uuid.NewString()}, DeviceModels: []string{"never"}},
+	}
+	details, err := explorer.readErrorDetails(ctx, app, oldID, query)
+	require.NoError(t, err)
+	require.NotNil(t, details.Summary)
+	require.Equal(t, encodeErrorID("g:"+group), details.Summary.ErrorID, "an old fallback resolves without inherited filters")
+	require.EqualValues(t, 3, details.Summary.Occurrences, "retries count once and events older than 31 days remain included")
+	require.EqualValues(t, 2, details.Summary.ImpactedDevices)
+	require.EqualValues(t, 1, details.Summary.CrashOccurrences)
+	require.True(t, details.Summary.FirstSeen.Equal(fixture[0].Timestamp))
+	require.True(t, details.Summary.LastSeen.Equal(fixture[2].Timestamp))
+	require.NotNil(t, details.AsOf)
+	require.True(t, details.AsOf.Equal(asOf))
+	require.LessOrEqual(t, len(details.Series), maxErrorsBuckets)
+	var seriesTotal uint64
+	for _, point := range details.Series {
+		seriesTotal += point.Count
+	}
+	require.Equal(t, details.Summary.Occurrences, seriesTotal)
+	require.Len(t, details.Updates, 2)
+	require.Len(t, details.DeviceModels, 2)
+	require.Len(t, details.Runtimes, 2)
+	require.Len(t, details.Occurrences, 2)
+	require.NotEmpty(t, details.NextCursor)
+	require.Equal(t, fixture[2].ContentKey.String(), details.RepresentativeOccurrence.EventKey, "the globally latest event is selected by default")
+	require.Len(t, tracked.calls, 4, "fallback resolution plus one extent, one aggregate and one bounded payload query")
+	for _, call := range tracked.calls[1:] {
+		require.Contains(t, call.sql, "l.ingested_at < fromUnixTimestamp64Nano(?)")
+		require.Contains(t, call.sql, "group_fingerprint IN ?", "raw scans are narrowed to candidate group keys")
+	}
+
+	// The existing API still reads only the requested period and filters.
+	windowed, err := explorer.readErrorDetails(ctx, app, details.Summary.ErrorID, ErrorDetailsQuery{
+		ExplorerQuery: ExplorerQuery{From: now.Add(-2 * time.Hour), To: now, Platform: []string{"ios"}}, Fatality: "fatal",
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, windowed.Summary.Occurrences)
+	require.Nil(t, windowed.AsOf)
+
+	// A backdated event arriving in the snapshot's current second must not
+	// change later pages, even though ingestion stores no subsecond precision.
+	require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
+		(app_id, update_id, eas_client_id, session_id, timestamp, ingested_at, content_key,
+		 event_name, severity_number, attributes, error_fingerprint)
+		VALUES (?, ?, ?, ?, ?, fromUnixTimestamp64Nano(?), ?, 'js.exception', 17, ?, ?)`,
+		app, updateA, deviceB, uuid.NewString(), now.Add(-100*24*time.Hour), asOf.UnixNano(),
+		uuid.NewString(), fixture[0].Attributes, fixture[0].ErrorFingerprint))
+	// Latest mapping metadata remains readable after replacing rows merge;
+	// the snapshot freezes log ingestion, not historical mapping versions.
+	require.NoError(t, explorer.writeErrorGroups(ctx, []groupedError{{
+		errorKey:   errorKey{appID: app, updateID: updateB, fingerprint: fixture[0].ErrorFingerprint.String()},
+		ErrorGroup: ErrorGroup{GroupFingerprint: group, ErrorType: "Error", Message: "updated title", SymbolicatedAt: asOf.Add(time.Hour)},
+	}}))
+	require.NoError(t, engine.Conn.Exec(ctx, "OPTIMIZE TABLE error_groups FINAL"))
+	cursor, err := DecodeLogCursor(details.NextCursor)
+	require.NoError(t, err)
+	query.Cursor = cursor
+	second, err := explorer.readErrorDetails(ctx, app, oldID, query)
+	require.NoError(t, err)
+	require.NotNil(t, second.Summary)
+	require.Equal(t, details.Summary.Occurrences, second.Summary.Occurrences)
+	require.Equal(t, "updated title", second.Summary.Message)
+	require.Len(t, second.Occurrences, 1)
+	require.Equal(t, fixture[0].ContentKey.String(), second.Occurrences[0].EventKey)
+	require.Empty(t, second.NextCursor)
+	unknown, err := explorer.readErrorDetails(ctx, app, encodeErrorID("g:"+uuid.NewString()), ErrorDetailsQuery{Global: true})
+	require.NoError(t, err)
+	require.Nil(t, unknown.Summary)
+	require.Empty(t, unknown.Series)
+	require.NotNil(t, unknown.AsOf)
+	singleton, err := explorer.readErrorDetails(ctx, otherApp, encodeErrorID("g:"+group), ErrorDetailsQuery{Global: true, AsOf: asOf})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, singleton.Summary.Occurrences, "identical group/update/raw keys in another app remain isolated")
+	require.Equal(t, foreign.ContentKey.String(), singleton.RepresentativeOccurrence.EventKey)
+	require.Len(t, singleton.Series, 2)
+	require.EqualValues(t, 1, singleton.Series[0].Count)
+	require.GreaterOrEqual(t, singleton.To.Sub(singleton.From), time.Second, "a singleton has a usable chart domain")
+}
+
 func TestErrorsLiveReconcilesCountsFiltersAndCursor(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)

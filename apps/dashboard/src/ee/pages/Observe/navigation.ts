@@ -65,15 +65,6 @@ export const observeNavigation: Array<{
     scopes: ['telemetry', 'timings'],
   },
   {
-    value: 'errors',
-    permission: 'observe:read',
-    label: 'Errors',
-    question: 'Which errors affect devices, and where do they happen?',
-    icon: Bug,
-    scopes: ['telemetry'],
-    enterprise: true,
-  },
-  {
     value: 'events',
     permission: 'observe:read',
     label: 'Events',
@@ -81,6 +72,15 @@ export const observeNavigation: Array<{
     icon: MousePointerClick,
     scopes: ['telemetry'],
     minimumSdk: 56,
+  },
+  {
+    value: 'errors',
+    permission: 'observe:read',
+    label: 'Errors',
+    question: 'Which errors affect devices, and where do they happen?',
+    icon: Bug,
+    scopes: ['telemetry'],
+    enterprise: true,
   },
   {
     value: 'devices',

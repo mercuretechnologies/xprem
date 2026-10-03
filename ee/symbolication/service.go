@@ -236,7 +236,7 @@ func (s *Service) buildIndex(ctx context.Context, appId, hash string, rebuild bo
 		}
 		if exists {
 			outcome, err := s.existingIndex(ctx, appId, hash)
-			// An index of an older format is written again.
+			// An index of an unsupported format is written again.
 			if !errors.Is(err, ErrInvalidIndex) {
 				return outcome, err
 			}

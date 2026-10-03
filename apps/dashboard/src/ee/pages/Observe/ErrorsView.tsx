@@ -9,6 +9,7 @@ import {
   AlertCircle,
   ArrowDownWideNarrow,
   Bug,
+  ChevronDown,
   ChevronRight,
   Code2,
   Loader2,
@@ -31,15 +32,21 @@ export const ErrorFatalitySelect = ({
   value: ErrorFatality;
   onChange: (value: ErrorFatality) => void;
 }) => (
-  <select
-    aria-label="Error fatality"
-    value={value}
-    onChange={event => onChange(event.target.value as ErrorFatality)}
-    className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
-    <option value="all">All errors</option>
-    <option value="fatal">Fatal only</option>
-    <option value="nonfatal">Non-fatal only</option>
-  </select>
+  <div className="relative">
+    <select
+      aria-label="Error fatality"
+      value={value}
+      onChange={event => onChange(event.target.value as ErrorFatality)}
+      className="h-9 appearance-none rounded-md border border-input bg-card pl-3 pr-9 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
+      <option value="all">All errors</option>
+      <option value="fatal">Fatal only</option>
+      <option value="nonfatal">Non-fatal only</option>
+    </select>
+    <ChevronDown
+      aria-hidden="true"
+      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+    />
+  </div>
 );
 
 export const ErrorsView = ({ filters }: { filters: ObserveFilters }) => {
@@ -48,7 +55,7 @@ export const ErrorsView = ({ filters }: { filters: ObserveFilters }) => {
   const search = params.get('errorSearch') ?? '';
   const sortParam = params.get('errorSort');
   const sort: ErrorSort =
-    sortParam === 'impactedDevices' || sortParam === 'lastSeen' ? sortParam : 'occurrences';
+    sortParam === 'occurrences' || sortParam === 'impactedDevices' ? sortParam : 'lastSeen';
   // Remount pagination and selection when the question changes. A live tick
   // alone keeps the page being read; a filter edit starts again at the head.
   const signature = JSON.stringify([
@@ -169,11 +176,15 @@ const ErrorsList = ({
             aria-label="Sort errors"
             value={sort}
             onChange={event => write('errorSort', event.target.value)}
-            className="h-9 rounded-md border border-input bg-card pl-9 pr-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
+            className="h-9 appearance-none rounded-md border border-input bg-card pl-9 pr-9 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20">
+            <option value="lastSeen">Last seen</option>
             <option value="occurrences">Most occurrences</option>
             <option value="impactedDevices">Most impacted devices</option>
-            <option value="lastSeen">Last seen</option>
           </select>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
         </div>
       </header>
       {query.isPending && (
@@ -233,7 +244,7 @@ const ErrorsList = ({
                   className="group border-b border-border/70 last:border-0 hover:bg-primary/[0.035] focus-within:bg-primary/[0.035]">
                   <td className="w-full min-w-80 max-w-lg px-4 py-4">
                     <Link
-                      to={errorDetailsHref(error.errorId, params, page)}
+                      to={errorDetailsHref(error.errorId)}
                       state={{ errorsSearch: params.toString() }}
                       className="flex items-center gap-4 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
                       <span className="min-w-0 flex-1">

@@ -4,46 +4,55 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { errorDetailsHref, errorsListHref } from './errorNavigation';
+import { errorDetailsHref, errorsListHref, errorsListParams } from './errorNavigation';
 
-test('opening a live error uses a dedicated route and freezes the response window', () => {
+test('opening an error uses its canonical global route and keeps list context in state', () => {
   const listParams = new URLSearchParams(
     'channel=staging&channel=preview&period=7d&live=1&errorSearch=Checkout&errorFatality=fatal&errorSort=lastSeen'
   );
   const original = listParams.toString();
-  const responseWindow = { from: '2026-09-26T11:00:00Z', to: '2026-10-03T11:04:08.123456789Z' };
-  const destination = new URL(
-    errorDetailsHref('g:checkout', listParams, responseWindow),
-    'https://dashboard.test'
-  );
+  const destination = new URL(errorDetailsHref('g:checkout'), 'https://dashboard.test');
   assert.equal(decodeURIComponent(destination.pathname), '/observe/errors/g:checkout');
-  assert.equal(destination.searchParams.get('from'), responseWindow.from);
-  assert.equal(destination.searchParams.get('to'), responseWindow.to);
-  assert.equal(destination.searchParams.get('live'), '0');
-  assert.equal(destination.searchParams.has('period'), false);
-  assert.equal(destination.searchParams.has('errorId'), false);
-  assert.deepEqual(destination.searchParams.getAll('channel'), ['staging', 'preview']);
-  assert.equal(destination.searchParams.get('errorFatality'), 'fatal');
+  assert.equal(destination.search, '');
   assert.equal(
     listParams.toString(),
     original,
     'the list URL must stay intact for return navigation'
   );
-  assert.equal(errorsListHref(listParams), `/observe/errors?${original}`);
+  assert.equal(
+    errorsListHref(errorsListParams({ errorsSearch: original })),
+    `/observe/errors?${original}`
+  );
 });
 
-test('legacy detail links keep their context and remove the old query identifier', () => {
+test('legacy list detail links remove query filters and restore them only on return', () => {
   const params = new URLSearchParams('errorId=f:checkout&device=known-device&from=now-30d&to=now');
-  const destination = new URL(
-    errorDetailsHref(params.get('errorId')!, params),
+  const destination = new URL(errorDetailsHref(params.get('errorId')!), 'https://dashboard.test');
+  assert.equal(decodeURIComponent(destination.pathname), '/observe/errors/f:checkout');
+  assert.equal(destination.search, '');
+  assert.equal(
+    errorsListHref(errorsListParams({ errorsSearch: params.toString() })),
+    '/observe/errors?device=known-device&from=now-30d&to=now'
+  );
+});
+
+test('old detail links canonicalize without turning URL filters into list state', () => {
+  const old = new URL(
+    '/observe/errors/g%3Acheckout?from=2026-09-26T12%3A00%3A00Z&to=2026-10-03T12%3A20%3A19.694Z&live=0&errorFatality=fatal',
     'https://dashboard.test'
   );
-  assert.equal(decodeURIComponent(destination.pathname), '/observe/errors/f:checkout');
-  assert.equal(destination.searchParams.has('errorId'), false);
-  assert.equal(destination.searchParams.get('device'), 'known-device');
-  assert.equal(destination.searchParams.get('from'), 'now-30d');
-  assert.equal(destination.searchParams.get('live'), '0');
-  assert.equal(errorsListHref(params), '/observe/errors?device=known-device&from=now-30d&to=now');
+  const errorId = decodeURIComponent(old.pathname.split('/').pop()!);
+  assert.equal(errorDetailsHref(errorId), '/observe/errors/g%3Acheckout');
+  assert.equal(errorsListHref(errorsListParams(null)), '/observe/errors');
+  assert.equal(errorsListHref(errorsListParams({})), '/observe/errors');
+  assert.equal(errorsListHref(errorsListParams({ errorsSearch: 123 })), '/observe/errors');
+});
+
+test('detail paths encode identifiers and never include list query parameters', () => {
+  assert.equal(
+    errorDetailsHref('g:checkout/failed?channel=staging'),
+    '/observe/errors/g%3Acheckout%2Ffailed%3Fchannel%3Dstaging'
+  );
 });
 
 test('breakdown navigation filters the list while preserving its other filters', () => {

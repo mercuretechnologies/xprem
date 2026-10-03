@@ -31,6 +31,9 @@ const ErrorsView = lazy(() =>
 const ErrorDetailsView = lazy(() =>
   import('./ErrorDetailsView').then(module => ({ default: module.ErrorDetailsView }))
 );
+const ErrorTrackingPitch = lazy(() =>
+  import('./ErrorTrackingPitch').then(module => ({ default: module.ErrorTrackingPitch }))
+);
 const DevicesView = lazy(() =>
   import('./DevicesView').then(module => ({ default: module.DevicesView }))
 );
@@ -53,20 +56,16 @@ export const Observe = () => {
 
   // One canonical URL per page, so the sidebar can highlight on an exact
   // match and a pasted link always points at a page that exists. The query
-  // string carries the filters and must survive redirects.
-  // Older shared links used a query identifier inside the error list.
+  // string carries list filters and must survive page redirects. Global error
+  // details keep the list selection only in navigation state.
   const legacyErrorId = requested === 'errors' ? params.get('errorId') : null;
   if (legacyErrorId) {
     return (
-      <Navigate
-        to={errorDetailsHref(legacyErrorId, params)}
-        state={{ errorsSearch: search }}
-        replace
-      />
+      <Navigate to={errorDetailsHref(legacyErrorId)} state={{ errorsSearch: search }} replace />
     );
   }
-  if (errorId && params.get('live') !== '0') {
-    return <Navigate to={errorDetailsHref(errorId, params)} state={state} replace />;
+  if (errorId && search) {
+    return <Navigate to={errorDetailsHref(errorId)} state={state} replace />;
   }
   if (requested === undefined && !errorId) {
     return <Navigate to={`/observe/overview${search}`} replace />;
@@ -113,12 +112,11 @@ export const Observe = () => {
           {page.value === 'overview' && <OverviewView filters={filters} />}
           {page.value === 'metrics' && <MetricsView filters={filters} />}
           {page.value === 'errors' && (
-            <EnterpriseFeatureGate feature={errorTrackingFeature}>
+            <EnterpriseFeatureGate feature={errorTrackingFeature} fallback={<ErrorTrackingPitch />}>
               {errorId ? (
                 <ErrorDetailsView
-                  key={JSON.stringify([api.getAppId(), errorId, search])}
+                  key={JSON.stringify([api.getAppId(), errorId])}
                   errorId={errorId}
-                  filters={filters}
                 />
               ) : (
                 <ErrorsView filters={filters} />
