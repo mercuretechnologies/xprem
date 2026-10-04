@@ -265,8 +265,14 @@ func (s *Service) buildIndex(ctx context.Context, appId, hash string, rebuild bo
 	if len(data) > maxMapSize {
 		return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: map %s exceeds %d MB", types.SourcemapIndexReasonMapTooLarge, hash, maxMapSize>>20))
 	}
-	m, err := Parse(data)
+	m, err := parseMap(ctx, data, maxIndexCacheBytes)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return indexOutcome{}, err
+		}
+		if errors.Is(err, errMapBudget) {
+			return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonIndexTooLarge, err))
+		}
 		return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonMapInvalid, err))
 	}
 	if IndexSize(m) > maxIndexCacheBytes {

@@ -91,7 +91,16 @@ type span struct{ offset, length uint32 }
 
 // IndexSize is the size in bytes of the index WriteIndex writes for m.
 func IndexSize(m *Map) int {
-	size := headerSize + len(encodeTables(m, encodeStrings(m.Sources), encodeStrings(m.Names))) + segmentSize*len(m.Segments)
+	// Measure the tables without constructing them: this is also the worker's
+	// resource check before it allocates the serialized index.
+	size := headerSize + 16 + 4*(len(m.Sources)+len(m.Names)) + len(m.Ignored) +
+		8*((len(m.Segments)+fenceStride-1)/fenceStride) + 8*len(m.Sources) + segmentSize*len(m.Segments)
+	for _, source := range m.Sources {
+		size += len(source)
+	}
+	for _, name := range m.Names {
+		size += len(name)
+	}
 	for _, content := range m.SourcesContent {
 		size += len(content)
 	}

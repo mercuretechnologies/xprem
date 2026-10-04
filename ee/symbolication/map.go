@@ -7,7 +7,7 @@
 package symbolication
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -55,17 +55,15 @@ type rawMap struct {
 
 // Parse decodes a source map. Any shape the index cannot use is ErrInvalidMap.
 func Parse(data []byte) (*Map, error) {
-	var raw rawMap
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidMap, err)
+	return parseMap(context.Background(), data, maxIndexCacheBytes)
+}
+
+func parseMap(ctx context.Context, data []byte, maxDecodedBytes int) (*Map, error) {
+	raw, budget, err := readMap(ctx, data, maxDecodedBytes)
+	if err != nil {
+		return nil, err
 	}
-	if raw.Version != 3 {
-		return nil, fmt.Errorf("%w: version %d, expected 3", ErrInvalidMap, raw.Version)
-	}
-	if raw.Mappings == "" {
-		return nil, fmt.Errorf("%w: no mappings", ErrInvalidMap)
-	}
-	segments, err := decodeMappings(raw.Mappings, len(raw.Sources), len(raw.Names))
+	segments, err := decodeMappings(ctx, raw.Mappings, len(raw.Sources), len(raw.Names), budget/segmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +106,29 @@ var base64Values = func() [256]int8 {
 // decodeMappings turns the VLQ string into absolute segments, in generated
 // order, which is the order the string lists them in: "," ends a segment
 // and ";" ends a generated line.
-func decodeMappings(mappings string, sources, names int) ([]Segment, error) {
-	segments := make([]Segment, 0, len(mappings)/5)
+func decodeMappings(ctx context.Context, mappings string, sources, names, maxSegments int) ([]Segment, error) {
+	count, err := countSegments(ctx, mappings, maxSegments)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	segments := make([]Segment, 0, count)
+	var fields [5]int64
 	var totals runningTotals
 	line, start := uint32(0), 0
 	for i := 0; i <= len(mappings); i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if i < len(mappings) && mappings[i] != ',' && mappings[i] != ';' {
 			continue
 		}
 		if encoded := mappings[start:i]; encoded != "" {
-			deltas, err := decodeVLQ(encoded)
+			deltas, err := decodeVLQInto(encoded, &fields)
 			if err != nil {
 				return nil, err
 			}
@@ -139,7 +150,13 @@ func decodeMappings(mappings string, sources, names int) ([]Segment, error) {
 
 // decodeVLQ reads the numbers of one segment, such as "SAAS" into 9, 0, 0, 9.
 func decodeVLQ(encoded string) ([]int64, error) {
-	var numbers []int64
+	var fields [5]int64
+	return decodeVLQInto(encoded, &fields)
+}
+
+// decodeVLQInto reuses five fields instead of allocating for every segment.
+func decodeVLQInto(encoded string, fields *[5]int64) ([]int64, error) {
+	numbers := fields[:0]
 	var value int64
 	shift := uint(0)
 	for i := 0; i < len(encoded); i++ {
