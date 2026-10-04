@@ -340,7 +340,7 @@ SELECT b.id, b.app_identifier_id, b.artifact_type
 FROM builds b LEFT JOIN build_staging_sweeps s ON s.build_id = b.id
 WHERE b.updated_at < now() - $1::interval
   AND b.status IN ('ready', 'failed', 'uploading')
-  AND (s.build_id IS NULL OR (b.status <> 'ready' AND s.swept_at < now() - $1::interval))
+  AND (s.build_id IS NULL OR (b.status <> 'ready' AND s.swept_at < b.updated_at))
 ORDER BY b.created_at, b.id LIMIT $2 FOR UPDATE OF b SKIP LOCKED
 `
 

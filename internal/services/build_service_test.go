@@ -544,6 +544,7 @@ func TestBuildLifecycleStartUploadComplete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.BuildStatusUploading, retry.Build.Status)
 	require.NotEmpty(t, retry.Upload.Headers[bucket.LocalUploadTokenHeader], "an identical retry gets a fresh upload grant")
+	require.True(t, retry.Build.UpdatedAt.After(registration.Build.UpdatedAt), "the fresh grant restarts the staging sweep's clock")
 
 	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, testBuildID)
 	require.ErrorIs(t, err, ErrBuildIntegrity, "nothing staged yet")

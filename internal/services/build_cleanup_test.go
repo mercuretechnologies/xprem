@@ -282,11 +282,15 @@ func TestBuildStagingSweepOnlyTouchesStaleStaging(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, count, "swept builds are not visited again")
 
-	_, err = pool.Exec(ctx, "UPDATE build_staging_sweeps SET swept_at = now() - interval '2 days' WHERE build_id = ANY($1)", []string{oldReady.BuildID, oldUploading.BuildID})
+	// Days later, only a build that changed after its sweep, such as one handed
+	// a new upload grant, is swept again.
+	_, err = pool.Exec(ctx, "UPDATE build_staging_sweeps SET swept_at = now() - interval '2 days' WHERE build_id = ANY($1)", []string{oldReady.BuildID, oldFailed.BuildID, oldUploading.BuildID})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, "UPDATE builds SET updated_at = now() - interval '3 days' WHERE id = ANY($1)", []string{oldReady.BuildID, oldFailed.BuildID})
 	require.NoError(t, err)
 	count, err = cleanup.SweepStaging(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, count, "only a build that can still receive uploads is swept again")
+	require.Equal(t, 1, count, "a build untouched since its sweep is not visited again")
 	_, uploadingStaging := keysOf(t, oldUploading)
 	require.Equal(t, uploadingStaging, deleter.keys()[len(deleter.keys())-1])
 }

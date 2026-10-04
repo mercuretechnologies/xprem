@@ -328,6 +328,11 @@ func (s *BuildService) RegisterArtifact(ctx context.Context, appID, identifierID
 				if !sameArtifact(current, *record) || !current.Metadata.FinishedAt.Equal(record.Metadata.FinishedAt) {
 					return nil, ErrBuildConflict
 				}
+				if current.Status == types.BuildStatusUploading {
+					// The fresh upload grant below restarts the staging sweep's clock.
+					next := current
+					return &next, nil
+				}
 				return nil, nil
 			}
 		})
