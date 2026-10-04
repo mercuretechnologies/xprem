@@ -32,7 +32,8 @@ export const pointDescription = (
   point: TimeSeriesPoint,
   label: string,
   formatValue: (value: number) => string,
-  formatTimestamp: (date: Date) => string
+  formatTimestamp: (date: Date) => string,
+  latestInterval = false
 ) => {
   const period =
     point.intervalStart && point.intervalEnd
@@ -40,6 +41,7 @@ export const pointDescription = (
       : formatTimestamp(point.timestamp);
   return [
     label,
+    latestInterval ? 'Latest interval' : null,
     period,
     `${point.intervalStart ? 'Median (p50) ' : ''}${formatValue(point.value)}`,
     pointSampleSize(point),

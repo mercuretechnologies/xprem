@@ -141,7 +141,7 @@ const PointGlyph = ({
   x,
   y,
   color,
-  single,
+  prominent,
   opacity = 1,
   ariaLabel,
   onFocus,
@@ -153,7 +153,7 @@ const PointGlyph = ({
   x: number;
   y: number;
   color: string;
-  single: boolean;
+  prominent: boolean;
   opacity?: number;
   ariaLabel?: string;
 } & Pick<
@@ -180,12 +180,12 @@ const PointGlyph = ({
     <circle
       cx={x}
       cy={y}
-      r={single ? 6 : 3.5}
+      r={prominent ? 6 : 3.5}
       fill="hsl(var(--background))"
       stroke={color}
-      strokeWidth={single ? 2 : 1.5}
+      strokeWidth={prominent ? 2 : 1.5}
     />
-    {single && <circle cx={x} cy={y} r={2.25} fill={color} />}
+    {prominent && <circle cx={x} cy={y} r={2.25} fill={color} />}
   </g>
 );
 
@@ -477,12 +477,19 @@ export const TimeSeriesChart = ({
                           x={x}
                           y={y}
                           color={item.color}
-                          single={item.points.length === 1}
+                          prominent={
+                            item.points.length === 1 ||
+                            (showPoints && datum === item.points[item.points.length - 1])
+                          }
                           opacity={dimmed(item.key) ? 0.22 : 1}
                           ariaLabel={
                             showPoints
-                              ? pointDescription(datum, item.label, formatValue, date =>
-                                  timestampFormatter.format(date)
+                              ? pointDescription(
+                                  datum,
+                                  item.label,
+                                  formatValue,
+                                  date => timestampFormatter.format(date),
+                                  datum === item.points[item.points.length - 1]
                                 )
                               : undefined
                           }
@@ -569,6 +576,9 @@ export const TimeSeriesChart = ({
                             // where it had none, so a series that misses this
                             // bucket is left out of the tooltip entirely.
                             if (!point || !sameBucket(point, nearest, bucketMs)) return null;
+                            const latest = item.points[item.points.length - 1];
+                            const latestInterval =
+                              showPoints && latest && sameBucket(point, latest, 0);
                             return (
                               <div key={item.key} className="space-y-0.5 text-xs">
                                 <div className="flex items-center justify-between gap-5">
@@ -585,7 +595,9 @@ export const TimeSeriesChart = ({
                                 </div>
                                 {point.intervalStart && (
                                   <div className="flex items-center justify-between gap-5 pl-3 text-[10px] text-muted-foreground">
-                                    <span>Median (p50)</span>
+                                    <span>
+                                      {latestInterval && 'Latest interval · '}Median (p50)
+                                    </span>
                                     <span>{pointSampleSize(point)}</span>
                                   </div>
                                 )}
@@ -621,7 +633,14 @@ export const TimeSeriesChart = ({
                       key={annotation.key}
                       type="button"
                       title={annotation.label}
-                      onClick={() => setOpenAnnotation(annotation)}
+                      data-chart-annotation={gradientPrefix}
+                      aria-expanded={openAnnotation?.key === annotation.key}
+                      aria-haspopup="dialog"
+                      onClick={() =>
+                        setOpenAnnotation(previous =>
+                          previous?.key === annotation.key ? null : annotation
+                        )
+                      }
                       style={position}
                       className={cn(
                         shared,
@@ -663,6 +682,18 @@ export const TimeSeriesChart = ({
             align="center"
             side="bottom"
             sideOffset={6}
+            onInteractOutside={event => {
+              // This chart's marker click owns the toggle. Dismissing on its
+              // pointerdown first would make the subsequent click reopen it.
+              const target = event.detail.originalEvent.target;
+              if (
+                target instanceof Element &&
+                target.closest('[data-chart-annotation]')?.getAttribute('data-chart-annotation') ===
+                  gradientPrefix
+              ) {
+                event.preventDefault();
+              }
+            }}
             className="w-72 overflow-hidden p-0">
             {openAnnotation &&
               renderAnnotationDetails(openAnnotation, () => setOpenAnnotation(null))}

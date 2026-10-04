@@ -701,8 +701,9 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
       {metrics.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
           <p className="max-w-2xl leading-relaxed">
-            Each dot shows the median duration for an interval. Gaps mean no measurements. Hover a
-            dot to see its duration and sample size. Scales adapt to each metric.
+            Each dot shows the median duration for an interval. Filled dots mark the latest
+            interval. Gaps mean no measurements. Hover a dot to see its duration and sample size.
+            Scales adapt to each metric.
             {showPublishes && ' Numbered markers show releases published in this period.'}
           </p>
           <button

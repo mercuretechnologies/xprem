@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { scaleLinear, scaleTime } from '@visx/scale';
+import { metricChartPoints } from '../../pages/Observe/metricChart';
 import {
   linePoints,
   pointDescription,
@@ -152,6 +153,16 @@ test('point descriptions identify the interval and singular or plural measuremen
   );
   assert.match(label, /2026-10-04T09:00:00\.000Z to 2026-10-04T09:15:00\.000Z/);
   assert.match(label, /Cold launch.*Median \(p50\) 0ms.*1 measurement · 1 device/);
+  assert.match(
+    pointDescription(
+      measurement,
+      'Cold launch',
+      value => `${value}ms`,
+      date => date.toISOString(),
+      true
+    ),
+    /Latest interval/
+  );
   assert.equal(
     pointDescription(
       point('2026-10-04T09:00:00Z', 2),
@@ -187,4 +198,79 @@ test('the installed visx nearest-X picker can hover after a lone zero point in t
   });
   assert.equal(picked.datum, measurement);
   assert.equal(picked.datum.value, 0);
+});
+
+test('a thirty-day chart retains the final partial bucket with one submillisecond or zero measurement', () => {
+  const require = createRequire(join(process.cwd(), 'package.json'));
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const visx = dirname(require.resolve('@visx/xychart'));
+  const { BaseGlyphSeries } = require(join(visx, 'components/series/private/BaseGlyphSeries.js'));
+  const DataContext = require(join(visx, 'context/DataContext.js')).default;
+  const window = { from: '2026-09-04T07:15:00Z', to: '2026-10-04T07:15:00Z', bucketSeconds: 21600 };
+  for (const latestValue of [0.000487583, 0]) {
+    const points = metricChartPoints(
+      [
+        { timestamp: '2026-09-05T06:00:00Z', value: 0.4, samples: 2, devices: 1 },
+        { timestamp: '2026-10-03T18:00:00Z', value: 0.001, samples: 1, devices: 1 },
+        { timestamp: '2026-10-04T06:00:00Z', value: latestValue, samples: 1, devices: 1 },
+      ],
+      window
+    );
+    const xScale = scaleTime({
+      domain: [new Date(window.from), new Date(window.to)],
+      range: [42, 690],
+    });
+    const domain = seriesValueDomain(
+      points.map(point => point.value),
+      true
+    );
+    const yScale = scaleLinear({ domain, range: [172, 42], nice: true, zero: domain[0] === 0 });
+    type PlottedGlyph = { key: string; datum: TimeSeriesPoint; x: number; y: number };
+    let plotted: PlottedGlyph[] = [];
+    const rendered = renderToStaticMarkup(
+      React.createElement(
+        DataContext.Provider,
+        {
+          value: { theme: {}, width: 700, height: 200, xScale, yScale, dataRegistry: {} },
+        },
+        React.createElement(BaseGlyphSeries, {
+          data: points,
+          dataKey: 'duration',
+          xScale,
+          yScale,
+          xAccessor: seriesTimestamp,
+          yAccessor: (point: TimeSeriesPoint) => point.value,
+          enableEvents: false,
+          renderGlyphs: ({ glyphs }: { glyphs: PlottedGlyph[] }) => {
+            plotted = glyphs;
+            return glyphs.map(glyph =>
+              React.createElement('circle', {
+                key: glyph.key,
+                cx: glyph.x,
+                cy: glyph.y,
+                'data-latest': glyph.datum === points[points.length - 1],
+              })
+            );
+          },
+        })
+      )
+    );
+    assert.equal(plotted.length, 3);
+    // The installed visx glyph payload preserves datum identity, but does not
+    // supply the index its TypeScript interface claims to provide.
+    assert.equal(plotted.filter(glyph => glyph.datum === points[points.length - 1]).length, 1);
+    assert.equal((rendered.match(/data-latest="true"/g) ?? []).length, 1);
+    const latest = plotted[plotted.length - 1];
+    assert.equal(latest.datum.value, latestValue);
+    assert.equal(latest.datum.samples, 1);
+    assert.equal(latest.datum.devices, 1);
+    assert.equal(latest.datum.intervalStart?.toISOString(), '2026-10-04T06:00:00.000Z');
+    assert.equal(latest.datum.intervalEnd?.toISOString(), '2026-10-04T07:15:00.000Z');
+    assert.ok(
+      latest.x - 6 >= 0 && latest.x + 6 <= 700,
+      'the larger latest glyph fits inside the SVG'
+    );
+    assert.ok(latest.y - 6 >= 0 && latest.y + 6 <= 200);
+  }
 });
