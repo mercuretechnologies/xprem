@@ -21,7 +21,9 @@ const (
 	// maxStacktraceScanBytes bounds how much of a value is read for frames.
 	maxStacktraceScanBytes = 256 << 10
 	maxStacktraceRunes     = 32 << 10
-	// maxStacktraceBytesPerRecord bounds the stack traces of one record together.
+	// maxStacktraceBytesPerRecord bounds encoded stack trace attributes,
+	// including their field names and JSON syntax, in addition to the ordinary
+	// attribute budget.
 	maxStacktraceBytesPerRecord = 64 << 10
 )
 
@@ -29,29 +31,6 @@ const (
 type stacktrace struct {
 	text   string
 	frames []symbolication.Frame
-}
-
-// readStacktraces reads the stack traces among the attributes named, within
-// maxStacktraceBytesPerRecord together.
-func readStacktraces(attrs map[string]any, names []string) map[string]stacktrace {
-	traces := map[string]stacktrace{}
-	budget := maxStacktraceBytesPerRecord
-	for _, key := range names {
-		text, isText := attrs[key].(string)
-		if !isText {
-			continue
-		}
-		minFrames := 2
-		if key == exceptionStacktraceKey || key == manualStacktraceKey {
-			// A key known to hold a trace may hold a single frame.
-			minFrames = 1
-		}
-		if trace, isTrace := readStacktrace(text, minFrames); isTrace && len(trace.text) <= budget {
-			budget -= len(trace.text)
-			traces[key] = trace
-		}
-	}
-	return traces
 }
 
 // readStacktrace reads value as a stack trace, with the frames past the ones

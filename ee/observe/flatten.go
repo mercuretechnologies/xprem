@@ -344,23 +344,70 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) (string, 
 	if len(names) == 0 {
 		return "", nil
 	}
-	// Alphabetical, matching the order the client retains, so both ends keep the same attributes past the ceiling.
+	// Ordinary attributes stay alphabetical; the exception's own trace and
+	// metadata take priority over other attributes.
 	sort.Strings(names)
-	kept := make(map[string]any, len(names))
-	for _, key := range []string{exceptionTypeKey, manualTypeKey, exceptionMessageKey, manualMessageKey} {
-		if text, isText := attrs[key].(string); isText {
-			kept[key] = truncateRunes(text, maxAttributeValueRunes)
+	kept := make(map[string]json.RawMessage, min(len(names), maxAttributesPerRecord))
+	traces := make(map[string]stacktrace)
+	// Together these budgets bound the complete JSON document, including its
+	// braces, encoded field names and values, colons and commas.
+	ordinaryBudget := maxAttributesBytes - 2
+	traceBudget := maxStacktraceBytesPerRecord
+	keep := func(key string, value any, budget *int) bool {
+		if len(kept) == maxAttributesPerRecord || len(key)+3 > *budget {
+			return false
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return false
+		}
+		encodedValue, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		cost := len(encodedKey) + 1 + len(encodedValue)
+		if len(kept) > 0 {
+			cost++
+		}
+		if cost > *budget {
+			return false
+		}
+		*budget -= cost
+		kept[key] = encodedValue
+		return true
+	}
+	keepTrace := func(key string, minFrames int) {
+		if envelope[key] || len(kept) == maxAttributesPerRecord || len(key)+3 > traceBudget {
+			return
+		}
+		text, isText := attrs[key].(string)
+		if !isText {
+			return
+		}
+		trace, isTrace := readStacktrace(text, minFrames)
+		if isTrace && keep(key, trace.text, &traceBudget) {
+			traces[key] = trace
 		}
 	}
-	traces := readStacktraces(attrs, names)
-	for key, trace := range traces {
-		kept[key] = trace.text
+	// These traces may contain a single frame and must survive a record full
+	// of unrelated traces whose names sort before them.
+	for _, key := range []string{exceptionStacktraceKey, manualStacktraceKey} {
+		keepTrace(key, 1)
 	}
-	if len(names) > maxAttributesPerRecord {
-		names = names[:maxAttributesPerRecord]
+	for _, key := range []string{exceptionTypeKey, manualTypeKey, exceptionMessageKey, manualMessageKey} {
+		if text, isText := attrs[key].(string); isText && !envelope[key] {
+			keep(key, truncateRunes(text, maxAttributeValueRunes), &ordinaryBudget)
+		}
 	}
-	budget := maxAttributesBytes
 	for _, key := range names {
+		if _, isKept := kept[key]; !isKept {
+			keepTrace(key, 2)
+		}
+	}
+	for _, key := range names {
+		if len(kept) == maxAttributesPerRecord {
+			break
+		}
 		if _, isKept := kept[key]; isKept {
 			continue
 		}
@@ -368,23 +415,7 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) (string, 
 		if text, isText := value.(string); isText {
 			value = truncateRunes(text, maxAttributeValueRunes)
 		}
-		cost := len(key) + 8
-		if text, isText := value.(string); isText {
-			cost += len(text)
-		} else {
-			// Serialized to be measured, and kept serialized so the work is not done twice.
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				continue
-			}
-			cost += len(encoded)
-			value = json.RawMessage(encoded)
-		}
-		if cost > budget {
-			break
-		}
-		budget -= cost
-		kept[key] = value
+		keep(key, value, &ordinaryBudget)
 	}
 	if len(kept) == 0 {
 		return "", nil

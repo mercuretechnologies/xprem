@@ -7,6 +7,7 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -113,4 +114,87 @@ func TestBoundBodyGivesAStacktraceItsRoom(t *testing.T) {
 	require.Greater(t, len(trace), maxBodyRunes)
 	assert.Equal(t, trace, boundBody(trace))
 	assert.Len(t, boundBody(strings.Repeat("b", 5000)), maxBodyRunes)
+}
+
+func TestHandleLogsRejectsAnOversizedStacktraceAttributeName(t *testing.T) {
+	key := strings.Repeat("x", 8<<20)
+	encodedKey, err := json.Marshal(key)
+	require.NoError(t, err)
+	trace := hermesTrace(30)
+	encodedTrace, err := json.Marshal(trace)
+	require.NoError(t, err)
+	body := []byte(fmt.Sprintf(`{"resourceLogs":[{
+		"resource":{"attributes":[{"key":"expo.eas_client.id","value":{"stringValue":"4127c568-af7f-4d2b-9e0a-1c6e2b7d9f31"}}]},
+		"scopeLogs":[{"logRecords":[{"attributes":[
+			{"key":%s,"value":{"stringValue":%s}},
+			{"key":"exception.stacktrace","value":{"stringValue":%s}}
+		]}]}]
+	}]}`, encodedKey, encodedTrace, encodedTrace))
+	require.Less(t, len(body), maxBatchBodyBytes)
+	sink := &capturingSink{}
+	response := serveIngest(NewIngestHandler(nil, sink, nil, nil), http.MethodPost, logsPath, body)
+	require.Equal(t, http.StatusNoContent, response.Code)
+	require.Len(t, sink.logs, 1)
+	require.LessOrEqual(t, len(sink.logs[0].Attributes), maxAttributesBytes+maxStacktraceBytesPerRecord)
+	var kept map[string]string
+	require.NoError(t, json.Unmarshal([]byte(sink.logs[0].Attributes), &kept))
+	assert.NotContains(t, kept, key)
+	assert.Equal(t, trace, kept[exceptionStacktraceKey])
+}
+
+func TestMarshalAttributesChargesJSONEscapingToEachBudget(t *testing.T) {
+	attrs := map[string]any{
+		exceptionStacktraceKey: hermesTrace(30),
+		manualStacktraceKey:    hermesTrace(30),
+	}
+	// HTML escaping makes each of these field names six times larger in JSON.
+	for i := 0; i < 4; i++ {
+		attrs[strings.Repeat("<", 7000)+fmt.Sprint(i)] = hermesTrace(30)
+	}
+	for i := 0; i < 30; i++ {
+		attrs[fmt.Sprintf("note%02d", i)] = strings.Repeat("<\x00\"\\", 256)
+	}
+	out, traces := marshalAttributes(attrs, nil)
+	require.LessOrEqual(t, len(out), maxAttributesBytes+maxStacktraceBytesPerRecord)
+	var kept map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &kept))
+	assert.Equal(t, attrs[exceptionStacktraceKey], kept[exceptionStacktraceKey])
+	assert.Equal(t, attrs[manualStacktraceKey], kept[manualStacktraceKey])
+	assert.Len(t, traces[exceptionStacktraceKey].frames, 30)
+	assert.Len(t, traces[manualStacktraceKey].frames, 30)
+	assert.Less(t, len(kept), len(attrs), "escaped names and values spend their full encoded size")
+
+	ordinary := map[string]any{}
+	for i := 0; i < 30; i++ {
+		ordinary[fmt.Sprintf("note%02d", i)] = strings.Repeat("<\x00\"\\", 256)
+	}
+	out, traces = marshalAttributes(ordinary, nil)
+	assert.Empty(t, traces)
+	assert.LessOrEqual(t, len(out), maxAttributesBytes)
+}
+
+func TestMarshalAttributesCountsStacktracesAndKeepsExceptionFirst(t *testing.T) {
+	attrs := map[string]any{
+		exceptionStacktraceKey: hermesTrace(30),
+		manualStacktraceKey:    hermesTrace(30),
+		exceptionTypeKey:       "TypeError",
+		exceptionMessageKey:    "Checkout failed",
+	}
+	for i := 0; i < 300; i++ {
+		attrs[fmt.Sprintf("a%03d", i)] = hermesTrace(2)
+	}
+	out, traces := marshalAttributes(attrs, nil)
+	var kept map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &kept))
+	assert.Len(t, kept, maxAttributesPerRecord)
+	assert.Equal(t, attrs[exceptionStacktraceKey], kept[exceptionStacktraceKey])
+	assert.Equal(t, attrs[manualStacktraceKey], kept[manualStacktraceKey])
+	assert.Equal(t, "TypeError", kept[exceptionTypeKey])
+	assert.Equal(t, "Checkout failed", kept[exceptionMessageKey])
+	assert.Len(t, traces[exceptionStacktraceKey].frames, 30)
+	assert.Len(t, traces[manualStacktraceKey].frames, 30)
+	assert.NotContains(t, kept, "a299")
+	for key := range traces {
+		assert.Contains(t, kept, key, "fingerprinting must only use retained traces")
+	}
 }
