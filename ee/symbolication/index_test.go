@@ -6,6 +6,7 @@ package symbolication
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math/rand"
 	"os"
@@ -26,7 +27,7 @@ func openIndexOf(t *testing.T, m *Map) *Index {
 }
 
 func TestLookupResolvesTheCrashColumn(t *testing.T) {
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	index := openIndexOf(t, m)
 
@@ -75,7 +76,7 @@ func TestOpenIndexRefusesForeignFiles(t *testing.T) {
 }
 
 func TestIndexReadersRejectUnsupportedVersions(t *testing.T) {
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, WriteIndex(&buf, m))
@@ -147,7 +148,7 @@ func TestHermesExampleMap(t *testing.T) {
 	}
 	data, err := os.ReadFile(matches[0])
 	require.NoError(t, err)
-	m, err := Parse(data)
+	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	require.NoError(t, err)
 	var raw struct {
 		Sources        []string  `json:"sources"`

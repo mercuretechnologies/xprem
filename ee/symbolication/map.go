@@ -53,11 +53,7 @@ type rawMap struct {
 	GoogleIgnoreList []int     `json:"x_google_ignoreList"`
 }
 
-// Parse decodes a source map. Any shape the index cannot use is ErrInvalidMap.
-func Parse(data []byte) (*Map, error) {
-	return parseMap(context.Background(), data, maxIndexCacheBytes)
-}
-
+// parseMap decodes a source map within the worker's memory budget.
 func parseMap(ctx context.Context, data []byte, maxDecodedBytes int) (*Map, error) {
 	raw, budget, err := readMap(ctx, data, maxDecodedBytes)
 	if err != nil {
@@ -128,7 +124,7 @@ func decodeMappings(ctx context.Context, mappings string, sources, names, maxSeg
 			continue
 		}
 		if encoded := mappings[start:i]; encoded != "" {
-			deltas, err := decodeVLQInto(encoded, &fields)
+			deltas, err := decodeVLQ(encoded, &fields)
 			if err != nil {
 				return nil, err
 			}
@@ -148,14 +144,8 @@ func decodeMappings(ctx context.Context, mappings string, sources, names, maxSeg
 	return segments, nil
 }
 
-// decodeVLQ reads the numbers of one segment, such as "SAAS" into 9, 0, 0, 9.
-func decodeVLQ(encoded string) ([]int64, error) {
-	var fields [5]int64
-	return decodeVLQInto(encoded, &fields)
-}
-
-// decodeVLQInto reuses five fields instead of allocating for every segment.
-func decodeVLQInto(encoded string, fields *[5]int64) ([]int64, error) {
+// decodeVLQ reads one segment into reusable fields without allocating.
+func decodeVLQ(encoded string, fields *[5]int64) ([]int64, error) {
 	numbers := fields[:0]
 	var value int64
 	shift := uint(0)

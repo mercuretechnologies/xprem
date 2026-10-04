@@ -5,6 +5,7 @@
 package symbolication
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,7 +21,7 @@ const cartMap = `{
 }`
 
 func TestParseDecodesSegments(t *testing.T) {
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	require.Len(t, m.Segments, 36)
 	assert.Equal(t, Segment{Column: 17, Source: 0, OriginalLine: 0, OriginalColumn: 17, Name: 0}, m.Segments[2], "third segment names cart")
@@ -29,7 +30,7 @@ func TestParseDecodesSegments(t *testing.T) {
 
 // The generated column restarts at each ";", the other totals carry on.
 func TestParseRestartsTheColumnOnEachGeneratedLine(t *testing.T) {
-	m, err := Parse([]byte(`{"version":3,"sources":["a.js"],"names":[],"mappings":"AAAA,SAAS;IAAI"}`))
+	m, err := parseMap(context.Background(), []byte(`{"version":3,"sources":["a.js"],"names":[],"mappings":"AAAA,SAAS;IAAI"}`), maxIndexCacheBytes)
 	require.NoError(t, err)
 	require.Len(t, m.Segments, 3)
 	assert.Equal(t, Segment{Line: 1, Column: 4, Source: 0, OriginalLine: 0, OriginalColumn: 13, Name: NoIndex}, m.Segments[2])
@@ -42,6 +43,7 @@ func TestParseRestartsTheColumnOnEachGeneratedLine(t *testing.T) {
 }
 
 func TestDecodeVLQ(t *testing.T) {
+	var fields [5]int64
 	for encoded, want := range map[string][]int64{
 		"AAAA":  {0, 0, 0, 0},
 		"SAAS":  {9, 0, 0, 9},
@@ -50,12 +52,12 @@ func TestDecodeVLQ(t *testing.T) {
 		"3B":    {-27},
 		"6rqS":  {300221},
 	} {
-		got, err := decodeVLQ(encoded)
+		got, err := decodeVLQ(encoded, &fields)
 		require.NoError(t, err, encoded)
 		assert.Equal(t, want, got, encoded)
 	}
 	for _, broken := range []string{"g", "A!", "gggggggggA"} {
-		_, err := decodeVLQ(broken)
+		_, err := decodeVLQ(broken, &fields)
 		assert.ErrorIs(t, err, ErrInvalidMap, broken)
 	}
 }
@@ -72,7 +74,7 @@ func TestParseRefusesUnusableMaps(t *testing.T) {
 		"column overflow": `{"version":3,"sources":["a"],"names":[],"mappings":"ggggggIAAA"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := Parse([]byte(data))
+			_, err := parseMap(context.Background(), []byte(data), maxIndexCacheBytes)
 			assert.ErrorIs(t, err, ErrInvalidMap)
 		})
 	}

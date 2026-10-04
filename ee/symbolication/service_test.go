@@ -158,7 +158,7 @@ func TestIndexJobStoresTheIndex(t *testing.T) {
 // rebuilt, the record still says what it holds.
 func TestIndexJobReusesAnExistingIndex(t *testing.T) {
 	store := newFakeStore()
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	var existing bytes.Buffer
 	require.NoError(t, WriteIndex(&existing, m))
@@ -321,7 +321,7 @@ func TestOpenUpdateIndexRepairsMissingAndInvalidIndexes(t *testing.T) {
 			store := newFakeStore()
 			store.maps[testHash] = []byte(cartMap)
 			if condition == "unsupported version" {
-				m, err := Parse(store.maps[testHash])
+				m, err := parseMap(context.Background(), store.maps[testHash], maxIndexCacheBytes)
 				require.NoError(t, err)
 				var encoded bytes.Buffer
 				require.NoError(t, WriteIndex(&encoded, m))

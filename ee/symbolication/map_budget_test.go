@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"xprem/internal/types"
 
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/assert"
@@ -34,11 +35,21 @@ func TestParseDefaultBudgetRejectsExpansionBeforeAllocatingSegments(t *testing.T
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	m, err := Parse(data)
+	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	runtime.ReadMemStats(&after)
 	require.Nil(t, m)
 	assert.ErrorIs(t, err, errMapBudget)
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(3*len(data)), "the oversized segment table must never be allocated")
+
+	store := newFakeStore()
+	store.maps[testHash] = data
+	service, indexes := newTestService(store)
+	err = runJob(t, service, indexes, 1)
+	var permanent *river.JobCancelError
+	require.ErrorAs(t, err, &permanent)
+	assert.Equal(t, types.SourcemapIndexCancelled, indexes.record.Status)
+	assert.True(t, strings.HasPrefix(indexes.record.Reason, types.SourcemapIndexReasonIndexTooLarge+":"), indexes.record.Reason)
+	assert.Empty(t, store.indexes)
 }
 
 func TestParseBudgetsAllArrayEntriesBeforeDecoding(t *testing.T) {
@@ -70,15 +81,15 @@ func TestParseBudgetsAllArrayEntriesBeforeDecoding(t *testing.T) {
 
 func TestParseArrayCountsRespectEscapedStringsAndNullContent(t *testing.T) {
 	data := []byte(`{"version":3,"sources":["a,\"[file].js","b.js"],"names":["x,y"],"sourcesContent":[null,"code,[text]"],"ignoreList":[1],"mappings":"AAAAA"}`)
-	m, err := Parse(data)
+	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a,\"[file].js", "b.js"}, m.Sources)
 	assert.Equal(t, []string{"", "code,[text]"}, m.SourcesContent)
 	assert.Equal(t, []bool{false, true}, m.Ignored)
 
-	_, err = Parse([]byte(`{"version":3,"sources":[["nested"]],"mappings":"A"}`))
+	_, err = parseMap(context.Background(), []byte(`{"version":3,"sources":[["nested"]],"mappings":"A"}`), maxIndexCacheBytes)
 	assert.ErrorIs(t, err, ErrInvalidMap, "counting entries must not admit invalid field types")
-	_, err = Parse([]byte("{\"version\":3,\"sources\":[\"\xff\"],\"mappings\":\"A\"}"))
+	_, err = parseMap(context.Background(), []byte("{\"version\":3,\"sources\":[\"\xff\"],\"mappings\":\"A\"}"), maxIndexCacheBytes)
 	assert.ErrorIs(t, err, ErrInvalidMap, "invalid UTF-8 must not expand past the input charge")
 }
 
@@ -88,7 +99,7 @@ func TestDenseMappingsDoNotAllocatePerSegmentOrGrowTheTable(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	m, err := Parse(data)
+	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	runtime.ReadMemStats(&after)
 	require.NoError(t, err)
 	require.Len(t, m.Segments, segments)

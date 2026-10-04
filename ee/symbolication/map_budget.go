@@ -8,16 +8,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"unicode/utf8"
 )
 
-var errMapBudget = errors.New("source map exceeds decoder memory budget")
-
-func mapBudgetError() error {
-	return fmt.Errorf("%w: %w", ErrInvalidMap, errMapBudget)
-}
+var errMapBudget = fmt.Errorf("%w: source map exceeds decoder memory budget", ErrInvalidMap)
 
 // readMap validates and counts array entries before allocating their decoded
 // slices. The input length covers decoded string bytes and the mappings;
@@ -29,7 +24,7 @@ func readMap(ctx context.Context, data []byte, maxDecodedBytes int) (rawMap, int
 		return rawMap{}, 0, err
 	}
 	if len(data) > maxMapSize || len(data) > maxDecodedBytes {
-		return rawMap{}, 0, mapBudgetError()
+		return rawMap{}, 0, errMapBudget
 	}
 	// JSON's replacement of invalid UTF-8 could expand string bytes beyond
 	// the input charge. Source maps must carry valid UTF-8 JSON.
@@ -130,7 +125,7 @@ func countArrayEntries(ctx context.Context, data []byte, maximum int) (int, erro
 	}
 	count := 1
 	if count > maximum {
-		return 0, mapBudgetError()
+		return 0, errMapBudget
 	}
 	depth, quoted, escaped := 0, false, false
 	for i, b := range data {
@@ -160,7 +155,7 @@ func countArrayEntries(ctx context.Context, data []byte, maximum int) (int, erro
 			if depth == 1 {
 				count++
 				if count > maximum {
-					return 0, mapBudgetError()
+					return 0, errMapBudget
 				}
 			}
 		}
@@ -182,7 +177,7 @@ func countSegments(ctx context.Context, mappings string, maximum int) (int, erro
 		} else if !inSegment {
 			count++
 			if count > maximum {
-				return 0, mapBudgetError()
+				return 0, errMapBudget
 			}
 			inSegment = true
 		}
