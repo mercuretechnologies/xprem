@@ -5,13 +5,9 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import {
-  api,
-  type ObserveChannelAdoption,
-  type UpdateFeedRecord,
-  type UpdateHealthRecord,
-} from '@/lib/api';
+import { api, type ObserveChannelAdoption, type UpdateHealthRecord } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ApiError } from '@/components/APIError';
 import { TimeSeriesChart } from '@/ee/components/charts/TimeSeriesChart';
 import { aggregateSeries, boundedFrom } from '@/ee/components/updateHealthSeries';
 import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
@@ -20,7 +16,13 @@ import { cn } from '@/lib/utils';
 import { liveInterval, type ObserveFilters } from './filters';
 import { compactNumber, exactNumber, sinceLabel } from './format';
 import { seriesColors } from './dimensions';
-import { buildUpdateGroups, groupTitle, type UpdateGroup } from './updateGroups';
+import { groupTitle, platformLabel } from './updateGroups';
+import {
+  readServingHeads,
+  servedReleases,
+  servingBranches,
+  type ServedRelease,
+} from './servedReleases';
 
 type Status = 'trouble' | 'watch' | 'healthy' | 'unknown';
 
@@ -42,36 +44,28 @@ const statusStyle: Record<Status, { label: string; dot: string }> = {
   unknown: { label: 'No data', dot: 'bg-muted-foreground/40' },
 };
 
-// What a branch serves right now: its newest publish, plus the feed row the
-// update details page is addressed by.
-type Served = { group: UpdateGroup; record: UpdateFeedRecord };
-
-const newestOf = (items: UpdateFeedRecord[] | undefined): Served | undefined => {
-  const group = buildUpdateGroups(items ?? [])[0];
-  const record = group && items?.find(item => item.updateUUID === group.updateUUIDs[0]);
-  return group && record ? { group, record } : undefined;
-};
-
 // Floored, so 100% only ever means no crash at all.
 const percentLabel = (value: number | null | undefined) =>
   value == null ? '–' : value === 100 ? '100%' : `${(Math.floor(value * 10) / 10).toFixed(1)}%`;
 
-const Release = ({ served, prefix }: { served: Served | undefined; prefix?: string }) =>
+const Release = ({ served, prefix }: { served: ServedRelease | undefined; prefix?: string }) =>
   served ? (
     <div className="min-w-0">
       <Link
         to={updateDetailsPath(served.record, 'updates')}
         className="block truncate text-[13px] font-medium hover:underline">
         {prefix}
-        {groupTitle(served.group)}
+        {served.group ? groupTitle(served.group) : 'Embedded bundle'}
       </Link>
       <p className="truncate text-[12px] text-muted-foreground">
-        {served.group.branch} · {shortRuntimeVersion(served.group.runtimeVersion)} ·{' '}
-        {sinceLabel(served.group.createdAt)}
+        {served.record.branch} · {shortRuntimeVersion(served.record.runtimeVersion)} ·{' '}
+        {platformLabel(served.group?.platforms ?? [served.record.platform])} ·{' '}
+        {sinceLabel(new Date(served.record.createdAt))}
+        {served.group?.rolloutPercentage != null && ` · ${served.group.rolloutPercentage}% rollout`}
       </p>
     </div>
   ) : (
-    <p className="text-[13px] text-muted-foreground">{prefix}Nothing published</p>
+    <p className="text-[13px] text-muted-foreground">{prefix}No release for this selection</p>
   );
 
 const Adoption = ({ adoption }: { adoption: ObserveChannelAdoption | undefined }) => {
@@ -79,14 +73,12 @@ const Adoption = ({ adoption }: { adoption: ObserveChannelAdoption | undefined }
     return <span className="text-[13px] text-muted-foreground">No active device</span>;
   }
   const upToDate = adoption.upToDateDevices / adoption.activeDevices;
-  const embedded = adoption.embeddedDevices / adoption.activeDevices;
   return (
     <div
       className="flex items-center gap-3"
-      title={`${exactNumber.format(adoption.upToDateDevices)} of ${exactNumber.format(adoption.activeDevices)} active devices run what this channel serves, ${exactNumber.format(adoption.embeddedDevices)} still run the embedded bundle`}>
+      title={`${exactNumber.format(adoption.upToDateDevices)} of ${exactNumber.format(adoption.activeDevices)} active devices run what this channel serves, ${exactNumber.format(adoption.embeddedDevices)} run the embedded bundle`}>
       <div className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div className="bg-primary" style={{ width: `${100 * upToDate}%` }} />
-        <div className="bg-muted-foreground/30" style={{ width: `${100 * embedded}%` }} />
       </div>
       <span className="w-10 text-right text-[13px] tabular-nums">
         {Math.round(100 * upToDate)}%
@@ -111,6 +103,7 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
   const channelsQuery = useQuery({
     queryKey: ['channels', api.getAppId()],
     queryFn: () => api.getChannels(),
+    refetchInterval: liveInterval(filters.live, filters.periodSpec),
   });
 
   const channels = useMemo(
@@ -123,38 +116,52 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
     [channelsQuery.data, filters.state.channel]
   );
   const branches = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          channels.flatMap(channel => [
-            channel.branchName ?? '',
-            channel.rollout?.rolloutBranchName ?? '',
-          ])
-        )
-      ).filter(Boolean),
-    [channels]
+    () => servingBranches(channels, filters.query.branch),
+    [channels, filters.query.branch]
   );
   const feeds = useQueries({
     queries: branches.map(branch => ({
-      queryKey: ['observe', 'branch-feed', api.getAppId(), branch],
-      queryFn: () => api.getUpdateFeed({ branch, limit: 20 }),
+      queryKey: ['observe', 'serving-heads', api.getAppId(), branch],
+      queryFn: () => readServingHeads(branch, query => api.getUpdateFeed(query)),
+      refetchInterval: liveInterval(filters.live, filters.periodSpec),
     })),
   });
   const servedByBranch = new Map(
-    branches.map((branch, index) => [branch, newestOf(feeds[index]?.data?.items)])
+    branches.map((branch, index) => [
+      branch,
+      servedReleases(
+        feeds[index]?.data ?? [],
+        filters.query.runtimeVersion,
+        filters.query.platform,
+        filters.query.branch
+      ),
+    ])
   );
-  const servedIds = Array.from(servedByBranch.values()).flatMap(
-    served => served?.group.updateUUIDs ?? []
+  const servedIds = Array.from(
+    new Set(
+      Array.from(servedByBranch.values()).flatMap(releases =>
+        releases.flatMap(release => release.group?.updateUUIDs ?? [])
+      )
+    )
   );
   const healthQuery = useQuery({
     queryKey: ['update-health', 'releases', api.getAppId(), servedIds.join(',')],
-    queryFn: () => api.getUpdateHealth(servedIds),
+    queryFn: async () => {
+      const updates: Record<string, UpdateHealthRecord> = {};
+      // The health route accepts at most 100 ids; a branch can serve many runtimes.
+      for (let offset = 0; offset < servedIds.length; offset += 100) {
+        const page = await api.getUpdateHealth(servedIds.slice(offset, offset + 100));
+        Object.assign(updates, page.updates);
+      }
+      return { updates };
+    },
     enabled: servedIds.length > 0,
+    refetchInterval: liveInterval(filters.live, filters.periodSpec),
   });
 
   const rows = (() => {
-    const healthOf = (served: Served | undefined) =>
-      served
+    const healthOf = (served: ServedRelease) =>
+      served.group
         ? aggregateUpdateHealth(served.group.updateUUIDs.map(id => healthQuery.data?.updates[id]))
         : undefined;
     const adoptionByChannel = new Map(
@@ -163,28 +170,42 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
     return (
       channels
         .map(channel => {
-          const served = servedByBranch.get(channel.branchName ?? '');
+          const baseSelected =
+            !filters.query.branch?.length || branches.includes(channel.branchName ?? '');
+          const rolloutSelected =
+            !!channel.rollout &&
+            (!filters.query.branch?.length || branches.includes(channel.rollout.rolloutBranchName));
+          const served = servedByBranch.get(channel.branchName ?? '') ?? [];
           const rollout = channel.rollout
-            ? servedByBranch.get(channel.rollout.rolloutBranchName)
-            : undefined;
+            ? (servedByBranch.get(channel.rollout.rolloutBranchName) ?? [])
+            : [];
           // A rollout in trouble is the channel in trouble, whatever the rest of it runs.
-          const worst = [served, ...(channel.rollout ? [rollout] : [])]
+          const worst = [...served, ...rollout]
             .map(entry => {
               const health = healthOf(entry);
               return { health, status: statusOf(health) };
             })
             .sort((left, right) => statusRank[left.status] - statusRank[right.status])[0];
+          const status: Status = worst?.status ?? 'unknown';
           return {
             channel,
+            baseSelected,
+            rolloutSelected,
             served,
             rollout,
-            health: worst.health,
-            status: worst.status,
+            health: worst?.health,
+            status,
             adoption: adoptionByChannel.get(channel.releaseChannelName),
           };
         })
         // A channel that serves nothing to nobody has nothing to report.
-        .filter(row => row.served || row.rollout || (row.adoption?.activeDevices ?? 0) > 0)
+        .filter(
+          row =>
+            (row.baseSelected || row.rolloutSelected) &&
+            (row.served.length > 0 ||
+              row.rollout.length > 0 ||
+              (row.adoption?.activeDevices ?? 0) > 0)
+        )
         .sort(
           (left, right) =>
             (right.adoption?.activeDevices ?? 0) - (left.adoption?.activeDevices ?? 0) ||
@@ -199,8 +220,8 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
     const picked: Array<{ key: string; label: string; updateUUIDs: string[] }> = [];
     let ids = 0;
     for (const row of rows) {
-      for (const served of [row.served, row.rollout]) {
-        if (!served || seen.has(served.group.key)) continue;
+      for (const served of [...row.served, ...row.rollout]) {
+        if (!served.group || seen.has(served.group.key)) continue;
         if (ids + served.group.updateUUIDs.length > 20) continue;
         seen.add(served.group.key);
         ids += served.group.updateUUIDs.length;
@@ -240,8 +261,30 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
   }));
   const hasCurves = adoptionSeries.some(series => series.points.length > 1);
 
-  if (channelsQuery.isLoading || releasesQuery.isLoading) {
+  if (channelsQuery.isLoading || releasesQuery.isLoading || feeds.some(feed => feed.isPending)) {
     return <Skeleton className="h-48 rounded-lg" />;
+  }
+  const servingError =
+    channelsQuery.error ?? releasesQuery.error ?? feeds.find(feed => feed.isError)?.error;
+  if (servingError) {
+    return (
+      <section>
+        <h2 className="mb-2.5 text-[15px] font-semibold tracking-tight">Releases</h2>
+        <div className="space-y-3 rounded-lg border bg-card p-4">
+          <ApiError error={servingError} />
+          <button
+            type="button"
+            onClick={() => {
+              void channelsQuery.refetch();
+              void releasesQuery.refetch();
+              for (const feed of feeds) void feed.refetch();
+            }}
+            className="text-sm text-primary hover:underline">
+            Retry
+          </button>
+        </div>
+      </section>
+    );
   }
   if (rows.length === 0) return null;
 
@@ -274,10 +317,25 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
                 )}
               </div>
               <div className="min-w-0 space-y-1.5">
-                <Release served={row.served} />
-                {row.channel.rollout && (
-                  <Release served={row.rollout} prefix={`${row.channel.rollout.percentage}% → `} />
-                )}
+                {row.baseSelected &&
+                  (row.served.length > 0 ? (
+                    row.served.map(served => <Release key={served.key} served={served} />)
+                  ) : (
+                    <Release served={undefined} />
+                  ))}
+                {row.rolloutSelected &&
+                  row.channel.rollout &&
+                  (row.rollout.length > 0 ? (
+                    row.rollout.map(served => (
+                      <Release
+                        key={served.key}
+                        served={served}
+                        prefix={`${row.channel.rollout!.percentage}% → `}
+                      />
+                    ))
+                  ) : (
+                    <Release served={undefined} prefix={`${row.channel.rollout.percentage}% → `} />
+                  ))}
               </div>
               <Adoption adoption={row.adoption} />
               <span

@@ -4431,23 +4431,26 @@ func (q *Queries) ListIdentitySchemaKeys(ctx context.Context, appID pgtype.UUID)
 }
 
 const listObserveChannelAdoption = `-- name: ListObserveChannelAdoption :many
-WITH newest AS (
-    SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
-           u.branch_id, rv.version AS runtime_version, u.platform,
-           u.update_uuid, c.update_uuid AS control_uuid
-    FROM updates u
-    JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
-    JOIN runtime_versions rv ON rv.id = u.runtime_version_id
-    LEFT JOIN updates c ON c.branch_id = u.branch_id AND c.id = u.control_update_id
-    WHERE u.checked_at IS NOT NULL
-    ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
-),
-served AS (
+WITH served AS (
     SELECT ch.name AS channel_name, ch.branch_id FROM channels ch WHERE ch.app_id = $1
     UNION ALL
     SELECT ch.name, cr.rollout_branch_id
     FROM channels ch JOIN channel_rollouts cr ON cr.channel_id = ch.id
     WHERE ch.app_id = $1
+),
+newest AS (
+    SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
+           u.branch_id, rv.version AS runtime_version, u.platform,
+           u.update_uuid, u.update_type,
+           c.update_uuid AS control_uuid, c.update_type AS control_type
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
+    JOIN runtime_versions rv ON rv.id = u.runtime_version_id
+    LEFT JOIN updates c ON c.branch_id = u.branch_id AND c.id = u.control_update_id
+        AND u.rollout_percentage IS NOT NULL
+    WHERE u.checked_at IS NOT NULL
+      AND u.branch_id IN (SELECT branch_id FROM served)
+    ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
 )
 SELECT d.channel_name::text AS channel_name,
        COUNT(*) AS active_devices,
@@ -4458,7 +4461,8 @@ SELECT d.channel_name::text AS channel_name,
            WHERE s.channel_name = d.channel_name
              AND n.runtime_version = d.runtime_version
              AND n.platform = d.platform
-             AND d.current_update_id IN (n.update_uuid, n.control_uuid)
+             AND (d.current_update_id IN (n.update_uuid, n.control_uuid)
+                  OR (d.current_update_id IS NULL AND (n.update_type = 1 OR n.control_type = 1)))
        )) AS up_to_date_devices
 FROM device_identity d
 WHERE d.app_id = $1

@@ -510,7 +510,7 @@ func (s *PostgresUpdateRepository) GetUpdateFeed(ctx context.Context, appId stri
 	if query.CursorCreatedAt != nil {
 		cursorCreatedAt = pgtype.Timestamptz{Time: *query.CursorCreatedAt, Valid: true}
 	}
-	rows, err := s.engine.Queries.GetUpdateFeed(ctx, pgdb.GetUpdateFeedParams{
+	params := pgdb.GetUpdateFeedParams{
 		AppID:           ToPgUUID(appId),
 		Branch:          query.Branch,
 		RuntimeVersion:  query.RuntimeVersion,
@@ -525,7 +525,33 @@ func (s *PostgresUpdateRepository) GetUpdateFeed(ctx context.Context, appId stri
 		CursorBranchID:  query.CursorBranchID,
 		CursorUpdateID:  query.CursorUpdateID,
 		RowLimit:        int32(query.Limit),
-	})
+	}
+	var rows []pgdb.GetUpdateFeedRow
+	var err error
+	if query.LatestOnly {
+		var heads []pgdb.GetLatestUpdateFeedRow
+		heads, err = s.engine.Queries.GetLatestUpdateFeed(ctx, pgdb.GetLatestUpdateFeedParams{
+			AppID:           params.AppID,
+			Branch:          params.Branch,
+			RuntimeVersion:  params.RuntimeVersion,
+			Platform:        params.Platform,
+			UpdateUuid:      params.UpdateUuid,
+			PublishGroup:    params.PublishGroup,
+			CommitHash:      params.CommitHash,
+			CreatedFrom:     params.CreatedFrom,
+			CreatedTo:       params.CreatedTo,
+			HasCursor:       params.HasCursor,
+			CursorCreatedAt: params.CursorCreatedAt,
+			CursorBranchID:  params.CursorBranchID,
+			CursorUpdateID:  params.CursorUpdateID,
+			RowLimit:        params.RowLimit,
+		})
+		for _, head := range heads {
+			rows = append(rows, pgdb.GetUpdateFeedRow(head))
+		}
+	} else {
+		rows, err = s.engine.Queries.GetUpdateFeed(ctx, params)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve update feed from database: %w", err)
 	}

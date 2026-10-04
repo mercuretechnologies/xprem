@@ -42,6 +42,92 @@ func TestUpdateErrorsReaderValidationAndUnavailable(t *testing.T) {
 	require.NotContains(t, string(encoded), `"series"`)
 }
 
+func TestUpdateErrorsLiveCountsManualRenderCrash(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+	explorer := &Explorer{clickhouse: engine}
+	appID, updateID := uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC()
+	// ErrorBoundary emits a fatal manual crash without expo.error.is_fatal.
+	attributes := map[string]any{
+		"name": "Error", "message": "Deliberate render crash from the observe lab",
+		"stack": "Error: Deliberate render crash from the observe lab\n    at LabScreen (address at app.hbc:1:120)",
+	}
+	row := errorLogRow(appID, updateID, uuid.NewString(), attributes, 21, false, now.Add(-time.Minute))
+	row.EventName = JSCrashEventName
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, []LogRow{row}))
+	errors, err := explorer.readErrors(ctx, appID, ErrorsQuery{
+		ExplorerQuery: ExplorerQuery{From: now.Add(-time.Hour), To: now.Add(time.Minute)},
+	})
+	require.NoError(t, err)
+	require.Len(t, errors.Errors, 1)
+	require.EqualValues(t, 1, errors.Errors[0].CrashOccurrences)
+	page, err := explorer.readUpdateErrors(ctx, appID, updateID, 25, 0)
+	require.NoError(t, err)
+	require.Len(t, page.Errors, 1)
+	require.Equal(t, errors.Errors[0].CrashOccurrences, page.Errors[0].CrashOccurrences)
+}
+
+func TestUpdateErrorsLiveManualCrashesRetainedDeduplicatedAndScoped(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+	explorer := &Explorer{clickhouse: engine}
+	appID, updateID, groupID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Second)
+	attributes := map[string]any{"name": "Error", "message": "manual crash"}
+	manual := errorLogRow(appID, updateID, uuid.NewString(), attributes, 21, false, now)
+	manual.EventName = JSCrashEventName
+	flagged := errorLogRow(appID, updateID, manual.EASClientID, attributes, 21, true, now.Add(-time.Minute))
+	flagged.EventName = JSCrashEventName
+	native := errorLogRow(appID, updateID, manual.EASClientID, attributes, 21, true, now.Add(-2*time.Minute))
+	nonfatal := errorLogRow(appID, updateID, manual.EASClientID, attributes, 17, false, now.Add(-3*time.Minute))
+	otherApp, otherUpdate := manual, manual
+	otherApp.AppID, otherApp.ContentKey = uuid.NewString(), uuid.New()
+	otherUpdate.UpdateID, otherUpdate.ContentKey = uuid.NewString(), uuid.New()
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx,
+		[]LogRow{manual, manual, flagged, native, nonfatal, otherApp, otherUpdate}))
+	// Retained logs span multiple aggregate hours and raw fingerprints of a
+	// canonical group. Joining their correction to every hourly state would
+	// count the first fingerprint's manual crashes more than once.
+	older := errorLogRow(appID, updateID, manual.EASClientID,
+		map[string]any{"name": "TypeError", "message": "older manual crash"}, 21, false, now.Add(-401*24*time.Hour))
+	older.EventName = JSCrashEventName
+	for _, row := range []LogRow{manual, older} {
+		at := now.Add(-400 * 24 * time.Hour)
+		if row.ErrorFingerprint == older.ErrorFingerprint {
+			at = older.Timestamp
+		}
+		require.NoError(t, engine.Conn.Exec(ctx, `INSERT INTO observe_logs
+		 (app_id,update_id,eas_client_id,event_name,severity_number,is_fatal,attributes,
+		 timestamp,ingested_at,content_key,error_fingerprint)
+		 VALUES (?,?,?,?,?,0,?,?,?,?,?)`, appID, updateID, row.EASClientID, JSCrashEventName,
+			21, row.Attributes, at, at, uuid.New(), row.ErrorFingerprint))
+	}
+	var mappings []groupedError
+	for _, row := range []LogRow{manual, older} {
+		mappings = append(mappings, groupedError{
+			errorKey:   errorKey{appID: appID, updateID: updateID, fingerprint: row.ErrorFingerprint.String()},
+			ErrorGroup: ErrorGroup{GroupFingerprint: groupID, ErrorType: "Error", Message: "manual crash", SymbolicatedAt: now},
+		})
+	}
+	require.NoError(t, explorer.writeErrorGroups(ctx, mappings))
+	page, err := explorer.readUpdateErrors(ctx, appID, updateID, 25, 0)
+	require.NoError(t, err)
+	require.Len(t, page.Errors, 1)
+	require.Equal(t, encodeErrorID("g:"+groupID), page.Errors[0].ErrorID)
+	require.EqualValues(t, 7, page.Errors[0].Occurrences, "aggregate occurrences still include the SDK retry")
+	require.EqualValues(t, 5, page.Errors[0].CrashOccurrences,
+		"three distinct manual crashes plus two fatal flags, without retry, nonfatal, or foreign rows")
+}
+
 func TestUpdateErrorsLiveGroupsAndDetectsIntroduction(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)
@@ -141,9 +227,12 @@ func TestUpdateErrorsLiveGroupsAndDetectsIntroduction(t *testing.T) {
 		require.Contains(t, summary.Message, "raw")
 	}
 	require.Len(t, tracked.calls, 2, "one summary query and one paginated history query")
+	require.Contains(t, tracked.calls[0].sql, "FROM observe_logs WHERE app_id = ? AND update_id = ?")
+	require.Contains(t, tracked.calls[0].sql, "AND event_name = 'xprem_js_crash' AND is_fatal = 0")
+	require.NotContains(t, tracked.calls[1].sql, "observe_logs")
 	for _, call := range tracked.calls {
-		require.NotContains(t, call.sql, "observe_logs")
 		require.NotContains(t, strings.ToLower(call.sql), "trace")
+		require.NotContains(t, call.sql, "attributes")
 	}
 	require.Contains(t, tracked.calls[1].sql, "group_fingerprint IN ?")
 	require.Contains(t, tracked.calls[1].sql, "(update_id, error_fingerprint) IN")

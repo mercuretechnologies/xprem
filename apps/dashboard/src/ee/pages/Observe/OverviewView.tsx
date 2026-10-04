@@ -107,9 +107,7 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
 
   const devices = fleet?.devices ?? 0;
   const facets = fleet?.facets ?? [];
-  const withoutOTA =
-    facets.find(facet => facet.dimension === 'update')?.values.find(value => value.value === '')
-      ?.devices ?? 0;
+  const embeddedDevices = fleet?.embeddedDevices ?? 0;
   const adoption = (releasesQuery.data?.channels ?? []).reduce(
     (total, channel) => ({
       active: total.active + channel.activeDevices,
@@ -153,9 +151,9 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
         />
         <Stat
           label="Embedded bundle"
-          value={percent(withoutOTA, devices)}
-          detail={devices > 0 ? compact.format(withoutOTA) : undefined}
-          help="Devices that have not taken any OTA update yet and run the bundle shipped in their store build."
+          value={percent(embeddedDevices, devices)}
+          detail={devices > 0 ? compact.format(embeddedDevices) : undefined}
+          help="Devices currently running the bundle shipped in their store build, including devices rolled back to it."
         />
       </div>
 

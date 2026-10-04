@@ -185,6 +185,91 @@ func TestGetUpdateFeedPostgres(t *testing.T) {
 	assert.NotEqual(t, firstPage[1].UpdateId, secondPage[0].UpdateId)
 }
 
+func TestGetLatestUpdateFeedPostgres(t *testing.T) {
+	fixture := newRolloutFixture(t)
+	ctx := context.Background()
+	fixture.checkedUpdate(t, 100, types.PlatformIOS, nil)
+	fixture.checkedUpdate(t, 200, types.PlatformAndroid, nil)
+	rollback, err := fixture.updates.CreateRollback(ctx, fixture.appId, 300, rolloutTestDefaultBranch, rolloutTestRuntime, types.PlatformIOS, "rollback", "back to embedded")
+	require.NoError(t, err)
+	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *rollback))
+	// Uploading a newer row must not hide the last checked serving head.
+	_, err = fixture.updates.CreateUpdate(ctx, fixture.appId, 400, rolloutTestDefaultBranch, rolloutTestRuntime, types.PlatformIOS, "unfinished", "", nil)
+	require.NoError(t, err)
+	newRuntime := "2.0.0"
+	_, err = fixture.branches.CreateRuntimeVersion(ctx, fixture.appId, newRuntime)
+	require.NoError(t, err)
+	newer, err := fixture.updates.CreateUpdate(ctx, fixture.appId, 500, rolloutTestDefaultBranch, newRuntime, types.PlatformAndroid, "new-runtime", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *newer))
+	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *newer, uuid.NewString()))
+	fixture.createUpdate(t, rolloutTestRolloutBranch, 300, types.PlatformIOS, true)
+	foreign := newRolloutFixture(t)
+	foreign.checkedUpdate(t, 300, types.PlatformIOS, nil)
+
+	query := types.UpdateFeedQuery{Branch: rolloutTestDefaultBranch, LatestOnly: true, Limit: 100}
+	heads, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, query)
+	require.NoError(t, err)
+	require.Len(t, heads, 3, "one checked head per runtime and platform, including older runtimes and rollback")
+	ids := make([]string, 0, len(heads))
+	for _, head := range heads {
+		ids = append(ids, head.UpdateId)
+		if head.UpdateId == "300" {
+			assert.Equal(t, "Rollback to embedded", head.UpdateUUID)
+		}
+	}
+	assert.ElementsMatch(t, []string{"200", "300", "500"}, ids)
+
+	// Applying the cursor after picking each head must never reveal the old
+	// version of a scope whose newest row appeared on an earlier page.
+	query.Limit = 1
+	var pagedIDs []string
+	for {
+		page, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, query)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		require.Len(t, page, 1)
+		pagedIDs = append(pagedIDs, page[0].UpdateId)
+		require.LessOrEqual(t, len(pagedIDs), 3, "paging must not repeat a serving head")
+		query.CursorCreatedAt = &page[0].FeedCreatedAt
+		query.CursorBranchID = page[0].BranchID
+		query.CursorUpdateID, err = strconv.ParseInt(page[0].UpdateId, 10, 64)
+		require.NoError(t, err)
+	}
+	assert.ElementsMatch(t, ids, pagedIDs)
+	filtered, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, types.UpdateFeedQuery{
+		Branch: rolloutTestDefaultBranch, RuntimeVersion: rolloutTestRuntime,
+		Platform: types.PlatformIOS, LatestOnly: true, Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "300", filtered[0].UpdateId)
+}
+
+func TestGetLatestUpdateFeedIncludesActiveControlPostgres(t *testing.T) {
+	fixture := newRolloutFixture(t)
+	ctx := context.Background()
+	fixture.checkedUpdate(t, 100, types.PlatformIOS, nil)
+	fixture.checkedUpdate(t, 200, types.PlatformAndroid, nil)
+	candidate, err := fixture.updates.CreateUpdateWithRollout(ctx, fixture.appId, 300, rolloutTestDefaultBranch, rolloutTestRuntime, types.PlatformIOS, "candidate", "", 10, nil)
+	require.NoError(t, err)
+	require.NoError(t, fixture.updates.MarkUpdateAsChecked(ctx, *candidate))
+	require.NoError(t, fixture.updates.StoreUpdateUUIDInMetadata(ctx, *candidate, uuid.NewString()))
+	query := types.UpdateFeedQuery{Branch: rolloutTestDefaultBranch, Platform: types.PlatformIOS, LatestOnly: true, Limit: 100}
+	active, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, query)
+	require.NoError(t, err)
+	require.Len(t, active, 2, "the active rollout serves both the candidate and its control")
+	assert.ElementsMatch(t, []string{"100", "300"}, []string{active[0].UpdateId, active[1].UpdateId})
+	_, err = fixture.rollouts.ClearUpdateRollout(ctx, fixture.appId, rolloutTestDefaultBranch, rolloutTestRuntime)
+	require.NoError(t, err)
+	finished, err := fixture.updates.GetUpdateFeed(ctx, fixture.appId, query)
+	require.NoError(t, err)
+	require.Len(t, finished, 1, "a finished rollout no longer serves the historical control")
+	assert.Equal(t, "300", finished[0].UpdateId)
+}
+
 // TestPublishGroupRolloutActivationPostgres verifies the second platform of a
 // grouped rollout publish still activates even though the first platform's rollout is already active.
 func TestPublishGroupRolloutActivationPostgres(t *testing.T) {

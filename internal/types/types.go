@@ -97,6 +97,7 @@ type UpdateFeedQuery struct {
 	Branch          string
 	RuntimeVersion  string
 	Platform        Platform
+	LatestOnly      bool
 	UpdateUUID      string
 	PublishGroup    string
 	CommitHash      string

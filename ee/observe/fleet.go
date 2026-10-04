@@ -41,9 +41,10 @@ type FleetFacet struct {
 
 // Fleet is the active device registry of an app, split along every fleet dimension.
 type Fleet struct {
-	Available bool         `json:"available"`
-	Devices   uint64       `json:"devices"`
-	Facets    []FleetFacet `json:"facets"`
+	Available       bool         `json:"available"`
+	Devices         uint64       `json:"devices"`
+	EmbeddedDevices uint64       `json:"embeddedDevices"`
+	Facets          []FleetFacet `json:"facets"`
 }
 
 // ChannelAdoption is how many active devices of a channel already run what it serves them.
@@ -130,6 +131,12 @@ func buildFleet(rows []pgdb.ListObserveFleetFacetsRow) Fleet {
 	// Every device counts exactly once in each facet, so any one of them sums to the fleet.
 	for _, value := range values["platform"] {
 		fleet.Devices += value.Devices
+	}
+	// The embedded cohort may be smaller than the fifty listed OTA updates.
+	for _, value := range values["update"] {
+		if value.Value == "" {
+			fleet.EmbeddedDevices += value.Devices
+		}
 	}
 	for _, dimension := range fleetDimensions {
 		ranked := values[dimension]

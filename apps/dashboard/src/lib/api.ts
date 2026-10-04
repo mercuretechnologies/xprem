@@ -255,6 +255,7 @@ export type UpdateFeedQuery = {
   branch?: string;
   runtimeVersion?: string;
   platform?: string;
+  latestOnly?: boolean;
   uuid?: string;
   groupId?: string;
   commitHash?: string;
@@ -568,6 +569,7 @@ export type ObserveFleetFacet = {
 export type ObserveFleet = {
   available: boolean;
   devices: number;
+  embeddedDevices: number;
   facets: ObserveFleetFacet[];
 };
 

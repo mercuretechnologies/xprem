@@ -390,6 +390,15 @@ func (h *UpdateHandler) GetPublishGroupsHandler(w http.ResponseWriter, r *http.R
 func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	params := r.URL.Query()
+	latestOnly := false
+	if raw := params.Get("latestOnly"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			handlers.RenderError(w, http.StatusBadRequest, "latestOnly must be a boolean")
+			return
+		}
+		latestOnly = parsed
+	}
 	limit := defaultUpdateFeedLimit
 	if rawLimit := params.Get("limit"); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
@@ -425,6 +434,7 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 		Branch:         params.Get("branch"),
 		RuntimeVersion: params.Get("runtimeVersion"),
 		Platform:       platform,
+		LatestOnly:     latestOnly,
 		UpdateUUID:     params.Get("uuid"),
 		PublishGroup:   params.Get("groupId"),
 		CommitHash:     params.Get("commitHash"),
