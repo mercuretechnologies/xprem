@@ -26,19 +26,40 @@ func (r *sourceReadCounter) ReadAt(p []byte, offset int64) (int, error) {
 	return r.Reader.ReadAt(p, offset)
 }
 
-func TestSymbolicateSkipsOversizedSourceBeforeReading(t *testing.T) {
-	m := labMap(strings.Repeat("x", maxContextSourceBytes+1), 1)
-	var encoded bytes.Buffer
-	require.NoError(t, WriteIndex(&encoded, m))
-	reader := &sourceReadCounter{Reader: bytes.NewReader(encoded.Bytes()), textsOffset: int64(le.Uint32(encoded.Bytes()[28:]))}
-	index, err := OpenIndex(reader)
-	require.NoError(t, err)
+func TestSymbolicateSourceContextBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		size      int
+		textReads int
+	}{
+		{"exact boundary", maxContextSourceBytes, 1},
+		{"over budget", maxContextSourceBytes + 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := labMap(strings.Repeat("x", tc.size), 1)
+			var encoded bytes.Buffer
+			require.NoError(t, WriteIndex(&encoded, m))
+			reader := &sourceReadCounter{Reader: bytes.NewReader(encoded.Bytes()), textsOffset: int64(le.Uint32(encoded.Bytes()[28:]))}
+			index, err := OpenIndex(reader)
+			require.NoError(t, err)
 
-	trace := Symbolicate(index, hermesTrace())
-	require.NotNil(t, trace.Frames[0].Origin)
-	assert.Equal(t, "src/LabScreen.tsx", trace.Frames[0].Origin.Source)
-	assert.Nil(t, trace.Frames[0].Origin.Context)
-	assert.Zero(t, reader.textReads, "the oversized source must be rejected before ReaderAt")
+			trace := Symbolicate(index, hermesTrace())
+			origin := trace.Frames[0].Origin
+			require.NotNil(t, origin)
+			assert.Equal(t, "src/LabScreen.tsx", origin.Source)
+			assert.Equal(t, 1, origin.Line)
+			assert.Equal(t, 5, origin.Column)
+			assert.Equal(t, "onPress", origin.Name)
+			assert.True(t, origin.InApp)
+			if tc.textReads == 0 {
+				assert.Nil(t, origin.Context)
+			} else {
+				require.NotNil(t, origin.Context)
+				assert.Equal(t, []string{strings.Repeat("x", trimmedLineRunes) + "…"}, origin.Context.Lines)
+			}
+			assert.Equal(t, tc.textReads, reader.textReads, "the oversized source must be rejected before ReaderAt")
+		})
+	}
 }
 
 func TestSourceTextBudgetIncludesExactBoundary(t *testing.T) {
@@ -49,8 +70,4 @@ func TestSourceTextBudgetIncludesExactBoundary(t *testing.T) {
 
 	_, err = index.sourceText(0, 7)
 	assert.ErrorIs(t, err, ErrInvalidIndex)
-	// The public method still reads sources using its existing index budget.
-	text, err = index.SourceText(0)
-	require.NoError(t, err)
-	assert.Equal(t, "12345678", text)
 }

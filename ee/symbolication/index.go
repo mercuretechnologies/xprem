@@ -370,13 +370,8 @@ func OpenIndex(r io.ReaderAt) (*Index, error) {
 	return x, nil
 }
 
-// SourceText reads the text of one source; "" when the map carried none.
-func (x *Index) SourceText(source int) (string, error) {
-	return x.sourceText(source, maxIndexCacheBytes)
-}
-
-// sourceText checks the stored span before allocating or reading its text.
-// Context callers have a smaller budget than callers reading a whole source.
+// sourceText reads one source within maxBytes, rejecting oversized spans
+// before allocating or reading their text; "" when the map carried none.
 func (x *Index) sourceText(source int, maxBytes uint32) (string, error) {
 	if source < 0 || source >= len(x.texts) {
 		return "", fmt.Errorf("%w: source %d out of range", ErrInvalidIndex, source)
@@ -398,7 +393,7 @@ func (x *Index) sourceText(source int, maxBytes uint32) (string, error) {
 // Position is where a generated position comes from.
 type Position struct {
 	Source string
-	// SourceIndex is Source's place in the map, the argument SourceText takes.
+	// SourceIndex is Source's place in the map.
 	SourceIndex int
 	// Line and Column are one-based, as editors count them.
 	Line    int

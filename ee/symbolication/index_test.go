@@ -55,11 +55,11 @@ func TestSourceTextIsReadBySpan(t *testing.T) {
 	}
 	index := openIndexOf(t, m)
 	for i, want := range m.SourcesContent {
-		got, err := index.SourceText(i)
+		got, err := index.sourceText(i, maxIndexCacheBytes)
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "source %d", i)
 	}
-	_, err := index.SourceText(3)
+	_, err := index.sourceText(3, maxIndexCacheBytes)
 	assert.ErrorIs(t, err, ErrInvalidIndex)
 
 	// The texts sit after the segments: a lookup still reads the right segments.
@@ -178,7 +178,7 @@ func TestHermesExampleMap(t *testing.T) {
 		assert.Equal(t, int(s.OriginalLine)+1, pos.Line)
 	}
 	for _, i := range []int{0, len(m.Sources) / 2, len(m.Sources) - 1} {
-		text, err := index.SourceText(i)
+		text, err := index.sourceText(i, maxIndexCacheBytes)
 		require.NoError(t, err)
 		want := ""
 		if raw.SourcesContent[i] != nil {
