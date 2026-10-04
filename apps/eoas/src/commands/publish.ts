@@ -207,6 +207,18 @@ export default class Publish extends Command {
       },
       packageRunner,
     });
+    // Resolve the project's dynamic config first: `all` means its supported
+    // native platforms, while an explicit selection still belongs to Expo to validate.
+    const platformsToExport = ([RequestedPlatform.Ios, RequestedPlatform.Android] as const).filter(
+      candidate =>
+        !platform || platform === RequestedPlatform.All
+          ? !config.platforms || config.platforms.includes(candidate)
+          : platform === candidate
+    );
+    if (!platformsToExport.length) {
+      Log.error('No iOS or Android platform is enabled in the Expo config.');
+      process.exit(1);
+    }
     const serverUrl = await resolveServerUrl(config, customServerUrl).catch(e => {
       Log.error(e.message);
       process.exit(1);
@@ -235,7 +247,7 @@ export default class Publish extends Command {
 
     const runtimeSpinner = ora('🔄 Resolving runtime version...').start();
     const runtimeVersions = [
-      ...(!platform || platform === RequestedPlatform.All || platform === RequestedPlatform.Ios
+      ...(platformsToExport.includes(RequestedPlatform.Ios)
         ? [
             {
               runtimeVersion: (
@@ -256,7 +268,7 @@ export default class Publish extends Command {
             },
           ]
         : []),
-      ...(!platform || platform === RequestedPlatform.All || platform === RequestedPlatform.Android
+      ...(platformsToExport.includes(RequestedPlatform.Android)
         ? [
             {
               runtimeVersion: (
@@ -295,11 +307,8 @@ export default class Publish extends Command {
     }
     const exportSpinner = ora('📦 Exporting project files...').start();
     try {
-      // Named explicitly: without --platform, expo export also bundles web.
-      const specifiedPlatform =
-        platform === RequestedPlatform.All
-          ? ['--platform', RequestedPlatform.Ios, '--platform', RequestedPlatform.Android]
-          : ['--platform', platform];
+      // Name native platforms explicitly so Expo never expands `all` to web.
+      const specifiedPlatform = platformsToExport.flatMap(candidate => ['--platform', candidate]);
       const sourcemapArgs = dumpSourcemap ? ['--dump-sourcemap'] : [];
       const [runnerCommand, runnerArgs] = splitPackageRunner(packageRunner);
       const { stdout } = await spawnAsync(
