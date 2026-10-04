@@ -114,6 +114,22 @@ func TestAManualCrashEventHasTheSameFingerprintAsTheSDKs(t *testing.T) {
 	assert.Equal(t, fingerprintFor(exceptionRow, errorAttributes("Error", "boom", trace)), manual)
 }
 
+func TestAManualCrashHasAFingerprintWithoutSeverityOrFatalFlag(t *testing.T) {
+	trace := deviceTrace("0CC7E3AE", 3, "1128613")
+	attributes := map[string]any{"name": "Error", "message": "boom", "stack": trace}
+	expected := fingerprintFor(exceptionRow, errorAttributes("Error", "boom", trace))
+	for _, severity := range []uint8{0, 9, 13, 17, 21} {
+		for _, fatal := range []bool{false, true} {
+			t.Run(fmt.Sprintf("severity_%d_fatal_%t", severity, fatal), func(t *testing.T) {
+				row := LogRow{EventName: JSCrashEventName, SeverityNumber: severity, IsFatal: fatal}
+				assert.Equal(t, expected, fingerprintFor(row, attributes))
+			})
+		}
+	}
+	assert.NotEqual(t, uuid.Nil, fingerprintFor(LogRow{EventName: JSCrashEventName}, nil),
+		"a manual crash with no attributes still has an error identity")
+}
+
 // fingerprintFor is errorFingerprint from the attributes as marshalAttributes reads them.
 func fingerprintFor(row LogRow, attributes map[string]any) uuid.UUID {
 	_, traces := marshalAttributes(attributes, nil)

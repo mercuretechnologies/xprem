@@ -72,6 +72,53 @@ func TestUpdateErrorsLiveCountsManualRenderCrash(t *testing.T) {
 	require.Equal(t, errors.Errors[0].CrashOccurrences, page.Errors[0].CrashOccurrences)
 }
 
+func TestUpdateErrorsLiveCountsNewLowSeverityManualCrashes(t *testing.T) {
+	chURL, pgURL := requireLiveStores(t)
+	clickhouse.RunDBMigrations(chURL, pgURL)
+	ctx := context.Background()
+	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
+	require.NoError(t, err)
+	defer engine.Close()
+	explorer := &Explorer{clickhouse: engine}
+	appID, updateID, deviceID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	resource := ResourceLogs{Attributes: map[string]any{
+		EASClientIDKey: deviceID, updateIDKey: updateID,
+	}}
+	for i, severity := range []uint8{0, 9, 13} {
+		resource.Records = append(resource.Records, LogRecord{
+			TimeUnixNano:   uint64(now.Add(time.Duration(i-60) * time.Second).UnixNano()),
+			SeverityNumber: severity,
+			Attributes: map[string]any{
+				EventNameKey: JSCrashEventName, "name": "Error", "message": "manual crash",
+				"stack": "Error: manual crash\n    at screen (app.js:1:120)",
+			},
+		})
+	}
+	rows := FlattenLogs(appID, LogBatch{Resources: []ResourceLogs{resource}}, now)
+	require.Len(t, rows, 3)
+	for _, row := range rows {
+		require.NotEqual(t, uuid.Nil, row.ErrorFingerprint)
+		require.False(t, row.IsFatal)
+	}
+	// Retries retain their content key. The global list deduplicates them;
+	// update aggregates retain the existing occurrence-count contract.
+	require.NoError(t, NewClickHouseTelemetrySink(engine).InsertLogs(ctx, append(rows, rows[0])))
+	errors, err := explorer.readErrors(ctx, appID, ErrorsQuery{
+		ExplorerQuery: ExplorerQuery{From: now.Add(-time.Hour), To: now.Add(time.Minute)}, Fatality: "fatal",
+	})
+	require.NoError(t, err)
+	require.Len(t, errors.Errors, 1)
+	require.EqualValues(t, 3, errors.Errors[0].Occurrences)
+	require.EqualValues(t, 3, errors.Errors[0].CrashOccurrences)
+	page, err := explorer.readUpdateErrors(ctx, appID, updateID, 25, 0)
+	require.NoError(t, err)
+	require.Len(t, page.Errors, 1)
+	require.EqualValues(t, 4, page.Errors[0].Occurrences)
+	require.EqualValues(t, 3, page.Errors[0].CrashOccurrences)
+	require.EqualValues(t, 1, page.Errors[0].ImpactedDevices)
+}
+
 func TestUpdateErrorsLiveManualCrashesRetainedDeduplicatedAndScoped(t *testing.T) {
 	chURL, pgURL := requireLiveStores(t)
 	clickhouse.RunDBMigrations(chURL, pgURL)
