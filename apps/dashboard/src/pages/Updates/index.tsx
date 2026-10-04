@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { TimeRangePicker } from '@/components/TimeRangePicker';
-import { describeRange, resolveRange, type TimeRange } from '@/lib/timeRange';
+import { describeRange } from '@/lib/timeRange';
 import { api, UpdateFeedRecord } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -52,6 +52,7 @@ import { aggregateUpdateHealth } from '@/pages/Updates/components/updateHealth';
 import { shortRuntimeVersion, updateDetailsPath, updateTitle } from '@/lib/update-format';
 import { GitCommitLink } from '@/components/GitCommitLink';
 import { LinkedUpdateTitle } from '@/components/LinkedUpdateTitle';
+import { resolvePublishedFilter } from './publishedFilter';
 
 type FeedGroup = {
   key: string;
@@ -223,19 +224,13 @@ export const Updates = () => {
 
   // The URL keeps the range as typed; the API gets its resolved bounds. A
   // relative range resolves when it is chosen, not on every render.
-  const publishedRange = useMemo<TimeRange | null>(
-    () =>
-      filters.from || filters.to
-        ? { from: filters.from || '2000-01-01', to: filters.to || 'now' }
-        : null,
+  const publishedFilter = useMemo(
+    () => resolvePublishedFilter(filters.from, filters.to, Date.now()),
     [filters.from, filters.to]
   );
-  const publishedBounds = useMemo(
-    () => (publishedRange ? resolveRange(publishedRange, Date.now()) : null),
-    [publishedRange]
-  );
-  const feedFrom = publishedBounds?.from.toISOString() ?? '';
-  const feedTo = publishedRange?.to === 'now' ? '' : (publishedBounds?.to.toISOString() ?? '');
+  const publishedRange = publishedFilter.range;
+  const feedFrom = publishedFilter.from;
+  const feedTo = publishedFilter.to;
 
   const filterKey = [
     filters.branch,
