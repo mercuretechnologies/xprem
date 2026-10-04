@@ -7,11 +7,14 @@ package observe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 	"xprem/ee/symbolication"
 	"xprem/internal/database/postgres"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -52,7 +55,7 @@ func NewErrorGroupsSweep(explorer *Explorer, indexes IndexOpener) *ErrorGroupsSw
 func (s *ErrorGroupsSweep) Run(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, errorGroupsSweepTimeout)
 	defer cancel()
-	release, locked, err := postgres.TryAdvisoryLock(ctx, s.explorer.postgres.DB, postgres.ErrorGroupSweepLockID, "error group sweep")
+	release, locked, err := tryErrorGroupsLock(ctx, s.explorer.postgres.DB)
 	if err != nil || !locked {
 		return err
 	}
@@ -151,6 +154,35 @@ func (s *ErrorGroupsSweep) Run(ctx context.Context) error {
 		dirty = true
 	}
 	return errors.Join(ctx.Err(), flush())
+}
+
+// A dedicated connection holds the session lock. Pinning one from the pool
+// would prevent progress reads and writes when DB_MAX_CONNS is one.
+func tryErrorGroupsLock(ctx context.Context, db any) (func(), bool, error) {
+	pool, isPool := db.(*pgxpool.Pool)
+	if !isPool {
+		return postgres.TryAdvisoryLock(ctx, db, postgres.ErrorGroupSweepLockID, "error group sweep")
+	}
+	conn, err := pgx.ConnectConfig(ctx, pool.Config().ConnConfig)
+	if err != nil {
+		return nil, false, fmt.Errorf("connecting for the error group sweep lock: %w", err)
+	}
+	release := func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), errorGroupsFinishTimeout)
+		defer cancel()
+		// Closing the session also releases its advisory lock.
+		_ = conn.Close(closeCtx)
+	}
+	var held bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", postgres.ErrorGroupSweepLockID).Scan(&held); err != nil {
+		release()
+		return nil, false, fmt.Errorf("taking the error group sweep lock: %w", err)
+	}
+	if !held {
+		release()
+		return nil, false, nil
+	}
+	return release, true, nil
 }
 
 // indexOf opens the update's index; an update that failed to open once in the

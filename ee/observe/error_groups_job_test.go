@@ -415,3 +415,27 @@ func TestErrorGroupsSweepDoesNotRunWhileAnotherReplicaHoldsLock(t *testing.T) {
 	require.NoError(t, sweep.Run(ctx))
 	require.Len(t, tracked.calls, 1, "the next replica resumes after the lock is released")
 }
+
+func TestErrorGroupsSweepRunsWithSingleConnectionPool(t *testing.T) {
+	explorer := isolatedErrorGroupsExplorer(t)
+	_, pgURL := requireLiveStores(t)
+	config, err := pgxpool.ParseConfig(pgURL)
+	require.NoError(t, err)
+	config.MaxConns = 1
+	config.MinConns = 0
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	explorer.postgres = &database.Engine{Queries: pgdb.New(pool), DB: pool}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	app, update := uuid.NewString(), uuid.NewString()
+	row := errorLogRow(app, update, uuid.NewString(), errorAttributes("Error", "ready",
+		"Error: ready\n    at onPress (address at /data/app.bundle:1:120)"), 21, true, time.Now().UTC())
+	require.NoError(t, NewClickHouseTelemetrySink(explorer.clickhouse).InsertLogs(ctx, []LogRow{row}))
+	opener := indexOpenerFunc(func(context.Context, string, string) (*symbolication.Index, error) { return labIndex(t), nil })
+	require.NoError(t, NewErrorGroupsSweep(explorer, opener).Run(ctx), "the lock must not consume the only pooled connection")
+	group, err := explorer.ReadErrorGroup(ctx, app, update, row.ErrorFingerprint.String())
+	require.NoError(t, err)
+	require.NotNil(t, group)
+}
