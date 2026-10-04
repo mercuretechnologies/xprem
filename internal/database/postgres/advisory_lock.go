@@ -21,6 +21,7 @@ const (
 	HealthOutboxLockID          int64 = 745103622 // health outbox drainer
 	HealthSnapshotLockID        int64 = 745103623 // health fleet snapshots
 	HealthSegmentSnapshotLockID int64 = 745103624 // health segment snapshot capture
+	ErrorGroupSweepLockID       int64 = 745103625 // error group sweep progress
 )
 
 // advisoryLockWaitTimeout caps waiting for a blocking advisory lock: long

@@ -305,13 +305,9 @@ func TestErrorsLiveReconcilesCountsFiltersAndCursor(t *testing.T) {
 }
 
 func TestErrorsSweepRecoversOlderPendingGroups(t *testing.T) {
-	chURL, pgURL := requireLiveStores(t)
-	clickhouse.RunDBMigrations(chURL, pgURL)
 	ctx := context.Background()
-	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
-	require.NoError(t, err)
-	defer engine.Close()
-	explorer := &Explorer{clickhouse: engine}
+	explorer := isolatedErrorGroupsExplorer(t)
+	engine := explorer.clickhouse
 
 	var indexBytes bytes.Buffer
 	require.NoError(t, symbolication.WriteIndex(&indexBytes, &symbolication.Map{
@@ -382,8 +378,10 @@ func TestErrorsSweepRecoversOlderPendingGroups(t *testing.T) {
 		}
 		return index, nil
 	}))
+	sweep.now = func() time.Time { return now.Add(-errorGroupsRetryDelay) }
 	require.NoError(t, sweep.Run(ctx))
 	ready = true
+	sweep.now = func() time.Time { return now }
 	require.NoError(t, sweep.Run(ctx))
 	page, err := explorer.readErrors(ctx, app, ErrorsQuery{ExplorerQuery: query, IncludeSeries: true})
 	require.NoError(t, err)

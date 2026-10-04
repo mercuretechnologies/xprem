@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 	"xprem/ee/symbolication"
 )
@@ -73,20 +75,88 @@ func (e *Explorer) ReadErrorGroup(ctx context.Context, appID, updateID, fingerpr
 	return &group, nil
 }
 
-// pendingErrorGroups lists the errors counted lately that have neither a
-// group nor a mark, most frequent first, from the offset-th one.
-func (e *Explorer) pendingErrorGroups(ctx context.Context, since time.Time, limit, offset int) ([]errorKey, error) {
+// pendingErrorGroupsWhere excludes completed errors and updates waiting for a
+// retry. Both app rotation and candidate selection use the same eligibility.
+func pendingErrorGroupsWhere(since time.Time, state errorGroupsSweepState) (string, []any, error) {
+	args := []any{since, since}
+	where := `hour >= ?
+	  AND (app_id, update_id, error_fingerprint) NOT IN (
+	      SELECT app_id, update_id, error_fingerprint FROM error_groups
+	      WHERE (app_id, update_id) IN (
+	          SELECT app_id, update_id FROM error_occurrences WHERE hour >= ?))`
+	if len(state.Deferred) != 0 {
+		updates := make([]string, 0, len(state.Deferred))
+		for update := range state.Deferred {
+			updates = append(updates, update)
+		}
+		sort.Strings(updates)
+		pairs := make([]string, 0, len(updates))
+		for _, update := range updates {
+			appID, updateID, ok := strings.Cut(update, "/")
+			if !ok {
+				return "", nil, fmt.Errorf("invalid deferred update in error group sweep progress")
+			}
+			pairs = append(pairs, "(toUUID(?), toUUID(?))")
+			args = append(args, appID, updateID)
+		}
+		where += " AND (app_id, update_id) NOT IN (" + strings.Join(pairs, ",") + ")"
+	}
+	return where, args, nil
+}
+
+// nextErrorGroupsApp rotates between applications, including those with
+// missing source maps or large ready backlogs. Circular ordering picks the
+// first app after the last one, or wraps, in a single query.
+func (e *Explorer) nextErrorGroupsApp(ctx context.Context, since time.Time, state errorGroupsSweepState) (string, error) {
+	where, args, err := pendingErrorGroupsWhere(since, state)
+	if err != nil {
+		return "", err
+	}
+	order := "app_id"
+	if state.LastApp != "" {
+		order = "(app_id <= toUUID(?)), app_id"
+		args = append(args, state.LastApp)
+	}
+	rows, err := e.clickhouse.Conn.Query(ctx, `SELECT toString(app_id)
+		FROM error_occurrences WHERE `+where+`
+		GROUP BY app_id ORDER BY `+order+` LIMIT 1`, args...)
+	if err != nil {
+		return "", fmt.Errorf("selecting the next application for error groups: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return "", rows.Err()
+	}
+	var appID string
+	if err := rows.Scan(&appID); err != nil {
+		return "", err
+	}
+	return appID, rows.Err()
+}
+
+// pendingErrorGroups lists the selected app's errors that have neither a
+// group nor a mark. Stable keyset order prevents new counts and completed
+// groups from moving a skipped error back ahead of the sweep's progress.
+func (e *Explorer) pendingErrorGroups(ctx context.Context, since time.Time, limit int, state errorGroupsSweepState) ([]errorKey, error) {
+	where, args, err := pendingErrorGroupsWhere(since, state)
+	if err != nil {
+		return nil, err
+	}
+	if state.LastApp != "" {
+		where += " AND app_id = toUUID(?)"
+		args = append(args, state.LastApp)
+	}
+	if cursor := state.cursor(); cursor != nil {
+		where += " AND (app_id, update_id, error_fingerprint) > (toUUID(?), toUUID(?), toUUID(?))"
+		args = append(args, cursor.AppID, cursor.UpdateID, cursor.Fingerprint)
+	}
+	args = append(args, limit)
 	rows, err := e.clickhouse.Conn.Query(ctx, `
 		SELECT toString(app_id), toString(update_id), toString(error_fingerprint)
-		FROM error_occurrences
-		WHERE hour >= ?
-		  AND (app_id, update_id, error_fingerprint) NOT IN (
-		      SELECT app_id, update_id, error_fingerprint FROM error_groups
-		      WHERE (app_id, update_id) IN (
-		          SELECT app_id, update_id FROM error_occurrences WHERE hour >= ?))
+		FROM error_occurrences WHERE `+where+`
 		GROUP BY app_id, update_id, error_fingerprint
-		ORDER BY sum(occurrences) DESC, app_id, update_id, error_fingerprint
-		LIMIT ? OFFSET ?`, since, since, limit, offset)
+		ORDER BY app_id, update_id, error_fingerprint
+		LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing the errors without a group: %w", err)
 	}

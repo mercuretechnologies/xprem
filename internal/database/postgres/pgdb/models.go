@@ -223,6 +223,11 @@ type OauthClient struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type ObserveErrorGroupSweepState struct {
+	ID    bool   `json:"id"`
+	State []byte `json:"state"`
+}
+
 type RefreshToken struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`

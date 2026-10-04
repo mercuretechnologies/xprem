@@ -10,6 +10,7 @@ import (
 	"log"
 	"time"
 	"xprem/ee/symbolication"
+	"xprem/internal/database/postgres"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -29,6 +30,8 @@ const (
 	errorGroupsLookback      = ErrorsMaxWindow
 	errorGroupsSweepTimeout  = 50 * time.Second
 	errorGroupsWriteEvery    = 20
+	errorGroupsRetryDelay    = 5 * time.Minute
+	errorGroupsFinishTimeout = 5 * time.Second
 )
 
 // ErrorGroupsSweep gives a group to every error counted without one, from one
@@ -37,77 +40,121 @@ const (
 type ErrorGroupsSweep struct {
 	explorer *Explorer
 	indexes  IndexOpener
+	now      func() time.Time
 }
 
 func NewErrorGroupsSweep(explorer *Explorer, indexes IndexOpener) *ErrorGroupsSweep {
-	return &ErrorGroupsSweep{explorer: explorer, indexes: indexes}
+	return &ErrorGroupsSweep{explorer: explorer, indexes: indexes, now: time.Now}
 }
 
-// Run is one pass.
+// Run is one bounded pass. The cursor and retry deadlines survive a worker or
+// replica change; an unavailable update cannot hold all other applications up.
 func (s *ErrorGroupsSweep) Run(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, errorGroupsSweepTimeout)
 	defer cancel()
+	release, locked, err := postgres.TryAdvisoryLock(ctx, s.explorer.postgres.DB, postgres.ErrorGroupSweepLockID, "error group sweep")
+	if err != nil || !locked {
+		return err
+	}
+	defer release()
+	state, err := s.explorer.errorGroupsState(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	state.prune(now)
 	// Include the oldest partial ingestion hour.
-	since := time.Now().Add(-errorGroupsLookback).Truncate(time.Hour)
+	since := now.Add(-errorGroupsLookback).Truncate(time.Hour)
+	appID, err := s.explorer.nextErrorGroupsApp(ctx, since, state)
+	if err != nil {
+		return err
+	}
+	if appID == "" {
+		return s.explorer.saveErrorGroupsState(ctx, state)
+	}
+	state.LastApp = appID
+	// Rotate even if this app's candidate query times out. This records no
+	// candidate progress; the cursor advances only after acknowledged writes.
+	if err := s.explorer.saveErrorGroupsState(ctx, state); err != nil {
+		return err
+	}
+	pending, err := s.explorer.pendingErrorGroups(ctx, since, errorGroupsPerSweep, state)
+	if err != nil {
+		return err
+	}
 	known := map[string]error{}
-	symbolicated, skipped := 0, 0
-	var head errorKey
-	for symbolicated < errorGroupsPerSweep {
-		// The errors written left the list and the skipped ones lead it.
-		pending, err := s.explorer.pendingErrorGroups(ctx, since, errorGroupsPerSweep, skipped)
-		if err != nil {
-			return err
-		}
-		if len(pending) == 0 || pending[0] == head {
+	var groups []groupedError
+	dirty := true
+	// Checkpoint only after the corresponding groups were acknowledged. If a
+	// write fails, the next pass repeats that batch rather than losing it.
+	flush := func() error {
+		if !dirty {
 			return nil
 		}
-		head = pending[0]
-		var groups []groupedError
-		for _, key := range pending {
-			if symbolicated == errorGroupsPerSweep {
-				break
+		writeCtx := ctx
+		if ctx.Err() != nil {
+			// Finish only already-attempted work when the run's budget expires.
+			// This bounded allowance saves progress past a slow failed index.
+			var finishCancel context.CancelFunc
+			writeCtx, finishCancel = context.WithTimeout(context.WithoutCancel(ctx), errorGroupsFinishTimeout)
+			defer finishCancel()
+		}
+		if err := s.explorer.writeErrorGroups(writeCtx, groups); err != nil {
+			return err
+		}
+		if err := s.explorer.saveErrorGroupsState(writeCtx, state); err != nil {
+			return err
+		}
+		groups = nil
+		dirty = false
+		return nil
+	}
+	for attempted, key := range pending {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, flush())
+		}
+		index, err := s.indexOf(ctx, known, key)
+		var group ErrorGroup
+		switch {
+		case err == nil:
+			group, err = s.symbolicate(ctx, index, key)
+			if err != nil {
+				log.Printf("observe: error %s of update %s stays without a group: %v", key.fingerprint, key.updateID, err)
 			}
-			index, err := s.indexOf(ctx, known, key)
-			var group ErrorGroup
-			switch {
-			case err == nil:
-				group, err = s.symbolicate(ctx, index, key)
-				if err != nil {
-					log.Printf("observe: error %s of update %s stays without a group: %v", key.fingerprint, key.updateID, err)
-					skipped++
-					continue
-				}
-				symbolicated++
-			case errors.Is(err, symbolication.ErrNoSourcemap),
-				errors.Is(err, symbolication.ErrUpdateNotFound):
-				group = ErrorGroup{GroupFingerprint: noGroupFingerprint, SymbolicatedAt: time.Now().UTC()}
-			case errors.Is(err, symbolication.ErrUnavailable):
-				// Nothing can be grouped without a license.
-				return s.explorer.writeErrorGroups(ctx, groups)
-			default:
-				skipped++
-				continue
-			}
+		case errors.Is(err, symbolication.ErrNoSourcemap),
+			errors.Is(err, symbolication.ErrUpdateNotFound):
+			group = ErrorGroup{GroupFingerprint: noGroupFingerprint, SymbolicatedAt: s.now().UTC()}
+			err = nil
+		case errors.Is(err, symbolication.ErrUnavailable):
+			// Nothing can be grouped without a license. Keep this key pending.
+			return flush()
+		default:
+			state.deferUpdate(key, s.now().Add(errorGroupsRetryDelay))
+		}
+		if err == nil {
 			groups = append(groups, groupedError{errorKey: key, ErrorGroup: group})
-			if len(groups) == errorGroupsWriteEvery {
-				if err := s.explorer.writeErrorGroups(ctx, groups); err != nil {
-					return err
-				}
-				groups = nil
+		}
+		state.advance(key, s.now())
+		dirty = true
+		if (attempted+1)%errorGroupsWriteEvery == 0 {
+			if err := flush(); err != nil {
+				return err
 			}
-		}
-		if err := s.explorer.writeErrorGroups(ctx, groups); err != nil {
-			return err
-		}
-		if len(pending) < errorGroupsPerSweep {
-			return nil
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
+	if len(pending) < errorGroupsPerSweep && state.cursor() != nil {
+		// End of a traversal: the next pass can see new keys behind the cursor.
+		delete(state.Cursors, appID)
+		dirty = true
+	}
+	return errors.Join(ctx.Err(), flush())
 }
 
-// indexOf opens the update's index; an update that answered with an error
-// once in the pass is not asked again.
+// indexOf opens the update's index; an update that failed to open once in the
+// pass is not asked again. An unreadable trace does not hide its valid siblings.
 func (s *ErrorGroupsSweep) indexOf(ctx context.Context, known map[string]error, key errorKey) (*symbolication.Index, error) {
 	cacheKey := key.appID + "/" + key.updateID
 	if err, seen := known[cacheKey]; seen {

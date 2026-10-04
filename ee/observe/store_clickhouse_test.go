@@ -241,14 +241,9 @@ func (f indexOpenerFunc) OpenUpdateIndex(ctx context.Context, appID, updateUUID 
 
 // Needs TEST_CLICKHOUSE_URL and TEST_DATABASE_URL to run.
 func TestErrorGroupsSweepGroupsEachErrorOnce(t *testing.T) {
-	chURL, pgURL := requireLiveStores(t)
-	clickhouse.RunDBMigrations(chURL, pgURL)
-
 	ctx := context.Background()
-	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
-	require.NoError(t, err)
-	defer engine.Close()
-	explorer := &Explorer{clickhouse: engine}
+	explorer := isolatedErrorGroupsExplorer(t)
+	engine := explorer.clickhouse
 
 	appID, indexedUpdate, unmappedUpdate := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	bundle := "/data/.expo-internal/cc6bcf26.bundle"
@@ -262,7 +257,7 @@ func TestErrorGroupsSweepGroupsEachErrorOnce(t *testing.T) {
 		logRow(indexedUpdate, crash), logRow(indexedUpdate, crash), logRow(unmappedUpdate, crash),
 	}))
 
-	// The sweep covers every app in the shared test database; only this one's opens count.
+	// Each update is opened once for the error it owns.
 	opened := 0
 	sweep := NewErrorGroupsSweep(explorer, indexOpenerFunc(func(_ context.Context, app, updateUUID string) (*symbolication.Index, error) {
 		if app != appID {
@@ -300,21 +295,16 @@ func TestErrorGroupsSweepGroupsEachErrorOnce(t *testing.T) {
 
 func pendingKeys(t *testing.T, explorer *Explorer, since time.Time, limit int) []errorKey {
 	t.Helper()
-	pending, err := explorer.pendingErrorGroups(context.Background(), since, limit, 0)
+	pending, err := explorer.pendingErrorGroups(context.Background(), since, limit, errorGroupsSweepState{})
 	require.NoError(t, err)
 	return pending
 }
 
 // Needs TEST_CLICKHOUSE_URL and TEST_DATABASE_URL to run.
 func TestErrorGroupsSweepIsNotStarvedByErrorsItCannotGroup(t *testing.T) {
-	chURL, pgURL := requireLiveStores(t)
-	clickhouse.RunDBMigrations(chURL, pgURL)
-
 	ctx := context.Background()
-	engine, err := clickhouse.NewClickHouseEngine(ctx, chURL)
-	require.NoError(t, err)
-	defer engine.Close()
-	explorer := &Explorer{clickhouse: engine}
+	explorer := isolatedErrorGroupsExplorer(t)
+	engine := explorer.clickhouse
 
 	appID, indexedUpdate, unmappedUpdate, brokenUpdate := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	bundle := "/data/.expo-internal/cc6bcf26.bundle"
@@ -343,11 +333,13 @@ func TestErrorGroupsSweepIsNotStarvedByErrorsItCannotGroup(t *testing.T) {
 		}
 		return labIndex(t), nil
 	}))
-	require.NoError(t, sweep.Run(ctx))
+	for pass := 0; pass < 4; pass++ {
+		require.NoError(t, sweep.Run(ctx))
+	}
 
 	group, err := explorer.ReadErrorGroup(ctx, appID, indexedUpdate, fingerprintFor(LogRow{SeverityNumber: 21}, mapped).String())
 	require.NoError(t, err)
-	require.NotNil(t, group, "the error with a map is grouped in the same pass as the more frequent ones it cannot group")
+	require.NotNil(t, group, "the error with a map is grouped within bounded passes despite errors it cannot group")
 	listed := map[string]bool{}
 	for _, key := range pendingKeys(t, explorer, time.Now().Add(-time.Hour), 100000) {
 		listed[key.updateID] = true
