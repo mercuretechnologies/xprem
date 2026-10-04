@@ -4,22 +4,16 @@
 
 import { lazy, Suspense } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Activity,
-  Box,
-  GitBranch,
-  MousePointerClick,
-  MapPin,
-  Radio,
-  ServerCrash,
-  Smartphone,
-} from 'lucide-react';
+import { ServerCrash } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import { liveInterval, type ObserveFilters } from './filters';
 import { ObserveNotice } from './ObserveNotice';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
+import { FleetPanel } from './FleetPanel';
+import { ReleasesPanel } from './ReleasesPanel';
 
 const WorldActivityMap = lazy(() =>
   import('./WorldActivityMap').then(module => ({ default: module.WorldActivityMap }))
@@ -28,59 +22,56 @@ const WorldActivityMap = lazy(() =>
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
 const exact = new Intl.NumberFormat();
 
-const StatTile = ({
-  icon: Icon,
+const Stat = ({
   label,
   value,
-  hint,
+  detail,
+  help,
+  live,
 }: {
-  icon: typeof Activity;
   label: string;
-  // null when the figure could not be read. Rendered as "n/a", never as 0: a
-  // zero here reads as a measurement, and "no devices online" is a very
-  // different statement from "we could not ask".
-  value: number | null;
-  hint: string;
+  // Already formatted; null when the figure could not be read, which must never read as a zero.
+  value: string | null;
+  detail?: string;
+  help: string;
+  live?: boolean;
 }) => (
-  <div
-    className="rounded-xl border bg-card p-4 shadow-card"
-    title={
-      value == null
-        ? `${label.toLowerCase()} unavailable`
-        : `${exact.format(value)} ${label.toLowerCase()}`
-    }>
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      <Icon className="h-3.5 w-3.5 text-primary" />
+  <div className="min-w-0 px-5 py-3 first:pl-0" title={help}>
+    <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+      {live && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
       {label}
-    </div>
-    <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
-      {value == null ? 'n/a' : compact.format(value)}
-    </div>
-    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{hint}</p>
+    </p>
+    <p className="mt-0.5 flex items-baseline gap-2">
+      <span className="text-[26px] font-semibold tracking-tight tabular-nums">
+        {value ?? 'n/a'}
+      </span>
+      {detail && <span className="truncate text-[13px] text-muted-foreground">{detail}</span>}
+    </p>
   </div>
 );
 
 export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
+  const fleetQuery = useQuery({
+    queryKey: ['observe', 'fleet', api.getAppId(), filters.query],
+    queryFn: () => api.getObserveFleet(filters.query),
+    refetchInterval: liveInterval(filters.live, filters.periodSpec),
+    placeholderData: previous => previous,
+  });
+  const releasesQuery = useQuery({
+    queryKey: ['observe', 'releases', api.getAppId(), filters.query],
+    queryFn: () => api.getObserveReleases(filters.query),
+    refetchInterval: liveInterval(filters.live, filters.periodSpec),
+    placeholderData: previous => previous,
+  });
+  // Only the map's city layer comes from here.
   const overviewQuery = useQuery({
     queryKey: ['observe', 'overview', api.getAppId(), filters.query],
     queryFn: () => api.getObserveOverview(filters.query),
     refetchInterval: liveInterval(filters.live, filters.periodSpec),
     placeholderData: previous => previous,
   });
-  const overview = overviewQuery.data;
-  // Live presence comes from the Postgres registry, not from telemetry: every
-  // manifest poll bumps last_seen too, so this number is right even on a fleet
-  // with no expo-observe. Refreshed on its own short cadence, since a 20 minute
-  // window only means something if it moves. It narrows on the filters the
-  // registry can honor, which is a subset of the ones this page offers: the
-  // hint says so when the rest are in play, rather than letting the tile read
-  // as if it answered the same question as its neighbours.
-  //
-  // This one tile reads the device registry rather than telemetry, so it
-  // answers to identity:read while the rest of the page answers to
-  // observe:read. An account may hold one and not the other, and firing the
-  // request anyway would 403 on a timer and report it as "the registry did
-  // not answer", which blames an outage for a permission decision.
+  // Live presence answers to identity:read while the rest of the page answers
+  // to observe:read, so it is only asked for when the account holds it.
   const canBrowseDevices = useAppPermission('identity:read', 'any-member');
   const onlineQuery = useQuery({
     queryKey: ['identity', 'online', api.getAppId(), filters.registryQuery],
@@ -90,105 +81,134 @@ export const OverviewView = ({ filters }: { filters: ObserveFilters }) => {
     enabled: canBrowseDevices,
   });
 
-  if (overviewQuery.isLoading) {
+  if (fleetQuery.isLoading) {
     return (
       <div className="space-y-5">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
-          {[0, 1, 2, 3, 4, 5, 6].map(tile => (
-            <Skeleton key={tile} className="h-28 rounded-xl" />
-          ))}
-        </div>
+        <Skeleton className="h-20 rounded-lg" />
+        <Skeleton className="h-40 rounded-xl" />
         <Skeleton className="h-[440px] rounded-xl" />
       </div>
     );
   }
 
-  if (overviewQuery.isError) {
+  if (fleetQuery.isError) {
     return (
       <ObserveNotice
         icon={ServerCrash}
         tone="error"
         title="Observe could not load"
-        detail="Check the server and ClickHouse logs."
+        detail="Check the server and PostgreSQL logs."
       />
     );
   }
 
-  if (overview?.available === false) return <TelemetryUnavailable />;
+  const fleet = fleetQuery.data;
+  if (fleet?.available === false) return <TelemetryUnavailable />;
 
-  const summary = overview?.summary;
+  const devices = fleet?.devices ?? 0;
+  const facets = fleet?.facets ?? [];
+  const withoutOTA =
+    facets.find(facet => facet.dimension === 'update')?.values.find(value => value.value === '')
+      ?.devices ?? 0;
+  const adoption = (releasesQuery.data?.channels ?? []).reduce(
+    (total, channel) => ({
+      active: total.active + channel.activeDevices,
+      upToDate: total.upToDate + channel.upToDateDevices,
+    }),
+    { active: 0, upToDate: 0 }
+  );
+  const percent = (part: number, whole: number) =>
+    whole > 0 ? `${Math.round((100 * part) / whole)}%` : '–';
+  const online = onlineQuery.isError || !canBrowseDevices ? null : (onlineQuery.data?.online ?? 0);
+  const country = facets.find(facet => facet.dimension === 'country');
+  const hasLocations = (overviewQuery.data?.locations?.length ?? 0) > 0;
 
   return (
-    <div className="space-y-5">
-      {summary && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
-          <StatTile
-            icon={Radio}
-            label="Online now"
-            value={
-              onlineQuery.isError || !canBrowseDevices ? null : (onlineQuery.data?.online ?? 0)
-            }
-            hint={
-              !canBrowseDevices
-                ? 'Counting live devices reads the device registry, which you do not have permission to browse.'
-                : onlineQuery.isError
-                  ? 'The device registry did not answer, so this count is unknown.'
-                  : filters.registryHonorsAll
-                    ? `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes, any route`
-                    : `Pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes. Build and channel filters do not narrow this one.`
-            }
-          />
-          {/* "Devices", not "users": expo-observe identifies an install, and
-              one person with two phones is two of these. */}
-          <StatTile
-            icon={Smartphone}
-            label="Devices"
-            value={summary.users}
-            hint="Installs that reported in"
-          />
-          <StatTile
-            icon={Activity}
-            label="Sessions"
-            value={summary.sessions}
-            hint="App runs observed"
-          />
-          <StatTile
-            icon={MousePointerClick}
-            label="Events"
-            value={summary.events}
-            hint="Logs and exceptions"
-          />
-          <StatTile
-            icon={Box}
-            label="OTA updates"
-            value={summary.updates}
-            hint="Distinct updates running"
-          />
-          <StatTile
-            icon={GitBranch}
-            label="App versions"
-            value={summary.releases}
-            hint="Store versions in the field"
-          />
-          <StatTile
-            icon={Smartphone}
-            label="Builds"
-            value={summary.builds}
-            hint="Native builds in the field"
-          />
-        </div>
-      )}
+    <div className="space-y-8">
+      <div className="grid grid-cols-2 divide-border border-b pb-2 lg:grid-cols-4 lg:divide-x">
+        <Stat
+          label="Active devices"
+          value={compact.format(devices)}
+          help={`${exact.format(devices)} devices checked in during the selected period.`}
+        />
+        <Stat
+          label="Online now"
+          live={!!online}
+          value={online == null ? null : compact.format(online)}
+          help={
+            !canBrowseDevices
+              ? 'Counting live devices reads the device registry, which you do not have permission to browse.'
+              : `Devices that pinged in the last ${onlineQuery.data?.windowMinutes ?? 20} minutes.${filters.registryHonorsAll ? '' : ' Channel and app version filters do not narrow this one.'}`
+          }
+        />
+        <Stat
+          label="Up to date"
+          value={releasesQuery.isError ? null : percent(adoption.upToDate, adoption.active)}
+          detail={
+            adoption.active > 0
+              ? `${compact.format(adoption.upToDate)} of ${compact.format(adoption.active)}`
+              : undefined
+          }
+          help="Devices running what their channel serves them: its newest release for their runtime and platform, or either side of a rollout."
+        />
+        <Stat
+          label="Embedded bundle"
+          value={percent(withoutOTA, devices)}
+          detail={devices > 0 ? compact.format(withoutOTA) : undefined}
+          help="Devices that have not taken any OTA update yet and run the bundle shipped in their store build."
+        />
+      </div>
 
-      {(overview?.locations?.length ?? 0) > 0 ? (
-        <Suspense fallback={<Skeleton className="h-[440px] rounded-xl" />}>
-          <WorldActivityMap locations={overview?.locations ?? []} filters={filters} />
-        </Suspense>
-      ) : (
-        <section className="flex items-center gap-2.5 rounded-xl border border-dashed bg-card px-5 py-4 text-sm text-muted-foreground">
-          <MapPin className="h-4 w-4 shrink-0" />
-          No install located yet.
-        </section>
-      )}
+      <ReleasesPanel filters={filters} />
+
+      <section>
+        <h2 className="mb-2.5 text-[15px] font-semibold tracking-tight">Fleet</h2>
+        {devices > 0 ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <FleetPanel
+              dimensions={['update', 'runtimeVersion', 'appVersion', 'channel']}
+              facets={facets}
+              total={devices}
+              filters={filters}
+            />
+            <FleetPanel
+              dimensions={['platform', 'deviceModel', 'osVersion']}
+              facets={facets}
+              total={devices}
+              filters={filters}
+            />
+          </div>
+        ) : (
+          <p className="rounded-lg border border-dashed px-4 py-6 text-center text-[13px] text-muted-foreground">
+            No device checked in during this period
+          </p>
+        )}
+      </section>
+
+      <div
+        className={cn(
+          'grid gap-4',
+          country && devices > 0 && 'xl:grid-cols-[minmax(0,1fr)_320px]'
+        )}>
+        {hasLocations ? (
+          <Suspense fallback={<Skeleton className="h-[620px] rounded-xl" />}>
+            <WorldActivityMap locations={overviewQuery.data?.locations ?? []} filters={filters} />
+          </Suspense>
+        ) : (
+          <p className="rounded-lg border border-dashed px-4 py-6 text-center text-[13px] text-muted-foreground">
+            No install located yet
+          </p>
+        )}
+        {country && devices > 0 && (
+          <FleetPanel
+            dimensions={['country']}
+            facets={facets}
+            total={devices}
+            filters={filters}
+            className="xl:self-start"
+          />
+        )}
+      </div>
     </div>
   );
 };

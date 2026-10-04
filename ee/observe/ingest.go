@@ -109,6 +109,8 @@ func recordCheckIns[R any](
 			OSName:          envelope.OSName,
 			OSVersion:       envelope.OSVersion,
 			AppVersion:      envelope.AppVersion,
+			Platform:        envelope.Platform,
+			RuntimeVersion:  envelope.RuntimeVersion,
 			ObservedAt:      envelope.Timestamp,
 		})
 	}

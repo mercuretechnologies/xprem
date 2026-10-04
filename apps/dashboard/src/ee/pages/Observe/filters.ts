@@ -92,35 +92,35 @@ const descriptors: Array<{
     key: 'platform',
     param: 'platform',
     label: 'Platform',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'channel',
     param: 'channel',
     label: 'Channel',
     queryKey: 'channel',
-    scopes: ['telemetry'],
+    scopes: ['telemetry', 'fleet'],
   },
   {
     key: 'branch',
     param: 'branch',
     label: 'Branch',
     queryKey: 'branch',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'runtimeVersion',
     param: 'runtime',
     label: 'Runtime',
     queryKey: 'runtimeVersion',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'updateId',
     param: 'update',
     label: 'Update',
     queryKey: 'updateId',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -130,7 +130,7 @@ const descriptors: Array<{
     queryKey: 'updateGroupId',
     // The registry reaches a publish through the update each device runs, so
     // this narrows the inventory like any other release dimension.
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -138,7 +138,7 @@ const descriptors: Array<{
     param: 'device',
     label: 'Device',
     queryKey: 'easClientId',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -146,7 +146,7 @@ const descriptors: Array<{
     param: 'appVersion',
     label: 'App version',
     queryKey: 'appVersion',
-    scopes: ['telemetry'],
+    scopes: ['telemetry', 'fleet'],
   },
   {
     key: 'appBuildNumber',
@@ -173,27 +173,33 @@ const descriptors: Array<{
   // Hardware and OS are not offered as dropdowns in the bar on purpose: you
   // reach them by clicking a segment in a breakdown, which is the only place
   // where their values are both known and worth picking.
-  { key: 'osName', param: 'os', label: 'OS', queryKey: 'osName', scopes: ['telemetry', 'devices'] },
+  {
+    key: 'osName',
+    param: 'os',
+    label: 'OS',
+    queryKey: 'osName',
+    scopes: ['telemetry', 'devices', 'fleet'],
+  },
   {
     key: 'osVersion',
     param: 'osVersion',
     label: 'OS version',
     queryKey: 'osVersion',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     key: 'deviceModel',
     param: 'model',
     label: 'Model',
     queryKey: 'deviceModel',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     key: 'countryCode',
     param: 'country',
     label: 'Country',
     queryKey: 'countryCode',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     // One filter holding `key:value` pairs rather than a key field and a value
@@ -203,7 +209,7 @@ const descriptors: Array<{
     param: 'attr',
     label: 'Attribute',
     queryKey: 'attr',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   // Conditions. They travel under their dimension name so the split a row came
   // from and the filter clicking it applies are spelled the same, and they are

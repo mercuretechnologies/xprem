@@ -4430,6 +4430,126 @@ func (q *Queries) ListIdentitySchemaKeys(ctx context.Context, appID pgtype.UUID)
 	return items, nil
 }
 
+const listObserveChannelAdoption = `-- name: ListObserveChannelAdoption :many
+WITH newest AS (
+    SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
+           u.branch_id, rv.version AS runtime_version, u.platform,
+           u.update_uuid, c.update_uuid AS control_uuid
+    FROM updates u
+    JOIN branches b ON b.id = u.branch_id AND b.app_id = $1
+    JOIN runtime_versions rv ON rv.id = u.runtime_version_id
+    LEFT JOIN updates c ON c.branch_id = u.branch_id AND c.id = u.control_update_id
+    WHERE u.checked_at IS NOT NULL
+    ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
+),
+served AS (
+    SELECT ch.name AS channel_name, ch.branch_id FROM channels ch WHERE ch.app_id = $1
+    UNION ALL
+    SELECT ch.name, cr.rollout_branch_id
+    FROM channels ch JOIN channel_rollouts cr ON cr.channel_id = ch.id
+    WHERE ch.app_id = $1
+)
+SELECT d.channel_name::text AS channel_name,
+       COUNT(*) AS active_devices,
+       COUNT(*) FILTER (WHERE d.current_update_id IS NULL) AS embedded_devices,
+       COUNT(*) FILTER (WHERE EXISTS (
+           SELECT 1 FROM served s
+           JOIN newest n ON n.branch_id = s.branch_id
+           WHERE s.channel_name = d.channel_name
+             AND n.runtime_version = d.runtime_version
+             AND n.platform = d.platform
+             AND d.current_update_id IN (n.update_uuid, n.control_uuid)
+       )) AS up_to_date_devices
+FROM device_identity d
+WHERE d.app_id = $1
+  AND d.last_seen_at >= $2::timestamptz
+  AND d.channel_name IS NOT NULL
+  AND (coalesce(cardinality($3::jsonb[]), 0) = 0 OR d.metadata @> ANY($3::jsonb[]))
+  AND (coalesce(cardinality($4::uuid[]), 0) = 0 OR d.eas_client_id = ANY($4::uuid[]))
+  AND (coalesce(cardinality($5::uuid[]), 0) = 0 OR d.current_update_id = ANY($5::uuid[]))
+  AND (coalesce(cardinality($6::uuid[]), 0) = 0 OR d.publish_group = ANY($6::uuid[]))
+  AND (coalesce(cardinality($7::text[]), 0) = 0 OR d.device_model = ANY($7::text[]))
+  AND (coalesce(cardinality($8::text[]), 0) = 0 OR d.os_name = ANY($8::text[]))
+  AND (coalesce(cardinality($9::text[]), 0) = 0 OR d.os_version = ANY($9::text[]))
+  AND (coalesce(cardinality($10::text[]), 0) = 0 OR d.country_code = ANY($10::text[]))
+  AND (coalesce(cardinality($11::text[]), 0) = 0 OR d.branch_name = ANY($11::text[]))
+  AND (coalesce(cardinality($12::text[]), 0) = 0 OR d.runtime_version = ANY($12::text[]))
+  AND (coalesce(cardinality($13::text[]), 0) = 0 OR d.platform = ANY($13::text[]))
+  AND (coalesce(cardinality($14::text[]), 0) = 0 OR d.channel_name = ANY($14::text[]))
+  AND (coalesce(cardinality($15::text[]), 0) = 0 OR d.app_version = ANY($15::text[]))
+GROUP BY d.channel_name
+ORDER BY active_devices DESC, d.channel_name
+`
+
+type ListObserveChannelAdoptionParams struct {
+	AppID           pgtype.UUID        `json:"app_id"`
+	ActiveSince     pgtype.Timestamptz `json:"active_since"`
+	Filters         [][]byte           `json:"filters"`
+	EasClientID     []pgtype.UUID      `json:"eas_client_id"`
+	CurrentUpdateID []pgtype.UUID      `json:"current_update_id"`
+	PublishGroup    []pgtype.UUID      `json:"publish_group"`
+	DeviceModel     []string           `json:"device_model"`
+	OsName          []string           `json:"os_name"`
+	OsVersion       []string           `json:"os_version"`
+	CountryCode     []string           `json:"country_code"`
+	Branch          []string           `json:"branch"`
+	RuntimeVersion  []string           `json:"runtime_version"`
+	Platform        []string           `json:"platform"`
+	Channel         []string           `json:"channel"`
+	AppVersion      []string           `json:"app_version"`
+}
+
+type ListObserveChannelAdoptionRow struct {
+	ChannelName     string `json:"channel_name"`
+	ActiveDevices   int64  `json:"active_devices"`
+	EmbeddedDevices int64  `json:"embedded_devices"`
+	UpToDateDevices int64  `json:"up_to_date_devices"`
+}
+
+// Per channel, the active devices and how many already run what that channel
+// serves them: the newest update of its branch (or rollout branch) for their
+// runtime and platform, or the control an update rollout keeps them on.
+func (q *Queries) ListObserveChannelAdoption(ctx context.Context, arg ListObserveChannelAdoptionParams) ([]ListObserveChannelAdoptionRow, error) {
+	rows, err := q.db.Query(ctx, listObserveChannelAdoption,
+		arg.AppID,
+		arg.ActiveSince,
+		arg.Filters,
+		arg.EasClientID,
+		arg.CurrentUpdateID,
+		arg.PublishGroup,
+		arg.DeviceModel,
+		arg.OsName,
+		arg.OsVersion,
+		arg.CountryCode,
+		arg.Branch,
+		arg.RuntimeVersion,
+		arg.Platform,
+		arg.Channel,
+		arg.AppVersion,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListObserveChannelAdoptionRow
+	for rows.Next() {
+		var i ListObserveChannelAdoptionRow
+		if err := rows.Scan(
+			&i.ChannelName,
+			&i.ActiveDevices,
+			&i.EmbeddedDevices,
+			&i.UpToDateDevices,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listObserveCohortDeviceIDs = `-- name: ListObserveCohortDeviceIDs :many
 SELECT eas_client_id FROM device_identity
 WHERE app_id = $1
@@ -4476,6 +4596,117 @@ func (q *Queries) ListObserveCohortDeviceIDs(ctx context.Context, arg ListObserv
 			return nil, err
 		}
 		items = append(items, eas_client_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listObserveFleetFacets = `-- name: ListObserveFleetFacets :many
+WITH fleet AS MATERIALIZED (
+    SELECT d.channel_name, d.runtime_version, d.platform, d.publish_group, d.current_update_id,
+           d.app_version, d.device_model, d.os_name, d.os_version, d.country_code
+    FROM device_identity d
+    WHERE d.app_id = $1
+      AND d.last_seen_at >= $2::timestamptz
+      AND (coalesce(cardinality($3::jsonb[]), 0) = 0 OR d.metadata @> ANY($3::jsonb[]))
+      AND (coalesce(cardinality($4::uuid[]), 0) = 0 OR d.eas_client_id = ANY($4::uuid[]))
+      AND (coalesce(cardinality($5::uuid[]), 0) = 0 OR d.current_update_id = ANY($5::uuid[]))
+      AND (coalesce(cardinality($6::uuid[]), 0) = 0 OR d.publish_group = ANY($6::uuid[]))
+      AND (coalesce(cardinality($7::text[]), 0) = 0 OR d.device_model = ANY($7::text[]))
+      AND (coalesce(cardinality($8::text[]), 0) = 0 OR d.os_name = ANY($8::text[]))
+      AND (coalesce(cardinality($9::text[]), 0) = 0 OR d.os_version = ANY($9::text[]))
+      AND (coalesce(cardinality($10::text[]), 0) = 0 OR d.country_code = ANY($10::text[]))
+      AND (coalesce(cardinality($11::text[]), 0) = 0 OR d.branch_name = ANY($11::text[]))
+      AND (coalesce(cardinality($12::text[]), 0) = 0 OR d.runtime_version = ANY($12::text[]))
+      AND (coalesce(cardinality($13::text[]), 0) = 0 OR d.platform = ANY($13::text[]))
+      AND (coalesce(cardinality($14::text[]), 0) = 0 OR d.channel_name = ANY($14::text[]))
+      AND (coalesce(cardinality($15::text[]), 0) = 0 OR d.app_version = ANY($15::text[]))
+)
+SELECT 'channel'::text AS dimension, COALESCE(channel_name, '')::text AS value, ''::text AS context, COUNT(*) AS devices
+FROM fleet GROUP BY 2
+UNION ALL
+SELECT 'runtimeVersion', COALESCE(runtime_version, ''), '', COUNT(*) FROM fleet GROUP BY 2
+UNION ALL
+SELECT 'update', COALESCE(publish_group::text, current_update_id::text, ''),
+       CASE WHEN publish_group IS NOT NULL THEN 'group' WHEN current_update_id IS NOT NULL THEN 'update' ELSE '' END,
+       COUNT(*)
+FROM fleet GROUP BY 2, 3
+UNION ALL
+SELECT 'platform', COALESCE(platform, ''), '', COUNT(*) FROM fleet GROUP BY 2
+UNION ALL
+SELECT 'appVersion', COALESCE(app_version, ''), '', COUNT(*) FROM fleet GROUP BY 2
+UNION ALL
+SELECT 'deviceModel', COALESCE(device_model, ''), '', COUNT(*) FROM fleet GROUP BY 2
+UNION ALL
+SELECT 'osVersion', COALESCE(os_version, ''), COALESCE(os_name, ''), COUNT(*) FROM fleet GROUP BY 2, 3
+UNION ALL
+SELECT 'country', COALESCE(country_code, ''), '', COUNT(*) FROM fleet GROUP BY 2
+`
+
+type ListObserveFleetFacetsParams struct {
+	AppID           pgtype.UUID        `json:"app_id"`
+	ActiveSince     pgtype.Timestamptz `json:"active_since"`
+	Filters         [][]byte           `json:"filters"`
+	EasClientID     []pgtype.UUID      `json:"eas_client_id"`
+	CurrentUpdateID []pgtype.UUID      `json:"current_update_id"`
+	PublishGroup    []pgtype.UUID      `json:"publish_group"`
+	DeviceModel     []string           `json:"device_model"`
+	OsName          []string           `json:"os_name"`
+	OsVersion       []string           `json:"os_version"`
+	CountryCode     []string           `json:"country_code"`
+	Branch          []string           `json:"branch"`
+	RuntimeVersion  []string           `json:"runtime_version"`
+	Platform        []string           `json:"platform"`
+	Channel         []string           `json:"channel"`
+	AppVersion      []string           `json:"app_version"`
+}
+
+type ListObserveFleetFacetsRow struct {
+	Dimension string `json:"dimension"`
+	Value     string `json:"value"`
+	Context   string `json:"context"`
+	Devices   int64  `json:"devices"`
+}
+
+// How the active fleet splits along each release and hardware dimension, every
+// dimension counted over the same filtered set. ” is "not recorded".
+// A publish when it has one, its lone update otherwise; context says which, ” is no known update.
+func (q *Queries) ListObserveFleetFacets(ctx context.Context, arg ListObserveFleetFacetsParams) ([]ListObserveFleetFacetsRow, error) {
+	rows, err := q.db.Query(ctx, listObserveFleetFacets,
+		arg.AppID,
+		arg.ActiveSince,
+		arg.Filters,
+		arg.EasClientID,
+		arg.CurrentUpdateID,
+		arg.PublishGroup,
+		arg.DeviceModel,
+		arg.OsName,
+		arg.OsVersion,
+		arg.CountryCode,
+		arg.Branch,
+		arg.RuntimeVersion,
+		arg.Platform,
+		arg.Channel,
+		arg.AppVersion,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListObserveFleetFacetsRow
+	for rows.Next() {
+		var i ListObserveFleetFacetsRow
+		if err := rows.Scan(
+			&i.Dimension,
+			&i.Value,
+			&i.Context,
+			&i.Devices,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -5413,8 +5644,12 @@ VALUES (
     -- A first sighting IS an arrival.
     CASE WHEN $12::uuid IS NULL
         THEN NULL ELSE $13::timestamptz END,
-    (SELECT branch_name FROM origin), (SELECT runtime_version FROM origin),
-    (SELECT platform FROM origin), (SELECT publish_group FROM origin)
+    (SELECT branch_name FROM origin),
+    CASE WHEN $12::uuid IS NULL THEN NULL
+        ELSE COALESCE((SELECT runtime_version FROM origin), $14::text) END,
+    CASE WHEN $12::uuid IS NULL THEN NULL
+        ELSE COALESCE((SELECT platform FROM origin), $15::text) END,
+    (SELECT publish_group FROM origin)
 )
 ON CONFLICT (app_id, eas_client_id) DO UPDATE SET
     last_seen_at = CURRENT_TIMESTAMP,
@@ -5453,19 +5688,21 @@ WHERE $12::uuid IS NULL
 `
 
 type RegisterDeviceParams struct {
-	AppID           pgtype.UUID        `json:"app_id"`
-	EasClientID     pgtype.UUID        `json:"eas_client_id"`
-	CountryCode     *string            `json:"country_code"`
-	City            *string            `json:"city"`
-	Lat             *float64           `json:"lat"`
-	Lng             *float64           `json:"lng"`
-	DeviceModel     *string            `json:"device_model"`
-	OsName          *string            `json:"os_name"`
-	OsVersion       *string            `json:"os_version"`
-	AppVersion      *string            `json:"app_version"`
-	ChannelName     *string            `json:"channel_name"`
-	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
-	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
+	AppID                  pgtype.UUID        `json:"app_id"`
+	EasClientID            pgtype.UUID        `json:"eas_client_id"`
+	CountryCode            *string            `json:"country_code"`
+	City                   *string            `json:"city"`
+	Lat                    *float64           `json:"lat"`
+	Lng                    *float64           `json:"lng"`
+	DeviceModel            *string            `json:"device_model"`
+	OsName                 *string            `json:"os_name"`
+	OsVersion              *string            `json:"os_version"`
+	AppVersion             *string            `json:"app_version"`
+	ChannelName            *string            `json:"channel_name"`
+	CurrentUpdateID        pgtype.UUID        `json:"current_update_id"`
+	ObservedAt             pgtype.Timestamptz `json:"observed_at"`
+	DeclaredRuntimeVersion *string            `json:"declared_runtime_version"`
+	DeclaredPlatform       *string            `json:"declared_platform"`
 }
 
 // Registration upsert for the passive path: the registry is uncapped (the
@@ -5495,6 +5732,8 @@ func (q *Queries) RegisterDevice(ctx context.Context, arg RegisterDeviceParams) 
 		arg.ChannelName,
 		arg.CurrentUpdateID,
 		arg.ObservedAt,
+		arg.DeclaredRuntimeVersion,
+		arg.DeclaredPlatform,
 	)
 	if err != nil {
 		return 0, err
@@ -6061,21 +6300,25 @@ UPDATE device_identity SET
     -- keeps what the last one established.
     branch_name = CASE WHEN $7::uuid IS NULL
         THEN device_identity.branch_name ELSE (SELECT o.branch_name FROM origin o) END,
+    -- An update the server never published (the embedded bundle) falls back to
+    -- the runtime and platform the device declared with it.
     runtime_version = CASE WHEN $7::uuid IS NULL
-        THEN device_identity.runtime_version ELSE (SELECT o.runtime_version FROM origin o) END,
+        THEN device_identity.runtime_version
+        ELSE COALESCE((SELECT o.runtime_version FROM origin o), $8::text) END,
     platform = CASE WHEN $7::uuid IS NULL
-        THEN device_identity.platform ELSE (SELECT o.platform FROM origin o) END,
+        THEN device_identity.platform
+        ELSE COALESCE((SELECT o.platform FROM origin o), $9::text) END,
     publish_group = CASE WHEN $7::uuid IS NULL
         THEN device_identity.publish_group ELSE (SELECT o.publish_group FROM origin o) END,
     -- Only telemetry knows the hardware; a manifest poll passes NULL here and
     -- must never blank what a previous batch established.
-    device_model = COALESCE($8, device_identity.device_model),
-    os_name = COALESCE($9, device_identity.os_name),
-    os_version = COALESCE($10, device_identity.os_version),
-    app_version = COALESCE($11, device_identity.app_version),
-    channel_name = COALESCE($12, device_identity.channel_name),
+    device_model = COALESCE($10, device_identity.device_model),
+    os_name = COALESCE($11, device_identity.os_name),
+    os_version = COALESCE($12, device_identity.os_version),
+    app_version = COALESCE($13, device_identity.app_version),
+    channel_name = COALESCE($14, device_identity.channel_name),
     current_update_observed_at = CASE WHEN $7::uuid IS NULL
-        THEN device_identity.current_update_observed_at ELSE $13::timestamptz END,
+        THEN device_identity.current_update_observed_at ELSE $15::timestamptz END,
     -- Moved onto, not heard from. The watermark above advances on every poll,
     -- because that is what makes it able to order racing observations; this one
     -- stands still for as long as the device stays where it is, which is what
@@ -6084,7 +6327,7 @@ UPDATE device_identity SET
         WHEN $7::uuid IS NULL
             THEN device_identity.current_update_arrived_at
         WHEN device_identity.current_update_id IS DISTINCT FROM (SELECT o.update_uuid FROM origin o)
-            THEN $13::timestamptz
+            THEN $15::timestamptz
         -- Unchanged means unchanged, including when nothing is recorded yet.
         -- Filling a NULL here with the current instant would have dated the
         -- whole pre-existing fleet at the deploy that introduced the column,
@@ -6110,23 +6353,25 @@ WHERE device_identity.app_id = $1 AND device_identity.eas_client_id = $2
   -- which update runs, so it has nothing to be stale about.
   AND ($7::uuid IS NULL
        OR device_identity.current_update_observed_at IS NULL
-       OR $13::timestamptz >= device_identity.current_update_observed_at)
+       OR $15::timestamptz >= device_identity.current_update_observed_at)
 `
 
 type TouchDeviceIdentityParams struct {
-	AppID           pgtype.UUID        `json:"app_id"`
-	EasClientID     pgtype.UUID        `json:"eas_client_id"`
-	CountryCode     *string            `json:"country_code"`
-	City            *string            `json:"city"`
-	Lat             *float64           `json:"lat"`
-	Lng             *float64           `json:"lng"`
-	CurrentUpdateID pgtype.UUID        `json:"current_update_id"`
-	DeviceModel     *string            `json:"device_model"`
-	OsName          *string            `json:"os_name"`
-	OsVersion       *string            `json:"os_version"`
-	AppVersion      *string            `json:"app_version"`
-	ChannelName     *string            `json:"channel_name"`
-	ObservedAt      pgtype.Timestamptz `json:"observed_at"`
+	AppID                  pgtype.UUID        `json:"app_id"`
+	EasClientID            pgtype.UUID        `json:"eas_client_id"`
+	CountryCode            *string            `json:"country_code"`
+	City                   *string            `json:"city"`
+	Lat                    *float64           `json:"lat"`
+	Lng                    *float64           `json:"lng"`
+	CurrentUpdateID        pgtype.UUID        `json:"current_update_id"`
+	DeclaredRuntimeVersion *string            `json:"declared_runtime_version"`
+	DeclaredPlatform       *string            `json:"declared_platform"`
+	DeviceModel            *string            `json:"device_model"`
+	OsName                 *string            `json:"os_name"`
+	OsVersion              *string            `json:"os_version"`
+	AppVersion             *string            `json:"app_version"`
+	ChannelName            *string            `json:"channel_name"`
+	ObservedAt             pgtype.Timestamptz `json:"observed_at"`
 }
 
 // Passive-contact bump (manifest poll, telemetry batch): refresh last_seen and
@@ -6147,6 +6392,8 @@ func (q *Queries) TouchDeviceIdentity(ctx context.Context, arg TouchDeviceIdenti
 		arg.Lat,
 		arg.Lng,
 		arg.CurrentUpdateID,
+		arg.DeclaredRuntimeVersion,
+		arg.DeclaredPlatform,
 		arg.DeviceModel,
 		arg.OsName,
 		arg.OsVersion,

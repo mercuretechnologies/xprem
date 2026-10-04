@@ -131,6 +131,10 @@ func registerAppRoutes(
 
 	app.route(http.MethodGet, "/observe/overview", container.ObserveExplorerHandler.GetOverviewHandler,
 		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/fleet", container.ObserveExplorerHandler.GetFleetHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
+	app.route(http.MethodGet, "/observe/releases", container.ObserveExplorerHandler.GetReleasesHandler,
+		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 	app.route(http.MethodGet, "/observe/check-ins", container.ObserveExplorerHandler.GetCheckInsHandler,
 		NeedsPermission(rbac.PermObserveRead, rbac.FallbackAnyMember))
 	app.route(http.MethodGet, "/observe/events", container.ObserveExplorerHandler.GetEventsHandler,

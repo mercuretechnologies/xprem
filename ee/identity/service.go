@@ -155,10 +155,10 @@ type DeviceInfo struct {
 	AppVersion string
 	// Channel is the update channel the device polls with; only manifest polls carry it.
 	Channel string
-}
-
-func (d DeviceInfo) IsZero() bool {
-	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == "" && d.Channel == ""
+	// Platform and RuntimeVersion only land when the device runs an update this server
+	// never published, such as its embedded bundle.
+	Platform       string
+	RuntimeVersion string
 }
 
 // PlaceOf reads the country and the city centroid the geo middleware stamped

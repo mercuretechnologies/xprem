@@ -51,6 +51,8 @@ type ExplorerReader interface {
 	ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error)
 	ReadLogs(ctx context.Context, appID string, query LogsQuery) (LogsPage, error)
 	ReadBreakdown(ctx context.Context, appID string, query BreakdownQuery) (Breakdown, error)
+	ReadFleet(ctx context.Context, appID string, query ExplorerQuery) (Fleet, error)
+	ReadReleases(ctx context.Context, appID string, query ExplorerQuery) (Releases, error)
 }
 
 type IdentitySchemaReader interface {
@@ -366,6 +368,50 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	handlers.RenderJSON(w, http.StatusOK, overview)
+}
+
+// GetFleetHandler splits the devices active over the period along every fleet dimension.
+func (h *ExplorerHandler) GetFleetHandler(w http.ResponseWriter, r *http.Request) {
+	query, err := h.parseBaseQuery(r, maxOverviewWindow)
+	if err != nil {
+		h.renderQueryError(w, err)
+		return
+	}
+	if h.reader == nil {
+		handlers.RenderJSON(w, http.StatusOK, Fleet{Facets: []FleetFacet{}})
+		return
+	}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	fleet, err := h.reader.ReadFleet(readContext, mux.Vars(r)["APP_ID"], query)
+	if err != nil {
+		log.Printf("observe: reading fleet failed: %v", err)
+		h.renderQueryError(w, err)
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, fleet)
+}
+
+// GetReleasesHandler reports, per channel, how much of its active fleet runs what it serves.
+func (h *ExplorerHandler) GetReleasesHandler(w http.ResponseWriter, r *http.Request) {
+	query, err := h.parseBaseQuery(r, maxOverviewWindow)
+	if err != nil {
+		h.renderQueryError(w, err)
+		return
+	}
+	if h.reader == nil {
+		handlers.RenderJSON(w, http.StatusOK, Releases{Channels: []ChannelAdoption{}})
+		return
+	}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	releases, err := h.reader.ReadReleases(readContext, mux.Vars(r)["APP_ID"], query)
+	if err != nil {
+		log.Printf("observe: reading releases failed: %v", err)
+		h.renderQueryError(w, err)
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, releases)
 }
 
 // GetCheckInsHandler feeds the live map with everything that checked in since

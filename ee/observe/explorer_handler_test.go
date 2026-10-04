@@ -55,6 +55,16 @@ func (r *recordingExplorer) ReadLogs(_ context.Context, _ string, query LogsQuer
 	return LogsPage{Available: true, Logs: []ObserveLog{}}, nil
 }
 
+func (r *recordingExplorer) ReadFleet(_ context.Context, _ string, query ExplorerQuery) (Fleet, error) {
+	r.overviewQuery = query
+	return Fleet{Available: true, Facets: []FleetFacet{}}, nil
+}
+
+func (r *recordingExplorer) ReadReleases(_ context.Context, _ string, query ExplorerQuery) (Releases, error) {
+	r.overviewQuery = query
+	return Releases{Available: true, Channels: []ChannelAdoption{}}, nil
+}
+
 func (r *recordingExplorer) ReadBreakdown(_ context.Context, _ string, query BreakdownQuery) (Breakdown, error) {
 	r.breakdownQuery = query
 	return Breakdown{Available: true, Segments: []BreakdownSegment{}}, nil

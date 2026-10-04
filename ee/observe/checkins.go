@@ -17,6 +17,7 @@ import (
 	"xprem/ee/identity"
 	"xprem/internal/cache"
 	"xprem/internal/handlers"
+	"xprem/internal/types"
 	"xprem/internal/update"
 
 	"github.com/google/uuid"
@@ -179,11 +180,16 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInStat
 	state.failedUpdateIDs = ParseFailedUpdateIDs(checkIn.FailedUpdateIDsRaw)
 	sort.Strings(state.failedUpdateIDs)
 	state.device = identity.DeviceInfo{
-		Model:      strings.TrimSpace(checkIn.DeviceModel),
-		OSName:     strings.TrimSpace(checkIn.OSName),
-		OSVersion:  strings.TrimSpace(checkIn.OSVersion),
-		AppVersion: strings.TrimSpace(checkIn.AppVersion),
-		Channel:    strings.TrimSpace(checkIn.ChannelName),
+		Model:          strings.TrimSpace(checkIn.DeviceModel),
+		OSName:         strings.TrimSpace(checkIn.OSName),
+		OSVersion:      strings.TrimSpace(checkIn.OSVersion),
+		AppVersion:     strings.TrimSpace(checkIn.AppVersion),
+		Channel:        strings.TrimSpace(checkIn.ChannelName),
+		RuntimeVersion: strings.TrimSpace(checkIn.RuntimeVersion),
+	}
+	// Anything but the two platforms the server serves is dropped rather than stored.
+	if platform, err := types.ParsePlatform(strings.ToLower(strings.TrimSpace(checkIn.Platform))); err == nil {
+		state.device.Platform = string(platform)
 	}
 	return state
 }
@@ -191,7 +197,7 @@ func normalizeCheckIn(checkIn handlers.DeviceCheckIn, now time.Time) checkInStat
 // deviceFingerprint condenses the reported hardware and store version.
 // Zero info fingerprints to "", which reads as "unknown" everywhere below.
 func deviceFingerprint(device identity.DeviceInfo) string {
-	// Channel stays out: a manifest poll carries only it, which would read as a hardware change.
+	// Hardware only: a manifest poll carries none of it, and would otherwise read as a change.
 	parts := []string{device.Model, device.OSName, device.OSVersion, device.AppVersion}
 	if strings.Join(parts, "") == "" {
 		return ""
