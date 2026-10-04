@@ -97,7 +97,7 @@ func TestOutboxDeliveryFreezesEventDimensions(t *testing.T) {
 		updateID, branchID, runtimeVersionID)
 	require.NoError(t, err)
 
-	store := identity.NewPostgresIdentityStore(&database.Engine{Queries: pgdb.New(pool), DB: pool})
+	store := identity.NewPostgresIdentityRepository(&database.Engine{Queries: pgdb.New(pool), DB: pool})
 	deviceID := uuid.NewString()
 	require.NoError(t, store.TouchDevice(ctx, appID, deviceID, nil, &identity.CurrentUpdate{ID: updateID, ObservedAt: time.Now().UTC()}, identity.DeviceInfo{
 		Model: "iPhone18,2", OSName: "iOS", OSVersion: "26.1", AppVersion: "1.4.0",

@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"xprem/config"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -25,20 +25,20 @@ const (
 var ErrInvalidClientMetadata = errors.New("invalid client metadata")
 
 type ClientRepository interface {
-	InsertOAuthClient(ctx context.Context, params store.InsertOAuthClientParameters) error
-	GetOAuthClient(ctx context.Context, id string) (store.OAuthClient, error)
+	InsertOAuthClient(ctx context.Context, params repository.InsertOAuthClientParameters) error
+	GetOAuthClient(ctx context.Context, id string) (repository.OAuthClient, error)
 }
 
 // CodeRepository is the authorization-code ledger.
 type CodeRepository interface {
-	InsertOAuthAuthorizationCode(ctx context.Context, params store.InsertOAuthAuthorizationCodeParameters) error
-	ConsumeOAuthAuthorizationCode(ctx context.Context, id string) (store.OAuthAuthorizationCode, error)
+	InsertOAuthAuthorizationCode(ctx context.Context, params repository.InsertOAuthAuthorizationCodeParameters) error
+	ConsumeOAuthAuthorizationCode(ctx context.Context, id string) (repository.OAuthAuthorizationCode, error)
 	DeleteExpiredOAuthAuthorizationCodes(ctx context.Context) error
 }
 
 // UserRepository is the slice of the users table the token flows need.
 type UserRepository interface {
-	GetUserByID(ctx context.Context, id string) (store.User, error)
+	GetUserByID(ctx context.Context, id string) (repository.User, error)
 	// BumpUserSessionVersion is the replay response: it retires every session
 	// of the account, dashboard included.
 	BumpUserSessionVersion(ctx context.Context, id string) error
@@ -98,7 +98,7 @@ func (s *OAuthService) RegisterClient(ctx context.Context, name string, redirect
 		Name:         name,
 		RedirectURIs: redirectURIs,
 	}
-	if err := s.clientRepo.InsertOAuthClient(ctx, store.InsertOAuthClientParameters{
+	if err := s.clientRepo.InsertOAuthClient(ctx, repository.InsertOAuthClientParameters{
 		ID:           client.ID,
 		Name:         client.Name,
 		RedirectURIs: client.RedirectURIs,

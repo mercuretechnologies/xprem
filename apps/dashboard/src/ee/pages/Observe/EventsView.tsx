@@ -2,27 +2,18 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import {
-  AlertCircle,
-  ChevronDown,
-  ChevronRight,
-  CirclePause,
-  CirclePlay,
-  Loader2,
-  Search,
-} from 'lucide-react';
+import { AlertCircle, ChevronDown, CirclePause, CirclePlay, Loader2, Search } from 'lucide-react';
 import { api, ObserveLog, ObserveLogsQuery } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { liveInterval, type ObserveFilters } from './filters';
 import { MultiSelect } from './MultiSelect';
 import { DeviceSheet } from './DeviceSheet';
-import { deviceName, osLabel } from './deviceNames';
-import { compactNumber, sinceLabel } from './format';
-import { exactTime, logMessage, severityDot, updateLabel } from './logRecords';
+import { compactNumber } from './format';
+import { logMessage, logTime, severityDot, shortUUID } from './logRecords';
 import { LogDetails } from './LogDetails';
 import { useLogStream } from './useLogStream';
 import { useUpdateNames } from './useUpdateNames';
@@ -42,9 +33,10 @@ const severityOptions: Array<{ value: Severity; label: string }> = [
 const isSeverity = (value: string | null): value is Severity =>
   severityOptions.some(option => option.value === value);
 
-// Shared by the header and every row so the columns cannot drift apart.
+// Shared by the header and every row so the columns cannot drift apart:
+// severity, date, runtime, update, channel, branch, device, content.
 const rowGrid =
-  'grid grid-cols-[22px_minmax(0,1.5fr)_minmax(0,1fr)_86px] md:grid-cols-[22px_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_86px] xl:grid-cols-[22px_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_140px_86px]';
+  'grid grid-cols-[3px_150px_minmax(0,1fr)] md:grid-cols-[3px_150px_84px_84px_minmax(0,1fr)] xl:grid-cols-[3px_150px_84px_84px_100px_110px_84px_minmax(0,1fr)] gap-x-3';
 
 const EventRow = ({
   log,
@@ -60,7 +52,6 @@ const EventRow = ({
   onOpenDevice: () => void;
 }) => {
   const message = logMessage(log);
-  const timestamp = new Date(log.timestamp);
   return (
     <>
       {/* A div rather than a button: the device opens its own panel, and a
@@ -75,68 +66,42 @@ const EventRow = ({
           event.preventDefault();
           onToggle();
         }}
-        className={`${rowGrid} w-full cursor-default items-center px-3 py-2 text-left text-[11px] text-muted-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent`}>
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 opacity-60" />
-        )}
-        <span className="flex min-w-0 items-center gap-2 pr-4">
-          <i className={`h-1.5 w-1.5 shrink-0 rounded-full ${severityDot(log)}`} />
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-xs text-foreground">
-              {log.eventName || 'Log record'}
-            </span>
-            {message !== log.eventName && (
-              <span className="mt-0.5 block truncate font-sans text-[11px] opacity-80">
-                {message}
-              </span>
-            )}
-          </span>
+        className={`${rowGrid} w-full cursor-default items-center py-1.5 pr-3 text-left font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:bg-accent ${expanded ? 'bg-accent/60' : ''}`}>
+        <i className={`h-4 w-[3px] rounded-r ${severityDot(log)}`} />
+        <time dateTime={log.timestamp} className="truncate text-foreground">
+          {logTime.format(new Date(log.timestamp))}
+        </time>
+        <span className="hidden truncate xl:block" title={log.runtimeVersion}>
+          {log.runtimeVersion || '-'}
+        </span>
+        <span
+          className="hidden truncate md:block"
+          title={updateName ? `${updateName} · ${log.updateId}` : log.updateId}>
+          {shortUUID(log.updateId)}
+        </span>
+        <span className="hidden truncate xl:block" title={log.channel}>
+          {log.channel || '-'}
+        </span>
+        <span className="hidden truncate xl:block" title={log.branch}>
+          {log.branch || '-'}
         </span>
         <button
           type="button"
           title={log.easClientId}
-          // The row expands on click; this one has somewhere else to go.
+          // The row expands on click; the device opens its own panel.
           onClick={event => {
             event.stopPropagation();
             onOpenDevice();
           }}
-          className="flex min-w-0 items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-primary/10">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 font-mono text-[9px] text-primary">
-            {log.easClientId.slice(0, 2)}
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate font-mono text-xs text-foreground">
-              {log.easClientId.slice(0, 8)}
-            </span>
-            {log.deviceModel && (
-              <span className="mt-0.5 block truncate text-[11px] opacity-80">
-                {deviceName(log.deviceModel).label}
-              </span>
-            )}
-          </span>
+          className="hidden truncate rounded text-left text-primary hover:underline md:block">
+          {shortUUID(log.easClientId)}
         </button>
-        <span className="hidden min-w-0 pr-4 md:block" title={log.updateId}>
-          <span className="block truncate text-xs text-foreground">
-            {updateName || updateLabel(log.updateId, true)}
-          </span>
-          {log.branch && <span className="mt-0.5 block truncate text-[11px]">{log.branch}</span>}
-        </span>
-        <span className="hidden min-w-0 pr-4 xl:block">
-          <span className="block truncate text-xs text-foreground">
-            {osLabel(log.osName, log.osVersion) || '-'}
-          </span>
-          {log.appVersion && (
-            <span className="mt-0.5 block truncate font-mono text-[11px]">
-              {log.appVersion}
-              {log.appBuildNumber ? ` (${log.appBuildNumber})` : ''}
-            </span>
+        <span className="min-w-0 truncate text-foreground" title={message}>
+          {log.eventName && log.eventName !== message && (
+            <span className="mr-2 text-muted-foreground">{log.eventName}</span>
           )}
+          {message}
         </span>
-        <time dateTime={log.timestamp} title={exactTime.format(timestamp)} className="text-right">
-          {sinceLabel(timestamp)}
-        </time>
       </div>
       {expanded && <LogDetails log={log} />}
     </>
@@ -145,7 +110,11 @@ const EventRow = ({
 
 export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // `event` filters by name; `eventKey` opens one occurrence while retaining
+  // the surrounding event stream.
+  const focusedEventKey = searchParams.get('eventKey');
+  const [expanded, setExpanded] = useState<string | null>(focusedEventKey);
+  const appliedFocus = useRef('');
   const [device, setDevice] = useState<ObserveLog | null>(null);
   // Joined then split so the array is the same object across renders: it feeds
   // a query key and a stream signature, and a fresh array on every render
@@ -223,10 +192,13 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
   // every tick, and depending on it would reset the stream once a minute,
   // which is exactly what pausing is supposed to prevent.
   const streamSignature = useMemo(
-    () => JSON.stringify([filters.state, selectedEvents, search, severity]),
-    [filters.state, selectedEvents, search, severity]
+    () => JSON.stringify([filters.state, filters.range, selectedEvents, search, severity]),
+    [filters.state, filters.range, selectedEvents, search, severity]
   );
-  useEffect(() => setExpanded(null), [streamSignature]);
+  useEffect(() => {
+    setExpanded(focusedEventKey);
+    appliedFocus.current = '';
+  }, [streamSignature, focusedEventKey]);
 
   const { scrollRef, logs, headQuery, older, paused, setPaused, resume, virtualizer } =
     useLogStream({
@@ -234,8 +206,34 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
       signature: streamSignature,
       live: filters.live,
       periodSpec: filters.periodSpec,
-      rowHeight: 48,
+      rowHeight: 30,
     });
+
+  useEffect(() => {
+    if (!focusedEventKey || headQuery.isPlaceholderData || logs.length === 0) return;
+    const focusSignature = JSON.stringify([streamSignature, focusedEventKey]);
+    if (appliedFocus.current === focusSignature) return;
+    const index = logs.findIndex(log => log.eventKey === focusedEventKey);
+    if (index < 0) {
+      // Equal timestamps can put the occurrence beyond the first page. Move
+      // to the tail so the existing stream loader fetches the next page.
+      if (older.hasMore && !older.failed) {
+        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
+      }
+      return;
+    }
+    setExpanded(focusedEventKey);
+    virtualizer.scrollToIndex(index, { align: 'start' });
+    appliedFocus.current = focusSignature;
+  }, [
+    focusedEventKey,
+    headQuery.isPlaceholderData,
+    logs,
+    older.hasMore,
+    older.failed,
+    streamSignature,
+    virtualizer,
+  ]);
 
   const updateNames = useUpdateNames();
   const tailing = filters.live && !paused;
@@ -273,27 +271,30 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
             }
             options={eventOptions}
           />
-          <select
-            aria-label="Severity"
-            value={severity}
-            onChange={event =>
-              setSearchParams(
-                current => {
-                  const next = new URLSearchParams(current);
-                  if (event.target.value) next.set('level', event.target.value);
-                  else next.delete('level');
-                  return next;
-                },
-                { replace: true }
-              )
-            }
-            className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20">
-            {severityOptions.map(option => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <select
+              aria-label="Severity"
+              value={severity}
+              onChange={event =>
+                setSearchParams(
+                  current => {
+                    const next = new URLSearchParams(current);
+                    if (event.target.value) next.set('level', event.target.value);
+                    else next.delete('level');
+                    return next;
+                  },
+                  { replace: true }
+                )
+              }
+              className="h-9 appearance-none rounded-md border border-input bg-card pl-3 pr-9 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20">
+              {severityOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
           {paused && filters.live && (
             <Button variant="outline" size="sm" onClick={resume}>
               <CirclePlay className="h-3.5 w-3.5" />
@@ -304,18 +305,20 @@ export const EventsView = ({ filters }: { filters: ObserveFilters }) => {
       </header>
 
       <div
-        className={`${rowGrid} border-b bg-muted/20 px-3 py-2 font-mono text-[10px] text-muted-foreground`}>
+        className={`${rowGrid} border-b bg-muted/20 py-2 pr-3 font-mono text-[10px] uppercase tracking-wide text-muted-foreground`}>
         <span />
-        <span>Event</span>
-        <span>Device</span>
+        <span>Date</span>
+        <span className="hidden xl:block">Runtime</span>
         <span className="hidden md:block">Update</span>
-        <span className="hidden xl:block">OS / app</span>
-        <span className="text-right">Time</span>
+        <span className="hidden xl:block">Channel</span>
+        <span className="hidden xl:block">Branch</span>
+        <span className="hidden md:block">Device</span>
+        <span>Content</span>
       </div>
 
       <div
         ref={scrollRef}
-        className="h-[min(680px,calc(100vh-300px))] min-h-[420px] overflow-auto"
+        className="h-[calc(100vh-260px)] min-h-[420px] overflow-auto"
         // Scrolling away from the head means reading, not tailing: new records
         // arriving would shift the row under the cursor.
         onScroll={event => {

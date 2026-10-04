@@ -8,7 +8,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
 	"xprem/internal/keyStore"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/validation"
 
 	"github.com/google/uuid"
@@ -24,14 +24,14 @@ const maxEnvValueBytes = 8 * 1024
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type EnvironmentRepository interface {
-	ResolveEnvironmentVariables(ctx context.Context, appID, channel, environment string) (*store.ResolvedEnvironment, error)
+	ResolveEnvironmentVariables(ctx context.Context, appID, channel, environment string) (*repository.ResolvedEnvironment, error)
 	InsertEnvironment(ctx context.Context, appId string, name string) (string, error)
-	ListEnvironments(ctx context.Context, appId string) ([]store.EnvironmentRow, error)
+	ListEnvironments(ctx context.Context, appId string) ([]repository.EnvironmentRow, error)
 	// GetEnvironmentIdByName returns ErrResourceNotFound for an unknown name.
 	GetEnvironmentIdByName(ctx context.Context, appId string, name string) (string, error)
 	DeleteEnvironment(ctx context.Context, appId string, name string) error
 	UpsertEnvVar(ctx context.Context, environmentId string, key string, isPublic bool, sealedValue string) error
-	ListEnvVars(ctx context.Context, appId string) ([]store.EnvVarRow, error)
+	ListEnvVars(ctx context.Context, appId string) ([]repository.EnvVarRow, error)
 	GetSealedValue(ctx context.Context, environmentId string, key string) (*string, error)
 	DeleteEnvVar(ctx context.Context, environmentId string, key string) error
 	SetChannelEnvironment(ctx context.Context, appId string, channelName string, environmentId *string) error
@@ -113,7 +113,7 @@ func (s *EnvironmentService) resolveEnvironment(ctx context.Context, appId strin
 
 func (s *EnvironmentService) CreateEnvironment(ctx context.Context, appId string, name string) (string, error) {
 	if s.repo == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateEnvironmentName(name); err != nil {
 		return "", err
@@ -136,7 +136,7 @@ func (s *EnvironmentService) CreateEnvironment(ctx context.Context, appId string
 // ListEnvironments returns every environment with its keys (never values).
 func (s *EnvironmentService) ListEnvironments(ctx context.Context, appId string) ([]Environment, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	rows, err := s.repo.ListEnvironments(ctx, appId)
 	if err != nil {
@@ -174,7 +174,7 @@ func (s *EnvironmentService) ListEnvironments(ctx context.Context, appId string)
 
 func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, appId string, name string) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateEnvironmentName(name); err != nil {
 		return err
@@ -194,7 +194,7 @@ func (s *EnvironmentService) DeleteEnvironment(ctx context.Context, appId string
 
 func (s *EnvironmentService) SetEnvVar(ctx context.Context, appId string, environmentName string, key string, value string, isPublic bool) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateEnvKey(key); err != nil {
 		return err
@@ -230,7 +230,7 @@ func (s *EnvironmentService) SetEnvVar(ctx context.Context, appId string, enviro
 // RevealEnvVar returns the plaintext value; the one read we audit.
 func (s *EnvironmentService) RevealEnvVar(ctx context.Context, appId string, environmentName string, key string) (string, error) {
 	if s.repo == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateEnvKey(key); err != nil {
 		return "", err
@@ -244,7 +244,7 @@ func (s *EnvironmentService) RevealEnvVar(ctx context.Context, appId string, env
 		return "", err
 	}
 	if sealedValue == nil {
-		return "", &store.ErrResourceNotFound{Resource: "env var", Identifier: key}
+		return "", &repository.ErrResourceNotFound{Resource: "env var", Identifier: key}
 	}
 	return s.revealEnvValue(ctx, appId, environmentName, environmentId, key, *sealedValue)
 }
@@ -268,7 +268,7 @@ func (s *EnvironmentService) revealEnvValue(ctx context.Context, appId, environm
 
 func (s *EnvironmentService) DeleteEnvVar(ctx context.Context, appId string, environmentName string, key string) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateEnvKey(key); err != nil {
 		return err
@@ -295,7 +295,7 @@ func (s *EnvironmentService) DeleteEnvVar(ctx context.Context, appId string, env
 // name unbinds it.
 func (s *EnvironmentService) SetChannelEnvironment(ctx context.Context, appId string, channelName string, environmentName *string) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validation.Name("channelName", channelName); err != nil {
 		return err
@@ -350,7 +350,7 @@ func (s *EnvironmentService) ExportVariables(ctx context.Context, appID, channel
 		return nil, err
 	}
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	resolved, err := s.repo.ResolveEnvironmentVariables(ctx, appID, channel, environment)
 	if err != nil {

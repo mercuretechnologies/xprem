@@ -19,7 +19,7 @@ import (
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres/pgdb"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 )
 
 const embeddedUpdateID = "00000000-0000-0000-0000-000000000000"
@@ -123,6 +123,9 @@ type MetricDefinition struct {
 type ObserveMetricPoint struct {
 	Timestamp time.Time `json:"timestamp"`
 	Value     float64   `json:"value"`
+	// Samples and Devices describe the deduplicated measurements in this bucket.
+	Samples uint64 `json:"samples"`
+	Devices uint64 `json:"devices"`
 }
 
 type MetricStats struct {
@@ -155,10 +158,13 @@ type ObserveSummary struct {
 	Platforms []string `json:"platforms"`
 }
 type Overview struct {
-	Available bool              `json:"available"`
-	Summary   ObserveSummary    `json:"summary"`
-	Metrics   []MetricSeries    `json:"metrics"`
-	Locations []ObserveLocation `json:"locations"`
+	Available     bool              `json:"available"`
+	From          time.Time         `json:"from"`
+	To            time.Time         `json:"to"`
+	BucketSeconds int64             `json:"bucketSeconds"`
+	Summary       ObserveSummary    `json:"summary"`
+	Metrics       []MetricSeries    `json:"metrics"`
+	Locations     []ObserveLocation `json:"locations"`
 }
 
 // observeCohortLimit caps the identity cohort an attribute filter resolves to.
@@ -200,7 +206,7 @@ func (e *Explorer) cohortContext(ctx context.Context, appID string, activeSince 
 	if len(filters) == 0 {
 		return ctx, false, nil
 	}
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return ctx, false, err
 	}
@@ -259,13 +265,13 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 	if len(query.UpdateGroupIDs) == 0 {
 		return query, false, nil
 	}
-	appUUID, err := store.ParsePgUUID(appID)
+	appUUID, err := repository.ParsePgUUID(appID)
 	if err != nil {
 		return query, false, err
 	}
 	members := make([]string, 0, 2*len(query.UpdateGroupIDs))
 	for _, group := range query.UpdateGroupIDs {
-		groupUUID, err := store.ParsePgUUID(group)
+		groupUUID, err := repository.ParsePgUUID(group)
 		if err != nil {
 			return query, false, err
 		}
@@ -288,9 +294,18 @@ func (e *Explorer) resolveUpdateGroup(ctx context.Context, appID string, query E
 }
 
 func telemetryWhere(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFragment, []any) {
+	return telemetryWhereWithTimeBounds(table, query, cohort, "?", query.From.UTC(), query.To.UTC())
+}
+
+// The ClickHouse driver truncates positional time.Time arguments to seconds.
+func telemetryWhereNanoseconds(table sqlFragment, query ExplorerQuery, cohort bool) (sqlFragment, []any) {
+	return telemetryWhereWithTimeBounds(table, query, cohort, "fromUnixTimestamp64Nano(?)", query.From.UnixNano(), query.To.UnixNano())
+}
+
+func telemetryWhereWithTimeBounds(table sqlFragment, query ExplorerQuery, cohort bool, timeParameter sqlFragment, from, to any) (sqlFragment, []any) {
 	// app_id is prepended by callers so unions can reuse this helper cleanly.
-	where := table + ".app_id = ? AND " + table + ".timestamp >= ? AND " + table + ".timestamp <= ?"
-	args := []any{query.From.UTC(), query.To.UTC()}
+	where := table + ".app_id = ? AND " + table + ".timestamp >= " + timeParameter + " AND " + table + ".timestamp <= " + timeParameter
+	args := []any{from, to}
 	inFilter := func(column sqlFragment, values []string) {
 		if len(values) == 0 {
 			return
@@ -352,12 +367,16 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 		return Overview{}, err
 	}
 	query = resolvedQuery
+	overview := Overview{
+		Available:     e.clickhouse != nil,
+		From:          query.From.UTC(),
+		To:            query.To.UTC(),
+		BucketSeconds: max(int64(query.Bucket/time.Second), 1),
+		Metrics:       []MetricSeries{},
+		Locations:     []ObserveLocation{},
+	}
 	if emptyUpdateGroup {
-		return Overview{
-			Available: e.clickhouse != nil,
-			Metrics:   []MetricSeries{},
-			Locations: []ObserveLocation{},
-		}, nil
+		return overview, nil
 	}
 	locations, err := e.cachedLocations(ctx, appID, query.From, query)
 	if err != nil {
@@ -367,12 +386,8 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 	if err != nil {
 		return Overview{}, err
 	}
-	overview := Overview{
-		Available: e.clickhouse != nil,
-		Summary:   ObserveSummary{Users: activeUsers},
-		Metrics:   []MetricSeries{},
-		Locations: locations,
-	}
+	overview.Summary.Users = activeUsers
+	overview.Locations = locations
 	if e.clickhouse == nil {
 		return overview, nil
 	}
@@ -571,11 +586,12 @@ func (e *Explorer) readMetricPoints(
 	sql := sqlf(`
 		SELECT metric_name,
 		       toStartOfInterval(timestamp, toIntervalSecond(?)) AS bucket,
-		       toFloat64(quantileTDigest(0.5)(value))
+		       toFloat64(quantileTDigest(0.5)(value)), count(), uniqExact(eas_client_id)
 		FROM (
 			SELECT any(m.metric_name) AS metric_name,
 			       any(m.timestamp) AS timestamp,
-			       any(m.value) AS value
+			       any(m.value) AS value,
+			       any(m.eas_client_id) AS eas_client_id
 			FROM %s
 			WHERE %s
 			GROUP BY m.content_key
@@ -594,7 +610,7 @@ func (e *Explorer) readMetricPoints(
 	for rows.Next() {
 		var name string
 		var point ObserveMetricPoint
-		if err := rows.Scan(&name, &point.Timestamp, &point.Value); err != nil {
+		if err := rows.Scan(&name, &point.Timestamp, &point.Value, &point.Samples, &point.Devices); err != nil {
 			return nil, err
 		}
 		points[name] = append(points[name], point)

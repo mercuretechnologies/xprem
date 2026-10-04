@@ -14,6 +14,8 @@ import {
   X,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { TimeRangePicker } from '@/components/TimeRangePicker';
+import { describeRange, resolveRange, type TimeRange } from '@/lib/timeRange';
 import { api, UpdateFeedRecord } from '@/lib/api';
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
@@ -58,7 +60,14 @@ type FeedGroup = {
 };
 
 type FeedFilterKey =
-  'branch' | 'runtimeVersion' | 'platform' | 'uuid' | 'groupId' | 'commitHash' | 'from' | 'to';
+  | 'branch'
+  | 'runtimeVersion'
+  | 'platform'
+  | 'uuid'
+  | 'groupId'
+  | 'commitHash'
+  | 'from'
+  | 'to';
 
 type FeedFilters = Record<FeedFilterKey, string>;
 type DebouncedFilterKey = 'uuid' | 'groupId' | 'commitHash';
@@ -212,6 +221,22 @@ export const Updates = () => {
     []
   );
 
+  // The URL keeps the range as typed; the API gets its resolved bounds. A
+  // relative range resolves when it is chosen, not on every render.
+  const publishedRange = useMemo<TimeRange | null>(
+    () =>
+      filters.from || filters.to
+        ? { from: filters.from || '2000-01-01', to: filters.to || 'now' }
+        : null,
+    [filters.from, filters.to]
+  );
+  const publishedBounds = useMemo(
+    () => (publishedRange ? resolveRange(publishedRange, Date.now()) : null),
+    [publishedRange]
+  );
+  const feedFrom = publishedBounds?.from.toISOString() ?? '';
+  const feedTo = publishedRange?.to === 'now' ? '' : (publishedBounds?.to.toISOString() ?? '');
+
   const filterKey = [
     filters.branch,
     filters.runtimeVersion,
@@ -219,8 +244,8 @@ export const Updates = () => {
     filters.uuid,
     filters.groupId,
     filters.commitHash,
-    filters.from,
-    filters.to,
+    feedFrom,
+    feedTo,
   ];
 
   const query = useInfiniteQuery({
@@ -228,6 +253,8 @@ export const Updates = () => {
     queryFn: ({ pageParam }) =>
       api.getUpdateFeed({
         ...filters,
+        from: feedFrom,
+        to: feedTo,
         cursor: pageParam || undefined,
         limit: 50,
       }),
@@ -392,8 +419,7 @@ export const Updates = () => {
       ['uuid', 'Update ID', filters.uuid],
       ['groupId', 'Group', filters.groupId],
       ['commitHash', 'Commit', filters.commitHash],
-      ['from', 'From', filters.from],
-      ['to', 'To', filters.to],
+      ['from', 'Published', publishedRange ? describeRange(publishedRange) : ''],
     ] as const
   ).filter(([, , value]) => value);
   const columnCount = canPublishUpdate ? 9 : 8;
@@ -525,24 +551,17 @@ export const Updates = () => {
                       onClear={() => clearTextFilter('commitHash')}
                     />
                   </FilterField>
-                  <FilterField label="Published from">
-                    <ClearableInput
-                      type="date"
-                      aria-label="Filter updates published from date"
-                      value={filters.from}
-                      onValueChange={value => setFilter('from', value)}
-                      onClear={() => setFilter('from', '')}
-                    />
-                  </FilterField>
-                  <FilterField label="Published to">
-                    <ClearableInput
-                      type="date"
-                      aria-label="Filter updates published to date"
-                      value={filters.to}
-                      onValueChange={value => setFilter('to', value)}
-                      onClear={() => setFilter('to', '')}
-                    />
-                  </FilterField>
+                  <div className="sm:col-span-2">
+                    <FilterField label="Published">
+                      <TimeRangePicker
+                        value={publishedRange}
+                        onChange={next =>
+                          setFilters({ from: next?.from ?? '', to: next?.to ?? '' })
+                        }
+                        allowAllTime
+                      />
+                    </FilterField>
+                  </div>
                 </div>
               </PopoverContent>
             </Popover>
@@ -560,7 +579,10 @@ export const Updates = () => {
                 key={key}
                 type="button"
                 title={`Clear ${label.toLowerCase()} filter`}
-                onClick={() => setFilter(key, '')}
+                // The range chip stands for both of its bounds.
+                onClick={() =>
+                  key === 'from' ? setFilters({ from: '', to: '' }) : setFilter(key, '')
+                }
                 className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-secondary px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-input hover:text-foreground">
                 <span className="font-medium text-foreground">{label}</span>
                 <span className="max-w-48 truncate">{value}</span>

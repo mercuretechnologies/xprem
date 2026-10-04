@@ -30,18 +30,18 @@ const (
 
 // BuildArtifactDeleter removes one artifact object; absent objects are not an error.
 type BuildArtifactDeleter interface {
-	DeleteBuildArtifact(context.Context, bucket.BuildArtifact, bool) error
+	Delete(context.Context, bucket.BuildArtifact, bool) error
 }
 
 // BuildCleanup drains the build_artifact_cleanup outbox, sweeps stale staging
 // uploads and fails abandoned builds. Final artifacts of ready builds are never touched.
 type BuildCleanup struct {
-	db      database.DBTX
-	storage BuildArtifactDeleter
+	db            database.DBTX
+	artifactStore BuildArtifactDeleter
 }
 
-func NewBuildCleanup(db database.DBTX, storage BuildArtifactDeleter) *BuildCleanup {
-	return &BuildCleanup{db: db, storage: storage}
+func NewBuildCleanup(db database.DBTX, artifactStore BuildArtifactDeleter) *BuildCleanup {
+	return &BuildCleanup{db: db, artifactStore: artifactStore}
 }
 
 // Start runs the cleanup loops until the returned stop function is called.
@@ -182,7 +182,7 @@ func (c *BuildCleanup) deleteArtifact(ctx context.Context, ref bucket.BuildArtif
 func (c *BuildCleanup) deleteOne(ctx context.Context, ref bucket.BuildArtifact, staging bool) error {
 	itemCtx, cancel := context.WithTimeout(ctx, buildCleanupItemTimeout)
 	defer cancel()
-	return c.storage.DeleteBuildArtifact(itemCtx, ref, staging)
+	return c.artifactStore.Delete(itemCtx, ref, staging)
 }
 
 func buildOutboxBackoff(attempts int32) time.Duration {

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   BadgeCheck,
+  Bot,
   Box,
   CircleUser,
   Container,
@@ -94,6 +95,7 @@ export const CommandPalette = ({
   const serverNavigation: NavigationItem[] = [
     { label: 'Settings', path: '/settings', icon: Settings },
     ...(CONTROL_PLANE_ENABLED ? [{ label: 'License', path: '/license', icon: BadgeCheck }] : []),
+    ...(CONTROL_PLANE_ENABLED ? [{ label: 'MCP', path: '/mcp', icon: Bot }] : []),
     { label: 'My account', path: '/account', icon: CircleUser },
   ];
   const accessSecurityNavigation: NavigationItem[] =

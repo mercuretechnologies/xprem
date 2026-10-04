@@ -45,7 +45,7 @@ func renderIdentityServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrTooManySchemaKeys):
 		handlers.RenderError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrTooManyCombinations):
-		// A bad request, not a server fault, however deep in the store it surfaces.
+		// A bad request, not a server fault, however deep in the repository it surfaces.
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 	default:
 		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
@@ -171,7 +171,7 @@ func (h *IdentityHandler) UpsertSchemaKeyHandler(w http.ResponseWriter, r *http.
 	if spec.MaxLength == 0 {
 		spec.MaxLength = DefaultMaxLength
 	}
-	// Validate before the store so a bad spec is a clear 400, not a 500.
+	// Validate before the repository so a bad spec is a clear 400, not a 500.
 	if err := ValidateKeySpec(spec); err != nil {
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 		return
@@ -397,7 +397,7 @@ func parseLimit(raw string, fallback int) int {
 	if err != nil {
 		return fallback
 	}
-	return n // the store clamps to its own bounds
+	return n // the repository clamps to its own bounds
 }
 
 func sortSchemaKeys(keys []schemaKeyResponse) {

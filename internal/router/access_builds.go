@@ -6,8 +6,8 @@ import (
 	"xprem/ee/apikeyrestrictions"
 	"xprem/internal/handlers"
 	"xprem/internal/helpers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -62,10 +62,10 @@ func (g buildGroup) guard(action apikeyrestrictions.BuildAction) mux.MiddlewareF
 				return
 			}
 			if g.identifiers == nil {
-				handlers.RenderBuildInputError(w, store.ErrNotSupportedInStatelessMode)
+				handlers.RenderBuildInputError(w, repository.ErrNotSupportedInStatelessMode)
 				return
 			}
-			var ref *store.AppIdentifierRef
+			var ref *repository.AppIdentifierRef
 			target := vars["APPLICATION_ID"]
 			if target != "" {
 				platform, parseErr := types.ParsePlatform(vars["PLATFORM"])
@@ -88,7 +88,7 @@ func (g buildGroup) guard(action apikeyrestrictions.BuildAction) mux.MiddlewareF
 				return
 			}
 			if ref == nil {
-				handlers.RenderBuildInputError(w, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: target})
+				handlers.RenderBuildInputError(w, &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: target})
 				return
 			}
 			err = g.apiKeyAccess.AuthorizeBuild(r.Context(), apikeyrestrictions.BuildRequest{

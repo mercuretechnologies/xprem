@@ -10,6 +10,7 @@ import {
   NoChangesDetectedError,
   RequestUploadUrlItem,
   activeRolloutConflictMessage,
+  buildSourcemapUpload,
   buildUploadFiles,
   computeFilesRequests,
   requestUploadUrls,
@@ -33,6 +34,12 @@ import { confirmAsync } from '../lib/prompts';
 import { RateLimiter } from '../lib/rateLimiter';
 import { ensureRepoIsCleanAsync } from '../lib/repo';
 import { resolveRuntimeVersionAsync } from '../lib/runtimeVersion';
+import {
+  PublishedUpdateMetadata,
+  UPDATE_METADATA_FILE,
+  readUpdateUUID,
+  writeUpdateMetadata,
+} from '../lib/updateMetadata';
 import { resolveVcsClient } from '../lib/vcs';
 import { Platform, resolveWorkflowAsync } from '../lib/workflow';
 
@@ -91,7 +98,7 @@ export default class Publish extends Command {
     }),
     dumpSourcemap: Flags.boolean({
       description:
-        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact; they stay in the output directory and are never uploaded. Disable with --no-dumpSourcemap.',
+        'Emit Hermes source maps alongside the bundle (default: true). Without a source map Hermes bakes a random temp path into the bytecode, so two exports of identical code never hash the same and server-side change detection cannot work. The maps also let tools like Sentry or PostHog symbolicate the published artifact. A server with UPLOAD_SOURCEMAPS enabled stores them with the update; otherwise they stay in the output directory. Disable with --no-dumpSourcemap.',
       default: true,
       allowNo: true,
     }),
@@ -105,6 +112,10 @@ export default class Publish extends Command {
       description:
         'Maximum number of asset uploads started per second. Accepts decimals (e.g. 1.5). Lower this if your storage provider rate-limits uploads.',
       default: '10',
+    }),
+    emitMetadata: Flags.boolean({
+      description: `Emit "${UPDATE_METADATA_FILE}" in the output directory with the published update of each platform`,
+      default: false,
     }),
   };
   private sanitizeFlags(flags: any): {
@@ -120,6 +131,7 @@ export default class Publish extends Command {
     dumpSourcemap: boolean;
     rolloutPercentage?: number;
     uploadRate: number;
+    emitMetadata: boolean;
   } {
     const uploadRate = Number(flags['upload-rate']);
     if (!Number.isFinite(uploadRate) || uploadRate <= 0) {
@@ -139,6 +151,7 @@ export default class Publish extends Command {
       dumpSourcemap: flags.dumpSourcemap,
       rolloutPercentage: flags['rollout-percentage'],
       uploadRate,
+      emitMetadata: flags.emitMetadata,
     };
   }
   public async run(): Promise<void> {
@@ -164,6 +177,7 @@ export default class Publish extends Command {
       dumpSourcemap,
       rolloutPercentage,
       uploadRate,
+      emitMetadata,
     } = this.sanitizeFlags(flags);
     if (!branch) {
       Log.error('Branch name is required');
@@ -281,7 +295,11 @@ export default class Publish extends Command {
     }
     const exportSpinner = ora('📦 Exporting project files...').start();
     try {
-      const specifiedPlatform = platform === RequestedPlatform.All ? [] : ['--platform', platform];
+      // Named explicitly: without --platform, expo export also bundles web.
+      const specifiedPlatform =
+        platform === RequestedPlatform.All
+          ? ['--platform', RequestedPlatform.Ios, '--platform', RequestedPlatform.Android]
+          : ['--platform', platform];
       const sourcemapArgs = dumpSourcemap ? ['--dump-sourcemap'] : [];
       const [runnerCommand, runnerArgs] = splitPackageRunner(packageRunner);
       const { stdout } = await spawnAsync(
@@ -334,6 +352,19 @@ export default class Publish extends Command {
       uploadFilesSpinner.fail('No files to upload');
       process.exit(1);
     }
+    const platformsToUpload: typeof runtimeVersions = [];
+    const missingBundlePlatforms: string[] = [];
+    for (const runtime of runtimeVersions) {
+      if (files.some(file => file.platform === runtime.platform && file.isLaunchAsset)) {
+        platformsToUpload.push(runtime);
+      } else {
+        missingBundlePlatforms.push(runtime.platform);
+      }
+    }
+    if (!platformsToUpload.length) {
+      uploadFilesSpinner.fail('No platforms with a bundle to upload');
+      process.exit(1);
+    }
     let uploadUrls: {
       uploadRequests: RequestUploadUrlItem[];
       updateId: string;
@@ -350,14 +381,17 @@ export default class Publish extends Command {
     const unchangedPlatforms: string[] = [];
     try {
       const outcomes = await Promise.all(
-        runtimeVersions.map(async ({ runtimeVersion, platform }) => {
+        platformsToUpload.map(async ({ runtimeVersion, platform }) => {
           if (!runtimeVersion) {
             throw new Error('Runtime version is not resolved');
           }
           try {
             return {
               ...(await requestUploadUrls({
-                body: { files: buildUploadFiles(files, platform) },
+                body: {
+                  files: buildUploadFiles(files, platform),
+                  sourcemap: buildSourcemapUpload(files, platform),
+                },
                 requestUploadUrl: `${serverUrl}/${appId}/requestUploadUrl/${branch}`,
                 auth: credentials,
                 runtimeVersion,
@@ -385,6 +419,9 @@ export default class Publish extends Command {
       });
       if (!uploadUrls.length) {
         uploadFilesSpinner.warn('⚠️ No changes found in the update, nothing to deploy');
+        for (const skipped of missingBundlePlatforms) {
+          Log.withInfo(`⚠️ No bundle exported for ${skipped}, skipping.`);
+        }
         return;
       }
       // Every path and URL the server handed back is checked here, before a
@@ -466,7 +503,10 @@ export default class Publish extends Command {
 
       uploadFilesSpinner.succeed('✅ Files uploaded successfully');
       for (const { platform: uploadedPlatform, uploadRequests } of uploadUrls) {
-        const totalFiles = buildUploadFiles(files, uploadedPlatform).length;
+        const sourcemapPath = buildSourcemapUpload(files, uploadedPlatform)?.path;
+        const totalFiles =
+          buildUploadFiles(files, uploadedPlatform).length +
+          (uploadRequests.some(r => r.originalFileName === sourcemapPath) ? 1 : 0);
         const deduplicated = totalFiles - uploadRequests.length;
         Log.withInfo(
           `📊 ${uploadedPlatform}: ${uploadRequests.length}/${totalFiles} files uploaded, ${deduplicated} deduplicated (already on the server)`
@@ -475,6 +515,9 @@ export default class Publish extends Command {
       for (const skipped of unchangedPlatforms) {
         Log.withInfo(`⚠️ There is no change in the update for ${skipped}, ignored...`);
       }
+      for (const skipped of missingBundlePlatforms) {
+        Log.withInfo(`⚠️ No bundle exported for ${skipped}, skipping.`);
+      }
     } catch (e) {
       uploadFilesSpinner.fail('❌ Failed to upload static files');
       Log.error(e);
@@ -482,6 +525,7 @@ export default class Publish extends Command {
     }
 
     const markAsFinishedSpinner = ora('🔗 Marking the updates as finished...').start();
+    const publishedUpdateUUIDs: Record<string, string | undefined> = {};
     const results = await Promise.all(
       uploadUrls.map(
         async ({
@@ -504,6 +548,7 @@ export default class Publish extends Command {
           });
           // If success and status code = 200
           if (response.ok) {
+            publishedUpdateUUIDs[platform] = await readUpdateUUID(response);
             Log.withInfo(`✅ Update ready for ${platform}`);
             // Announce only when the server echoed the percentage back: an old server
             // silently ignores the param and ships the update to 100% of devices.
@@ -569,6 +614,25 @@ export default class Publish extends Command {
         Log.withInfo(
           'ℹ️ Platform updates were published without grouping (publish groups require a server in control plane mode).'
         );
+      }
+      if (emitMetadata) {
+        const deployed = uploadUrls.filter((_, index) => results[index] === 'deployed');
+        if (deployed.some(({ platform: p }) => !publishedUpdateUUIDs[p])) {
+          Log.warn(
+            `⚠️ ${UPDATE_METADATA_FILE} was not written: the server did not return the update ids. Upgrade the server to use --emitMetadata.`
+          );
+        } else {
+          const metadata: PublishedUpdateMetadata[] = deployed.map(u => ({
+            id: publishedUpdateUUIDs[u.platform]!,
+            platform: u.platform,
+            runtimeVersion: u.runtimeVersion,
+            branch,
+            group: groupAcknowledged ? publishGroupId : undefined,
+            message: resolvedMessage,
+          }));
+          await writeUpdateMetadata(path.join(projectDir, outputDir), metadata);
+          Log.withInfo(`📝 ${UPDATE_METADATA_FILE} written to ${outputDir}`);
+        }
       }
       Log.withInfo('🔥 Your users will receive the latest update automatically!');
     }

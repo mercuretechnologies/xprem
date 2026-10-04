@@ -6,7 +6,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/ios"
 	"xprem/internal/providers/appstoreconnect"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -14,24 +14,24 @@ import (
 )
 
 type IosCredentialsRepository interface {
-	SaveIosCertificate(ctx context.Context, certificate store.IosCertificate, seal store.SealIosCertificateFunc) (string, error)
-	GetIosCertificate(ctx context.Context, certificateId string) (*store.IosCertificate, error)
-	GetIosCertificateFile(ctx context.Context, certificateId string) (*store.SealedIosCertificateFile, error)
-	ListIosCertificates(ctx context.Context) ([]store.IosCertificate, error)
-	GetIosSigningSetting(ctx context.Context, identifierId string) (*store.IosSigningSetting, error)
-	UpsertIosSigningSetting(ctx context.Context, identifierId string, setting store.IosSigningSetting) error
-	UpsertAppStoreConnectApiKey(ctx context.Context, appId string, key store.SealedAppStoreConnectApiKey) error
-	GetAppStoreConnectApiKey(ctx context.Context, appId string) (*store.SealedAppStoreConnectApiKey, error)
-	DeleteAppStoreConnectApiKey(ctx context.Context, appId string) ([]store.RevokedIosDeviceInvitation, error)
-	InsertIosDeviceInvitation(ctx context.Context, invitation store.NewIosDeviceInvitation) (time.Time, error)
-	ListIosDeviceInvitations(ctx context.Context, appId string) ([]store.IosDeviceInvitation, error)
+	SaveIosCertificate(ctx context.Context, certificate repository.IosCertificate, seal repository.SealIosCertificateFunc) (string, error)
+	GetIosCertificate(ctx context.Context, certificateId string) (*repository.IosCertificate, error)
+	GetIosCertificateFile(ctx context.Context, certificateId string) (*repository.SealedIosCertificateFile, error)
+	ListIosCertificates(ctx context.Context) ([]repository.IosCertificate, error)
+	GetIosSigningSetting(ctx context.Context, identifierId string) (*repository.IosSigningSetting, error)
+	UpsertIosSigningSetting(ctx context.Context, identifierId string, setting repository.IosSigningSetting) error
+	UpsertAppStoreConnectApiKey(ctx context.Context, appId string, key repository.SealedAppStoreConnectApiKey) error
+	GetAppStoreConnectApiKey(ctx context.Context, appId string) (*repository.SealedAppStoreConnectApiKey, error)
+	DeleteAppStoreConnectApiKey(ctx context.Context, appId string) ([]repository.RevokedIosDeviceInvitation, error)
+	InsertIosDeviceInvitation(ctx context.Context, invitation repository.NewIosDeviceInvitation) (time.Time, error)
+	ListIosDeviceInvitations(ctx context.Context, appId string) ([]repository.IosDeviceInvitation, error)
 	RevokeIosDeviceInvitation(ctx context.Context, appId string, invitationId string) (string, error)
-	ResolveIosDeviceInvitation(ctx context.Context, tokenHash string) (*store.ActiveIosDeviceInvitation, error)
+	ResolveIosDeviceInvitation(ctx context.Context, tokenHash string) (*repository.ActiveIosDeviceInvitation, error)
 	ClaimIosDeviceInvitation(ctx context.Context, invitationId string) (string, error)
-	FinishIosDeviceRegistration(ctx context.Context, registration store.IosDeviceRegistration, claimToken string) (string, error)
+	FinishIosDeviceRegistration(ctx context.Context, registration repository.IosDeviceRegistration, claimToken string) (string, error)
 	ReleaseIosDeviceInvitation(ctx context.Context, invitationId string, claimToken string) error
-	GetIosDeviceRegistration(ctx context.Context, tokenHash string, registrationId string) (*store.IosDeviceRegistration, error)
-	ListRegisteredIosDevices(ctx context.Context, appId string) ([]store.RegisteredIosDevice, error)
+	GetIosDeviceRegistration(ctx context.Context, tokenHash string, registrationId string) (*repository.IosDeviceRegistration, error)
+	ListRegisteredIosDevices(ctx context.Context, appId string) ([]repository.RegisteredIosDevice, error)
 }
 
 // IosCredentialsMetadata is the signing state of an iOS identifier, shared by App Store, TestFlight and Ad Hoc builds.
@@ -108,27 +108,27 @@ func (s *IosCredentialsService) SetDeviceResponseVerifier(verifier *ios.DeviceRe
 // canonicalAppID binds sealed app blobs to one spelling of the app uuid.
 func (s *IosCredentialsService) canonicalAppID(appId string) (string, error) {
 	if s.repo == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	parsed, err := uuid.Parse(appId)
 	if err != nil {
-		return "", &store.ErrResourceNotFound{Resource: "app", Identifier: appId}
+		return "", &repository.ErrResourceNotFound{Resource: "app", Identifier: appId}
 	}
 	return parsed.String(), nil
 }
 
 // resolveIosIdentifier maps (app, identifier id) to the identifier row,
 // refusing unknown ids and non-ios platforms.
-func (s *IosCredentialsService) resolveIosIdentifier(ctx context.Context, appId string, identifierId string) (*store.AppIdentifierRef, error) {
+func (s *IosCredentialsService) resolveIosIdentifier(ctx context.Context, appId string, identifierId string) (*repository.AppIdentifierRef, error) {
 	if s.repo == nil || s.identifiers == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	ref, err := s.identifiers.GetAppIdentifierByID(ctx, appId, identifierId)
 	if err != nil {
 		return nil, err
 	}
 	if ref == nil {
-		return nil, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
+		return nil, &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
 	}
 	if ref.Platform != types.PlatformIOS {
 		return nil, validation.Errorf("identifier", "identifier %q is an %s identifier, ios credentials require an ios one", ref.Identifier, ref.Platform)
@@ -185,7 +185,7 @@ func (s *IosCredentialsService) UpdateIosSigningSetting(ctx context.Context, app
 	if err != nil {
 		return err
 	}
-	setting := store.IosSigningSetting{Mode: input.Mode}
+	setting := repository.IosSigningSetting{Mode: input.Mode}
 	switch input.Mode {
 	case types.IosSigningAutomatic:
 	case types.IosSigningCertificate:
@@ -217,7 +217,7 @@ func (s *IosCredentialsService) UpdateIosSigningSetting(ctx context.Context, app
 
 // selectableCertificate loads an unexpired distribution certificate of the pool that belongs to the
 // team of the app's API key.
-func (s *IosCredentialsService) selectableCertificate(ctx context.Context, appId string, certificateId string) (*store.IosCertificate, error) {
+func (s *IosCredentialsService) selectableCertificate(ctx context.Context, appId string, certificateId string) (*repository.IosCertificate, error) {
 	if _, err := uuid.Parse(certificateId); err != nil {
 		return nil, validation.Errorf("certificateId", "certificate id must be a UUID")
 	}

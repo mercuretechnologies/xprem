@@ -119,7 +119,7 @@ func TestUpBackfillUpdateAssetMappingCopiesBucketMappings(t *testing.T) {
 		}
 	})
 
-	t.Run("storage errors roll back copied mappings", func(t *testing.T) {
+	t.Run("storage errors keep the mappings copied before the failure", func(t *testing.T) {
 		// A directory in place of the metadata file causes a real read failure.
 		metadataPath := filepath.Join(root, appID, "production", "1", strconv.Itoa(healthyLaterUpdate), "update-metadata.json")
 		require.NoError(t, os.Remove(metadataPath))
@@ -132,7 +132,10 @@ func TestUpBackfillUpdateAssetMappingCopiesBucketMappings(t *testing.T) {
 		require.ErrorContains(t, err, "reading the bucket asset mapping of update "+strconv.Itoa(healthyLaterUpdate))
 		var pathErr *os.PathError
 		require.ErrorAs(t, err, &pathErr)
-		require.Nil(t, storedMapping(casUpdate), "earlier writes must roll back after a storage failure")
+		var kept types.UpdateAssetMapping
+		require.NoError(t, json.Unmarshal(storedMapping(casUpdate), &kept), "a write made before the failure must survive it")
+		require.Equal(t, mapping, kept)
+		require.Nil(t, storedMapping(healthyLaterUpdate))
 	})
 
 	t.Run("corrupt metadata is skipped and valid mappings are copied idempotently", func(t *testing.T) {

@@ -313,6 +313,7 @@ export const DevicesView = ({ filters }: { filters: ObserveFilters }) => {
     const params = new URLSearchParams(window.location.search);
     params.set('device', device.easClientId);
     params.delete('cursor');
+    params.delete('errorId');
     return `/observe/events?${params.toString()}`;
   };
 

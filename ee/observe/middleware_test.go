@@ -14,8 +14,8 @@ import (
 	"testing"
 	"xprem/config"
 	"xprem/internal/cache"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func (r *countingAppRepo) GetAppByID(_ context.Context, _ string) (config.AppCon
 	}
 	return config.AppConfig{}, nil
 }
-func (r *countingAppRepo) InsertApp(context.Context, store.InsertAppParameters) (string, error) {
+func (r *countingAppRepo) InsertApp(context.Context, repository.InsertAppParameters) (string, error) {
 	return "", nil
 }
 func (r *countingAppRepo) DeleteAppByID(context.Context, string) error             { return nil }
@@ -98,4 +98,39 @@ func TestCachedAppResolverRejectsMalformedID(t *testing.T) {
 	rec := post(h, "/observe/%00bad/proj/v1/logs", "203.0.113.22:1")
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Equal(t, int64(0), atomic.LoadInt64(&repo.calls))
+}
+
+func limitedChain(perIP, perApp int) http.Handler {
+	router := mux.NewRouter()
+	sub := router.PathPrefix("/observe/{APP_ID}").Subrouter()
+	sub.Use(CachedAppResolverMiddleware(&countingAppRepo{}))
+	sub.Use(IngestLimitMiddleware(perIP, perApp))
+	sub.HandleFunc("/{PROJECT_ID}/v1/logs", NewIngestHandler(nil, nil, nil, nil).HandleLogs).Methods(http.MethodPost)
+	return router
+}
+
+func TestIngestLimitThrottlesAnAddressThenTheApp(t *testing.T) {
+	resetObserveCache(t)
+	h := limitedChain(2, 3)
+	path := "/observe/limited-app/proj/v1/logs"
+
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.30:1").Code)
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.30:1").Code)
+	rec := post(h, path, "203.0.113.30:1")
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.Equal(t, "60", rec.Header().Get("Retry-After"))
+
+	// The refused request did not count against the app: a third batch still fits.
+	require.Equal(t, http.StatusNoContent, post(h, path, "203.0.113.31:1").Code)
+	require.Equal(t, http.StatusTooManyRequests, post(h, path, "203.0.113.32:1").Code)
+
+	require.Equal(t, http.StatusNoContent, post(h, "/observe/other-app/proj/v1/logs", "203.0.113.30:1").Code)
+}
+
+func TestIngestLimitOfZeroDisablesIt(t *testing.T) {
+	resetObserveCache(t)
+	h := limitedChain(0, 0)
+	for i := 0; i < 10; i++ {
+		require.Equal(t, http.StatusNoContent, post(h, "/observe/open-app/proj/v1/logs", "203.0.113.40:1").Code)
+	}
 }

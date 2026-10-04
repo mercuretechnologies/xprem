@@ -23,6 +23,7 @@ class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     Observe.logEvent('xprem_js_crash', {
+      severity: 'fatal',
       attributes: {
         message: error.message,
         stack: error.stack || "",

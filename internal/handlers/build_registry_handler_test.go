@@ -19,9 +19,9 @@ import (
 	"time"
 	"xprem/internal/bucket"
 	"xprem/internal/helpers"
+	"xprem/internal/repository"
 	"xprem/internal/requestmeta"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	"github.com/gorilla/mux"
@@ -39,11 +39,11 @@ type registryIdentifierRepo struct {
 	services.AppIdentifierRepository
 }
 
-func (registryIdentifierRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*store.AppIdentifierRef, error) {
+func (registryIdentifierRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*repository.AppIdentifierRef, error) {
 	if app != registryApp || id != registryIdentifier {
 		return nil, nil
 	}
-	return &store.AppIdentifierRef{Id: id, Platform: types.PlatformAndroid, Identifier: "com.example.app"}, nil
+	return &repository.AppIdentifierRef{Id: id, Platform: types.PlatformAndroid, Identifier: "com.example.app"}, nil
 }
 
 type registryRepo struct {
@@ -95,7 +95,7 @@ func (r *registryRepo) Get(_ context.Context, appID, id string) (*types.BuildRec
 	}
 	record, ok := r.builds[id]
 	if !ok || record.AppID != appID {
-		return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	return &record, nil
 }
@@ -120,7 +120,7 @@ func (r *registryRepo) Transition(_ context.Context, appID, id string, decide fu
 	defer r.mu.Unlock()
 	current, ok := r.builds[id]
 	if !ok || current.AppID != appID {
-		return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	next, err := decide(current)
 	if err != nil {
@@ -159,7 +159,7 @@ func (r *registryRepo) ResolveShare(_ context.Context, hash string) (*types.Buil
 	}
 	share, ok := r.shares[hash]
 	if !ok || share.RevokedAt != nil || !share.ExpiresAt.After(time.Now()) {
-		return nil, time.Time{}, &store.ErrResourceNotFound{Resource: "share", Identifier: "link"}
+		return nil, time.Time{}, &repository.ErrResourceNotFound{Resource: "share", Identifier: "link"}
 	}
 	record := r.builds[registryBuild]
 	return &record, share.ExpiresAt, nil
@@ -175,8 +175,13 @@ func newRegistryFixture(t *testing.T) *registryFixture {
 	t.Helper()
 	t.Setenv("JWT_SECRET", "registry-secret")
 	t.Setenv("BASE_URL", "https://ota.example.com/sub/path/")
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUILDS_BASE_PATH", t.TempDir())
+	t.Setenv("BUCKET_KEY_PREFIX", "")
+	artifactStore, err := bucket.OpenBuildArtifactStore()
+	require.NoError(t, err)
 	repo := newRegistryRepo()
-	service := services.NewBuildService(repo, registryIdentifierRepo{}, &bucket.LocalBucket{BasePath: t.TempDir()})
+	service := services.NewBuildService(repo, registryIdentifierRepo{}, artifactStore)
 	handler := NewBuildRegistryHandler(service)
 	router := mux.NewRouter()
 	authorized := func(next http.HandlerFunc) http.HandlerFunc {
@@ -580,8 +585,9 @@ func TestBuildRegistryErrorMapping(t *testing.T) {
 		{services.ErrBuildNotReady, http.StatusConflict},
 		{services.ErrBuildState, http.StatusConflict},
 		{services.ErrBuildIntegrity, http.StatusBadRequest},
-		{&store.ErrResourceNotFound{Resource: "build", Identifier: "x"}, http.StatusNotFound},
-		{store.ErrNotSupportedInStatelessMode, http.StatusBadRequest},
+		{&repository.ErrResourceNotFound{Resource: "build", Identifier: "x"}, http.StatusNotFound},
+		{repository.ErrNotSupportedInStatelessMode, http.StatusBadRequest},
+		{services.ErrBuildStorageUnavailable, http.StatusBadRequest},
 		{errors.New("connection refused to 10.0.0.1"), http.StatusInternalServerError},
 	} {
 		w := httptest.NewRecorder()

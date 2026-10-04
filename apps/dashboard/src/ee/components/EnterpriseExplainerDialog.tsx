@@ -3,7 +3,7 @@
 // (see ee/LICENSE at the repository root); it is NOT covered by the MIT
 // license of this repository.
 
-import { ReactNode } from 'react';
+import { EnterpriseFeature } from '@/ee/lib/enterpriseFeatures';
 import { Link } from 'react-router';
 import { ArrowUpRight, Lock, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -26,13 +26,7 @@ const enterpriseUrl = (feature?: string) => {
 };
 
 // The upsell dialog shown when someone reaches for an enterprise feature
-// without a valid license. Used by EnterpriseFeatureGate for masked blocks,
-// and directly by inline actions (like the branch protection toggle) where a
-// masking overlay would not fit.
-//
-// Pass `feature` to explain what the specific feature does, on top of the
-// generic enterprise pitch; the masked-block gate can omit it since the
-// surrounding UI already shows what is locked.
+// without a valid license. Without `feature` it gives the generic pitch.
 export const EnterpriseExplainerDialog = ({
   open,
   onOpenChange,
@@ -40,7 +34,7 @@ export const EnterpriseExplainerDialog = ({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  feature?: { name: string; description: ReactNode };
+  feature?: EnterpriseFeature;
 }) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent>

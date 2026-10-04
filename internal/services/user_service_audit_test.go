@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 	"xprem/internal/auditlog"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,9 +13,9 @@ import (
 
 // seededAdmin inserts the acting admin directly: these tests audit what the
 // service does for a target, the actor just has to exist and stay enabled.
-func seededAdmin(t *testing.T, repo *fakeUserRepo) store.User {
+func seededAdmin(t *testing.T, repo *fakeUserRepo) repository.User {
 	t.Helper()
-	admin, err := repo.InsertUser(context.Background(), store.InsertUserParameters{
+	admin, err := repo.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "admin-1", Email: "admin@example.com", PasswordHash: "hash", IsAdmin: true, Enabled: true,
 	})
 	require.NoError(t, err)
@@ -89,9 +89,9 @@ type failingLookupRepo struct {
 	failID string
 }
 
-func (r *failingLookupRepo) GetUserByID(ctx context.Context, id string) (store.User, error) {
+func (r *failingLookupRepo) GetUserByID(ctx context.Context, id string) (repository.User, error) {
 	if id == r.failID {
-		return store.User{}, errors.New("lookup unavailable")
+		return repository.User{}, errors.New("lookup unavailable")
 	}
 	return r.fakeUserRepo.GetUserByID(ctx, id)
 }
@@ -100,7 +100,7 @@ func TestAuditSurvivesTargetLookupFailure(t *testing.T) {
 	base := newFakeUserRepo()
 	recorder := &fakeAuditRecorder{}
 	admin := seededAdmin(t, base)
-	target, err := base.InsertUser(context.Background(), store.InsertUserParameters{
+	target, err := base.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "target-1", Email: "target@example.com", PasswordHash: "hash", Enabled: true,
 	})
 	require.NoError(t, err)

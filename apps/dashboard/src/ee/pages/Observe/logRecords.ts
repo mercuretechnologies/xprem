@@ -3,26 +3,31 @@
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
 import { ObserveLog } from '@/lib/api';
+import type { Json } from './JsonView';
 
 // What a log record looks like once it is read rather than stored, shared by
 // the event table and the details panel it expands into.
 
-export const exactTime = new Intl.DateTimeFormat(undefined, {
+// A log row's date, down to the millisecond, as Datadog shows it.
+export const logTime = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
+  fractionalSecondDigits: 3,
+  hour12: false,
 });
 
-export const shortID = (value: string) =>
-  value.length > 12 ? `${value.slice(0, 8)}…` : value || '-';
+// The first block of a UUID, enough to tell rows apart; '-' for the zero UUID.
+export const shortUUID = (value: string) =>
+  !value || /^[0-]+$/.test(value) ? '-' : value.slice(0, 8);
 
 // The server's sentinel for a device running the bundle compiled into its binary.
 const EMBEDDED_UPDATE_ID = '00000000-0000-0000-0000-000000000000';
 
 export const updateLabel = (updateId: string, short = false) =>
-  updateId === EMBEDDED_UPDATE_ID ? 'Embedded bundle' : short ? shortID(updateId) : updateId;
+  updateId === EMBEDDED_UPDATE_ID ? 'Embedded bundle' : short ? shortUUID(updateId) : updateId;
 
 export const severityDot = (log: ObserveLog) => {
   if (log.isFatal) return 'bg-rose-500';
@@ -30,17 +35,6 @@ export const severityDot = (log: ObserveLog) => {
   if (log.severityNumber >= 13) return 'bg-amber-400';
   if (log.severityNumber >= 9) return 'bg-sky-400';
   return 'bg-muted-foreground';
-};
-
-const parseAttributes = (value: string): Record<string, unknown> => {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 };
 
 const firstText = (attributes: Record<string, unknown>, keys: string[]) => {
@@ -55,7 +49,9 @@ const firstText = (attributes: Record<string, unknown>, keys: string[]) => {
 // part lives in the attributes.
 export const logMessage = (log: ObserveLog) => {
   if (log.body.trim()) return log.body.trim();
-  const attributes = parseAttributes(log.attributes);
+  const document = parseJsonDocument(log.attributes);
+  const attributes =
+    document && typeof document === 'object' && !Array.isArray(document) ? document : {};
   return (
     firstText(attributes, [
       'exception.message',
@@ -68,11 +64,12 @@ export const logMessage = (log: ObserveLog) => {
   );
 };
 
-export const prettyPayload = (value: string) => {
-  if (!value.trim()) return '';
+// Parses a stored payload; null when it is not a JSON object or array.
+export const parseJsonDocument = (value: string): Json | null => {
   try {
-    return JSON.stringify(JSON.parse(value), null, 2);
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as Json) : null;
   } catch {
-    return value;
+    return null;
   }
 };

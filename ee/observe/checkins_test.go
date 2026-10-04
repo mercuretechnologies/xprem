@@ -23,7 +23,7 @@ import (
 
 // fakeTouchStore fakes the registry's check-in write path.
 type fakeTouchStore struct {
-	identity.Store
+	identity.Repository
 	failing      atomic.Bool
 	failFailures atomic.Bool
 	calls        atomic.Int32

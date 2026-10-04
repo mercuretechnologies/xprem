@@ -17,6 +17,7 @@ import { TimestampCell } from '@/components/ui/timestamp-cell';
 import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { rolesFeature } from '@/ee/lib/enterpriseFeatures';
 import { RoleFormDialog } from '@/ee/components/RoleFormDialog';
 import { PERMISSION_GROUPS } from '@/ee/lib/permissionCatalog';
 
@@ -102,7 +103,7 @@ export const Roles = () => {
         title="Roles"
         description="A role is a reusable set of permissions, like Release manager. Assign one to a user on an app from the Users page; admins bypass roles entirely."
       />
-      <EnterpriseFeatureGate>
+      <EnterpriseFeatureGate feature={rolesFeature}>
         <div className="space-y-4">
           {!!rolesQuery.error && <ApiError error={rolesQuery.error} />}
 

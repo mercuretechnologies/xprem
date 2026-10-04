@@ -482,6 +482,7 @@ export type UpdateFeedQuery = {
   branch?: string;
   runtimeVersion?: string;
   platform?: string;
+  latestOnly?: boolean;
   uuid?: string;
   groupId?: string;
   commitHash?: string;
@@ -543,23 +544,6 @@ export type UpdateHealthHistoryPoint = {
   updateIssues: number;
   runtimeIssues: number;
   healthPercent: number | null;
-};
-
-// Same curves, split by a device dimension. Keys are segment values instead
-// of update ids, rebuilt from the raw health events since the snapshots are
-// pre-aggregated per update.
-export type UpdateHealthSegmentPoint = {
-  timestamp: string;
-  devicesOnUpdate: number;
-  successfulDevices: number;
-  faultyDevices: number;
-  healthPercent: number | null;
-};
-
-export type UpdateHealthSegmentsResponse = {
-  available: boolean;
-  dimension: string;
-  segments: Record<string, UpdateHealthSegmentPoint[]>;
 };
 
 // What PostgreSQL alone can reconstruct, served when the deployment runs no
@@ -705,6 +689,19 @@ export type IdentityDevicePage = {
   nextCursor?: string | null;
 };
 
+export type ObserveMetricWindow = {
+  from: string;
+  to: string;
+  bucketSeconds: number;
+};
+
+export type ObserveMetricPoint = {
+  timestamp: string;
+  value: number;
+  samples: number;
+  devices: number;
+};
+
 // One row of "who is this metric slow for". `values` are the raw column values
 // and double as the filters to drill in with; `contexts` qualify them when they
 // mean nothing alone (an OS version without its OS name).
@@ -719,7 +716,7 @@ export type ObserveBreakdownSegment = {
   samples: number;
   p50: number;
   p90: number;
-  points?: Array<{ timestamp: string; value: number }>;
+  points?: ObserveMetricPoint[];
 };
 
 export type ObserveBreakdownDimension =
@@ -752,7 +749,7 @@ export type ObserveConditionDefinition = {
   sessionScoped?: boolean;
 };
 
-export type ObserveBreakdown = {
+export type ObserveBreakdown = ObserveMetricWindow & {
   available: boolean;
   metric: string;
   dimension: ObserveBreakdownDimension;
@@ -786,10 +783,49 @@ export type ObserveMetric = {
     // which cards it can answer for, instead of asking each of them.
     reportsConditions?: boolean;
   };
-  points: Array<{ timestamp: string; value: number }>;
+  points: ObserveMetricPoint[];
 };
 
-export type ObserveOverview = {
+// The active device registry split along one dimension. An empty value is one
+// the registry has not recorded; `others` folds every value past the list.
+export type ObserveFleetDimension =
+  | 'channel'
+  | 'runtimeVersion'
+  | 'update'
+  | 'platform'
+  | 'appVersion'
+  | 'deviceModel'
+  | 'osVersion'
+  | 'country';
+
+export type ObserveFleetFacet = {
+  dimension: ObserveFleetDimension;
+  // `context` is the OS name of an OS version, or 'group' / 'update' for an update.
+  values: Array<{ value: string; context?: string; devices: number }>;
+  others: number;
+  otherValues: number;
+};
+
+export type ObserveFleet = {
+  available: boolean;
+  devices: number;
+  embeddedDevices: number;
+  facets: ObserveFleetFacet[];
+};
+
+export type ObserveChannelAdoption = {
+  channel: string;
+  activeDevices: number;
+  embeddedDevices: number;
+  upToDateDevices: number;
+};
+
+export type ObserveReleases = {
+  available: boolean;
+  channels: ObserveChannelAdoption[];
+};
+
+export type ObserveOverview = ObserveMetricWindow & {
   available: boolean;
   summary: {
     users: number;
@@ -857,7 +893,59 @@ export type ObserveLog = {
   easBuildId: string;
   environment: string;
   sdkVersion: string;
+  // Absent for a record that is not an error.
+  errorFingerprint?: string;
 };
+
+// Where a frame of a stack trace comes from, once mapped through the source map.
+export type TraceOrigin = {
+  source: string;
+  line: number;
+  column: number;
+  name?: string;
+  // false for a dependency: a source the map lists as ignored.
+  inApp: boolean;
+  // The lines of code around an in-app frame; firstLine numbers the first one.
+  context?: { firstLine: number; lines: string[] };
+};
+
+// One entry of a symbolicated trace: a frame, or the count of frames the
+// trace left out (skipped). repeat folds a recursion into one entry.
+export type TraceFrame = {
+  function?: string;
+  file?: string;
+  line?: number;
+  column?: number;
+  native?: boolean;
+  repeat?: number;
+  skipped?: number;
+  origin?: TraceOrigin;
+};
+
+export type ErrorGroup = {
+  fingerprint: string;
+  // The same for this error in every update.
+  groupFingerprint: string;
+  errorType: string;
+  message: string;
+  // "LabScreen.tsx in onPress": the first frame of the app's own code.
+  culprit: string;
+  trace: { frames: TraceFrame[] | null };
+  symbolicatedAt: string;
+};
+
+// Why an error has no group yet, or 'ready'. 'waiting' means the source map
+// is indexed and the sweep has not passed yet; both it and 'indexing' resolve
+// on their own.
+export type ErrorGroupStatus =
+  | 'ready'
+  | 'waiting'
+  | 'indexing'
+  | 'index_failed'
+  | 'no_sourcemap'
+  | 'unavailable';
+
+export type ErrorGroupAnswer = { status: ErrorGroupStatus; group?: ErrorGroup };
 
 export type ObserveLogsPage = {
   available: boolean;
@@ -874,6 +962,87 @@ export type ObserveLogsQuery = ObserveQuery & {
   limit?: number;
 };
 
+export type ErrorFatality = 'all' | 'fatal' | 'nonfatal';
+export type ErrorSort = 'occurrences' | 'impactedDevices' | 'lastSeen';
+export type ErrorSeriesPoint = { timestamp: string; count: number };
+export type ErrorSummary = {
+  errorId: string;
+  errorType: string;
+  message: string;
+  culprit: string;
+  symbolicationStatus: ErrorGroupStatus;
+  occurrences: number;
+  impactedDevices: number;
+  crashOccurrences: number;
+  firstSeen: string;
+  lastSeen: string;
+  series?: ErrorSeriesPoint[];
+};
+export type ObserveErrorsQuery = ObserveQuery & {
+  search?: string;
+  fatality?: ErrorFatality;
+  sort?: ErrorSort;
+  limit?: number;
+  offset?: number;
+  includeSeries?: boolean;
+};
+export type ObserveErrorsPage = {
+  available: boolean;
+  from: string;
+  to: string;
+  bucketSeconds: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  errors: ErrorSummary[];
+};
+export type UpdateErrorSummary = ErrorSummary & {
+  // Unknown until symbolication allows the error to be matched across updates.
+  new: boolean | null;
+};
+export type UpdateErrorsPage = {
+  available: boolean;
+  updateId: string;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  errors: UpdateErrorSummary[];
+};
+export type ErrorBreakdownSegment = {
+  key: string;
+  label: string;
+  occurrences: number;
+  percentage: number;
+  updateId?: string;
+  updateGroupId?: string;
+  platform?: string;
+  osName?: string;
+  osVersion?: string;
+};
+export type ObserveErrorDetailsQuery = ObserveQuery & {
+  scope?: 'all';
+  asOf?: string;
+  fatality?: ErrorFatality;
+  limit?: number;
+  cursor?: string;
+};
+export type ObserveErrorDetails = {
+  available: boolean;
+  asOf?: string;
+  from: string;
+  to: string;
+  bucketSeconds: number;
+  summary: ErrorSummary | null;
+  series: ErrorSeriesPoint[];
+  updates: ErrorBreakdownSegment[];
+  deviceModels: ErrorBreakdownSegment[];
+  osVersions: ErrorBreakdownSegment[];
+  runtimes: ErrorBreakdownSegment[];
+  occurrences: ObserveLog[];
+  nextCursor?: string;
+  representativeOccurrence?: ObserveLog;
+};
+
 export type UpdateDetailsRecord = {
   updateUUID: string;
   createdAt: string;
@@ -885,10 +1054,38 @@ export type UpdateDetailsRecord = {
   expoConfig: string;
   rolloutPercentage?: number | null;
   controlUpdateId?: string | null;
+  // Hash of the bundle's source map in the sourcemap store; absent when the
+  // update was published without one (control-plane only).
+  sourcemapHash?: string | null;
+};
+
+export type SourcemapIndexStatus = 'pending' | 'running' | 'stored' | 'failed' | 'cancelled';
+
+// The index job of an update's source map (enterprise, control-plane only).
+export type SourcemapIndexRecord = {
+  hash: string;
+  status: SourcemapIndexStatus;
+  reason?: string;
+  segments?: number;
+  indexSize?: number;
+  attempts: number;
+  updatedAt: string;
+};
+
+// An update's source map: its hash and, once a job handled it, the index
+// record. index is null for a map no job ever recorded.
+export type UpdateSourcemapRecord = {
+  hash: string | null;
+  index: SourcemapIndexRecord | null;
 };
 
 export type BundlePatchStatus =
-  'pending' | 'running' | 'stored' | 'skipped' | 'failed' | 'cancelled';
+  | 'pending'
+  | 'running'
+  | 'stored'
+  | 'skipped'
+  | 'failed'
+  | 'cancelled';
 
 // One bsdiff patch planned toward a target update from an earlier source
 // update (control-plane only, when bundle diffing is enabled). Sizes are set
@@ -1078,6 +1275,7 @@ export type ServerSettings = {
   SERVER_VERSION: string;
   CONTROL_PLANE_ENABLED: boolean;
   BUNDLE_DIFFING: boolean;
+  UPLOAD_SOURCEMAPS: boolean;
   CACHE_MODE: string;
   REDIS_HOST: string;
   REDIS_PORT: string;
@@ -2210,24 +2408,6 @@ export class ApiClient {
       }
     );
   }
-  // Its own route, not a mode of getUpdateHealthHistory below. Splitting the
-  // window by a device dimension reads different data and needs observe:read,
-  // while the plain series is open to anyone who can see the app because the
-  // updates table and the rollout card both draw it.
-  public async getUpdateHealthSegments(
-    updateUUIDs: string[],
-    dimension: string,
-    from?: string,
-    to?: string
-  ) {
-    const search = new URLSearchParams({ ids: updateUUIDs.join(','), dimension });
-    if (from) search.set('from', from);
-    if (to) search.set('to', to);
-    return this.request<UpdateHealthSegmentsResponse>(
-      `${this.appScope()}/observe/update-health/segments?${search.toString()}`,
-      { method: 'GET' }
-    );
-  }
   public async getUpdateHealthHistory(updateUUIDs: string[], from?: string, to?: string) {
     const search = new URLSearchParams({ ids: updateUUIDs.join(',') });
     if (from) search.set('from', from);
@@ -2273,6 +2453,18 @@ export class ApiClient {
       { method: 'GET' }
     );
   }
+  public async getObserveFleet(query: ObserveQuery = {}) {
+    return this.request<ObserveFleet>(
+      `${this.appScope()}/observe/fleet?${observeSearchParams(query).toString()}`,
+      { method: 'GET' }
+    );
+  }
+  public async getObserveReleases(query: ObserveQuery = {}) {
+    return this.request<ObserveReleases>(
+      `${this.appScope()}/observe/releases?${observeSearchParams(query).toString()}`,
+      { method: 'GET' }
+    );
+  }
   // The live feed behind the map. `since` is the cursor the server handed back
   // last time, never a locally computed timestamp: the browser clock has no
   // say in where the window starts.
@@ -2290,11 +2482,40 @@ export class ApiClient {
       method: 'GET',
     });
   }
+  public async getErrorGroup(updateId: string, fingerprint: string) {
+    const search = new URLSearchParams({ updateId });
+    return this.request<ErrorGroupAnswer>(
+      `${this.appScope()}/observe/errors/${encodeURIComponent(fingerprint)}?${search.toString()}`,
+      { method: 'GET' }
+    );
+  }
   public async getObserveLogs(query: ObserveLogsQuery = {}) {
     const search = observeSearchParams(query);
     return this.request<ObserveLogsPage>(`${this.appScope()}/observe/logs?${search.toString()}`, {
       method: 'GET',
     });
+  }
+  public async getObserveErrors(query: ObserveErrorsQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveErrorsPage>(`${this.appScope()}/observe/errors?${search}`, {
+      method: 'GET',
+    });
+  }
+  public async getUpdateErrors(updateId: string, query: { limit?: number; offset?: number } = {}) {
+    const search = new URLSearchParams();
+    if (query.limit !== undefined) search.set('limit', String(query.limit));
+    if (query.offset !== undefined) search.set('offset', String(query.offset));
+    return this.request<UpdateErrorsPage>(
+      `${this.appScope()}/observe/updates/${encodeURIComponent(updateId)}/errors?${search}`,
+      { method: 'GET' }
+    );
+  }
+  public async getObserveErrorDetails(errorId: string, query: ObserveErrorDetailsQuery = {}) {
+    const search = observeSearchParams(query);
+    return this.request<ObserveErrorDetails>(
+      `${this.appScope()}/observe/errors/groups/${encodeURIComponent(errorId)}?${search}`,
+      { method: 'GET' }
+    );
   }
   public async getIdentityDevices(query: IdentityDeviceQuery = {}, cursor?: string, limit = 50) {
     const search = observeSearchParams(query);
@@ -2361,6 +2582,20 @@ export class ApiClient {
   public async recomputeUpdatePatches(branch: string, runtimeVersion: string, updateId: string) {
     return this.request<{ scheduled: number }>(
       `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/patches/recompute`,
+      { method: 'POST' }
+    );
+  }
+
+  public async getUpdateSourcemap(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<UpdateSourcemapRecord>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/sourcemap`,
+      { method: 'GET' }
+    );
+  }
+  // Schedules the index of this update's source map again, as its publish did.
+  public async reindexUpdateSourcemap(branch: string, runtimeVersion: string, updateId: string) {
+    return this.request<{ scheduled: boolean }>(
+      `${this.appScope()}/branch/${encodeURIComponent(branch)}/runtimeVersion/${encodeURIComponent(runtimeVersion)}/updates/${encodeURIComponent(updateId)}/sourcemap/reindex`,
       { method: 'POST' }
     );
   }

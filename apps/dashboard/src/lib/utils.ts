@@ -60,3 +60,16 @@ export function formatCompactTimestamp(
   });
   return `${dateStr} ${timeStr}`;
 }
+
+export const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+// A job's reason is its code, optionally followed by ": detail"; labels names the codes.
+export const describeReason = (reason: string, labels: Record<string, string>) => {
+  const code = reason.split(':')[0].trim();
+  const label = labels[code];
+  return label ? { label, detail: reason === code ? undefined : reason } : { label: reason };
+};

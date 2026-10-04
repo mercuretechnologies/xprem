@@ -12,7 +12,8 @@ import { ApiError } from '@/components/APIError';
 import { DataTable } from '@/components/DataTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { TimeRangePicker } from '@/components/TimeRangePicker';
+import { resolveRange, type TimeRange } from '@/lib/timeRange';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
 import {
   Sheet,
@@ -22,12 +23,10 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { auditLogFeature } from '@/ee/lib/enterpriseFeatures';
 import { AUDIT_ACTION_GROUPS } from '@/ee/lib/auditCatalog';
 
 const PAGE_SIZE = 50;
-
-// Local-datetime input value -> RFC3339 the API expects. Empty stays empty.
-const toRfc3339 = (value: string) => (value ? new Date(value).toISOString() : '');
 
 const selectClassName =
   'h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm ' +
@@ -80,9 +79,11 @@ export const AuditLog = () => {
     action: '',
     appId: '',
     outcome: '',
-    from: '',
-    to: '',
   });
+  // null reads the whole history. A relative range resolves once, when it is
+  // chosen, so the query key does not change on every render.
+  const [range, setRange] = useState<TimeRange | null>(null);
+  const resolvedRange = useMemo(() => (range ? resolveRange(range, Date.now()) : null), [range]);
   // The actor filter carries its display too: when it was set by clicking a
   // row (api key, deleted account), the users select cannot represent it and
   // the chip below shows it instead.
@@ -136,8 +137,8 @@ export const AuditLog = () => {
     action: filters.action || undefined,
     appId: filters.appId || undefined,
     outcome: filters.outcome || undefined,
-    from: toRfc3339(filters.from) || undefined,
-    to: toRfc3339(filters.to) || undefined,
+    from: resolvedRange?.from.toISOString(),
+    to: range?.to === 'now' ? undefined : resolvedRange?.to.toISOString(),
   };
 
   const eventsQuery = useInfiniteQuery({
@@ -180,7 +181,7 @@ export const AuditLog = () => {
         title="Audit log"
         description="Every state-changing action on this server: who did it, on what, and with which outcome. Entries are append-only."
       />
-      <EnterpriseFeatureGate>
+      <EnterpriseFeatureGate feature={auditLogFeature}>
         <div className="space-y-4">
           {!!eventsQuery.error && <ApiError error={eventsQuery.error} />}
 
@@ -250,21 +251,7 @@ export const AuditLog = () => {
                 <option value="denied">denied</option>
                 <option value="failure">failure</option>
               </select>
-              <div className="flex items-center gap-1">
-                <Input
-                  className="h-9 w-52 text-xs"
-                  type="datetime-local"
-                  value={filters.from}
-                  onChange={event => setFilters(f => ({ ...f, from: event.target.value }))}
-                />
-                <span className="text-muted-foreground">→</span>
-                <Input
-                  className="h-9 w-52 text-xs"
-                  type="datetime-local"
-                  value={filters.to}
-                  onChange={event => setFilters(f => ({ ...f, to: event.target.value }))}
-                />
-              </div>
+              <TimeRangePicker value={range} onChange={setRange} allowAllTime />
             </div>
             <span className="text-sm text-muted-foreground">
               {totalCount} event{totalCount === 1 ? '' : 's'}

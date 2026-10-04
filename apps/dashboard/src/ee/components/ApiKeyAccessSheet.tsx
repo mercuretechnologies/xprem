@@ -32,6 +32,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { tokenAccessFeature } from '@/ee/lib/enterpriseFeatures';
 import { BranchPatternInput, NamePatternInput } from '@/ee/components/BranchPatternInput';
 import { cn } from '@/lib/utils';
 
@@ -63,7 +64,7 @@ export const ApiKeyAccessSheet = ({
           </SheetDescription>
         </SheetHeader>
         <div className="mt-6">
-          <EnterpriseFeatureGate>
+          <EnterpriseFeatureGate feature={tokenAccessFeature}>
             {accessQuery.isLoading ? (
               <div className="space-y-3">
                 <Skeleton className="h-12 w-full" />

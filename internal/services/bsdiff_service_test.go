@@ -74,7 +74,7 @@ func newPatchJobHarness(t *testing.T) *patchJobHarness {
 	patches := &fakePatchRepo{}
 	return &patchJobHarness{
 		rolloutTestHarness: h,
-		service:            NewBSDiffService(bucket.GetBucket(), nil, h.updateService, h.updateRepo, patches),
+		service:            NewBSDiffService(bucket.GetBucket().BlobStore, bucket.GetBucket().PatchStore, nil, h.updateService, h.updateRepo, patches),
 		patches:            patches,
 	}
 }
@@ -92,7 +92,7 @@ func (h *patchJobHarness) seedBundle(t *testing.T, branch string, id int64, upda
 	require.NoError(t, h.updateRepo.StoreUpdateAssetMapping(context.Background(), update, &types.UpdateAssetMapping{
 		LaunchAsset: types.ShapedAsset{Hash: hash, Key: "bundle", FileExtension: ".hbc"},
 	}))
-	require.NoError(t, bucket.GetBucket().PutBlob(context.Background(), h.appId, hash, bytes.NewReader(bundle)))
+	require.NoError(t, bucket.GetBucket().BlobStore.Put(context.Background(), h.appId, hash, bytes.NewReader(bundle)))
 }
 
 func blobHash(data []byte) string {
@@ -132,7 +132,7 @@ func (h *patchJobHarness) run(t *testing.T, target, source string, attempt, maxA
 
 func (h *patchJobHarness) storedPatch(t *testing.T, target, source string) []byte {
 	t.Helper()
-	file, err := bucket.GetBucket().GetBSDiff(context.Background(), h.appId, "main", target, source)
+	file, err := bucket.GetBucket().PatchStore.Get(context.Background(), h.appId, "main", target, source)
 	require.NoError(t, err)
 	if file == nil {
 		return nil

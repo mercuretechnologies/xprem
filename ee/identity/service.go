@@ -58,9 +58,9 @@ const (
 	FailureTypeRuntime FailureType = "runtime_issue"
 )
 
-// Store is the full data surface the service needs: the ingest write path plus the
+// Repository is the full data surface the service needs: the ingest write path plus the
 // dashboard read/CRUD queries.
-type Store interface {
+type Repository interface {
 	IdentityMutator
 	GetSchema(ctx context.Context, appID string) (Schema, error)
 	UpsertSchemaKey(ctx context.Context, appID string, spec KeySpec) (KeySpec, error)
@@ -75,13 +75,13 @@ type Store interface {
 // Service owns the store. The ingest route calls Apply; the dashboard
 // handler calls the read/CRUD methods below.
 type Service struct {
-	store Store
+	store Repository
 	// licenseValid is a field, not a direct call, so tests can pin it without a signed key.
 	licenseValid func() bool
 }
 
 // NewService builds the identity service.
-func NewService(store Store) *Service {
+func NewService(store Repository) *Service {
 	return &Service{store: store, licenseValid: licensing.IsEnterprise}
 }
 
@@ -145,18 +145,20 @@ type CurrentUpdate struct {
 	ObservedAt time.Time
 }
 
-// DeviceInfo is the hardware and OS a device reports; only telemetry carries it, so every
-// field is optional and empty means "not reported".
+// DeviceInfo is what a device reports about itself; every field is optional and empty
+// means "not reported".
 type DeviceInfo struct {
 	Model     string
 	OSName    string
 	OSVersion string
 	// AppVersion is the store version of the binary, not the OTA update.
 	AppVersion string
-}
-
-func (d DeviceInfo) IsZero() bool {
-	return d.Model == "" && d.OSName == "" && d.OSVersion == "" && d.AppVersion == ""
+	// Channel is the update channel the device polls with; only manifest polls carry it.
+	Channel string
+	// Platform and RuntimeVersion only land when the device runs an update this server
+	// never published, such as its embedded bundle.
+	Platform       string
+	RuntimeVersion string
 }
 
 // PlaceOf reads the country and the city centroid the geo middleware stamped

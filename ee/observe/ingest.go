@@ -27,6 +27,7 @@ const (
 	resultBadRequest  = "bad_request"
 	resultTooLarge    = "too_large"
 	resultUnavailable = "unavailable"
+	resultThrottled   = "throttled"
 )
 
 // maxBatchBodyBytes caps the size of one ingestion body; oversized bodies get
@@ -108,6 +109,8 @@ func recordCheckIns[R any](
 			OSName:          envelope.OSName,
 			OSVersion:       envelope.OSVersion,
 			AppVersion:      envelope.AppVersion,
+			Platform:        envelope.Platform,
+			RuntimeVersion:  envelope.RuntimeVersion,
 			ObservedAt:      envelope.Timestamp,
 		})
 	}
@@ -305,7 +308,7 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows := FlattenLogs(appID, batch, time.Now().UTC())
-	if err := h.recordRuntimeHealth(r.Context(), appID, rows); err != nil {
+	if err := h.recordRuntimeHealth(r.Context(), appID, rows, nil); err != nil {
 		log.Printf("observe: recording runtime health failed: %v", err)
 		observeBatch(resultUnavailable)
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -340,12 +343,21 @@ func (h *IngestHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	acknowledgeBatch(w, rejectedLogRecordsField, batch.DroppedRecords)
 }
 
-// JSCrashEventName is the documented log-event convention for reporting a JS
-// runtime crash into update health.
+// JSCrashEventName and AppStartedEventName are the manual events apps logged
+// before the SDK reported crashes and launches on its own; still honoured.
 const (
 	JSCrashEventName    = "xprem_js_crash"
 	AppStartedEventName = "app_started"
 )
+
+// Metrics the SDK emits once the JS bundle has rendered: ttr from the root
+// component's first render, tti from Observe.markInteractive. The launch-time
+// metrics fire from the native app delegate before any JS runs, so they say
+// nothing about the update.
+var launchMetricNames = map[string]bool{
+	"expo.app_startup.ttr": true,
+	"expo.app_startup.tti": true,
+}
 
 type runtimeHealthState uint8
 
@@ -365,14 +377,14 @@ type runtimeHealthSignal struct {
 	occurredAt time.Time
 }
 
-// recordRuntimeHealth projects JS crash/start transitions into PostgreSQL,
+// recordRuntimeHealth projects crash/launch transitions into PostgreSQL,
 // ordering signals by event timestamp rather than ingestion order.
-func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, rows []LogRow) error {
+func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, logs []LogRow, metrics []MetricRow) error {
 	if h.identityService == nil {
 		return nil
 	}
 
-	grouped := groupRuntimeHealthSignals(rows)
+	grouped := groupRuntimeHealthSignals(logs, metrics)
 	// Sorted for a deterministic budget: a retried batch must apply the same way.
 	keys := make([]runtimeHealthKey, 0, len(grouped))
 	for key := range grouped {
@@ -409,31 +421,49 @@ func (h *IngestHandler) recordRuntimeHealth(ctx context.Context, appID string, r
 	return nil
 }
 
-func groupRuntimeHealthSignals(rows []LogRow) map[runtimeHealthKey][]runtimeHealthSignal {
+func groupRuntimeHealthSignals(logs []LogRow, metrics []MetricRow) map[runtimeHealthKey][]runtimeHealthSignal {
 	grouped := make(map[runtimeHealthKey][]runtimeHealthSignal)
-	for _, row := range rows {
-		if row.EventName != JSCrashEventName && row.EventName != AppStartedEventName {
-			continue
-		}
-		if _, err := uuid.Parse(row.EASClientID); err != nil {
+	add := func(envelope Envelope, signal runtimeHealthSignal) {
+		if _, err := uuid.Parse(envelope.EASClientID); err != nil {
 			observeRecordsDropped(reasonForgedClientID, 1)
-			continue
+			return
 		}
-		if row.UpdateID == ZeroUpdateID {
-			continue
+		if envelope.UpdateID == ZeroUpdateID {
+			return
 		}
-		key := runtimeHealthKey{device: row.EASClientID, update: row.UpdateID}
-		state := runtimeHealthy
-		if row.EventName == JSCrashEventName {
-			state = runtimeFaulty
+		key := runtimeHealthKey{device: envelope.EASClientID, update: envelope.UpdateID}
+		grouped[key] = append(grouped[key], signal)
+	}
+	for _, row := range logs {
+		if signal, ok := logRuntimeHealthSignal(row); ok {
+			add(row.Envelope, signal)
 		}
-		grouped[key] = append(grouped[key], runtimeHealthSignal{
-			state:      state,
-			fatalError: jsCrashMessage(row.Attributes),
-			occurredAt: row.Timestamp.UTC(),
-		})
+	}
+	for _, row := range metrics {
+		if launchMetricNames[row.MetricName] {
+			// The update that rendered is the resource's, never a point's override.
+			envelope := row.Envelope
+			envelope.UpdateID = row.RunningUpdateID
+			add(envelope, runtimeHealthSignal{state: runtimeHealthy, occurredAt: row.Timestamp.UTC()})
+		}
 	}
 	return grouped
+}
+
+// logRuntimeHealthSignal reads a fatal SDK exception (js.exception,
+// native.exception) or one of the manual events as a health transition.
+func logRuntimeHealthSignal(row LogRow) (runtimeHealthSignal, bool) {
+	switch {
+	case row.IsFatal || row.EventName == JSCrashEventName:
+		return runtimeHealthSignal{
+			state:      runtimeFaulty,
+			fatalError: crashMessage(row.Attributes),
+			occurredAt: row.Timestamp.UTC(),
+		}, true
+	case row.EventName == AppStartedEventName:
+		return runtimeHealthSignal{state: runtimeHealthy, occurredAt: row.Timestamp.UTC()}, true
+	}
+	return runtimeHealthSignal{}, false
 }
 
 // normalizeRuntimeHealthSignals restores source-event order and collapses
@@ -472,9 +502,10 @@ func (h *IngestHandler) applyRuntimeHealthSignal(ctx context.Context, appID stri
 	)
 }
 
-// jsCrashMessage extracts the conventional `message` attribute for the
-// fatal_error column; missing, non-string or unparseable yields "".
-func jsCrashMessage(attributes string) string {
+// crashMessage extracts the fatal_error column from the SDK's
+// `exception.message`, or the manual event's `message`; missing, non-string
+// or unparseable yields "".
+func crashMessage(attributes string) string {
 	if attributes == "" {
 		return ""
 	}
@@ -482,7 +513,10 @@ func jsCrashMessage(attributes string) string {
 	if err := json.Unmarshal([]byte(attributes), &attrs); err != nil {
 		return ""
 	}
-	message, _ := attrs["message"].(string)
+	message, _ := attrs["exception.message"].(string)
+	if message == "" {
+		message, _ = attrs["message"].(string)
+	}
 	return boundFatalError(message)
 }
 
@@ -516,8 +550,8 @@ func identityRequestsFromBatch(batch LogBatch, appID string) []identity.Request 
 func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	defer preserveBatchOnPanic(w, "metrics")
 
-	if h.telemetry == nil {
-		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, maxBatchBodyBytes))
+	if h.telemetry == nil && h.identityService == nil {
+		_, _ = io.Copy(io.Discard, http.MaxBytesReader(w, r.Body, maxBatchBodyBytes)) // To keep the connection alive over 256Ko
 		observeBatch(resultAccepted)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -537,6 +571,17 @@ func (h *IngestHandler) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	appID := mux.Vars(r)["APP_ID"]
 	observeRecordsDropped(reasonOverCap, batch.DroppedRecords)
 	rows := FlattenMetrics(appID, batch, time.Now().UTC())
+	if err := h.recordRuntimeHealth(r.Context(), appID, nil, rows); err != nil {
+		log.Printf("observe: recording runtime health failed: %v", err)
+		observeBatch(resultUnavailable)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	if h.telemetry == nil {
+		observeRecordsDropped(reasonTelemetry, len(rows))
+		acknowledgeBatch(w, rejectedDataPointsField, batch.DroppedRecords)
+		return
+	}
 	place := h.identityService.PlaceOf(r.Context())
 	for i := range rows {
 		rows[i].CountryCode, rows[i].Lat, rows[i].Lng = place.CountryCode, place.Lat, place.Lng

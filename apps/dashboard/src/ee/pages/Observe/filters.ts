@@ -2,44 +2,44 @@
 // This file is governed by the Mercure Technologies Enterprise Edition License
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import type { ObserveQuery } from '@/lib/api';
 import type { FilterScope } from './navigation';
+import {
+  defaultRange,
+  isRelative,
+  isZonedAbsolute,
+  resolveRange,
+  type TimeRange,
+} from '@/lib/timeRange';
 
-export type ObservePeriod = '1h' | '24h' | '7d' | '14d' | '30d';
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 
-// snapMs rounds the window start down to a stable boundary. Without it every
-// render computes a new `from` and react-query treats it as a brand new query,
-// so nothing is ever served from cache. `to` stays unset so the head of the
-// window keeps sliding to now on each refetch.
-export const periods: Array<{
-  value: ObservePeriod;
-  label: string;
-  windowMs: number;
-  snapMs: number;
-  liveMs: number;
-}> = [
-  { value: '1h', label: 'Last hour', windowMs: 3_600_000, snapMs: 60_000, liveMs: 5_000 },
-  { value: '24h', label: 'Last 24 hours', windowMs: 86_400_000, snapMs: 300_000, liveMs: 15_000 },
-  { value: '7d', label: 'Last 7 days', windowMs: 604_800_000, snapMs: 3_600_000, liveMs: 60_000 },
-  {
-    value: '14d',
-    label: 'Last 14 days',
-    windowMs: 1_209_600_000,
-    snapMs: 3_600_000,
-    liveMs: 60_000,
-  },
-  {
-    value: '30d',
-    label: 'Last 30 days',
-    windowMs: 2_592_000_000,
-    snapMs: 3_600_000,
-    liveMs: 60_000,
-  },
-];
+// The longest window a page may ask for, as ee/observe enforces it:
+// maxLogsWindow for the event table, maxOverviewWindow everywhere else.
+export const maxWindowMs = (page: string) =>
+  page === 'events' || page === 'errors' ? 31 * DAY : 90 * DAY;
 
-export const defaultPeriod: ObservePeriod = '24h';
+// Old ?period= links, honored as a range ending now.
+const legacyPeriods: Record<string, string> = {
+  '1h': 'now-1h',
+  '24h': 'now-24h',
+  '7d': 'now-7d',
+  '14d': 'now-14d',
+  '30d': 'now-30d',
+};
+
+// snapMs rounds a relative window start down to a stable boundary; liveMs is
+// the refresh cadence.
+export type WindowSpec = { windowMs: number; snapMs: number; liveMs: number };
+
+const windowSpec = (windowMs: number): WindowSpec => {
+  if (windowMs <= HOUR) return { windowMs, snapMs: 60_000, liveMs: 5_000 };
+  if (windowMs <= DAY) return { windowMs, snapMs: 300_000, liveMs: 15_000 };
+  return { windowMs, snapMs: HOUR, liveMs: 60_000 };
+};
 
 export type FilterKey =
   | 'platform'
@@ -92,35 +92,35 @@ const descriptors: Array<{
     key: 'platform',
     param: 'platform',
     label: 'Platform',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'channel',
     param: 'channel',
     label: 'Channel',
     queryKey: 'channel',
-    scopes: ['telemetry'],
+    scopes: ['telemetry', 'fleet'],
   },
   {
     key: 'branch',
     param: 'branch',
     label: 'Branch',
     queryKey: 'branch',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'runtimeVersion',
     param: 'runtime',
     label: 'Runtime',
     queryKey: 'runtimeVersion',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
   },
   {
     key: 'updateId',
     param: 'update',
     label: 'Update',
     queryKey: 'updateId',
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -130,7 +130,7 @@ const descriptors: Array<{
     queryKey: 'updateGroupId',
     // The registry reaches a publish through the update each device runs, so
     // this narrows the inventory like any other release dimension.
-    scopes: ['telemetry', 'updateGroups', 'devices'],
+    scopes: ['telemetry', 'updateGroups', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -138,7 +138,7 @@ const descriptors: Array<{
     param: 'device',
     label: 'Device',
     queryKey: 'easClientId',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
     uuid: true,
   },
   {
@@ -146,7 +146,7 @@ const descriptors: Array<{
     param: 'appVersion',
     label: 'App version',
     queryKey: 'appVersion',
-    scopes: ['telemetry'],
+    scopes: ['telemetry', 'fleet'],
   },
   {
     key: 'appBuildNumber',
@@ -173,27 +173,33 @@ const descriptors: Array<{
   // Hardware and OS are not offered as dropdowns in the bar on purpose: you
   // reach them by clicking a segment in a breakdown, which is the only place
   // where their values are both known and worth picking.
-  { key: 'osName', param: 'os', label: 'OS', queryKey: 'osName', scopes: ['telemetry', 'devices'] },
+  {
+    key: 'osName',
+    param: 'os',
+    label: 'OS',
+    queryKey: 'osName',
+    scopes: ['telemetry', 'devices', 'fleet'],
+  },
   {
     key: 'osVersion',
     param: 'osVersion',
     label: 'OS version',
     queryKey: 'osVersion',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     key: 'deviceModel',
     param: 'model',
     label: 'Model',
     queryKey: 'deviceModel',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     key: 'countryCode',
     param: 'country',
     label: 'Country',
     queryKey: 'countryCode',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   {
     // One filter holding `key:value` pairs rather than a key field and a value
@@ -203,7 +209,7 @@ const descriptors: Array<{
     param: 'attr',
     label: 'Attribute',
     queryKey: 'attr',
-    scopes: ['telemetry', 'devices'],
+    scopes: ['telemetry', 'devices', 'fleet'],
   },
   // Conditions. They travel under their dimension name so the split a row came
   // from and the filter clicking it applies are spelled the same, and they are
@@ -309,34 +315,35 @@ const queryForScopes = (state: FilterState, scopes: FilterScope[]): ObserveQuery
   return applied;
 };
 
-const isPeriod = (value: string | null): value is ObservePeriod =>
-  periods.some(period => period.value === value);
-
-export const useObserveFilters = (scopes: FilterScope[]) => {
+export const useObserveFilters = (scopes: FilterScope[], maxWindow: number) => {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const period: ObservePeriod = isPeriod(searchParams.get('period'))
-    ? (searchParams.get('period') as ObservePeriod)
-    : defaultPeriod;
-  // isPeriod already guarantees the find succeeds; the fallback only exists to
-  // satisfy the type, and it resolves through defaultPeriod rather than through
-  // an index whose correctness would depend on the order of the table.
-  const periodSpec =
-    periods.find(entry => entry.value === period) ??
-    periods.find(entry => entry.value === defaultPeriod)!;
-  // Live is on by default on the short windows people watch during a rollout,
-  // and off on the long ones where polling only costs ClickHouse time.
+  const fromParam = searchParams.get('from');
+  const toParam = searchParams.get('to');
+  const periodParam = searchParams.get('period');
+  const range = useMemo<TimeRange>(() => {
+    if (fromParam && toParam && resolveRange({ from: fromParam, to: toParam }, Date.now())) {
+      return { from: fromParam, to: toParam };
+    }
+    const legacy = legacyPeriods[periodParam ?? ''];
+    return legacy ? { from: legacy, to: 'now' } : defaultRange;
+  }, [fromParam, toParam, periodParam]);
+  const periodSpec = useMemo(() => {
+    const resolved = resolveRange(range, Date.now())!;
+    return windowSpec(resolved.to.getTime() - resolved.from.getTime());
+  }, [range]);
+  // Live needs a window that ends now; on by default up to a day.
   const liveParam = searchParams.get('live');
-  const live = liveParam == null ? periodSpec.windowMs <= 86_400_000 : liveParam === '1';
+  const live =
+    range.to === 'now' && (liveParam == null ? periodSpec.windowMs <= DAY : liveParam === '1');
 
   // The window start is computed once and reused, so on its own it would stay
   // pinned to the moment the page opened and "last hour" would quietly grow
   // into "last three hours". This advances it one snap boundary at a time
-  // while live, and freezes it when paused, which is what paused should mean.
+  // while live; setRange and setLive move it to the moment of the click.
   const [windowTick, setWindowTick] = useState(() => Date.now());
   useEffect(() => {
     if (!live) return;
-    setWindowTick(Date.now());
     const timer = window.setInterval(() => setWindowTick(Date.now()), periodSpec.snapMs);
     return () => window.clearInterval(timer);
   }, [live, periodSpec.snapMs]);
@@ -419,11 +426,19 @@ export const useObserveFilters = (scopes: FilterScope[]) => {
     });
   }, [write]);
 
-  const setPeriod = useCallback(
-    (value: ObservePeriod) => {
+  const setRange = useCallback(
+    (next: TimeRange) => {
+      // In the navigation's transition, so the old range never renders with the new tick.
+      startTransition(() => setWindowTick(Date.now()));
       write(params => {
-        if (value === defaultPeriod) params.delete('period');
-        else params.set('period', value);
+        params.delete('period');
+        if (next.from === defaultRange.from && next.to === defaultRange.to) {
+          params.delete('from');
+          params.delete('to');
+        } else {
+          params.set('from', next.from);
+          params.set('to', next.to);
+        }
         // The live default follows the window length, so an explicit choice
         // made for another window must not stick to the new one.
         params.delete('live');
@@ -457,17 +472,43 @@ export const useObserveFilters = (scopes: FilterScope[]) => {
 
   const setLive = useCallback(
     (value: boolean) => {
+      startTransition(() => setWindowTick(Date.now()));
       write(params => params.set('live', value ? '1' : '0'));
     },
     [write]
   );
 
   const query = useMemo<ObserveQuery>(() => {
-    const from = new Date(
-      Math.floor((windowTick - periodSpec.windowMs) / periodSpec.snapMs) * periodSpec.snapMs
-    ).toISOString();
-    return { from, ...queryForScopes(state, scopes) };
-  }, [periodSpec.snapMs, periodSpec.windowMs, scopes, state, windowTick]);
+    const resolved = resolveRange(range, windowTick) ?? resolveRange(defaultRange, windowTick)!;
+    // A relative end moves with windowTick, so it snaps; an absolute one is already stable.
+    const bound = (expression: string, date: Date) =>
+      isZonedAbsolute(expression)
+        ? expression.trim()
+        : new Date(
+            isRelative(expression)
+              ? Math.floor(date.getTime() / periodSpec.snapMs) * periodSpec.snapMs
+              : date.getTime()
+          ).toISOString();
+    // Snapping moves the start earlier, and a range wider than the page allows
+    // is a 400: the start never goes past the earliest the server accepts,
+    // with one snap of margin when the head is the server's own now.
+    const margin = range.to === 'now' && live ? periodSpec.snapMs : 0;
+    const earliest = (range.to === 'now' ? windowTick : resolved.to.getTime()) - maxWindow + margin;
+    const snappedFrom = bound(range.from, resolved.from);
+    const from =
+      new Date(snappedFrom).getTime() < earliest
+        ? new Date(Math.ceil(earliest / periodSpec.snapMs) * periodSpec.snapMs).toISOString()
+        : snappedFrom;
+    // A live window leaves `to` unset, so its head keeps sliding on each refetch.
+    // A paused one sends its frozen head, so the server measures the same window.
+    const to =
+      range.to !== 'now'
+        ? bound(range.to, resolved.to)
+        : live
+          ? undefined
+          : new Date(windowTick).toISOString();
+    return { from, ...(to ? { to } : {}), ...queryForScopes(state, scopes) };
+  }, [live, maxWindow, periodSpec.snapMs, range, scopes, state, windowTick]);
 
   // What the Postgres device registry can honor of the current selection, for
   // a panel served by it on a page that reads from somewhere else. Carries no
@@ -532,9 +573,10 @@ export const useObserveFilters = (scopes: FilterScope[]) => {
     query,
     registryQuery,
     registryHonorsAll,
-    period,
+    range,
+    setRange,
+    maxWindow,
     periodSpec,
-    setPeriod,
     live,
     setLive,
     applies,
@@ -551,7 +593,7 @@ export type ObserveFilters = ReturnType<typeof useObserveFilters>;
 // own cadence: a tail that lags 15s behind reads as broken.
 export const liveInterval = (
   live: boolean,
-  periodSpec: (typeof periods)[number],
+  periodSpec: WindowSpec,
   fast = false
 ): number | false => {
   if (!live) return false;

@@ -1,0 +1,64 @@
+/* Copyright (c) 2026 Axel Marciano (Mercure Technologies). All rights reserved.
+ * This file is governed by the Mercure Technologies Enterprise Edition License
+ * (see ee/LICENSE); it is NOT covered by the MIT license of this repository. */
+
+/* Observe owns its palette; the dashboard and its navigation keep their theme. */
+.observe-workspace {
+  --background: 260 33% 98%;
+  --foreground: 260 19% 22%;
+  --card: 0 0% 100%;
+  --card-foreground: 260 19% 22%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 260 19% 22%;
+  --primary: 255 63% 55%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 262 35% 96%;
+  --secondary-foreground: 260 19% 22%;
+  --muted: 262 35% 96%;
+  --muted-foreground: 263 10% 44%;
+  --accent: 263 50% 94%;
+  --accent-foreground: 260 19% 22%;
+  --border: 263 22% 88%;
+  --input: 263 20% 79%;
+  --ring: 255 63% 55%;
+  --link: 255 63% 50%;
+  --graph-dot: 263 22% 79%;
+  --observe-shadow-card: 0 1px 3px rgb(53 46 67 / 0.05);
+  --observe-shadow-elevated: 0 16px 40px -12px rgb(53 46 67 / 0.18);
+}
+
+.dark .observe-workspace {
+  --background: 262 18% 11%;
+  --foreground: 263 25% 94%;
+  --card: 261 17% 15%;
+  --card-foreground: 263 25% 94%;
+  --popover: 265 17% 19%;
+  --popover-foreground: 263 25% 94%;
+  --primary: 258 80% 77%;
+  --primary-foreground: 262 22% 10%;
+  --secondary: 265 17% 19%;
+  --secondary-foreground: 263 25% 94%;
+  --muted: 265 17% 19%;
+  --muted-foreground: 262 17% 72%;
+  --accent: 265 22% 23%;
+  --accent-foreground: 263 25% 94%;
+  --border: 265 16% 27%;
+  --input: 265 15% 35%;
+  --ring: 258 80% 77%;
+  --link: 259 73% 81%;
+  --graph-dot: 264 18% 35%;
+  --observe-shadow-card: 0 1px 3px rgb(10 6 16 / 0.16);
+  --observe-shadow-elevated: 0 16px 40px -12px rgb(10 6 16 / 0.45);
+}
+
+.observe-workspace.shadow-card,
+.observe-workspace .shadow-card {
+  --tw-shadow: var(--observe-shadow-card);
+  --tw-shadow-colored: var(--observe-shadow-card);
+}
+
+.observe-workspace.shadow-elevated,
+.observe-workspace .shadow-elevated {
+  --tw-shadow: var(--observe-shadow-elevated);
+  --tw-shadow-colored: var(--observe-shadow-elevated);
+}

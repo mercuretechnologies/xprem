@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/validation"
 
 	"github.com/google/uuid"
@@ -47,11 +47,11 @@ func renderServiceError(w http.ResponseWriter, err error, fallback string) {
 		handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 		return
 	}
-	if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+	if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 		handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 		return
 	}
-	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+	if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
 		return
 	}

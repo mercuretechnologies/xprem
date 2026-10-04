@@ -20,7 +20,7 @@ import (
 	"xprem/internal/ios"
 	"xprem/internal/keyStore"
 	"xprem/internal/providers/appstoreconnect"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -115,7 +115,7 @@ func bundleIDName(identifier string) string {
 
 // signingCertificate returns the pool certificate that signs the identifier with its Apple id: the
 // selected one, or in automatic mode the pool certificate of the team that expires last, created when there is none.
-func (s *IosCredentialsService) signingCertificate(ctx context.Context, client *appstoreconnect.Client, appId string, identifierId string) (*store.IosCertificate, string, error) {
+func (s *IosCredentialsService) signingCertificate(ctx context.Context, client *appstoreconnect.Client, appId string, identifierId string) (*repository.IosCertificate, string, error) {
 	setting, err := s.repo.GetIosSigningSetting(ctx, identifierId)
 	if err != nil {
 		return nil, "", err
@@ -127,7 +127,7 @@ func (s *IosCredentialsService) signingCertificate(ctx context.Context, client *
 	if err != nil {
 		return nil, "", err
 	}
-	var selected *store.IosCertificate
+	var selected *repository.IosCertificate
 	if setting.CertificateId != nil {
 		if selected, err = s.repo.GetIosCertificate(ctx, *setting.CertificateId); err != nil {
 			return nil, "", err
@@ -148,7 +148,7 @@ func (s *IosCredentialsService) signingCertificate(ctx context.Context, client *
 
 // automaticCertificate returns the usable pool certificate that expires last, creating one when
 // there is none. Builds that find none take turns, and look again once it is theirs.
-func (s *IosCredentialsService) automaticCertificate(ctx context.Context, client *appstoreconnect.Client, appId string) (*store.IosCertificate, string, error) {
+func (s *IosCredentialsService) automaticCertificate(ctx context.Context, client *appstoreconnect.Client, appId string) (*repository.IosCertificate, string, error) {
 	certificate, appleId, err := s.latestPoolCertificate(ctx, client)
 	if err != nil || certificate != nil {
 		return certificate, appleId, err
@@ -168,7 +168,7 @@ func (s *IosCredentialsService) automaticCertificate(ctx context.Context, client
 }
 
 // latestPoolCertificate returns the pool certificate Apple still lists for the team that expires last, or nil.
-func (s *IosCredentialsService) latestPoolCertificate(ctx context.Context, client *appstoreconnect.Client) (*store.IosCertificate, string, error) {
+func (s *IosCredentialsService) latestPoolCertificate(ctx context.Context, client *appstoreconnect.Client) (*repository.IosCertificate, string, error) {
 	appleIds, err := appleCertificateIds(ctx, client)
 	if err != nil {
 		return nil, "", err
@@ -177,7 +177,7 @@ func (s *IosCredentialsService) latestPoolCertificate(ctx context.Context, clien
 	if err != nil {
 		return nil, "", err
 	}
-	var latest *store.IosCertificate
+	var latest *repository.IosCertificate
 	for i, certificate := range pool {
 		_, listed := appleIds[certificate.FingerprintSHA1]
 		if listed && time.Now().Before(certificate.ExpiresAt) && (latest == nil || certificate.ExpiresAt.After(latest.ExpiresAt)) {
@@ -205,7 +205,7 @@ func appleCertificateIds(ctx context.Context, client *appstoreconnect.Client) (m
 
 // createIosCertificate has Apple issue a distribution certificate for a new private key and stores it
 // in the pool; a certificate that cannot be stored is revoked.
-func (s *IosCredentialsService) createIosCertificate(ctx context.Context, client *appstoreconnect.Client, appId string) (*store.IosCertificate, string, error) {
+func (s *IosCredentialsService) createIosCertificate(ctx context.Context, client *appstoreconnect.Client, appId string) (*repository.IosCertificate, string, error) {
 	// A certificate Apple issues must be stored or revoked even if the CLI disconnected meanwhile.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), iosCertificateCreationTimeout)
 	defer cancel()
@@ -235,7 +235,7 @@ func (s *IosCredentialsService) createIosCertificate(ctx context.Context, client
 	return certificate, created.ID, nil
 }
 
-func (s *IosCredentialsService) storeCreatedCertificate(ctx context.Context, appId string, privateKey *rsa.PrivateKey, der []byte) (*store.IosCertificate, error) {
+func (s *IosCredentialsService) storeCreatedCertificate(ctx context.Context, appId string, privateKey *rsa.PrivateKey, der []byte) (*repository.IosCertificate, error) {
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {
 		return nil, fmt.Errorf("apple distribution certificate: %w", err)
@@ -257,7 +257,7 @@ func (s *IosCredentialsService) storeCreatedCertificate(ctx context.Context, app
 	if err != nil {
 		return nil, err
 	}
-	return &store.IosCertificate{Id: certificateId, FingerprintSHA1: parsed.FingerprintSHA1, TeamID: parsed.TeamID, ExpiresAt: parsed.ExpiresAt}, nil
+	return &repository.IosCertificate{Id: certificateId, FingerprintSHA1: parsed.FingerprintSHA1, TeamID: parsed.TeamID, ExpiresAt: parsed.ExpiresAt}, nil
 }
 
 var adHocDeviceClasses = []string{"IPHONE", "IPAD", "IPOD"}
@@ -333,7 +333,7 @@ func (s *IosCredentialsService) unsealIosCertificate(ctx context.Context, certif
 		return nil, "", err
 	}
 	if file == nil {
-		return nil, "", &store.ErrResourceNotFound{Resource: "ios certificate", Identifier: certificateId}
+		return nil, "", &repository.ErrResourceNotFound{Resource: "ios certificate", Identifier: certificateId}
 	}
 	masterKey := []byte(keyStore.ReadDBKeysMasterKey())
 	p12, err := crypto.UnsealAESGCM(file.SealedCertificate, masterKey, iosCertificateAAD(certificateId, "certificate"))

@@ -10,8 +10,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/validation"
 )
 
@@ -80,7 +80,7 @@ func (h *AppHandler) CreateAppHandler(w http.ResponseWriter, r *http.Request) {
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
@@ -129,7 +129,7 @@ func (h *AppHandler) DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.appService.DeleteApp(r.Context(), *app); err != nil {
-		notFoundErr := (*store.ErrResourceNotFound)(nil)
+		notFoundErr := (*repository.ErrResourceNotFound)(nil)
 		if errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return

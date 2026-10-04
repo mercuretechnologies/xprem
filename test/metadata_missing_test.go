@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 	"xprem/internal/types"
 	"xprem/internal/update"
@@ -16,7 +17,7 @@ func TestGetMetadataMissingReturnsSentinel(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
 	phantom := types.Update{AppId: "test-app-id", Branch: "branch-1", RuntimeVersion: "1", UpdateId: "999999"}
-	_, err := update.GetMetadata(phantom)
+	_, err := update.GetMetadata(context.Background(), phantom)
 	require.ErrorIs(t, err, update.ErrUpdateMetadataMissing)
 	assert.Contains(t, err.Error(), "test-app-id/branch-1/1/999999")
 }

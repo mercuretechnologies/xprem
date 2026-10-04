@@ -4,18 +4,25 @@
 // license of this repository.
 
 import { ReactNode, useState } from 'react';
+import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Lock, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { EnterpriseExplainerDialog } from '@/ee/components/EnterpriseExplainerDialog';
+import { EnterpriseFeature } from '@/ee/lib/enterpriseFeatures';
 
 // Wraps an enterprise-only block. With a valid license the children render
-// untouched. Without one they stay visible (never hidden) but inert behind a
-// frosted overlay with an upsell card; its button opens the enterprise
-// explainer dialog. Shares the ['license'] query with the License page and
-// EnterpriseBadge, so activating a key unlocks the block immediately.
-export const EnterpriseFeatureGate = ({ children }: { children: ReactNode }) => {
+// untouched; without one `fallback`, or a panel naming the feature, takes their place.
+export const EnterpriseFeatureGate = ({
+  children,
+  feature,
+  fallback,
+}: {
+  children: ReactNode;
+  feature: EnterpriseFeature;
+  fallback?: ReactNode;
+}) => {
   const [isExplainerOpen, setIsExplainerOpen] = useState(false);
 
   const licenseQuery = useQuery({
@@ -23,39 +30,50 @@ export const EnterpriseFeatureGate = ({ children }: { children: ReactNode }) => 
     queryFn: () => api.getLicense(),
   });
 
+  if (licenseQuery.isPending) {
+    return null;
+  }
   if (licenseQuery.data?.valid) {
     return <>{children}</>;
   }
+  if (fallback) {
+    return <>{fallback}</>;
+  }
 
   return (
-    <div className="relative">
-      {/* react-dom 18 drops inert={true}; the attribute is only set when given a
-          string, hence the cast (our @types/react is v19, which types it as boolean). */}
-      <div
-        aria-hidden
-        inert={'' as unknown as boolean}
-        className="pointer-events-none select-none opacity-60">
-        {children}
-      </div>
-      <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[3px]">
-        <div className="flex flex-col items-center gap-3 rounded-lg border border-emerald-400/20 bg-card px-8 py-6 text-center shadow-elevated">
-          <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 shadow-card">
-            <Lock className="h-5 w-5 text-emerald-700 dark:text-white" strokeWidth={2.2} />
-          </div>
-          <div>
-            <p className="text-sm font-semibold">Enterprise feature</p>
-            <p className="mt-1 max-w-[230px] text-xs leading-relaxed text-muted-foreground">
-              Unlock it with an Enterprise license.
-            </p>
-          </div>
+    <>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-4 rounded-xl border border-emerald-400/20 bg-card px-6 py-5 shadow-card">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 shadow-card">
+          <feature.icon className="h-5 w-5 text-emerald-700 dark:text-white" strokeWidth={2} />
+        </div>
+        <div className="min-w-[240px] flex-1">
+          <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+            Enterprise
+          </p>
+          <p className="text-[15px] font-semibold">{feature.name}</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            {feature.description}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2">
           <Button size="sm" onClick={() => setIsExplainerOpen(true)}>
             <Sparkles className="h-3.5 w-3.5" />
             Discover Enterprise
           </Button>
+          <p className="text-xs text-muted-foreground">
+            Have a key?{' '}
+            <Link to="/license" className="font-medium text-link hover:underline">
+              Activate it
+            </Link>
+          </p>
         </div>
       </div>
 
-      <EnterpriseExplainerDialog open={isExplainerOpen} onOpenChange={setIsExplainerOpen} />
-    </div>
+      <EnterpriseExplainerDialog
+        open={isExplainerOpen}
+        onOpenChange={setIsExplainerOpen}
+        feature={feature}
+      />
+    </>
   );
 };

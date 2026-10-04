@@ -65,3 +65,7 @@ sql:
             go_type:
               import: "xprem/internal/auditlog"
               type: "ActorType"
+          - column: "sourcemap_indexes.status"
+            go_type:
+              import: "xprem/internal/types"
+              type: "SourcemapIndexStatus"

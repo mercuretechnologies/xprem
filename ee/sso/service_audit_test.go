@@ -8,8 +8,8 @@ import (
 	"context"
 	"testing"
 	"xprem/internal/auditlog"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -83,7 +83,7 @@ func TestPendingProvisioningEmitsProvisionedOnly(t *testing.T) {
 func TestLinkingExistingAccountEmitsAuditEvent(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUserRepo()
-	existing, err := users.InsertUser(context.Background(), store.InsertUserParameters{
+	existing, err := users.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "existing-user", Email: testEmail, PasswordHash: "some-bcrypt-hash", IsAdmin: true, Enabled: true,
 	})
 	require.NoError(t, err)

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -20,7 +20,7 @@ const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 func seedClient(t *testing.T, repo *fakeClientRepo, redirectURIs ...string) string {
 	t.Helper()
 	id := uuid.New().String()
-	repo.inserted = append(repo.inserted, store.InsertOAuthClientParameters{
+	repo.inserted = append(repo.inserted, repository.InsertOAuthClientParameters{
 		ID:           id,
 		Name:         "Claude Code",
 		RedirectURIs: redirectURIs,

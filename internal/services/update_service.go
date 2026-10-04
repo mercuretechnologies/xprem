@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"xprem/internal/bucket"
+	"time"
 	"xprem/internal/cache"
+	"xprem/internal/repository"
 	"xprem/internal/rollout"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
@@ -32,7 +32,7 @@ type UpdateRepository interface {
 	// update row of one eoas run (CLI-minted on publish, server-minted on
 	// group republish) so consumers can treat them as a single publish. Nil
 	// (older CLIs, rollbacks, internal callers) leaves the rows ungrouped;
-	// the bucket store ignores it entirely (no grouping in stateless mode).
+	// the bucket repository ignores it entirely (no grouping in stateless mode).
 	CreateUpdate(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, publishGroup *string) (*types.Update, error)
 	CreateUpdateWithRollout(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string, rolloutPercentage int, publishGroup *string) (*types.Update, error)
 	// message is the reason the rollback was created. Empty for the CLI and
@@ -41,13 +41,13 @@ type UpdateRepository interface {
 	CreateRollback(ctx context.Context, appId string, updateId int64, branchName string, runtimeVersion string, platform types.Platform, commitHash string, message string) (*types.Update, error)
 	// ImportUpdate copies one externally-published update row; false means the
 	// row already existed.
-	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
-	ImportUpdate(ctx context.Context, params store.ImportUpdateParams) (bool, error)
-	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
+	// Control-plane only: the bucket repository answers ErrNotSupportedInStatelessMode.
+	ImportUpdate(ctx context.Context, params repository.ImportUpdateParams) (bool, error)
+	// Control-plane only: the bucket repository answers ErrNotSupportedInStatelessMode.
 	UpdateExists(ctx context.Context, appId string, branchName string, updateId int64) (bool, error)
 	// GetUpdatesByPublishGroup resolves the checked members of one publish
 	// group on (branch, runtime version), for the group republish.
-	// Control-plane only: the bucket store answers ErrNotSupportedInStatelessMode.
+	// Control-plane only: the bucket repository answers ErrNotSupportedInStatelessMode.
 	GetUpdatesByPublishGroup(ctx context.Context, appId string, branchName string, runtimeVersion string, publishGroup string) ([]types.PublishGroupMember, error)
 	GetPublishGroupsPage(ctx context.Context, appId string, branchName string, runtimeVersion string, cursor *int64, limit int) (types.PublishGroupsPage, error)
 	GetUpdatesByRunTimeVersionAndBranchName(ctx context.Context, appId string, runtimeVersion string, branchName string, cursor *int64, limit int) (types.UpdatesPage, error)
@@ -58,20 +58,21 @@ type UpdateRepository interface {
 	// mapping existed; callers fall back to the update-folder layout.
 	GetUpdateAssetMapping(ctx context.Context, update types.Update) (*types.UpdateAssetMapping, error)
 	StoreUpdateAssetMapping(ctx context.Context, update types.Update, mapping *types.UpdateAssetMapping) error
+	// Control-plane only: the bucket repository answers nil, and refuses to store.
+	GetUpdateSourcemapHash(ctx context.Context, update types.Update) (*string, error)
+	StoreUpdateSourcemapHash(ctx context.Context, update types.Update, hash string) error
 }
 
 type UpdateService struct {
 	updateRepo UpdateRepository
-	bucket     bucket.Bucket
 	// manifestFlight collapses concurrent composes of one manifest entry:
 	// right after a publish, every poll misses the cache at once.
 	manifestFlight singleflight.Group
 }
 
-func NewUpdateService(updateRepo UpdateRepository, bucket bucket.Bucket) *UpdateService {
+func NewUpdateService(updateRepo UpdateRepository) *UpdateService {
 	return &UpdateService{
 		updateRepo: updateRepo,
-		bucket:     bucket,
 	}
 }
 
@@ -100,6 +101,9 @@ func (s *UpdateService) getLatestUpdateEnvelope(ctx context.Context, appId strin
 // manifestResponseEntry is the poll-ready form of a composed manifest: the
 // exact bytes the response body carries, and the update's UUID for the
 // same-version short-circuit.
+// manifestComposeTimeout bounds a compose that no longer follows any caller.
+const manifestComposeTimeout = 30 * time.Second
+
 type manifestResponseEntry struct {
 	ManifestJSON json.RawMessage `json:"manifestJson"`
 	UpdateUUID   string          `json:"updateUuid"`
@@ -107,7 +111,7 @@ type manifestResponseEntry struct {
 
 // cachedManifestResponse is the single owner of the composed-manifest cache;
 // the request path and the publish prewarm both go through it. Composing is
-// what costs the store reads, so a warm poll never pays one.
+// what costs the repository reads, so a warm poll never pays one.
 func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types.Update, platform types.Platform) (manifestResponseEntry, error) {
 	manifestCache := cache.GetCache()
 	cacheKey := update2.ComputeManifestResponseCacheKey(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId, platform)
@@ -115,10 +119,13 @@ func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types
 		return entry, nil
 	}
 	flightEntry, err, _ := s.manifestFlight.Do(cacheKey, func() (any, error) {
+		// Shared by every waiting request: one caller leaving must not fail the others.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manifestComposeTimeout)
+		defer cancel()
 		if entry, ok := cache.GetJSON[manifestResponseEntry](manifestCache, cacheKey); ok {
 			return entry, nil
 		}
-		metadata, err := update2.GetMetadata(update)
+		metadata, err := update2.GetMetadata(ctx, update)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +137,7 @@ func (s *UpdateService) cachedManifestResponse(ctx context.Context, update types
 		if err != nil {
 			return nil, err
 		}
-		manifest, err := update2.ComposeUpdateManifest(&metadata, update, storedMetadata, mapping, platform)
+		manifest, err := update2.ComposeUpdateManifest(ctx, &metadata, update, storedMetadata, mapping, platform)
 		if err != nil {
 			return nil, err
 		}

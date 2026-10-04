@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/validation"
 
 	mcpprot "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -109,12 +109,12 @@ func requireBranchRuntimeVersion(ctx context.Context, deps Deps, appId string, b
 func isActionableWriteError(err error) bool {
 	var (
 		validationErr     *validation.Error
-		notFound          *store.ErrResourceNotFound
-		alreadyExists     *store.ErrResourceAlreadyExists
-		branchProtected   *store.ErrBranchProtected
-		branchHasChannels *store.ErrBranchHasActiveChannels
-		branchInRollout   *store.ErrBranchInActiveRollout
-		channelHasRollout *store.ErrChannelHasActiveRollout
+		notFound          *repository.ErrResourceNotFound
+		alreadyExists     *repository.ErrResourceAlreadyExists
+		branchProtected   *repository.ErrBranchProtected
+		branchHasChannels *repository.ErrBranchHasActiveChannels
+		branchInRollout   *repository.ErrBranchInActiveRollout
+		channelHasRollout *repository.ErrChannelHasActiveRollout
 		republishErr      *services.RepublishError
 	)
 	switch {
@@ -131,7 +131,7 @@ func isActionableWriteError(err error) bool {
 		errors.Is(err, services.ErrRolloutSuperseded),
 		errors.Is(err, services.ErrPublishGroupNotFound),
 		errors.Is(err, services.ErrNoChangesDetected),
-		errors.Is(err, store.ErrNotSupportedInStatelessMode):
+		errors.Is(err, repository.ErrNotSupportedInStatelessMode):
 		return true
 	}
 	return false

@@ -7,6 +7,7 @@ import { useSettings } from '@/lib/SettingsContext';
 import { useCurrentUser } from '@/lib/CurrentUserContext';
 import { PageHeader } from '@/components/PageHeader';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { ssoFeature } from '@/ee/lib/enterpriseFeatures';
 import { SsoConfigCard } from '@/ee/components/SsoConfigCard';
 
 // The SSO page of the Access & Security sidebar group. Without a valid
@@ -52,7 +53,7 @@ export const Sso = () => {
         title="Single sign-on"
         description="Let your team sign in through your identity provider. Accounts are created automatically as members on their first sign-in, and admins keep their password as a break-glass access."
       />
-      <EnterpriseFeatureGate>
+      <EnterpriseFeatureGate feature={ssoFeature}>
         <SsoConfigCard />
       </EnterpriseFeatureGate>
     </div>

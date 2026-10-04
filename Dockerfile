@@ -28,12 +28,13 @@ RUN GOOS=linux GOARCH=${TARGETARCH} go build \
 
 FROM alpine:latest
 # Fixed uid/gid so USER can be numeric below and volume ownership instructions
-# (chown 100:101 / fsGroup: 101) stay stable across rebuilds. /app/updates is
-# pre-created and chowned so the default LOCAL_BUCKET_BASE_PATH (./updates)
-# stays writable without root.
+# (chown 100:101 / fsGroup: 101) stay stable across rebuilds. /app/updates and
+# /app/sourcemaps are pre-created and chowned so the defaults of
+# LOCAL_BUCKET_BASE_PATH (./updates) and LOCAL_SOURCEMAPS_BASE_PATH
+# (./sourcemaps) stay writable without root.
 RUN apk add --no-cache bash && \
     addgroup -S -g 101 ota && adduser -S -u 100 -G ota ota && \
-    mkdir -p /app/updates && chown ota:ota /app/updates
+    mkdir -p /app/updates /app/sourcemaps && chown ota:ota /app/updates /app/sourcemaps
 WORKDIR /app
 COPY --from=builder /app/main /app/main
 COPY --from=dashboard-builder /app/apps/dashboard/dist /app/apps/dashboard/dist

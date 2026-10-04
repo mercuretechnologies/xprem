@@ -15,6 +15,7 @@ import { AppInfo } from '@/pages/AppInfo';
 import { ApiTokens } from '@/pages/ApiTokens';
 import { Users } from '@/pages/Users';
 import { Account } from '@/pages/Account';
+import { Mcp } from '@/pages/Mcp';
 import { License } from '@/ee/pages/License';
 import { Sso } from '@/ee/pages/Sso';
 import { Roles } from '@/ee/pages/Roles';
@@ -62,7 +63,7 @@ const RequiresControlPlane = ({ children }: { children: ReactNode }) => {
 };
 
 // Observe is a set of pages behind one sub-navigation, so the same element
-// serves both routes: /observe only exists to catch the bare URL and redirect
+// serves their routes: /observe only exists to catch the bare URL and redirect
 // to the default page. Control-plane only like the update feed, because every
 // view reads the device registry, which is a database table.
 //
@@ -156,6 +157,7 @@ export const App = () => {
                         />
                         <Route path="/observe" element={observeRoute} />
                         <Route path="/observe/:page" element={observeRoute} />
+                        <Route path="/observe/errors/:errorId" element={observeRoute} />
                         <Route path="/app-info" element={withLayout(withApp(<AppInfo />))} />
                         <Route path="/tokens" element={withLayout(withApp(<ApiTokens />))} />
                         <Route path="/users" element={withLayout(<Users />)} />
@@ -163,6 +165,14 @@ export const App = () => {
                         <Route path="/audit-logs" element={withLayout(<AuditLog />)} />
                         <Route path="/sso" element={withLayout(<Sso />)} />
                         <Route path="/license" element={withLayout(<License />)} />
+                        <Route
+                          path="/mcp"
+                          element={withLayout(
+                            <RequiresControlPlane>
+                              <Mcp />
+                            </RequiresControlPlane>
+                          )}
+                        />
                         <Route path="/account" element={withLayout(<Account />)} />
                         <Route path="/build-credentials" element={withLayout(withApp(<BuildCredentials />))} />
                         <Route

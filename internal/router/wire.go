@@ -15,6 +15,7 @@ import (
 	"xprem/ee/observe"
 	"xprem/ee/rbac"
 	"xprem/ee/sso"
+	"xprem/ee/symbolication"
 	"xprem/ee/telemetry"
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
@@ -30,9 +31,10 @@ import (
 	"xprem/internal/mcp"
 	"xprem/internal/mcptools"
 	"xprem/internal/oauth"
+	"xprem/internal/objectstore"
 	"xprem/internal/ratelimit"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 )
 
 type AppContainer struct {
@@ -70,6 +72,7 @@ type AppContainer struct {
 	SSOHandler                  *sso.SSOHandler
 	UpdateHandler               *dashhandlers.UpdateHandler
 	BundlePatchHandler          *dashhandlers.BundlePatchHandler
+	SourcemapHandler            *symbolication.Handler
 	UploadHandler               *handlers.UploadHandler
 	RepublishHandler            *handlers.RepublishHandler
 	UsersHandler                *dashhandlers.UsersHandler
@@ -78,6 +81,7 @@ type AppContainer struct {
 	ObserveIngestHandler        *observe.IngestHandler
 	ObserveHealthHistoryHandler *observe.HealthHistoryHandler
 	ObserveExplorerHandler      *observe.ExplorerHandler
+	ObserveErrorsHandler        *observe.ErrorsHandler
 	IdentityHandler             *identity.IdentityHandler
 }
 
@@ -91,6 +95,19 @@ func logLegacyAppIdFallback() {
 	if config.GetEnv("EXPO_APP_ID") != "" {
 		log.Println("🔒 [LEGACY] app id fallback DISABLED by SKIP_LEGACY_APP_ID_FALLBACK, manifest/asset requests without an expo-app-id header are rejected. Any v1 client that has not been rebuilt stops receiving updates.")
 	}
+}
+
+// buildsAllowed reports whether builds may store their artifacts in
+// artifactStore: not while it shares the updates bucket CDN_BASE_URL serves
+// publicly.
+func buildsAllowed(artifactStore *bucket.BuildArtifactStore) bool {
+	if !artifactStore.SharesUpdatesLocation() || cdn.ResolvedType() != "generic" {
+		return true
+	}
+	mode := objectstore.ResolveMode()
+	kind := objectstore.LocationKind(mode)
+	log.Printf("⚠️  [BUILDS] Builds are turned off: their artifacts would share the updates %s that CDN_BASE_URL serves publicly. Set %s to a private %s, then move any existing builds/ objects into it.", kind, bucket.BuildsLocationEnv(mode), kind)
+	return false
 }
 
 // InitDependencies wires application stores and services and returns their cleanup function.
@@ -111,9 +128,11 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var mcpHandler *mcp.MCPHandler
 	var rolloutRepo services.RolloutRepository
 	var bundlePatchRepo services.BundlePatchRepository
+	var sourcemapIndexRepo symbolication.IndexRepository
 	// nil in stateless mode: store identities and signing credentials only
 	// exist on the control plane.
 	var buildRepo services.BuildRepository
+	var buildArtifactStore services.BuildArtifactStore
 	var buildCleanup *services.BuildCleanup
 	var appIdentifierRepo services.AppIdentifierRepository
 	var credentialsRepo services.CredentialsRepository
@@ -133,6 +152,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	var healthHistory *observe.HealthHistory
 	var stateHistory *observe.StateHistory
 	var explorer *observe.Explorer
+	// nil without CLICKHOUSE_URL: telemetry is then acknowledged and dropped.
+	var observeClickHouse *clickhouse.Engine
 	var checkInRecorder *observe.CheckInRecorder
 
 	telemetryEnabled := !config.IsServerTelemetryDisabled() && !config.IsTestMode()
@@ -170,40 +191,48 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		migrations.SetEngine(dbEngine)
 		postgres.RunDBMigrations(dbUrl)
 
-		authRepo = store.NewPostgresAuthStore(dbEngine)
-		blobRepo = store.NewPostgresBlobStore(dbEngine)
-		appRepo = store.NewPostgresAppStore(dbEngine)
-		userRepo = store.NewPostgresUserStore(dbEngine)
-		refreshTokenRepo = store.NewPostgresRefreshTokenStore(dbEngine)
-		oauthClientRepo = store.NewPostgresOAuthClientStore(dbEngine)
-		oauthCodeRepo = store.NewPostgresOAuthCodeStore(dbEngine)
-		licenseRepo = licensing.NewPostgresLicenseStore(dbEngine)
-		ssoRepo = sso.NewPostgresSSOStore(dbEngine)
-		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyAccessStore(dbEngine)
-		branchProtectionRepo = branchprotection.NewPostgresStore(dbEngine)
-		rbacRepo = rbac.NewPostgresRBACStore(dbEngine)
-		auditRepo = audit.NewPostgresAuditStore(dbEngine)
-		branchRepo = store.NewPostgresBranchStore(dbEngine)
-		channelRepo = store.NewPostgresChannelStore(dbEngine)
-		pgUpdateStore := store.NewPostgresUpdateStore(dbEngine)
-		updateRepo = pgUpdateStore
+		authRepo = repository.NewPostgresAuthRepository(dbEngine)
+		blobRepo = repository.NewPostgresBlobRepository(dbEngine)
+		appRepo = repository.NewPostgresAppRepository(dbEngine)
+		userRepo = repository.NewPostgresUserRepository(dbEngine)
+		refreshTokenRepo = repository.NewPostgresRefreshTokenRepository(dbEngine)
+		oauthClientRepo = repository.NewPostgresOAuthClientRepository(dbEngine)
+		oauthCodeRepo = repository.NewPostgresOAuthCodeRepository(dbEngine)
+		licenseRepo = licensing.NewPostgresLicenseRepository(dbEngine)
+		ssoRepo = sso.NewPostgresSSORepository(dbEngine)
+		apiKeyAccessRepo = apikeyrestrictions.NewPostgresApiKeyAccessRepository(dbEngine)
+		branchProtectionRepo = branchprotection.NewPostgresRepository(dbEngine)
+		rbacRepo = rbac.NewPostgresRBACRepository(dbEngine)
+		auditRepo = audit.NewPostgresAuditRepository(dbEngine)
+		branchRepo = repository.NewPostgresBranchRepository(dbEngine)
+		channelRepo = repository.NewPostgresChannelRepository(dbEngine)
+		pgUpdateRepo := repository.NewPostgresUpdateRepository(dbEngine)
+		updateRepo = pgUpdateRepo
 		jobsClient, err = jobs.NewClient(dbEngine)
 		if err != nil {
 			log.Fatalf("Job system initialization failed: %v", err)
 		}
-		rolloutRepo = store.NewPostgresRolloutStore(dbEngine)
-		bundlePatchRepo = store.NewPostgresBundlePatchStore(dbEngine)
-		appIdentifierRepo = store.NewPostgresAppIdentifierStore(dbEngine)
-		buildRepo = store.NewPostgresBuildStore(dbEngine)
-		buildCleanup = services.NewBuildCleanup(dbEngine.DB, resolvedBucket)
-		credentialsRepo = store.NewPostgresCredentialsStore(dbEngine)
-		iosCredentialsRepo = store.NewPostgresIosCredentialsStore(dbEngine)
+		rolloutRepo = repository.NewPostgresRolloutRepository(dbEngine)
+		bundlePatchRepo = repository.NewPostgresBundlePatchRepository(dbEngine)
+		sourcemapIndexRepo = symbolication.NewPostgresIndexRepository(dbEngine)
+		appIdentifierRepo = repository.NewPostgresAppIdentifierRepository(dbEngine)
+		buildRepo = repository.NewPostgresBuildRepository(dbEngine)
+		artifactStore, err := bucket.OpenBuildArtifactStore()
+		if err != nil {
+			log.Fatalf("Build artifact storage: %v", err)
+		}
+		buildCleanup = services.NewBuildCleanup(dbEngine.DB, artifactStore)
+		if buildsAllowed(artifactStore) {
+			buildArtifactStore = artifactStore
+		}
+		credentialsRepo = repository.NewPostgresCredentialsRepository(dbEngine)
+		iosCredentialsRepo = repository.NewPostgresIosCredentialsRepository(dbEngine)
 		lockIosCertificate = postgres.AdvisoryLocker(dbEngine.DB, postgres.IosCertificateLockID, "ios certificate")
-		environmentRepo = store.NewPostgresEnvironmentStore(dbEngine)
+		environmentRepo = repository.NewPostgresEnvironmentRepository(dbEngine)
 
 		// Resolved even when telemetry is off: licensing needs the instance id.
-		seedInstanceId, _ := resolvedBucket.GetInstanceID()
-		instanceId, instanceIdErr = store.NewPostgresServerInstanceStore(dbEngine).GetOrCreateInstanceID(ctx, seedInstanceId)
+		seedInstanceId, _ := resolvedBucket.InstanceStore.ID(ctx)
+		instanceId, instanceIdErr = repository.NewPostgresServerInstanceRepository(dbEngine).GetOrCreateInstanceID(ctx, seedInstanceId)
 		if instanceIdErr != nil {
 			log.Printf("⚠️  [INSTANCE] Could not resolve the server instance id, license activation and heartbeats are unavailable this run: %v", instanceIdErr)
 		}
@@ -213,10 +242,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 			addCleanup(observe.StartHealthOutboxDiscarder(ctx, dbEngine))
 		} else {
 			stateHistory = observe.NewStateHistory(dbEngine)
-			identityService = identity.NewService(identity.NewPostgresIdentityStore(dbEngine))
+			identityService = identity.NewService(identity.NewPostgresIdentityRepository(dbEngine))
 			checkInRecorder = observe.NewCheckInRecorder(identityService, cache.GetCache())
-			var observeClickHouse *clickhouse.Engine
-
 			if chUrl := config.GetClickHouseURL(); chUrl != "" {
 				chEngine, err := clickhouse.NewClickHouseEngine(ctx, chUrl)
 				if err != nil {
@@ -225,7 +252,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				addCleanup(chEngine.Close)
 				clickhouse.RunDBMigrations(chUrl, dbUrl)
 				telemetrySink = observe.NewClickHouseTelemetrySink(chEngine)
-				branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateStore.GetUpdateOriginByUUID)
+				branchResolver = observe.NewBranchResolver(cache.GetCache(), pgUpdateRepo.GetUpdateOriginByUUID)
 				healthHistory = observe.NewHealthHistory(dbEngine, chEngine)
 				observeClickHouse = chEngine
 				addCleanup(healthHistory.Start(ctx))
@@ -240,14 +267,14 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		if err := config.LoadAppsFromFlatEnv(); err != nil {
 			log.Fatalf("Invalid apps config: %v\nSee https://mercure-technologies.gitbook.io/xprem/stateless-mode/getting-started for the stateless (flat-env) config format.", err)
 		}
-		authRepo = store.NewBucketAuthStore(resolvedBucket)
-		appRepo = store.NewBucketAppStore(resolvedBucket)
-		branchRepo = store.NewBucketBranchStore(resolvedBucket)
-		channelRepo = store.NewBucketChannelStore(resolvedBucket)
-		updateRepo = store.NewBucketUpdateStore(resolvedBucket)
-		blobRepo = store.NewBucketBlobStore(resolvedBucket)
+		authRepo = repository.NewBucketAuthRepository()
+		appRepo = repository.NewBucketAppRepository()
+		branchRepo = repository.NewBucketBranchRepository(resolvedBucket.UpdateStore)
+		channelRepo = repository.NewBucketChannelRepository()
+		updateRepo = repository.NewBucketUpdateRepository(resolvedBucket.UpdateStore)
+		blobRepo = repository.NewBucketBlobRepository(resolvedBucket.BlobStore)
 		if telemetryEnabled {
-			instanceId, instanceIdErr = store.NewBucketServerInstanceStore(resolvedBucket, cache.GetCache()).GetOrCreateInstanceID(ctx)
+			instanceId, instanceIdErr = repository.NewBucketServerInstanceRepository(resolvedBucket.InstanceStore, cache.GetCache()).GetOrCreateInstanceID(ctx)
 			if instanceIdErr != nil {
 				log.Printf("⚠️  [TELEMETRY] Could not resolve the server instance id, heartbeats stay off for this run: %v", instanceIdErr)
 			}
@@ -303,16 +330,38 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	userService.SetOnAuditEvent(auditService.Record)
 	appService := services.NewAppService(appRepo)
 	appService.SetOnAuditEvent(auditService.Record)
-	branchService := services.NewBranchService(branchRepo, channelRepo, updateRepo, rolloutRepo, resolvedBucket)
+	branchService := services.NewBranchService(branchRepo, channelRepo, updateRepo, rolloutRepo, resolvedBucket.UpdateStore, resolvedBucket.PatchStore)
 	branchService.SetOnAuditEvent(auditService.Record)
 	channelService := services.NewChannelService(branchRepo, channelRepo)
 	channelService.SetOnAuditEvent(auditService.Record)
-	updateService := services.NewUpdateService(updateRepo, resolvedBucket)
-	bsDiffService := services.NewBSDiffService(resolvedBucket, jobsClient, updateService, updateRepo, bundlePatchRepo)
-	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket)
+	updateService := services.NewUpdateService(updateRepo)
+	bsDiffService := services.NewBSDiffService(resolvedBucket.BlobStore, resolvedBucket.PatchStore, jobsClient, updateService, updateRepo, bundlePatchRepo)
+	expoImportService := expoimport.NewService(appService, branchService, channelService, updateRepo, jobsClient, resolvedBucket.BlobStore, resolvedBucket.UpdateStore)
+	// nil unless UPLOAD_SOURCEMAPS is on, which needs the control plane.
+	sourcemapStore, err := bucket.OpenSourcemapStore()
+	if err != nil {
+		log.Fatalf("UPLOAD_SOURCEMAPS is enabled but %v", err)
+	}
+	var symbolicationService *symbolication.Service
+	if sourcemapStore != nil {
+		// CDN_BASE_URL fronts a publicly readable bucket, and a source map
+		// embeds the app's source code.
+		if sourcemapStore.SharesUpdatesLocation() && cdn.ResolvedType() == "generic" {
+			log.Fatalf("UPLOAD_SOURCEMAPS: source maps cannot share the updates bucket when CDN_BASE_URL serves it; point them at a dedicated bucket")
+		}
+		symbolicationService = symbolication.NewService(sourcemapStore, sourcemapIndexRepo, jobsClient)
+	}
 	if jobsClient != nil {
 		expoimport.RegisterWorker(jobsClient.Workers(), expoImportService)
 		services.RegisterBSDiffWorker(jobsClient.Workers(), bsDiffService)
+		if symbolicationService != nil {
+			symbolication.RegisterWorker(jobsClient.Workers(), symbolicationService)
+		}
+		if symbolicationService != nil && observeClickHouse != nil {
+			errorGroupsSweep := observe.NewErrorGroupsSweep(explorer, symbolicationService)
+			observe.RegisterErrorGroupsWorker(jobsClient.Workers(), errorGroupsSweep)
+			jobsClient.AddPeriodic(errorGroupsSweep.PeriodicJob())
+		}
 		if err := jobsClient.Start(ctx); err != nil {
 			log.Fatalf("Job system startup failed: %v", err)
 		}
@@ -322,13 +371,17 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	if config.IsBundleDiffingCDNRedirect() && !cdn.SupportsPatchRedirect() {
 		log.Fatalf("BUNDLE_DIFFING_CDN_REDIRECT needs a CDN with an edge that can add response headers (CloudFront or CDN_BASE_URL); resolved CDN: %q", cdn.ResolvedType())
 	}
-	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket)
-	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket, bsDiffService)
+	expoProtocolService := services.NewExpoProtocolService(appRepo, channelRepo, updateRepo, updateService, services.DefaultBranchRules(), resolvedBucket.BlobStore, resolvedBucket.PatchStore)
+	deploymentService := services.NewDeploymentService(branchService, updateService, updateRepo, resolvedBucket.BlobStore, resolvedBucket.UpdateStore, bsDiffService)
 	deploymentService.SetOnAuditEvent(auditService.Record)
+	if sourcemapStore != nil {
+		deploymentService.SetSourcemapStore(sourcemapStore)
+		deploymentService.SetSourcemapIndexer(symbolicationService)
+	}
 	bsDiffService.SetOnAuditEvent(auditService.Record)
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
-	buildService := services.NewBuildService(buildRepo, appIdentifierRepo, resolvedBucket)
+	buildService := services.NewBuildService(buildRepo, appIdentifierRepo, buildArtifactStore)
 	if buildCleanup != nil {
 		addCleanup(buildCleanup.Start(ctx))
 	}
@@ -422,12 +475,14 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		SSOHandler:                  sso.NewSSOHandler(ssoService, rateLimiter),
 		UpdateHandler:               dashhandlers.NewUpdateHandler(updateService, deploymentService),
 		BundlePatchHandler:          dashhandlers.NewBundlePatchHandler(bsDiffService),
+		SourcemapHandler:            symbolication.NewHandler(symbolicationService),
 		UploadHandler:               handlers.NewUploadHandler(deploymentService),
 		UsersHandler:                dashhandlers.NewUsersHandler(userService, dashboardAuthService, rateLimiter),
 		UserRepo:                    userRepo,
 		ObserveIngestHandler:        observe.NewIngestHandler(identityService, telemetrySink, branchResolver, checkInRecorder),
 		ObserveHealthHistoryHandler: observe.NewHealthHistoryHandler(healthHistory, stateHistory),
 		ObserveExplorerHandler:      observe.NewExplorerHandler(explorer, identityService),
+		ObserveErrorsHandler:        observe.NewErrorsHandler(explorer, symbolicationService),
 		IdentityHandler:             identity.NewIdentityHandler(identityService),
 		MCPHandler:                  mcpHandler,
 		OAuthHandler:                oauthHandler,

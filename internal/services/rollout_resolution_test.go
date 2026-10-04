@@ -1,6 +1,6 @@
 package services
 
-// Fake-repo coverage of the progressive rollout decision tree, modeling the store
+// Fake-repo coverage of the progressive rollout decision tree, modeling the repository
 // contract the Postgres integration tests pin down so it runs in CI without a database.
 
 import (
@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"xprem/config"
-	"xprem/internal/bucket"
 	"xprem/internal/crypto"
+	"xprem/internal/repository"
 	"xprem/internal/rollout"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	"github.com/google/uuid"
@@ -56,6 +55,7 @@ type fakeStoredUpdate struct {
 	updateUUID        string
 	publishGroup      *string
 	assetMapping      *types.UpdateAssetMapping
+	sourcemapHash     *string
 }
 
 type fakeUpdateRepo struct {
@@ -358,7 +358,7 @@ func (r *fakeUpdateRepo) StoreUpdateUUIDInMetadata(_ context.Context, update typ
 	return nil
 }
 
-func (r *fakeUpdateRepo) ImportUpdate(context.Context, store.ImportUpdateParams) (bool, error) {
+func (r *fakeUpdateRepo) ImportUpdate(context.Context, repository.ImportUpdateParams) (bool, error) {
 	return false, fmt.Errorf("ImportUpdate is not exercised by these tests")
 }
 
@@ -384,6 +384,27 @@ func (r *fakeUpdateRepo) StoreUpdateAssetMapping(_ context.Context, update types
 		return fmt.Errorf("update %s not found", update.UpdateId)
 	}
 	row.assetMapping = mapping
+	return nil
+}
+
+func (r *fakeUpdateRepo) GetUpdateSourcemapHash(_ context.Context, update types.Update) (*string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return nil, nil
+	}
+	return row.sourcemapHash, nil
+}
+
+func (r *fakeUpdateRepo) StoreUpdateSourcemapHash(_ context.Context, update types.Update, hash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row := r.findRowLocked(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId)
+	if row == nil {
+		return fmt.Errorf("update %s not found", update.UpdateId)
+	}
+	row.sourcemapHash = &hash
 	return nil
 }
 
@@ -537,7 +558,7 @@ func (r *fakeChannelRepo) GetChannelBranchMapping(_ context.Context, _, channelN
 
 type fakeAppRepo struct{}
 
-func (fakeAppRepo) InsertApp(_ context.Context, _ store.InsertAppParameters) (string, error) {
+func (fakeAppRepo) InsertApp(_ context.Context, _ repository.InsertAppParameters) (string, error) {
 	return "", nil
 }
 
@@ -628,84 +649,43 @@ func hashedUploads(paths ...string) []FileUploadItem {
 
 const launchAssetPath = "bundles/launch.hbc"
 
-// fakeRolloutBucket satisfies bucket.Bucket for the revert flow.
-type fakeRolloutBucket struct{}
+// fakeBlobStore, fakePatchStore and fakeUpdateStore are the bucket stores of a
+// harness that stores no files.
+type fakeBlobStore struct{}
 
-func (fakeRolloutBucket) GetBranches(_ string) ([]string, error) { return nil, nil }
+func (fakeBlobStore) Exists(context.Context, string, string) (bool, error) { return false, nil }
 
-func (fakeRolloutBucket) GetRuntimeVersions(_, _ string) ([]types.RuntimeVersionWithStats, error) {
-	return nil, nil
-}
-
-func (fakeRolloutBucket) GetUpdates(_, _, _ string) ([]types.Update, error) { return nil, nil }
-
-func (fakeRolloutBucket) GetFile(_ types.Update, _ string) (*types.BucketFile, error) {
+func (fakeBlobStore) Get(context.Context, string, string) (*types.BucketFile, error) {
 	return nil, fmt.Errorf("fake bucket stores no files")
 }
 
-func (fakeRolloutBucket) RequestUploadUrlForFileUpdate(_, _, _, _, _ string) (*bucket.UploadRequest, error) {
-	return &bucket.UploadRequest{Method: "PUT"}, nil
+type fakePatchStore struct{}
+
+func (fakePatchStore) Exists(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
 }
 
-func (fakeRolloutBucket) UploadFileIntoUpdate(_ types.Update, _ string, _ io.Reader) error {
+func (fakePatchStore) Get(context.Context, string, string, string, string) (*types.BucketFile, error) {
+	return nil, fmt.Errorf("fake bucket stores no files")
+}
+
+func (fakePatchStore) Put(context.Context, string, string, string, string, io.Reader) error {
 	return nil
 }
 
-func (fakeRolloutBucket) CopyFileIntoUpdate(_ types.Update, _ types.Update, _ string) error {
-	return nil
-}
+func (fakePatchStore) DeleteBranch(context.Context, string, string) error { return nil }
 
-func (fakeRolloutBucket) DeleteUpdateFolder(_, _, _, _ string) error { return nil }
+type fakeUpdateStore struct{}
 
-func (fakeRolloutBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {
+func (fakeUpdateStore) Delete(context.Context, string, string, string, string) error { return nil }
+
+func (fakeUpdateStore) CreateFrom(_ context.Context, previousUpdate *types.Update, newUpdateId string) (*types.Update, error) {
 	return &types.Update{
 		AppId:          previousUpdate.AppId,
 		Branch:         previousUpdate.Branch,
 		RuntimeVersion: previousUpdate.RuntimeVersion,
 		UpdateId:       newUpdateId,
 	}, nil
-}
-
-func (fakeRolloutBucket) GetInstanceID() (string, error) { return "", nil }
-
-func (fakeRolloutBucket) PersistInstanceID(_ string) error { return nil }
-
-func (fakeRolloutBucket) RetrieveMigrationHistory() ([]string, error) { return nil, nil }
-
-func (fakeRolloutBucket) ApplyMigration(_ string) error { return nil }
-
-func (fakeRolloutBucket) RemoveMigrationFromHistory(_ string) error { return nil }
-
-func (fakeRolloutBucket) BlobExists(context.Context, string, string) (bool, error) {
-	return false, nil
-}
-
-func (fakeRolloutBucket) GetBlob(context.Context, string, string) (*types.BucketFile, error) {
-	return nil, fmt.Errorf("fake bucket stores no files")
-}
-
-func (fakeRolloutBucket) PutBlob(context.Context, string, string, io.Reader) error {
-	return nil
-}
-
-func (fakeRolloutBucket) BSDiffExists(context.Context, string, string, string, string) (bool, error) {
-	return false, nil
-}
-
-func (fakeRolloutBucket) GetBSDiff(context.Context, string, string, string, string) (*types.BucketFile, error) {
-	return nil, fmt.Errorf("fake bucket stores no files")
-}
-
-func (fakeRolloutBucket) PutBSDiff(context.Context, string, string, string, string, io.Reader) error {
-	return nil
-}
-
-func (fakeRolloutBucket) DeleteBSDiffs(context.Context, string, string) error {
-	return nil
-}
-
-func (fakeRolloutBucket) RequestBlobUploadURL(_, _, _ string) (*bucket.UploadRequest, error) {
-	return &bucket.UploadRequest{Method: "PUT"}, nil
 }
 
 type rolloutTestHarness struct {
@@ -726,10 +706,10 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 	updateRepo := &fakeUpdateRepo{events: events}
 	channelRepo := &fakeChannelRepo{mappings: map[string]*types.ChannelResolution{}}
 	rolloutRepo := &fakeRolloutRepo{updateRepo: updateRepo, events: events}
-	updateService := NewUpdateService(updateRepo, nil)
-	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeRolloutBucket{})
-	bsDiffService := NewBSDiffService(fakeRolloutBucket{}, nil, updateService, updateRepo, nil)
-	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeRolloutBucket{}, bsDiffService)
+	updateService := NewUpdateService(updateRepo)
+	branchService := NewBranchService(fakeBranchRepo{}, channelRepo, updateRepo, rolloutRepo, fakeUpdateStore{}, fakePatchStore{})
+	bsDiffService := NewBSDiffService(fakeBlobStore{}, fakePatchStore{}, nil, updateService, updateRepo, nil)
+	deploymentService := NewDeploymentService(branchService, updateService, updateRepo, fakeBlobStore{}, fakeUpdateStore{}, bsDiffService)
 	return &rolloutTestHarness{
 		appId:             uuid.NewString(),
 		events:            events,
@@ -737,7 +717,7 @@ func newRolloutTestHarness(t *testing.T) *rolloutTestHarness {
 		channelRepo:       channelRepo,
 		rolloutRepo:       rolloutRepo,
 		updateService:     updateService,
-		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules(), fakeRolloutBucket{}),
+		protocolService:   NewExpoProtocolService(fakeAppRepo{}, channelRepo, updateRepo, updateService, DefaultBranchRules(), fakeBlobStore{}, fakePatchStore{}),
 		deploymentService: deploymentService,
 		rolloutService:    NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService),
 	}
@@ -1038,7 +1018,7 @@ func TestMarkUpdateAsCheckedMapsUniqueViolationToRolloutConflict(t *testing.T) {
 	racingUpdate, err := h.updateRepo.CreateUpdateWithRollout(ctx, h.appId, 300, "main", "1", "ios", "abc123", "", 30, nil)
 	require.NoError(t, err)
 
-	err = h.deploymentService.MarkUpdateAsChecked(ctx, *racingUpdate, types.NormalUpdate)
+	_, err = h.deploymentService.MarkUpdateAsChecked(ctx, *racingUpdate, types.NormalUpdate)
 	assert.ErrorIs(t, err, ErrActiveRolloutBlocksPublish)
 }
 
@@ -1332,24 +1312,4 @@ func TestResolveAssetUpdateTiers(t *testing.T) {
 		require.NotNil(t, servedUpdate)
 		assert.Equal(t, "100", servedUpdate.UpdateId)
 	})
-}
-
-func (fakeRolloutBucket) GetBuildArtifact(context.Context, bucket.BuildArtifact, bool) (*types.BucketFile, error) {
-	return nil, nil
-}
-
-func (fakeRolloutBucket) PutBuildArtifact(context.Context, bucket.BuildArtifact, bool, io.Reader) error {
-	return nil
-}
-
-func (fakeRolloutBucket) DeleteBuildArtifact(context.Context, bucket.BuildArtifact, bool) error {
-	return nil
-}
-
-func (fakeRolloutBucket) RequestBuildArtifactUploadURL(context.Context, string, bucket.BuildArtifact) (*bucket.UploadRequest, error) {
-	return &bucket.UploadRequest{Method: "PUT"}, nil
-}
-
-func (fakeRolloutBucket) RequestBuildArtifactDownloadURL(context.Context, bucket.BuildArtifact, time.Time) (string, error) {
-	return "", nil
 }

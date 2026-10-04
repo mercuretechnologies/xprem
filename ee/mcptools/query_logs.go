@@ -40,21 +40,22 @@ type QueryLogsInput struct {
 
 // LogOutput is one line, trimmed to what reads usefully.
 type LogOutput struct {
-	Timestamp   string `json:"timestamp"`
-	EventName   string `json:"eventName"`
-	Severity    string `json:"severity,omitempty"`
-	IsFatal     bool   `json:"isFatal,omitempty"`
-	Body        string `json:"body,omitempty"`
-	Attributes  string `json:"attributes,omitempty" jsonschema:"raw JSON of the attributes the SDK attached to the line"`
-	EasClientId string `json:"easClientId,omitempty" jsonschema:"the install that emitted it; pass it to get_device"`
-	SessionId   string `json:"sessionId,omitempty"`
-	UpdateId    string `json:"updateId,omitempty"`
-	Branch      string `json:"branch,omitempty"`
-	Channel     string `json:"channel,omitempty"`
-	Platform    string `json:"platform,omitempty"`
-	OsVersion   string `json:"osVersion,omitempty"`
-	DeviceModel string `json:"deviceModel,omitempty"`
-	AppVersion  string `json:"appVersion,omitempty"`
+	Timestamp        string `json:"timestamp"`
+	EventName        string `json:"eventName"`
+	Severity         string `json:"severity,omitempty"`
+	IsFatal          bool   `json:"isFatal,omitempty"`
+	ErrorFingerprint string `json:"errorFingerprint,omitempty" jsonschema:"names the error: the same on every occurrence of one bug in one update, absent on a line that is not an error"`
+	Body             string `json:"body,omitempty"`
+	Attributes       string `json:"attributes,omitempty" jsonschema:"raw JSON of the attributes the SDK attached to the line"`
+	EasClientId      string `json:"easClientId,omitempty" jsonschema:"the install that emitted it; pass it to get_device"`
+	SessionId        string `json:"sessionId,omitempty"`
+	UpdateId         string `json:"updateId,omitempty"`
+	Branch           string `json:"branch,omitempty"`
+	Channel          string `json:"channel,omitempty"`
+	Platform         string `json:"platform,omitempty"`
+	OsVersion        string `json:"osVersion,omitempty"`
+	DeviceModel      string `json:"deviceModel,omitempty"`
+	AppVersion       string `json:"appVersion,omitempty"`
 }
 
 type QueryLogsOutput struct {
@@ -131,21 +132,22 @@ func queryLogsHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallTool
 		}
 		for _, line := range page.Logs {
 			output.Logs = append(output.Logs, LogOutput{
-				Timestamp:   line.Timestamp.UTC().Format(time.RFC3339),
-				EventName:   line.EventName,
-				Severity:    line.SeverityText,
-				IsFatal:     line.IsFatal,
-				Body:        truncate(line.Body),
-				Attributes:  truncate(line.Attributes),
-				EasClientId: line.EASClientID,
-				SessionId:   line.SessionID,
-				UpdateId:    line.UpdateID,
-				Branch:      line.Branch,
-				Channel:     line.Channel,
-				Platform:    line.Platform,
-				OsVersion:   line.OSVersion,
-				DeviceModel: line.DeviceModel,
-				AppVersion:  line.AppVersion,
+				Timestamp:        line.Timestamp.UTC().Format(time.RFC3339),
+				EventName:        line.EventName,
+				Severity:         line.SeverityText,
+				IsFatal:          line.IsFatal,
+				ErrorFingerprint: line.ErrorFingerprint,
+				Body:             truncate(line.Body),
+				Attributes:       truncate(line.Attributes),
+				EasClientId:      line.EASClientID,
+				SessionId:        line.SessionID,
+				UpdateId:         line.UpdateID,
+				Branch:           line.Branch,
+				Channel:          line.Channel,
+				Platform:         line.Platform,
+				OsVersion:        line.OSVersion,
+				DeviceModel:      line.DeviceModel,
+				AppVersion:       line.AppVersion,
 			})
 		}
 		return nil, output, nil

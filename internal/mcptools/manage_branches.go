@@ -74,7 +74,7 @@ func deleteBranchHandler(deps Deps) func(ctx context.Context, req *mcpprot.CallT
 			return nil, DeleteBranchOutput{}, errors.New("branch is required; list the branches with get_branches")
 		}
 		// Protection, active channels and active rollouts are all refused by
-		// the service and the store; their messages name what to unblock.
+		// the service and the repository; their messages name what to unblock.
 		if err := deps.BranchWriter.DeleteBranch(ctx, input.Branch, input.AppId); err != nil {
 			return nil, DeleteBranchOutput{}, writeError(err, "delete the branch", "mcp delete_branch", principal, input.AppId)
 		}

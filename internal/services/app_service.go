@@ -12,7 +12,7 @@ import (
 	"xprem/internal/helpers"
 	"xprem/internal/keyStore"
 	"xprem/internal/providers/expo"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/validation"
 
 	"github.com/google/uuid"
@@ -26,7 +26,7 @@ type AppService struct {
 }
 
 type AppRepository interface {
-	InsertApp(ctx context.Context, app store.InsertAppParameters) (string, error)
+	InsertApp(ctx context.Context, app repository.InsertAppParameters) (string, error)
 	DeleteAppByID(ctx context.Context, id string) error
 	GetApps(ctx context.Context) ([]config.AppDescriptor, error)
 	UpdateAppNameByID(ctx context.Context, id string, newName string) error
@@ -59,7 +59,7 @@ func (s *AppService) createApp(ctx context.Context, appId uuid.UUID, displayName
 	if err := validation.DisplayName("name", displayName); err != nil {
 		return "", err
 	}
-	// Apps are only ever created through the control plane, the bucket store
+	// Apps are only ever created through the control plane, the bucket repository
 	// rejects InsertApp, so creation always happens at runtime, from the
 	// dashboard, which offers only database and aws-secrets-manager. Neither
 	// legacy mode can carry usable key material for a new app: local key paths
@@ -83,7 +83,7 @@ func (s *AppService) createApp(ctx context.Context, appId uuid.UUID, displayName
 		return "", validation.Errorf("keysConfig", "%v", err)
 	}
 	modeStr := string(keysConfig.Mode)
-	params := store.InsertAppParameters{
+	params := repository.InsertAppParameters{
 		ID:       appId.String(),
 		Name:     displayName,
 		KeysMode: &modeStr,
@@ -187,7 +187,7 @@ func (s *AppService) PresentApp(ctx context.Context, app config.AppConfig) confi
 	if app.Name == "" {
 		// The stateless flat env carries no display name, resolve it from
 		// Expo for the dashboard. Best-effort and cached; "" keeps the
-		// id-as-label fallback. Lives here rather than in the store so the
+		// id-as-label fallback. Lives here rather than in the repository so the
 		// device-facing OTA path never pays the Expo round-trip.
 		app.Name = expo.FetchAppName(ctx, app.Id)
 	}

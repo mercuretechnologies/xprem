@@ -9,7 +9,7 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
@@ -21,7 +21,8 @@ type BranchService struct {
 	updateRepo  UpdateRepository
 	// Nil in stateless mode, where rollouts do not exist and the guards below are inert.
 	rolloutRepo RolloutRepository
-	bucket      bucket.Bucket
+	updateStore UpdateStore
+	patchStore  PatchStore
 	// onAuditEvent is the audit emission seam; nil (community) means branch
 	// changes leave no events.
 	onAuditEvent auditlog.RecordFunc
@@ -46,13 +47,14 @@ func (s *BranchService) SetOnAuditEvent(record auditlog.RecordFunc) {
 	s.onAuditEvent = record
 }
 
-func NewBranchService(branchRepo BranchRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, rolloutRepo RolloutRepository, bucket bucket.Bucket) *BranchService {
+func NewBranchService(branchRepo BranchRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, rolloutRepo RolloutRepository, updateStore UpdateStore, patchStore PatchStore) *BranchService {
 	return &BranchService{
 		branchRepo:  branchRepo,
 		channelRepo: channelRepo,
 		updateRepo:  updateRepo,
 		rolloutRepo: rolloutRepo,
-		bucket:      bucket,
+		updateStore: updateStore,
+		patchStore:  patchStore,
 	}
 }
 
@@ -99,7 +101,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 		return fmt.Errorf("failed to validate branch dependencies: %w", err)
 	}
 	if len(channels) > 0 {
-		return &store.ErrBranchHasActiveChannels{
+		return &repository.ErrBranchHasActiveChannels{
 			BranchName:   branchName,
 			ChannelNames: channels,
 		}
@@ -113,7 +115,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 			return fmt.Errorf("failed to validate branch rollout dependencies: %w", err)
 		}
 		if len(rolloutChannels) > 0 {
-			return &store.ErrBranchInActiveRollout{
+			return &repository.ErrBranchInActiveRollout{
 				BranchName:   branchName,
 				ChannelNames: rolloutChannels,
 			}
@@ -152,7 +154,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 	}
 	go func(bucketRows []types.UpdateRef) {
 		for _, row := range bucketRows {
-			err := s.bucket.DeleteUpdateFolder(appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))
+			err := s.updateStore.Delete(context.Background(), appId, branchName, row.RuntimeVersion, strconv.FormatInt(row.ID, 10))
 			if err != nil {
 				fmt.Printf("failed to delete update files for update %d: %v\n", row.ID, err)
 			}
@@ -161,7 +163,7 @@ func (s *BranchService) DeleteBranch(ctx context.Context, branchName string, app
 		if len(bucketRows) == 0 {
 			return
 		}
-		if err := s.bucket.DeleteBSDiffs(context.Background(), appId, branchName); err != nil {
+		if err := s.patchStore.DeleteBranch(context.Background(), appId, branchName); err != nil {
 			fmt.Printf("failed to delete bundle patches of branch %s: %v\n", branchName, err)
 		}
 	}(rows)
@@ -196,11 +198,11 @@ func (s *BranchService) UpdateChannelBranchMapping(ctx context.Context, appId st
 		// The guarded UPDATE reports 0 rows for both an unknown channel and a channel
 		// locked by an active rollout; tell them apart so the caller gets a 409 with
 		// the real reason instead of a misleading 404.
-		var notFoundErr *store.ErrResourceNotFound
+		var notFoundErr *repository.ErrResourceNotFound
 		if errors.As(err, &notFoundErr) && notFoundErr.Resource == "channel" && s.rolloutRepo != nil && channelName != "" {
 			activeRollout, rolloutErr := s.rolloutRepo.GetChannelRollout(ctx, appId, channelName)
 			if rolloutErr == nil && activeRollout != nil {
-				return &store.ErrChannelHasActiveRollout{ChannelName: channelName}
+				return &repository.ErrChannelHasActiveRollout{ChannelName: channelName}
 			}
 		}
 		return err

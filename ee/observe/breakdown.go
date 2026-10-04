@@ -29,10 +29,13 @@ type BreakdownSegment struct {
 
 // Breakdown groups one metric by one dimension into ranked segments.
 type Breakdown struct {
-	Available bool               `json:"available"`
-	Metric    string             `json:"metric"`
-	Dimension string             `json:"dimension"`
-	Segments  []BreakdownSegment `json:"segments"`
+	Available     bool               `json:"available"`
+	From          time.Time          `json:"from"`
+	To            time.Time          `json:"to"`
+	BucketSeconds int64              `json:"bucketSeconds"`
+	Metric        string             `json:"metric"`
+	Dimension     string             `json:"dimension"`
+	Segments      []BreakdownSegment `json:"segments"`
 	// Overall is the same metric over the same filters with no grouping, the baseline segments deviate from.
 	Overall BreakdownSegment `json:"overall"`
 }
@@ -336,10 +339,13 @@ func (e *Explorer) readBreakdown(
 	}
 
 	breakdown := Breakdown{
-		Available: e.clickhouse != nil,
-		Metric:    query.Metric,
-		Dimension: query.Dimension,
-		Segments:  []BreakdownSegment{},
+		Available:     e.clickhouse != nil,
+		From:          query.From.UTC(),
+		To:            query.To.UTC(),
+		BucketSeconds: max(int64(query.Bucket/time.Second), 1),
+		Metric:        query.Metric,
+		Dimension:     query.Dimension,
+		Segments:      []BreakdownSegment{},
 	}
 	if e.clickhouse == nil {
 		return breakdown, nil
@@ -349,6 +355,8 @@ func (e *Explorer) readBreakdown(
 		return Breakdown{}, err
 	}
 	query.ExplorerQuery = resolved
+	breakdown.From, breakdown.To = query.From.UTC(), query.To.UTC()
+	breakdown.BucketSeconds = max(int64(query.Bucket/time.Second), 1)
 	if empty {
 		return breakdown, nil
 	}
@@ -476,9 +484,10 @@ func (e *Explorer) readBreakdownPoints(
 
 	sql := sqlf(`
 		SELECT %s, toStartOfInterval(timestamp, toIntervalSecond(?)) AS bucket,
-		       toFloat64(quantileTDigest(0.5)(value))
+		       toFloat64(quantileTDigest(0.5)(value)), count(), uniqExact(eas_client_id)
 		FROM (
-			SELECT %s, any(m.timestamp) AS timestamp, any(m.value) AS value
+			SELECT %s, any(m.timestamp) AS timestamp, any(m.value) AS value,
+			       any(m.eas_client_id) AS eas_client_id
 			FROM %s
 			WHERE %s AND m.metric_name = ? AND (%s) IN (%s)
 			GROUP BY %s
@@ -514,7 +523,7 @@ func (e *Explorer) readBreakdownPoints(
 	for rows.Next() {
 		var value, context string
 		var point ObserveMetricPoint
-		if err := rows.Scan(&value, &context, &point.Timestamp, &point.Value); err != nil {
+		if err := rows.Scan(&value, &context, &point.Timestamp, &point.Value, &point.Samples, &point.Devices); err != nil {
 			return err
 		}
 		point.Value = finite(point.Value)

@@ -8,8 +8,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -53,7 +53,7 @@ func (h *ChannelHandler) CreateChannelHandler(w http.ResponseWriter, r *http.Req
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
@@ -82,7 +82,7 @@ func (h *ChannelHandler) DeleteChannelHandler(w http.ResponseWriter, r *http.Req
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
@@ -126,11 +126,11 @@ func (h *ChannelHandler) SetBranchSurfingHandler(w http.ResponseWriter, r *http.
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())
 			return
 		}

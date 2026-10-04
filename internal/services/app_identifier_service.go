@@ -9,7 +9,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 )
@@ -19,12 +19,12 @@ var iosBundleIdPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*$`)
 
 type AppIdentifierRepository interface {
 	InsertAppIdentifier(ctx context.Context, appId string, platform types.Platform, identifier string) (string, error)
-	GetAppIdentifiers(ctx context.Context, appId string) ([]store.AppIdentifierRow, error)
-	GetAppIdentifierByID(ctx context.Context, appId string, identifierId string) (*store.AppIdentifierRef, error)
-	GetAppIdentifierByPlatformAndIdentifier(ctx context.Context, appId string, platform types.Platform, identifier string) (*store.AppIdentifierRef, error)
+	GetAppIdentifiers(ctx context.Context, appId string) ([]repository.AppIdentifierRow, error)
+	GetAppIdentifierByID(ctx context.Context, appId string, identifierId string) (*repository.AppIdentifierRef, error)
+	GetAppIdentifierByPlatformAndIdentifier(ctx context.Context, appId string, platform types.Platform, identifier string) (*repository.AppIdentifierRef, error)
 	DeleteAppIdentifier(ctx context.Context, appId string, identifierId string) error
 	SetBuildNumber(ctx context.Context, appId string, identifierId string, buildNumber string) error
-	AllocateBuildNumber(ctx context.Context, appId string, identifierId string, next func(types.Platform, string) (string, error)) (*store.AppIdentifierRef, error)
+	AllocateBuildNumber(ctx context.Context, appId string, identifierId string, next func(types.Platform, string) (string, error)) (*repository.AppIdentifierRef, error)
 }
 
 // AppIdentifier is the dashboard projection of one store identity.
@@ -79,7 +79,7 @@ func validateIdentifier(platform types.Platform, identifier string) error {
 
 func (s *AppIdentifierService) CreateAppIdentifier(ctx context.Context, appId string, platform types.Platform, identifier string) (string, error) {
 	if s.repo == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateIdentifier(platform, identifier); err != nil {
 		return "", err
@@ -102,7 +102,7 @@ func (s *AppIdentifierService) CreateAppIdentifier(ctx context.Context, appId st
 // GetAppIdentifiers lists app identifiers with their platform signing-credential readiness.
 func (s *AppIdentifierService) GetAppIdentifiers(ctx context.Context, appId string) ([]AppIdentifier, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	rows, err := s.repo.GetAppIdentifiers(ctx, appId)
 	if err != nil {
@@ -127,14 +127,14 @@ func (s *AppIdentifierService) GetAppIdentifiers(ctx context.Context, appId stri
 // when it drifts from what the store actually holds.
 func (s *AppIdentifierService) SetBuildNumber(ctx context.Context, appId string, identifierId string, buildNumber string) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	ref, err := s.repo.GetAppIdentifierByID(ctx, appId, identifierId)
 	if err != nil {
 		return err
 	}
 	if ref == nil {
-		return &store.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
+		return &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
 	}
 	if err := validation.BuildNumber(ref.Platform, buildNumber); err != nil {
 		return err
@@ -159,7 +159,7 @@ func (s *AppIdentifierService) SetBuildNumber(ctx context.Context, appId string,
 
 func (s *AppIdentifierService) DeleteAppIdentifier(ctx context.Context, appId string, identifierId string) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
 	}
 	// Read before the delete: afterwards there is no row left to name in the
 	// audit entry. Best-effort, like the entry itself.
@@ -187,7 +187,7 @@ func (s *AppIdentifierService) DeleteAppIdentifier(ctx context.Context, appId st
 // AllocateBuildNumber reserves the next build number of an identifier.
 func (s *AppIdentifierService) AllocateBuildNumber(ctx context.Context, appId string, identifierId string) (string, error) {
 	if s.repo == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	ref, err := s.repo.AllocateBuildNumber(ctx, appId, identifierId, s.nextBuildNumber)
 	if err != nil {
@@ -226,7 +226,7 @@ func (s *AppIdentifierService) nextBuildNumber(platform types.Platform, current 
 	// int64 without imposing Android's versionCode limit on iOS.
 	number, _ := new(big.Int).SetString(component, 10)
 	if platform == types.PlatformAndroid && number.Cmp(big.NewInt(validation.MaxAndroidBuildNumber)) >= 0 {
-		return "", store.ErrBuildNumberExhausted
+		return "", repository.ErrBuildNumberExhausted
 	}
 	return prefix + number.Add(number, big.NewInt(1)).String(), nil
 }

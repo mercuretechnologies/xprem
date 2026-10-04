@@ -5,6 +5,18 @@ import { Observe, useObserve } from 'expo-observe'
 
 import { ThemedText } from '@/components/ThemedText'
 
+// Not a tail call, so no engine can fold the frames away.
+function descend(depth: number): number {
+  if (depth === 0) {
+    throw new Error('Deliberate deep crash from the observe lab')
+  }
+  return descend(depth - 1) + 1
+}
+
+function recurseForever(): number {
+  return recurseForever() + 1
+}
+
 function Action({
   title,
   description,
@@ -91,6 +103,87 @@ export function LabScreen({
               throw new Error('Deliberate async crash from the observe lab')
             }, 0)
           }}
+        />
+        <Action
+          title="Report a caught error"
+          description="js.exception, not fatal, source reportedByUser"
+          onPress={() => {
+            try {
+              throw new Error('Deliberate caught error from the observe lab')
+            } catch (error) {
+              Observe.reportError(error)
+            }
+          }}
+        />
+        <Action
+          title="Throw 300 frames deep"
+          description="Reported error whose stack is 300 descend() frames: 50 recent + 50 oldest are kept"
+          onPress={() => {
+            try {
+              descend(300)
+            } catch (error) {
+              Observe.reportError(error)
+            }
+          }}
+        />
+        <Action
+          title="Overflow the call stack"
+          description="Infinite recursion, RangeError: does Hermes skip frames itself?"
+          onPress={() => {
+            try {
+              recurseForever()
+            } catch (error) {
+              Observe.reportError(error)
+            }
+          }}
+        />
+        <Action
+          title="Throw a non-fatal error"
+          description="Global handler called with isFatal=false"
+          onPress={() =>
+            ErrorUtils.getGlobalHandler()(
+              new Error('Deliberate non-fatal error from the observe lab'),
+              false
+            )
+          }
+        />
+        <Action
+          title="Reject a promise without catch"
+          description="Unhandled rejection: the SDK captures nothing today"
+          onPress={() => {
+            Promise.reject(new Error('Deliberate unhandled rejection from the observe lab'))
+          }}
+        />
+        <Action
+          title="Read a property of undefined"
+          description="TypeError in a press handler, fatal, the most common crash in the wild"
+          onPress={() => {
+            const user = undefined as unknown as { profile: { name: string } }
+            console.log(user.profile.name)
+          }}
+        />
+        <Action
+          title="Throw an error with a cause"
+          description="Fatal, nested error: does the cause survive the trip?"
+          onPress={() => {
+            setTimeout(() => {
+              throw new Error('Checkout failed', {
+                cause: new Error('Payment provider timed out'),
+              })
+            }, 0)
+          }}
+        />
+        <Action
+          title="Fetch a 500"
+          description="Failed request, shows up in network traces, not as an error"
+          onPress={() => {
+            fetch('https://httpstat.us/500').catch(() => {})
+          }}
+        />
+        <Action
+          title="console.error"
+          description="Logged to the console only: not captured, unlike Sentry breadcrumbs"
+          onPress={() => console.error('Deliberate console.error from the observe lab')}
         />
         <Action
           title="Dispatch now"

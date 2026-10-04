@@ -48,7 +48,7 @@ func (b surfBlockSet) contains(branchName string, updateId string) bool {
 // collectSurfBlocks gathers what this device must not be surfed onto, from its
 // two sources. The verdicts it echoes back are already tokens; the crashes it
 // reports are manifest UUIDs, a different identifier from the update id, which
-// only the store can resolve. An id that resolves to nothing tells us nothing, so
+// only the repository can resolve. An id that resolves to nothing tells us nothing, so
 // it is skipped rather than failing the poll.
 //
 // Only called for a device whose surf was honoured AND that reported something,

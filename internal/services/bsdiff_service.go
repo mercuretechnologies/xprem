@@ -13,7 +13,6 @@ import (
 	"xprem/config"
 	"xprem/internal/auditlog"
 	"xprem/internal/bsdiff"
-	"xprem/internal/bucket"
 	"xprem/internal/jobs"
 	"xprem/internal/types"
 	"xprem/internal/validation"
@@ -38,7 +37,8 @@ var (
 )
 
 type BsDiffService struct {
-	bucket        bucket.Bucket
+	blobStore     BlobStore
+	patchStore    PatchStore
 	jobs          *jobs.Client
 	updateService *UpdateService
 	updateRepo    UpdateRepository
@@ -46,9 +46,10 @@ type BsDiffService struct {
 	onAuditEvent  auditlog.RecordFunc
 }
 
-func NewBSDiffService(bucket bucket.Bucket, jobsClient *jobs.Client, updateService *UpdateService, updateRepo UpdateRepository, patches BundlePatchRepository) *BsDiffService {
+func NewBSDiffService(blobStore BlobStore, patchStore PatchStore, jobsClient *jobs.Client, updateService *UpdateService, updateRepo UpdateRepository, patches BundlePatchRepository) *BsDiffService {
 	return &BsDiffService{
-		bucket:        bucket,
+		blobStore:     blobStore,
+		patchStore:    patchStore,
 		jobs:          jobsClient,
 		updateService: updateService,
 		updateRepo:    updateRepo,
@@ -301,7 +302,7 @@ func (s *BsDiffService) readBundle(ctx context.Context, appId string, mapping *t
 	if mapping == nil || mapping.LaunchAsset.Hash == "" {
 		return nil, nil
 	}
-	blob, err := s.bucket.GetBlob(ctx, appId, mapping.LaunchAsset.Hash)
+	blob, err := s.blobStore.Get(ctx, appId, mapping.LaunchAsset.Hash)
 	if err != nil {
 		return nil, fmt.Errorf("reading blob %s: %w", mapping.LaunchAsset.Hash, err)
 	}
@@ -413,7 +414,7 @@ func (s *BsDiffService) computeBSDiff(ctx context.Context, appId, targetUpdateUU
 		return patchOutcome{status: types.BundlePatchSkipped, reason: types.BundlePatchReasonNotWorth, patchSize: &patchSize, fullDownloadSize: &fullSize}, nil
 	}
 
-	if err := s.bucket.PutBSDiff(ctx, appId, target.Branch, targetUpdateUUID, sourceUpdateUUID, bytes.NewReader(patch)); err != nil {
+	if err := s.patchStore.Put(ctx, appId, target.Branch, targetUpdateUUID, sourceUpdateUUID, bytes.NewReader(patch)); err != nil {
 		return patchOutcome{}, fmt.Errorf("storing patch %s -> %s: %w", sourceUpdateUUID, targetUpdateUUID, err)
 	}
 	log.Printf("[bsdiff] stored patch %s -> %s: %d bytes against a %d byte download", sourceUpdateUUID, targetUpdateUUID, len(patch), fullDownload)

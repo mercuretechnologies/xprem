@@ -168,6 +168,21 @@ describe('validateEnvMap', () => {
     );
   });
 
+  it('asks for a private builds bucket behind a generic CDN, as a warning', () => {
+    const env = parseEnvFile(
+      renderEnvFile({
+        ...baseChoices,
+        delivery: 'generic-cdn',
+        cdnBaseUrl: 'https://cdn.example.com',
+      })
+    );
+    const issues = validateEnvMap(env);
+    expect(issues.filter(i => i.level === 'error')).toEqual([]);
+    expect(
+      issues.some(i => i.level === 'warning' && i.message.includes('S3_BUCKET_BUILDS_NAME'))
+    ).toBe(true);
+  });
+
   it('requires DB_URL', () => {
     const env = parseEnvFile(renderEnvFile(baseChoices));
     delete env.DB_URL;

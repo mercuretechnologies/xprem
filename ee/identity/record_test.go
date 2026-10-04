@@ -141,7 +141,7 @@ func TestCoalesceRequests(t *testing.T) {
 }
 
 // applySequentially is a naive replay of the requests, the reference CoalesceRequests's
-// output must match. rejected names keys the store would drop, since $set/$set_once are
+// output must match. rejected names keys the repository would drop, since $set/$set_once are
 // filtered per key while $unset never is.
 func applySequentially(state map[string]any, requests []Request, rejected map[string]bool) map[string]any {
 	result := map[string]any{}
@@ -251,12 +251,12 @@ func TestCoalesceRequestsSurvivesUncomparableValues(t *testing.T) {
 				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
 				{AppID: "app", EASClientID: "d1", Op: OpSet, Attributes: map[string]any{"k": value}},
 			})
-			// Reported as different rather than merged; the store would drop such a value anyway.
+			// Reported as different rather than merged; the repository would drop such a value anyway.
 			require.Len(t, out, 2)
 		}, "%T", value)
 	}
 
-	// The scalars the store can actually keep still merge, including the two
+	// The scalars the repository can actually keep still merge, including the two
 	// numeric shapes the decoder produces.
 	for _, value := range []any{"v", true, int64(42), 4.2} {
 		out := CoalesceRequests([]Request{

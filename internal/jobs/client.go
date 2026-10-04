@@ -10,7 +10,7 @@ import (
 	"time"
 	"xprem/internal/database"
 	"xprem/internal/database/postgres"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,9 +26,14 @@ var ErrAlreadyRunning = errors.New("a job of this kind is already running for th
 // patch in memory, so the queue stays narrow.
 const QueueBSDiff = "bsdiff"
 
+// QueueSourcemapIndex runs the source map index jobs. Each one decodes a
+// whole map in memory, so one at a time.
+const QueueSourcemapIndex = "sourcemap-index"
+
 type Client struct {
 	pool        *pgxpool.Pool
 	workers     *river.Workers
+	periodic    []*river.PeriodicJob
 	riverClient *river.Client[pgx.Tx]
 }
 
@@ -43,6 +48,12 @@ func NewClient(engine *database.Engine) (*Client, error) {
 // Workers is the registry to add workers to, before Start.
 func (c *Client) Workers() *river.Workers {
 	return c.workers
+}
+
+// AddPeriodic schedules a job, before Start. River inserts it from one
+// replica only, the elected leader.
+func (c *Client) AddPeriodic(job *river.PeriodicJob) {
+	c.periodic = append(c.periodic, job)
 }
 
 func (c *Client) Start(ctx context.Context) error {
@@ -62,10 +73,12 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 	riverClient, err := river.NewClient(driver, &river.Config{
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: 10},
-			QueueBSDiff:        {MaxWorkers: 2},
+			river.QueueDefault:  {MaxWorkers: 10},
+			QueueBSDiff:         {MaxWorkers: 2},
+			QueueSourcemapIndex: {MaxWorkers: 1},
 		},
-		Workers: c.workers,
+		Workers:      c.workers,
+		PeriodicJobs: c.periodic,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to build the river client: %w", err)
@@ -93,7 +106,7 @@ func (c *Client) Stop() {
 // skipped the insert.
 func (c *Client) Enqueue(ctx context.Context, args river.JobArgs) (string, error) {
 	if c == nil || c.riverClient == nil {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	inserted, err := c.riverClient.Insert(ctx, args, nil)
 	if err != nil {

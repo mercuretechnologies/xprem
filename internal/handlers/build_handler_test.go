@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"testing"
 	"xprem/internal/android/androidtest"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	"github.com/gorilla/mux"
@@ -20,16 +20,16 @@ import (
 
 type buildCredentialRepository struct {
 	services.CredentialsRepository
-	credentials *store.SealedAndroidCredentials
+	credentials *repository.SealedAndroidCredentials
 	err         error
 	id          string
 }
 
-func (repo *buildCredentialRepository) UpsertAndroidCredentials(_ context.Context, id string, credentials store.SealedAndroidCredentials) error {
+func (repo *buildCredentialRepository) UpsertAndroidCredentials(_ context.Context, id string, credentials repository.SealedAndroidCredentials) error {
 	repo.credentials = &credentials
 	return nil
 }
-func (repo *buildCredentialRepository) GetAndroidCredentials(_ context.Context, id string) (*store.SealedAndroidCredentials, error) {
+func (repo *buildCredentialRepository) GetAndroidCredentials(_ context.Context, id string) (*repository.SealedAndroidCredentials, error) {
 	repo.id = id
 	return repo.credentials, repo.err
 }
@@ -40,14 +40,14 @@ type buildIdentifierRepository struct {
 	allocated int64
 }
 
-func (repo *buildIdentifierRepository) GetAppIdentifierByID(_ context.Context, app, id string) (*store.AppIdentifierRef, error) {
+func (repo *buildIdentifierRepository) GetAppIdentifierByID(_ context.Context, app, id string) (*repository.AppIdentifierRef, error) {
 	repo.app, repo.id = app, id
 	if app != "app-1" || id != "id-1" {
 		return nil, nil
 	}
-	return &store.AppIdentifierRef{Id: id, Platform: types.PlatformAndroid}, nil
+	return &repository.AppIdentifierRef{Id: id, Platform: types.PlatformAndroid}, nil
 }
-func (repo *buildIdentifierRepository) AllocateBuildNumber(_ context.Context, app, id string, next func(types.Platform, string) (string, error)) (*store.AppIdentifierRef, error) {
+func (repo *buildIdentifierRepository) AllocateBuildNumber(_ context.Context, app, id string, next func(types.Platform, string) (string, error)) (*repository.AppIdentifierRef, error) {
 	repo.app, repo.id = app, id
 	previous := strconv.FormatInt(repo.allocated, 10)
 	value, err := next(types.PlatformAndroid, previous)
@@ -55,7 +55,7 @@ func (repo *buildIdentifierRepository) AllocateBuildNumber(_ context.Context, ap
 		return nil, err
 	}
 	repo.allocated++
-	return &store.AppIdentifierRef{Id: "id-1", Platform: types.PlatformAndroid, BuildNumber: value, PreviousBuildNumber: previous}, nil
+	return &repository.AppIdentifierRef{Id: "id-1", Platform: types.PlatformAndroid, BuildNumber: value, PreviousBuildNumber: previous}, nil
 }
 func TestBuildCredentialsAllowlistAndWholeFile(t *testing.T) {
 	t.Setenv("AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID", "")
@@ -86,8 +86,8 @@ func TestBuildCredentialsErrorsDoNotExposeSecrets(t *testing.T) {
 		status int
 	}{
 		{errors.New("secret sentinel"), 500},
-		{&store.ErrResourceNotFound{Resource: "android credentials", Identifier: "id"}, 404},
-		{store.ErrNotSupportedInStatelessMode, 400},
+		{&repository.ErrResourceNotFound{Resource: "android credentials", Identifier: "id"}, 404},
+		{repository.ErrNotSupportedInStatelessMode, 400},
 	} {
 		h := NewBuildHandler(nil, services.NewCredentialsService(&buildCredentialRepository{err: tc.err}, &buildIdentifierRepository{}), nil, nil)
 		w := httptest.NewRecorder()

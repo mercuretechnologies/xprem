@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -28,7 +28,7 @@ func (h *AppIdentifiersHandler) GetAppIdentifiersHandler(w http.ResponseWriter, 
 	appId := mux.Vars(r)["APP_ID"]
 	identifiers, err := h.identifierService.GetAppIdentifiers(r.Context(), appId)
 	if err != nil {
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -58,11 +58,11 @@ func (h *AppIdentifiersHandler) CreateAppIdentifierHandler(w http.ResponseWriter
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -111,11 +111,11 @@ func (h *AppIdentifiersHandler) SetBuildNumberHandler(w http.ResponseWriter, r *
 			handlers.RenderError(w, http.StatusBadRequest, valErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -135,15 +135,15 @@ func (h *AppIdentifiersHandler) DeleteAppIdentifierHandler(w http.ResponseWriter
 	}
 	err := h.identifierService.DeleteAppIdentifier(r.Context(), appId, identifierId)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if restrictsErr := (*store.ErrAppIdentifierRestrictsApiKeys)(nil); errors.As(err, &restrictsErr) {
+		if restrictsErr := (*repository.ErrAppIdentifierRestrictsApiKeys)(nil); errors.As(err, &restrictsErr) {
 			handlers.RenderError(w, http.StatusConflict, restrictsErr.Error())
 			return
 		}

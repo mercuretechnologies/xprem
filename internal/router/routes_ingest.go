@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"net/http"
 	"time"
+	"xprem/config"
 	"xprem/ee/observe"
 	"xprem/internal/middleware"
 
@@ -18,6 +19,7 @@ const ingestReadDeadline = 30 * time.Second
 func registerIngestRoutes(r *mux.Router, container *AppContainer) {
 	observeSubrouter := r.PathPrefix("/observe/{APP_ID}").Subrouter()
 	observeSubrouter.Use(observe.CachedAppResolverMiddleware(container.AppRepo))
+	observeSubrouter.Use(observe.IngestLimitMiddleware(config.ObserveIngestLimitPerIP(), config.ObserveIngestLimitPerApp()))
 	observeSubrouter.Use(middleware.NewReadDeadlineMiddleware(ingestReadDeadline))
 	observeSubrouter.HandleFunc("/{PROJECT_ID}/v1/logs", container.ObserveIngestHandler.HandleLogs).Methods(http.MethodPost)
 	observeSubrouter.HandleFunc("/{PROJECT_ID}/v1/metrics", container.ObserveIngestHandler.HandleMetrics).Methods(http.MethodPost)

@@ -3,14 +3,21 @@
 // (see ee/LICENSE); it is NOT covered by the MIT license of this repository.
 
 import { Permission } from '@/ee/lib/PermissionsContext';
-import { Braces, Smartphone, ChartNoAxesCombined, Gauge, MousePointerClick } from 'lucide-react';
+import {
+  Braces,
+  Bug,
+  Smartphone,
+  ChartNoAxesCombined,
+  Gauge,
+  MousePointerClick,
+} from 'lucide-react';
 
 // Each page answers one question an app team actually asks, which is why they
 // are named after the question and not after the table behind them. The order
 // is the order those questions come up: "is it healthy right now", "is my last
 // release fast and did it break anything", "what did the app record", "who is
 // running it", then the attribute allowlist that feeds the filters.
-export type ObservePage = 'overview' | 'metrics' | 'events' | 'devices' | 'attributes';
+export type ObservePage = 'overview' | 'metrics' | 'errors' | 'events' | 'devices' | 'attributes';
 
 // Which filters mean anything on a page. Update-group health is answered from the
 // Postgres device registry, which knows nothing about builds, environments or
@@ -19,7 +26,8 @@ export type ObservePage = 'overview' | 'metrics' | 'events' | 'devices' | 'attri
 // 'timings' is the narrowest of them: the state a device reported for one
 // measurement lives on the metric data point alone, so only the page drawing
 // those timings can honor a filter on it.
-export type FilterScope = 'telemetry' | 'timings' | 'updateGroups' | 'devices' | 'none';
+// 'fleet' is the registry as the Overview reads it, which also knows each device's channel and store version.
+export type FilterScope = 'telemetry' | 'timings' | 'updateGroups' | 'devices' | 'fleet' | 'none';
 
 export const observeNavigation: Array<{
   value: ObservePage;
@@ -38,6 +46,8 @@ export const observeNavigation: Array<{
   // The split follows what the data is, not the URL: the three telemetry pages
   // read the Observe explorer, the two others read the device registry.
   permission: Permission;
+  // Part of the Enterprise edition: the sidebar badges it without a license.
+  enterprise?: true;
 }> = [
   {
     value: 'overview',
@@ -45,13 +55,13 @@ export const observeNavigation: Array<{
     label: 'Overview',
     question: 'Is the app healthy right now?',
     icon: ChartNoAxesCombined,
-    scopes: ['telemetry'],
+    scopes: ['fleet'],
   },
   {
     value: 'metrics',
     permission: 'observe:read',
     label: 'Metrics',
-    question: 'Is the served update group healthy, and is the app fast for everyone?',
+    question: 'Is the app fast for everyone?',
     icon: Gauge,
     scopes: ['telemetry', 'timings'],
   },
@@ -63,6 +73,15 @@ export const observeNavigation: Array<{
     icon: MousePointerClick,
     scopes: ['telemetry'],
     minimumSdk: 56,
+  },
+  {
+    value: 'errors',
+    permission: 'observe:read',
+    label: 'Errors',
+    question: 'Which errors affect devices, and where do they happen?',
+    icon: Bug,
+    scopes: ['telemetry'],
+    enterprise: true,
   },
   {
     value: 'devices',
@@ -79,6 +98,7 @@ export const observeNavigation: Array<{
     question: 'Which device metadata can I filter on?',
     icon: Braces,
     scopes: ['none'],
+    enterprise: true,
   },
 ];
 

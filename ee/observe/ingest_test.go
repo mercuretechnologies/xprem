@@ -50,11 +50,12 @@ type recordedRuntimeSignal struct {
 	kind       string
 	device     string
 	updateID   string
+	message    string
 	occurredAt time.Time
 }
 
 type recordingMutator struct {
-	identity.Store
+	identity.Repository
 	sets         []map[string]any
 	unsets       [][]string
 	failures     []recordedFailure
@@ -72,12 +73,12 @@ func (m *recordingMutator) RecordUpdateFailures(_ context.Context, _ string, eas
 	return nil
 }
 
-func (m *recordingMutator) RecordRuntimeFailure(_ context.Context, _ string, easClientID string, updateID string, _ string, occurredAt time.Time) error {
+func (m *recordingMutator) RecordRuntimeFailure(_ context.Context, _ string, easClientID string, updateID string, fatalError string, occurredAt time.Time) error {
 	if m.failFailures {
 		return fmt.Errorf("database is down")
 	}
 	m.runtime = append(m.runtime, recordedRuntimeSignal{
-		kind: "failure", device: easClientID, updateID: updateID, occurredAt: occurredAt,
+		kind: "failure", device: easClientID, updateID: updateID, message: fatalError, occurredAt: occurredAt,
 	})
 	return nil
 }
@@ -386,6 +387,87 @@ func TestHandleLogsRuntimeRecoveryUsesEventOrder(t *testing.T) {
 	}, mutator.runtime)
 }
 
+const sdkExceptionLogsFixture = `{
+  "resourceLogs": [{
+    "resource": {"attributes": [
+      {"key": "expo.eas_client.id", "value": {"stringValue": "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}},
+      {"key": "expo.app.updates.id", "value": {"stringValue": "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d"}}
+    ]},
+    "scopeLogs": [{"scope": {"name": "expo-observe"}, "logRecords": [
+      {
+        "timeUnixNano": 1767960489000000000,
+        "severityNumber": 21,
+        "attributes": [
+          {"key": "event.name", "value": {"stringValue": "js.exception"}},
+          {"key": "expo.error.is_fatal", "value": {"boolValue": true}},
+          {"key": "exception.message", "value": {"stringValue": "undefined is not a function"}}
+        ]
+      },
+      {
+        "timeUnixNano": 1767960490000000000,
+        "severityNumber": 17,
+        "attributes": [
+          {"key": "event.name", "value": {"stringValue": "js.exception"}},
+          {"key": "expo.error.is_fatal", "value": {"boolValue": false}},
+          {"key": "exception.message", "value": {"stringValue": "handled"}}
+        ]
+      }
+    ]}]
+  }]
+}`
+
+func TestHandleLogsFatalSDKExceptionIsARuntimeFailure(t *testing.T) {
+	mutator := &recordingMutator{}
+	handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
+	recorder := serveIngest(handler, http.MethodPost, logsPath, []byte(sdkExceptionLogsFixture))
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, []recordedRuntimeSignal{{
+		kind:       "failure",
+		device:     "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+		updateID:   "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d",
+		message:    "undefined is not a function",
+		occurredAt: time.Unix(1767960489, 0).UTC(),
+	}}, mutator.runtime)
+}
+
+const launchMetricsFixture = `{
+  "resourceMetrics": [{
+    "resource": {"attributes": [
+      {"key": "expo.eas_client.id", "value": {"stringValue": "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d"}},
+      {"key": "expo.app.updates.id", "value": {"stringValue": "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d"}}
+    ]},
+    "scopeMetrics": [{"scope": {"name": "expo-observe"}, "metrics": [
+      {"name": "expo.app_startup.cold_launch_time", "unit": "s", "gauge": {"dataPoints": [
+        {"timeUnixNano": 1767960489000000000, "asDouble": 1.2}
+      ]}},
+      {"name": "expo.app_startup.ttr", "unit": "s", "gauge": {"dataPoints": [
+        {"timeUnixNano": 1767960490000000000, "asDouble": 0.4, "attributes": [
+          {"key": "expo.update_id", "value": {"stringValue": "11111111-2222-4333-8444-555555555555"}}
+        ]}
+      ]}}
+    ]}]
+  }]
+}`
+
+func TestHandleMetricsFirstRenderResolvesRuntimeFailure(t *testing.T) {
+	mutator := &recordingMutator{}
+	handler := NewIngestHandler(identity.NewService(mutator), nil, nil, nil)
+	recorder := serveIngest(handler, http.MethodPost, "/observe/app-1/p/v1/metrics", []byte(launchMetricsFixture))
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, []recordedRuntimeSignal{{
+		kind:       "recovered",
+		device:     "8b9c1fe0-93b3-4b3a-8c1d-2f4a5e6b7c8d",
+		updateID:   "b16fa250-1b5f-42e9-a012-3f4a5e6b7c8d",
+		occurredAt: time.Unix(1767960490, 0).UTC(),
+	}}, mutator.runtime)
+}
+
+func TestCrashMessagePrefersSDKExceptionMessage(t *testing.T) {
+	require.Equal(t, "boom", crashMessage(`{"exception.message":"boom","message":"legacy"}`))
+	require.Equal(t, "legacy", crashMessage(`{"message":"legacy"}`))
+	require.Equal(t, "", crashMessage(`{"exception.message":3}`))
+}
+
 func TestNormalizeRuntimeHealthSignalsOrdersAndCompacts(t *testing.T) {
 	firstCrash := time.Unix(1767960489, 0).UTC()
 	tiedAt := firstCrash.Add(time.Second)
@@ -423,7 +505,7 @@ func TestIngestEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM apps WHERE id = $1", appID) })
 
-	identityStore := identity.NewPostgresIdentityStore(&database.Engine{Queries: pgdb.New(pool), DB: pool})
+	identityStore := identity.NewPostgresIdentityRepository(&database.Engine{Queries: pgdb.New(pool), DB: pool})
 	for _, spec := range []identity.KeySpec{
 		{Key: "userId", Type: identity.ValueTypeString},
 		{Key: "seats", Type: identity.ValueTypeNumber},

@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/crypto"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -33,45 +33,45 @@ import (
 // fakeUserRepo is an in-memory services.UserRepository, mirroring the fake
 // used by the community service tests.
 type fakeUserRepo struct {
-	users map[string]store.User
+	users map[string]repository.User
 }
 
 func newFakeUserRepo() *fakeUserRepo {
-	return &fakeUserRepo{users: map[string]store.User{}}
+	return &fakeUserRepo{users: map[string]repository.User{}}
 }
 
-func (r *fakeUserRepo) InsertUser(_ context.Context, params store.InsertUserParameters) (store.User, error) {
-	email := store.NormalizeEmail(params.Email)
+func (r *fakeUserRepo) InsertUser(_ context.Context, params repository.InsertUserParameters) (repository.User, error) {
+	email := repository.NormalizeEmail(params.Email)
 	for _, user := range r.users {
 		if user.Email == email {
-			return store.User{}, &store.ErrResourceAlreadyExists{Resource: "user", Identifier: email}
+			return repository.User{}, &repository.ErrResourceAlreadyExists{Resource: "user", Identifier: email}
 		}
 	}
-	user := store.User{Id: params.ID, Email: email, PasswordHash: params.PasswordHash, IsAdmin: params.IsAdmin, Enabled: params.Enabled, CreatedAt: time.Now()}
+	user := repository.User{Id: params.ID, Email: email, PasswordHash: params.PasswordHash, IsAdmin: params.IsAdmin, Enabled: params.Enabled, CreatedAt: time.Now()}
 	r.users[params.ID] = user
 	return user, nil
 }
 
-func (r *fakeUserRepo) GetUserByEmail(_ context.Context, email string) (store.User, error) {
-	normalizedEmail := store.NormalizeEmail(email)
+func (r *fakeUserRepo) GetUserByEmail(_ context.Context, email string) (repository.User, error) {
+	normalizedEmail := repository.NormalizeEmail(email)
 	for _, user := range r.users {
 		if user.Email == normalizedEmail {
 			return user, nil
 		}
 	}
-	return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: normalizedEmail}
+	return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: normalizedEmail}
 }
 
-func (r *fakeUserRepo) GetUserByID(_ context.Context, id string) (store.User, error) {
+func (r *fakeUserRepo) GetUserByID(_ context.Context, id string) (repository.User, error) {
 	user, ok := r.users[id]
 	if !ok {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	return user, nil
 }
 
-func (r *fakeUserRepo) GetUsers(_ context.Context) ([]store.User, error) {
-	users := make([]store.User, 0, len(r.users))
+func (r *fakeUserRepo) GetUsers(_ context.Context) ([]repository.User, error) {
+	users := make([]repository.User, 0, len(r.users))
 	for _, user := range r.users {
 		users = append(users, user)
 	}
@@ -107,7 +107,7 @@ func (r *fakeUserRepo) UpdateUserEnabled(_ context.Context, id string, enabled b
 func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	user.SessionVersion++
 	r.users[id] = user
@@ -117,7 +117,7 @@ func (r *fakeUserRepo) BumpUserSessionVersion(_ context.Context, id string) erro
 func (r *fakeUserRepo) TouchUserLastConnected(_ context.Context, id string) error {
 	user, ok := r.users[id]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "user", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "user", Identifier: id}
 	}
 	now := time.Now()
 	user.LastConnectedAt = &now
@@ -171,10 +171,10 @@ func (r *fakeSSORepo) DeleteConfig(_ context.Context) error {
 	return nil
 }
 
-func (r *fakeSSORepo) FindUserBySubject(ctx context.Context, issuer string, subject string) (store.User, error) {
+func (r *fakeSSORepo) FindUserBySubject(ctx context.Context, issuer string, subject string) (repository.User, error) {
 	userID, ok := r.identities[identityKey(issuer, subject)]
 	if !ok {
-		return store.User{}, &store.ErrResourceNotFound{Resource: "sso identity", Identifier: subject}
+		return repository.User{}, &repository.ErrResourceNotFound{Resource: "sso identity", Identifier: subject}
 	}
 	return r.users.GetUserByID(ctx, userID)
 }
@@ -182,29 +182,29 @@ func (r *fakeSSORepo) FindUserBySubject(ctx context.Context, issuer string, subj
 func (r *fakeSSORepo) LinkIdentity(_ context.Context, issuer string, subject string, userID string, _ string) error {
 	key := identityKey(issuer, subject)
 	if _, exists := r.identities[key]; exists {
-		return &store.ErrResourceAlreadyExists{Resource: "sso identity", Identifier: subject}
+		return &repository.ErrResourceAlreadyExists{Resource: "sso identity", Identifier: subject}
 	}
 	r.identities[key] = userID
 	return nil
 }
 
-func (r *fakeSSORepo) ProvisionUser(ctx context.Context, params store.InsertUserParameters, issuer string, subject string) (store.User, error) {
+func (r *fakeSSORepo) ProvisionUser(ctx context.Context, params repository.InsertUserParameters, issuer string, subject string) (repository.User, error) {
 	key := identityKey(issuer, subject)
 	if r.provisionRaces {
 		r.provisionRaces = false
 		otherReplicaID := "other-replica-" + params.ID
-		if _, err := r.users.InsertUser(ctx, store.InsertUserParameters{ID: otherReplicaID, Email: params.Email, Enabled: params.Enabled}); err != nil {
-			return store.User{}, err
+		if _, err := r.users.InsertUser(ctx, repository.InsertUserParameters{ID: otherReplicaID, Email: params.Email, Enabled: params.Enabled}); err != nil {
+			return repository.User{}, err
 		}
 		r.identities[key] = otherReplicaID
-		return store.User{}, &store.ErrResourceAlreadyExists{Resource: "user", Identifier: params.Email}
+		return repository.User{}, &repository.ErrResourceAlreadyExists{Resource: "user", Identifier: params.Email}
 	}
 	if _, exists := r.identities[key]; exists {
-		return store.User{}, &store.ErrResourceAlreadyExists{Resource: "sso identity", Identifier: subject}
+		return repository.User{}, &repository.ErrResourceAlreadyExists{Resource: "sso identity", Identifier: subject}
 	}
 	user, err := r.users.InsertUser(ctx, params)
 	if err != nil {
-		return store.User{}, err
+		return repository.User{}, err
 	}
 	r.identities[key] = user.Id
 	return user, nil
@@ -428,7 +428,7 @@ func TestCompleteLoginPrefersKnownSubjectOverEmail(t *testing.T) {
 func TestCompleteLoginLinksExistingAccountByEmail(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUserRepo()
-	existing, err := users.InsertUser(context.Background(), store.InsertUserParameters{
+	existing, err := users.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "existing-user", Email: testEmail, PasswordHash: "some-bcrypt-hash", IsAdmin: true, Enabled: true,
 	})
 	require.NoError(t, err)
@@ -507,7 +507,7 @@ func TestManualUserValidationProvisionsDisabledAccounts(t *testing.T) {
 func TestManualUserValidationLeavesExistingAccountsAlone(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUserRepo()
-	existing, err := users.InsertUser(context.Background(), store.InsertUserParameters{
+	existing, err := users.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "existing-user", Email: testEmail, PasswordHash: "some-bcrypt-hash", IsAdmin: true, Enabled: true,
 	})
 	require.NoError(t, err)
@@ -660,7 +660,7 @@ func TestCompleteLoginRejectsUnverifiedEmail(t *testing.T) {
 	users := newFakeUserRepo()
 	// An existing account an attacker would try to take over by asserting its
 	// address from a tenant they control.
-	victim, err := users.InsertUser(context.Background(), store.InsertUserParameters{
+	victim, err := users.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "victim", Email: testEmail, PasswordHash: "victim-hash", IsAdmin: true, Enabled: true,
 	})
 	require.NoError(t, err)

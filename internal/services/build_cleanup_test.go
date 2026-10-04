@@ -33,7 +33,7 @@ type recordingDeleter struct {
 	failOn  map[string]error
 }
 
-func (r *recordingDeleter) DeleteBuildArtifact(_ context.Context, ref bucket.BuildArtifact, staging bool) error {
+func (r *recordingDeleter) Delete(_ context.Context, ref bucket.BuildArtifact, staging bool) error {
 	key, err := ref.Key(staging)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -32,7 +33,8 @@ type ExpoProtocolService struct {
 	updateRepo    UpdateRepository
 	updateService *UpdateService
 	branchRules   []BranchRule
-	bucket        bucket.Bucket
+	blobStore     BlobStore
+	patchStore    PatchStore
 }
 
 type ManifestRequestParams struct {
@@ -116,14 +118,15 @@ func (e *ExpoProtocolError) Error() string { return e.Message }
 
 func (e *ExpoAssetError) Error() string { return e.Message }
 
-func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, updateService *UpdateService, branchRules []BranchRule, resolvedBucket bucket.Bucket) *ExpoProtocolService {
+func NewExpoProtocolService(appRepo AppRepository, channelRepo ChannelRepository, updateRepo UpdateRepository, updateService *UpdateService, branchRules []BranchRule, blobStore BlobStore, patchStore PatchStore) *ExpoProtocolService {
 	return &ExpoProtocolService{
 		appRepo:       appRepo,
 		channelRepo:   channelRepo,
 		updateRepo:    updateRepo,
 		updateService: updateService,
 		branchRules:   branchRules,
-		bucket:        resolvedBucket,
+		blobStore:     blobStore,
+		patchStore:    patchStore,
 	}
 }
 
@@ -415,7 +418,7 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 		return &ExpoAssetResult{RedirectToURL: redirectURL}, nil
 	}
 
-	blob, err := s.bucket.GetBlob(ctx, params.AppID, params.Hash)
+	blob, err := s.blobStore.Get(ctx, params.AppID, params.Hash)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading blob: %v", params.RequestID, err)
 		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
@@ -423,7 +426,8 @@ func (s *ExpoProtocolService) resolveBlobAsset(ctx context.Context, params Asset
 	if blob == nil {
 		return &ExpoAssetResult{}, &ExpoAssetError{StatusCode: http.StatusNotFound, Message: "Asset not found"}
 	}
-	body, err := bucket.ConvertReadCloserToBytes(blob.Reader)
+	defer blob.Reader.Close()
+	body, err := io.ReadAll(blob.Reader)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading blob body: %v", params.RequestID, err)
 		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
@@ -491,7 +495,7 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 		}
 	}
 
-	patch, err := s.bucket.GetBSDiff(ctx, params.AppID, branch, target, source)
+	patch, err := s.patchStore.Get(ctx, params.AppID, branch, target, source)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading patch %s -> %s: %v", params.RequestID, source, target, err)
 		return nil
@@ -499,7 +503,8 @@ func (s *ExpoProtocolService) resolveBSDiffAsset(ctx context.Context, params Ass
 	if patch == nil {
 		return nil
 	}
-	body, err := bucket.ConvertReadCloserToBytes(patch.Reader)
+	defer patch.Reader.Close()
+	body, err := io.ReadAll(patch.Reader)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading patch body %s -> %s: %v", params.RequestID, source, target, err)
 		return nil
@@ -573,7 +578,7 @@ func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetReso
 	cdn := cdn2.GetCDN()
 
 	if cdn == nil || params.PreventCDNRedirection {
-		resp, err := assets.HandleAssetsWithFile(req)
+		resp, err := assets.HandleAssetsWithFile(ctx, req)
 		if err != nil {
 			return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
 		}
@@ -586,7 +591,7 @@ func (s *ExpoProtocolService) ResolveAsset(ctx context.Context, params AssetReso
 		}, nil
 	}
 
-	resp, err := assets.HandleAssetsWithURL(req, cdn)
+	resp, err := assets.HandleAssetsWithURL(ctx, req, cdn)
 	if err != nil {
 		return nil, &ExpoAssetError{StatusCode: http.StatusInternalServerError, Message: "Internal Server Error"}
 	}

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/bucket"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -49,7 +49,7 @@ func (r *memoryBuildRepo) Create(_ context.Context, record types.BuildRecord) (*
 	}
 	if existing, ok := r.builds[record.ID]; ok {
 		if existing.AppID != record.AppID {
-			return nil, false, &store.ErrResourceNotFound{Resource: "build", Identifier: record.ID}
+			return nil, false, &repository.ErrResourceNotFound{Resource: "build", Identifier: record.ID}
 		}
 		return &existing, false, nil
 	}
@@ -66,7 +66,7 @@ func (r *memoryBuildRepo) Get(_ context.Context, appID, id string) (*types.Build
 	}
 	record, ok := r.builds[id]
 	if !ok || record.AppID != appID {
-		return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	return &record, nil
 }
@@ -88,7 +88,7 @@ func (r *memoryBuildRepo) Transition(ctx context.Context, appID, id string, deci
 	defer r.mu.Unlock()
 	current, ok := r.builds[id]
 	if !ok || current.AppID != appID {
-		return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	next, err := decide(current)
 	if err != nil {
@@ -174,20 +174,20 @@ func (r *memoryBuildRepo) ResolveShare(_ context.Context, hash string) (*types.B
 	}
 	share, ok := r.shares[hash]
 	if !ok {
-		return nil, time.Time{}, &store.ErrResourceNotFound{Resource: "share", Identifier: "link"}
+		return nil, time.Time{}, &repository.ErrResourceNotFound{Resource: "share", Identifier: "link"}
 	}
 	for _, record := range r.builds {
 		return &record, share.ExpiresAt, nil
 	}
-	return nil, time.Time{}, &store.ErrResourceNotFound{Resource: "share", Identifier: "link"}
+	return nil, time.Time{}, &repository.ErrResourceNotFound{Resource: "share", Identifier: "link"}
 }
 
 type buildFixture struct {
-	service *BuildService
-	repo    *memoryBuildRepo
-	storage *bucket.LocalBucket
-	root    string
-	now     time.Time
+	service       *BuildService
+	repo          *memoryBuildRepo
+	artifactStore *bucket.BuildArtifactStore
+	root          string
+	now           time.Time
 }
 
 func newBuildFixture(t *testing.T) *buildFixture {
@@ -197,12 +197,16 @@ func newBuildFixture(t *testing.T) *buildFixture {
 	identifiers.add(testBuildIdentifier, types.PlatformAndroid, "com.example.app")
 	identifiers.add(otherBuildID, types.PlatformIOS, "com.example.ios")
 	root := t.TempDir()
-	storage := &bucket.LocalBucket{BasePath: root}
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUILDS_BASE_PATH", root)
+	t.Setenv("BUCKET_KEY_PREFIX", "")
+	artifactStore, err := bucket.OpenBuildArtifactStore()
+	require.NoError(t, err)
 	repo := newMemoryBuildRepo()
-	service := NewBuildService(repo, identifiers, storage)
+	service := NewBuildService(repo, identifiers, artifactStore)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	service.now = func() time.Time { return now }
-	return &buildFixture{service: service, repo: repo, storage: storage, root: root, now: now}
+	return &buildFixture{service: service, repo: repo, artifactStore: artifactStore, root: root, now: now}
 }
 
 func (f *buildFixture) startInput() BuildStartInput {
@@ -327,7 +331,7 @@ func TestBuildStartValidation(t *testing.T) {
 	require.True(t, validation.IsValidationError(err), "only canonical lowercase UUIDs")
 	_, err = f.service.Start(ctx, testBuildApp, otherBuildID, testBuildID, f.startInput())
 	require.True(t, validation.IsValidationError(err), "iOS identifiers are refused")
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	_, err = f.service.Start(ctx, testBuildApp, "55555555-5555-4555-8555-555555555555", testBuildID, f.startInput())
 	require.ErrorAs(t, err, &missing)
 	_, err = f.service.Start(ctx, "other-app", testBuildIdentifier, testBuildID, f.startInput())
@@ -336,9 +340,9 @@ func TestBuildStartValidation(t *testing.T) {
 
 	stateless := NewBuildService(nil, nil, nil)
 	_, err = stateless.Start(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.startInput())
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 	_, err = stateless.Fail(ctx, testBuildApp, testBuildIdentifier, testBuildID, FailBuildInput{FinishedAt: time.Now().Add(-time.Hour)})
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 }
 
 func TestBuildRegisterValidation(t *testing.T) {
@@ -425,11 +429,14 @@ func TestBuildAcceptsIosArtifacts(t *testing.T) {
 	require.Equal(t, types.BuildArtifactIPA, build.ArtifactType)
 }
 
+// untouchedArtifactStore panics on any call.
+type untouchedArtifactStore struct{ BuildArtifactStore }
+
 func TestBuildRejectsArtifactForAnotherPlatform(t *testing.T) {
 	for _, operation := range []string{"start", "register"} {
 		t.Run(operation, func(t *testing.T) {
 			f := newBuildFixture(t)
-			f.service.storage = nil
+			f.service.artifactStore = untouchedArtifactStore{}
 			var err error
 			if operation == "start" {
 				input := f.startInput()
@@ -445,6 +452,48 @@ func TestBuildRejectsArtifactForAnotherPlatform(t *testing.T) {
 			require.Empty(t, f.repo.builds)
 		})
 	}
+}
+
+func TestBuildsTurnedOffRefuseNewArtifactsButStillFail(t *testing.T) {
+	f := newBuildFixture(t)
+	ctx := context.Background()
+	registration, err := f.service.RegisterArtifact(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.registerInput([]byte("artifact")))
+	require.NoError(t, err)
+	f.service.artifactStore = nil
+
+	_, err = f.service.Start(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.startInput())
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+	_, err = f.service.RegisterArtifact(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.registerInput([]byte("artifact")))
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+	require.ErrorIs(t, f.service.UploadLocal(ctx, testBuildApp, testBuildIdentifier, testBuildID, "token", strings.NewReader("artifact")), ErrBuildStorageUnavailable)
+	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, testBuildID)
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+	_, err = f.service.Download(ctx, *registration.Build)
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+	_, err = f.service.DownloadURL(ctx, *registration.Build, f.now.Add(time.Hour))
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+	_, _, err = f.service.CreateShare(ctx, testBuildApp, testBuildID, 24)
+	require.ErrorIs(t, err, ErrBuildStorageUnavailable)
+
+	failed, err := f.service.Fail(ctx, testBuildApp, testBuildIdentifier, testBuildID, FailBuildInput{FinishedAt: f.now})
+	require.NoError(t, err)
+	require.Equal(t, types.BuildStatusFailed, failed.Status)
+}
+
+func TestBuildsTurnedOffStillReturnAReadyBuild(t *testing.T) {
+	f := newBuildFixture(t)
+	ctx := context.Background()
+	content := []byte("artifact")
+	registration, err := f.service.RegisterArtifact(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.registerInput(content))
+	require.NoError(t, err)
+	require.NoError(t, f.service.UploadLocal(ctx, testBuildApp, testBuildIdentifier, testBuildID, registration.Upload.Headers[bucket.LocalUploadTokenHeader], bytes.NewReader(content)))
+	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, testBuildID)
+	require.NoError(t, err)
+	f.service.artifactStore = nil
+
+	ready, err := f.service.Complete(ctx, testBuildApp, testBuildIdentifier, testBuildID)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildStatusReady, ready.Status)
 }
 
 func TestBuildRegistrationLocalUploadURL(t *testing.T) {
@@ -579,7 +628,7 @@ func TestBuildRegisterWithoutStart(t *testing.T) {
 	require.Equal(t, types.BuildStatusUploading, current.Status)
 
 	_, err = f.service.Complete(ctx, "other-app", testBuildIdentifier, testBuildID)
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	require.ErrorAs(t, err, &missing)
 	_, err = f.service.Complete(ctx, testBuildApp, otherBuildID, testBuildID)
 	require.ErrorAs(t, err, &missing, "the build belongs to another identifier")
@@ -625,7 +674,7 @@ func TestBuildFailFromBuilding(t *testing.T) {
 	_, err = f.service.Start(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.startInput())
 	require.NoError(t, err, "re-declaring the failed build with identical inputs is idempotent")
 	_, err = f.service.Fail(ctx, testBuildApp, testBuildIdentifier, otherBuildID, FailBuildInput{FinishedAt: f.now})
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	require.ErrorAs(t, err, &missing)
 }
 
@@ -663,7 +712,7 @@ func TestBuildCompleteRequiresUploadingState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.BuildStatusBuilding, current.Status, "a premature complete does not fail the build")
 	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, otherBuildID)
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	require.ErrorAs(t, err, &missing)
 	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, "bad")
 	require.True(t, validation.IsValidationError(err))
@@ -674,7 +723,7 @@ func TestBuildCompleteRejectsTamperedUpload(t *testing.T) {
 	ctx := context.Background()
 	registration, err := f.service.RegisterArtifact(ctx, testBuildApp, testBuildIdentifier, testBuildID, f.registerInput([]byte("declared")))
 	require.NoError(t, err)
-	require.NoError(t, f.storage.PutBuildArtifact(ctx, artifactRef(*registration.Build), true, strings.NewReader("tampered")))
+	require.NoError(t, f.artifactStore.Put(ctx, artifactRef(*registration.Build), true, strings.NewReader("tampered")))
 	_, err = f.service.Complete(ctx, testBuildApp, testBuildIdentifier, testBuildID)
 	require.ErrorIs(t, err, ErrBuildIntegrity)
 	_, err = os.Stat(f.finalPath(t, *registration.Build))
@@ -706,7 +755,7 @@ func TestBuildUploadLocalBounds(t *testing.T) {
 	require.ErrorIs(t, f.service.UploadLocal(ctx, testBuildApp, testBuildIdentifier, testBuildID, "not-a-token", strings.NewReader("12345")), ErrUnauthorized)
 	require.ErrorIs(t, f.service.UploadLocal(ctx, testBuildApp, testBuildIdentifier, testBuildID, registration.Upload.Headers[bucket.LocalUploadTokenHeader]+"x", strings.NewReader("12345")), ErrUnauthorized)
 
-	otherUpload, err := f.storage.RequestBuildArtifactUploadURL(ctx, testBuildApp, bucket.BuildArtifact{IdentifierID: otherBuildID, BuildID: testBuildID, Type: types.BuildArtifactAPK})
+	otherUpload, err := f.artifactStore.PresignPut(ctx, testBuildApp, bucket.BuildArtifact{IdentifierID: otherBuildID, BuildID: testBuildID, Type: types.BuildArtifactAPK})
 	require.NoError(t, err)
 	require.ErrorIs(t, f.service.UploadLocal(ctx, testBuildApp, testBuildIdentifier, testBuildID, otherUpload.Headers[bucket.LocalUploadTokenHeader], strings.NewReader("12345")), ErrUnauthorized)
 
@@ -806,7 +855,7 @@ func TestBuildSharesRequireReadyAPK(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testBuildID, resolved.ID)
 	require.Equal(t, share.ExpiresAt, expiry)
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	_, _, err = f.service.ResolveShare(ctx, "short")
 	require.ErrorAs(t, err, &missing)
 	_, _, err = f.service.ResolveShare(ctx, strings.Repeat("0", 64))

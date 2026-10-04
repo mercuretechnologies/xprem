@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"slices"
 	"time"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -44,7 +44,7 @@ func (s *OAuthService) ValidateAuthorizationRequest(ctx context.Context, req Aut
 	}
 	stored, err := s.clientRepo.GetOAuthClient(ctx, req.ClientID)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return Client{}, fmt.Errorf("%w: unknown client_id", ErrInvalidAuthorizationRequest)
 		}
 		return Client{}, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
@@ -104,7 +104,7 @@ func (s *OAuthService) CreateAuthorizationCode(ctx context.Context, userId strin
 		// this user's consent.
 		log.Printf("failed to sweep expired oauth authorization codes: %v", err)
 	}
-	if err := s.codeRepo.InsertOAuthAuthorizationCode(ctx, store.InsertOAuthAuthorizationCodeParameters{
+	if err := s.codeRepo.InsertOAuthAuthorizationCode(ctx, repository.InsertOAuthAuthorizationCodeParameters{
 		ID:            code,
 		ClientID:      req.ClientID,
 		UserID:        userId,

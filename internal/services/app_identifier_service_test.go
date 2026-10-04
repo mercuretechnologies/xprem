@@ -9,7 +9,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/cache"
 	"xprem/internal/dashboard"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -35,12 +35,12 @@ func (f *fakeAppIdentifierRepo) InsertAppIdentifier(_ context.Context, _ string,
 	return "id-1", nil
 }
 
-func (f *fakeAppIdentifierRepo) GetAppIdentifiers(_ context.Context, _ string) ([]store.AppIdentifierRow, error) {
+func (f *fakeAppIdentifierRepo) GetAppIdentifiers(_ context.Context, _ string) ([]repository.AppIdentifierRow, error) {
 	return nil, nil
 }
 
-func (f *fakeAppIdentifierRepo) GetAppIdentifierByID(_ context.Context, _ string, _ string) (*store.AppIdentifierRef, error) {
-	return &store.AppIdentifierRef{Id: "id-1", Platform: f.platform(), Identifier: "com.example.app", BuildNumber: f.buildNumber}, nil
+func (f *fakeAppIdentifierRepo) GetAppIdentifierByID(_ context.Context, _ string, _ string) (*repository.AppIdentifierRef, error) {
+	return &repository.AppIdentifierRef{Id: "id-1", Platform: f.platform(), Identifier: "com.example.app", BuildNumber: f.buildNumber}, nil
 }
 
 func (f *fakeAppIdentifierRepo) DeleteAppIdentifier(_ context.Context, _ string, _ string) error {
@@ -123,13 +123,13 @@ func TestAppIdentifiersUnsupportedInStatelessMode(t *testing.T) {
 	service := NewAppIdentifierService(nil)
 	ctx := context.Background()
 	_, err := service.CreateAppIdentifier(ctx, "app-1", types.PlatformAndroid, "com.example.app")
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 	_, err = service.GetAppIdentifiers(ctx, "app-1")
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.DeleteAppIdentifier(ctx, "app-1", "id-1"), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.DeleteAppIdentifier(ctx, "app-1", "id-1"), repository.ErrNotSupportedInStatelessMode)
 }
 
-func (f *fakeAppIdentifierRepo) AllocateBuildNumber(_ context.Context, _ string, _ string, next func(types.Platform, string) (string, error)) (*store.AppIdentifierRef, error) {
+func (f *fakeAppIdentifierRepo) AllocateBuildNumber(_ context.Context, _ string, _ string, next func(types.Platform, string) (string, error)) (*repository.AppIdentifierRef, error) {
 	previous := f.buildNumber
 	if previous == "" {
 		previous = "0"
@@ -139,7 +139,7 @@ func (f *fakeAppIdentifierRepo) AllocateBuildNumber(_ context.Context, _ string,
 		return nil, err
 	}
 	f.buildNumber = value
-	return &store.AppIdentifierRef{Id: "id-1", Platform: f.platform(), Identifier: "com.example.app", BuildNumber: value, PreviousBuildNumber: previous}, nil
+	return &repository.AppIdentifierRef{Id: "id-1", Platform: f.platform(), Identifier: "com.example.app", BuildNumber: value, PreviousBuildNumber: previous}, nil
 }
 
 func TestAllocateBuildNumberPersistsAndAudits(t *testing.T) {
@@ -160,11 +160,11 @@ func TestAllocateBuildNumberPersistsAndAudits(t *testing.T) {
 
 	repo.buildNumber = "2100000000"
 	_, err = service.AllocateBuildNumber(context.Background(), "app-1", "id-1")
-	require.ErrorIs(t, err, store.ErrBuildNumberExhausted)
+	require.ErrorIs(t, err, repository.ErrBuildNumberExhausted)
 	require.Len(t, events, 1)
 
 	_, err = NewAppIdentifierService(nil).AllocateBuildNumber(context.Background(), "app-1", "id-1")
-	require.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	require.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 }
 
 func TestSetBuildNumberUsesRecordedPlatform(t *testing.T) {
@@ -224,6 +224,6 @@ func TestAllocateBuildNumberPlatformRules(t *testing.T) {
 	}
 }
 
-func (f *fakeAppIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(context.Context, string, types.Platform, string) (*store.AppIdentifierRef, error) {
+func (f *fakeAppIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(context.Context, string, types.Platform, string) (*repository.AppIdentifierRef, error) {
 	panic("not used in these tests")
 }

@@ -5,24 +5,23 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Info, ServerCrash } from 'lucide-react';
-import { api, ObserveBreakdownDimension, ObserveMetric } from '@/lib/api';
+import {
+  api,
+  ObserveBreakdownDimension,
+  ObserveMetric,
+  ObserveMetricPoint,
+  ObserveMetricWindow,
+} from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TimeSeriesChart, type TimeSeriesChartProps } from '@/ee/components/charts/TimeSeriesChart';
-import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
-import { HealthBySegment } from './HealthBySegment';
-import { HealthPlaceholder } from './HealthPlaceholder';
 import { liveInterval, type ObserveFilters } from './filters';
 import { ObserveNotice } from './ObserveNotice';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
-import {
-  duration,
-  exactNumber,
-  formatChange,
-  relativeChange,
-  withoutPartialBucket,
-} from './format';
+import { exactNumber, formatChange, relativeChange } from './format';
+import { histogramIntervalLabel } from './errorHistogram';
+import { metricChartPoints, metricDuration as duration } from './metricChart';
 import {
   dimensionSpec,
   isDimension,
@@ -33,7 +32,6 @@ import {
 import {
   branchesByUpdateId,
   buildUpdateGroups,
-  groupContext,
   groupTitle,
   platformLabel,
   subjectLine,
@@ -143,6 +141,7 @@ type RankedSegment = {
   devices: number;
   p50: number;
   p90: number;
+  points?: ObserveMetricPoint[];
   ranked: boolean;
   change: number | null;
 };
@@ -232,6 +231,7 @@ const SegmentRow = ({
 // everywhere or in a single place.
 const MetricSection = ({
   metric,
+  window,
   filters,
   dimension,
   annotations,
@@ -241,6 +241,7 @@ const MetricSection = ({
   branchReach,
 }: {
   metric: ObserveMetric;
+  window: ObserveMetricWindow | undefined;
   filters: ObserveFilters;
   dimension: ObserveBreakdownDimension | undefined;
   annotations: Array<{ key: string; label: string; timestamp: Date }>;
@@ -256,8 +257,7 @@ const MetricSection = ({
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const breakdownQuery = useQuery({
     queryKey: ['observe', 'breakdown', api.getAppId(), metric.id, dimension, filters.query],
-    queryFn: () =>
-      api.getObserveBreakdown(metric.id, dimension!, filters.query, { points: true }),
+    queryFn: () => api.getObserveBreakdown(metric.id, dimension!, filters.query, { points: true }),
     // No condition gate here: the view no longer renders a card that cannot
     // answer the current split, so a card that exists is one worth asking.
     enabled: dimension != null,
@@ -273,6 +273,13 @@ const MetricSection = ({
 
   const baseline = breakdownQuery.data?.overall;
   const baselineP50 = baseline?.p50 ?? metric.stats.median;
+  const snapshot = dimension ? breakdownQuery.data : window;
+  const chartWindow =
+    snapshot?.from && snapshot.to && snapshot.bucketSeconds > 0 ? snapshot : undefined;
+  const timeDomain: [Date, Date] = [
+    new Date(chartWindow?.from ?? filters.query.from ?? Date.now() - filters.periodSpec.windowMs),
+    new Date(chartWindow?.to ?? filters.query.to ?? Date.now()),
+  ];
 
   const segments = useMemo<RankedSegment[]>(
     () =>
@@ -320,15 +327,7 @@ const MetricSection = ({
           key: segment.id,
           label: segment.label,
           color: seriesColors[index % seriesColors.length],
-          points: withoutPartialBucket(
-            (
-              (segment as RankedSegment & { points?: Array<{ timestamp: string; value: number }> })
-                .points ?? []
-            ).map(point => ({
-              timestamp: new Date(point.timestamp),
-              value: point.value,
-            }))
-          ),
+          points: metricChartPoints(segment.points ?? [], chartWindow),
         }))
         .filter(entry => entry.points.length > 0);
     }
@@ -337,15 +336,10 @@ const MetricSection = ({
         key: metric.id,
         label: metric.label,
         color: seriesColors[0],
-        points: withoutPartialBucket(
-          metric.points.map(point => ({
-            timestamp: new Date(point.timestamp),
-            value: point.value,
-          }))
-        ),
+        points: metricChartPoints(metric.points, chartWindow),
       },
     ];
-  }, [dimension, metric, segments]);
+  }, [dimension, metric, segments, chartWindow]);
 
   const colorOf = (id: string, index: number) =>
     index < INLINE_SEGMENTS && series.some(entry => entry.key === id)
@@ -392,33 +386,46 @@ const MetricSection = ({
               alternating value/label along a line: a percentile and its number
               read as one thing, and the three stay comparable. */}
           <div className="mt-1.5 flex items-baseline gap-6">
-            <span className="flex flex-col">
-              <span className="font-mono text-xl font-semibold leading-tight">
-                {duration(baselineP50)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p50</span>
-            </span>
-            <span className="flex flex-col">
-              <span className="font-mono text-sm font-medium leading-tight text-muted-foreground">
-                {duration(baseline?.p90 ?? metric.stats.p90)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p90</span>
-            </span>
-            <span className="flex flex-col">
-              <span className="font-mono text-sm font-medium leading-tight text-muted-foreground">
-                {duration(metric.stats.p99)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p99</span>
-            </span>
+            {[
+              { label: 'Median (p50)', percentile: 50, value: baselineP50 },
+              { label: 'p90', percentile: 90, value: baseline?.p90 ?? metric.stats.p90 },
+              { label: 'p99', percentile: 99, value: metric.stats.p99 },
+            ].map(({ label, percentile, value }) => (
+              <Tooltip key={percentile}>
+                <TooltipTrigger
+                  type="button"
+                  className="flex cursor-help flex-col items-start rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`${label}: ${duration(value)}`}>
+                  <span
+                    className={
+                      percentile === 50
+                        ? 'font-mono text-xl font-semibold leading-tight'
+                        : 'font-mono text-sm font-medium leading-tight text-muted-foreground'
+                    }>
+                    {duration(value)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{label}</span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">
+                  {percentile}% of measurements in this period are at or below this duration.
+                </TooltipContent>
+              </Tooltip>
+            ))}
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          {exactNumber.format(baseline?.devices ?? metric.stats.devices)} devices ·{' '}
-          {exactNumber.format(baseline?.samples ?? metric.stats.count)} samples
+          {exactNumber.format(baseline?.devices ?? metric.stats.devices)}{' '}
+          {(baseline?.devices ?? metric.stats.devices) === 1 ? 'device' : 'devices'} ·{' '}
+          {exactNumber.format(baseline?.samples ?? metric.stats.count)}{' '}
+          {(baseline?.samples ?? metric.stats.count) === 1 ? 'measurement' : 'measurements'}
         </p>
       </div>
 
-      <div className="px-3 py-2">
+      <div className="px-3 pb-2 pt-3">
+        <div className="flex items-center justify-between gap-2 px-2 text-[11px] text-muted-foreground">
+          <span>Median over time</span>
+          {chartWindow && <span>{histogramIntervalLabel(chartWindow.bucketSeconds)}</span>}
+        </div>
         {series.some(entry => entry.points.length > 0) ? (
           <TimeSeriesChart
             series={series}
@@ -427,9 +434,10 @@ const MetricSection = ({
             renderAnnotationDetails={renderAnnotationDetails}
             formatValue={duration}
             formatAxisValue={duration}
-            // Durations: nothing starts at zero and one cold start at twelve
-            // seconds would flatten every other curve against the axis.
             frameToData
+            showPoints
+            timeDomain={timeDomain}
+            pointIntervalMs={chartWindow ? chartWindow.bucketSeconds * 1_000 : undefined}
             highlightedKey={highlighted}
             ariaLabel={`${metric.label} over time`}
             height={200}
@@ -439,7 +447,11 @@ const MetricSection = ({
             {breakdownQuery.isLoading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : (
-              <p className="text-sm text-muted-foreground">Not enough points to draw a trend</p>
+              <p className="max-w-xs text-sm text-muted-foreground">
+                {dimension
+                  ? `A segment needs at least ${MIN_DEVICES_TO_RANK} devices to appear on this chart`
+                  : 'No measurements in this period'}
+              </p>
             )}
           </div>
         )}
@@ -563,6 +575,7 @@ const PublishedHere = ({
 );
 
 export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
+  const [showPublishes, setShowPublishes] = useState(true);
   const updateGroups = useUpdateGroups(filters);
   // undefined when nothing is split, or when the URL names something this
   // build does not know: a stale link must land on the unsplit view rather
@@ -607,94 +620,19 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     : reported;
   const withheld = reported.length - metrics.length;
 
-  // Health over time needs a scope. Without one, every update of the period
-  // would collapse into a single curve mixing what is served today with what
-  // was served last week, which answers nothing.
-  // Lengths, not truthiness: these are always arrays, and an empty array is
-  // truthy, so testing the values themselves makes this constantly true and
-  // the guard never fires.
-  const scoped =
-    filters.state.branch.length > 0 ||
-    filters.state.channel.length > 0 ||
-    filters.state.updateId.length > 0 ||
-    filters.state.updateGroupId.length > 0;
-  // Health comes from update_health_snapshots, which the server aggregates per
-  // update: the manifest poll it is built from carries the update, its branch
-  // and the platform, and nothing about the hardware. So the split drives this
-  // chart for the dimensions the snapshots actually hold, and says so for the
-  // rest rather than silently ignoring the choice.
-  // Update group needs nothing here: the per-group curves are what this chart
-  // draws by default, so splitting by it is already the unsplit view.
-  const segmentSplit = (
-    ['deviceModel', 'osVersion', 'country', 'appVersion', 'platform'] as string[]
-  ).includes(dimension ?? '')
-    ? (dimension as ObserveBreakdownDimension)
-    : undefined;
-  // Screen is the one split the health events cannot follow: a route belongs to
-  // a navigation timing, and an adoption or a launch failure has none.
-  const unsupportedSplit = dimension === 'route' ? 'route' : undefined;
-
-  const healthSeries = useMemo(() => {
-    if (!scoped) return [];
-    // The history endpoint takes at most 20 update ids. Asking for every group
-    // of the period earns a 400 and an empty chart, and would be meaningless
-    // anyway: adoption is a question about what shipped recently, so the
-    // newest publishes are the ones that get plotted.
-    const recent = updateGroups.slice(0, 8);
-    const withinRequestBudget = <T extends { updateUUIDs: string[] }>(entries: T[]) => {
-      const kept: T[] = [];
-      let ids = 0;
-      for (const entry of entries) {
-        if (kept.length >= seriesColors.length) break;
-        const trimmed = { ...entry, updateUUIDs: entry.updateUUIDs.slice(0, 20 - ids) };
-        if (trimmed.updateUUIDs.length === 0) break;
-        ids += trimmed.updateUUIDs.length;
-        kept.push(trimmed);
-      }
-      return kept;
-    };
-    // What a publish is, in the words that let you recognise it: which branch
-    // it went out on, which runtime it needs, and when it shipped. The platform
-    // is deliberately absent, a group is both platforms by construction.
-    const describe = (group: UpdateGroup) =>
-      groupContext(group, (date: Date) => publishedAt.format(date), { branch: false });
-    const colored = (
-      entries: Array<{
-        key: string;
-        label: string;
-        detail?: string;
-        group?: string;
-        updateUUIDs: string[];
-      }>
-    ) =>
-      withinRequestBudget(entries).map((entry, index) => ({
-        ...entry,
-        color: seriesColors[index % seriesColors.length],
-      }));
-
-    // One curve per publish, so a rollout and the control it runs against stay
-    // apart. The history endpoint takes at most 20 update ids, which is what
-    // bounds how many publishes can be compared at once.
-    return colored(
-      recent.map(group => ({
-        key: group.key,
-        label: groupTitle(group),
-        detail: describe(group),
-        group: group.branch,
-        updateUUIDs: group.updateUUIDs,
-      }))
-    );
-  }, [scoped, updateGroups]);
-
   // Publish markers, restricted to the window on screen: one off the left edge
   // would pin itself to the axis and read as a publish that never happened.
   const windowStart = filters.query.from ? new Date(filters.query.from).getTime() : 0;
+  const windowEnd = filters.query.to ? new Date(filters.query.to).getTime() : Infinity;
   const updateGroupMarkers = useMemo(
     () =>
       updateGroups
-        .filter(group => group.createdAt.getTime() >= windowStart)
+        .filter(
+          group =>
+            group.createdAt.getTime() >= windowStart && group.createdAt.getTime() <= windowEnd
+        )
         .map(group => ({ key: group.key, label: groupTitle(group), timestamp: group.createdAt })),
-    [updateGroups, windowStart]
+    [updateGroups, windowStart, windowEnd]
   );
 
   const updateNames = useMemo(() => titlesByUpdateId(updateGroups), [updateGroups]);
@@ -702,14 +640,6 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     () => branchesByUpdateId(updateGroups),
     [updateGroups]
   );
-
-  // A row of the health table narrows the page to what it names, the same move
-  // the segment table offers. Splitting by update plots one curve per platform
-  // row, so there the key is the update itself rather than its group.
-  const selectHealthSeries = (key: string) => {
-    const group = updateGroups.find(entry => entry.key === key);
-    if (group) filters.setFilters(updateGroupFilter(group));
-  };
 
   const renderMarkedGroups: TimeSeriesChartProps['renderAnnotationDetails'] = (cluster, close) => (
     <PublishedHere
@@ -747,40 +677,6 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
     <div className="space-y-5">
       {overview?.available === false && <TelemetryUnavailable />}
 
-      {scoped ? (
-        healthSeries.length > 0 &&
-        (unsupportedSplit ? (
-          <HealthPlaceholder
-            title="Health cannot be split by screen"
-            detail="A route belongs to a navigation timing. Adoption and launch failures come from the manifest polls every client makes, which know the update, its branch, the platform and the device, but never which screen was open. The split still applies to the timings below."
-          />
-        ) : segmentSplit ? (
-          <HealthBySegment
-            filters={filters}
-            updateUUIDs={healthSeries.flatMap(entry => entry.updateUUIDs).slice(0, 20)}
-            dimension={segmentSplit}
-            annotations={updateGroupMarkers}
-            renderAnnotationDetails={renderMarkedGroups}
-          />
-        ) : (
-          <UpdateHealthHistory
-            series={healthSeries}
-            annotations={updateGroupMarkers}
-            annotationNoun="update groups"
-            renderAnnotationDetails={renderMarkedGroups}
-            breakdownLabel="Update group"
-            onBreakdownSelect={selectHealthSeries}
-            from={filters.query.from}
-            live={filters.live}
-          />
-        ))
-      ) : (
-        <HealthPlaceholder
-          title="Pick what you want the health of"
-          detail="Choose a branch, a channel or an update group above, and adoption and launch failures appear here over time. Without a scope, every update of the period would collapse into a single curve mixing what ships today with what shipped last week."
-        />
-      )}
-
       {overview?.available && metrics.length === 0 && (
         <div className="flex h-56 flex-col items-center justify-center rounded-xl border border-dashed bg-card text-center">
           <p className="text-sm font-medium">No timing reported in this period</p>
@@ -802,6 +698,24 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
         </p>
       )}
 
+      {metrics.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+          <p className="max-w-2xl leading-relaxed">
+            Each dot shows the median duration for an interval. Filled dots mark the latest
+            interval. Gaps mean no measurements. Hover a dot to see its duration and sample size.
+            Scales adapt to each metric.
+            {showPublishes && ' Numbered markers show releases published in this period.'}
+          </p>
+          <button
+            type="button"
+            aria-pressed={showPublishes}
+            onClick={() => setShowPublishes(previous => !previous)}
+            className={`shrink-0 rounded-md border px-3 py-1.5 transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showPublishes ? 'border-primary/40 bg-primary/10 text-foreground' : 'bg-card'}`}>
+            {showPublishes ? 'Hide releases' : 'Show releases'}
+          </button>
+        </div>
+      )}
+
       {/* Its own provider: the app mounts none, and the sidebar's covers only
           the sidebar. Radix is happy with one per subtree. */}
       <TooltipProvider delayDuration={150}>
@@ -810,9 +724,10 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
             <MetricSection
               key={metric.id}
               metric={metric}
+              window={overview}
               filters={filters}
               dimension={dimension}
-              annotations={updateGroupMarkers}
+              annotations={showPublishes ? updateGroupMarkers : []}
               renderAnnotationDetails={renderMarkedGroups}
               updateTitles={updateNames}
               branchOfUpdate={branchOfUpdate}

@@ -181,7 +181,7 @@ func (s *ExpoProtocolService) cachedPatchExists(ctx context.Context, appId, bran
 	if cached := existsCache.Get(cacheKey); cached != "" {
 		return cached == "1", nil
 	}
-	exists, err := s.bucket.BSDiffExists(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
+	exists, err := s.patchStore.Exists(ctx, appId, branch, targetUpdateUUID, sourceUpdateUUID)
 	if err != nil {
 		return false, err
 	}

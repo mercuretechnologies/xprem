@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"time"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 )
 
 // fakeRefreshTokenRepo is an in-memory rotation ledger. It deliberately mirrors
@@ -12,7 +12,7 @@ import (
 // against the same clock that stamped UsedAt. A fake more permissive than the
 // SQL it stands for would make every service test above it lie.
 type fakeRefreshTokenRepo struct {
-	tokens map[string]store.RefreshToken
+	tokens map[string]repository.RefreshToken
 	// rotateErr, when set, fails every rotation: the "an outage must not read
 	// as a revocation" path.
 	rotateErr error
@@ -22,14 +22,14 @@ type fakeRefreshTokenRepo struct {
 }
 
 func newFakeRefreshTokenRepo() *fakeRefreshTokenRepo {
-	return &fakeRefreshTokenRepo{tokens: map[string]store.RefreshToken{}}
+	return &fakeRefreshTokenRepo{tokens: map[string]repository.RefreshToken{}}
 }
 
-func (r *fakeRefreshTokenRepo) InsertRefreshToken(_ context.Context, params store.InsertRefreshTokenParameters) error {
+func (r *fakeRefreshTokenRepo) InsertRefreshToken(_ context.Context, params repository.InsertRefreshTokenParameters) error {
 	if r.insertErr != nil {
 		return r.insertErr
 	}
-	r.tokens[params.ID] = store.RefreshToken{
+	r.tokens[params.ID] = repository.RefreshToken{
 		Id:        params.ID,
 		UserId:    params.UserID,
 		FamilyId:  params.FamilyID,
@@ -38,13 +38,13 @@ func (r *fakeRefreshTokenRepo) InsertRefreshToken(_ context.Context, params stor
 	return nil
 }
 
-func (r *fakeRefreshTokenRepo) RotateRefreshToken(_ context.Context, params store.RotateRefreshTokenParameters) (store.RefreshToken, error) {
+func (r *fakeRefreshTokenRepo) RotateRefreshToken(_ context.Context, params repository.RotateRefreshTokenParameters) (repository.RefreshToken, error) {
 	if r.rotateErr != nil {
-		return store.RefreshToken{}, r.rotateErr
+		return repository.RefreshToken{}, r.rotateErr
 	}
 	token, ok := r.tokens[params.OldID]
 	if !ok || token.UsedAt != nil || !token.ExpiresAt.After(time.Now()) {
-		return store.RefreshToken{}, &store.ErrResourceNotFound{Resource: "refresh token", Identifier: params.OldID}
+		return repository.RefreshToken{}, &repository.ErrResourceNotFound{Resource: "refresh token", Identifier: params.OldID}
 	}
 	now := time.Now()
 	successorId := params.NewID
@@ -53,7 +53,7 @@ func (r *fakeRefreshTokenRepo) RotateRefreshToken(_ context.Context, params stor
 	r.tokens[params.OldID] = token
 	// Same transaction as the claim in the real store: a successor always
 	// exists for a token that was retired.
-	r.tokens[successorId] = store.RefreshToken{
+	r.tokens[successorId] = repository.RefreshToken{
 		Id:        successorId,
 		UserId:    token.UserId,
 		FamilyId:  token.FamilyId,
@@ -62,10 +62,10 @@ func (r *fakeRefreshTokenRepo) RotateRefreshToken(_ context.Context, params stor
 	return token, nil
 }
 
-func (r *fakeRefreshTokenRepo) GetRefreshToken(_ context.Context, id string, replayGrace time.Duration) (store.RefreshToken, error) {
+func (r *fakeRefreshTokenRepo) GetRefreshToken(_ context.Context, id string, replayGrace time.Duration) (repository.RefreshToken, error) {
 	token, ok := r.tokens[id]
 	if !ok {
-		return store.RefreshToken{}, &store.ErrResourceNotFound{Resource: "refresh token", Identifier: id}
+		return repository.RefreshToken{}, &repository.ErrResourceNotFound{Resource: "refresh token", Identifier: id}
 	}
 	token.UsedRecently = token.UsedAt != nil && time.Since(*token.UsedAt) <= replayGrace
 	return token, nil

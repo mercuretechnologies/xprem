@@ -24,8 +24,8 @@ import (
 	"xprem/ee/licensing"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
@@ -77,11 +77,11 @@ type SSORepository interface {
 	GetConfig(ctx context.Context) (*SSOConfig, error)
 	SaveConfig(ctx context.Context, cfg SSOConfig) error
 	DeleteConfig(ctx context.Context) error
-	FindUserBySubject(ctx context.Context, issuer string, subject string) (store.User, error)
+	FindUserBySubject(ctx context.Context, issuer string, subject string) (repository.User, error)
 	LinkIdentity(ctx context.Context, issuer string, subject string, userID string, email string) error
 	// ProvisionUser creates the user row and its identity atomically, so a
 	// crash between the two cannot leave an orphan account.
-	ProvisionUser(ctx context.Context, params store.InsertUserParameters, issuer string, subject string) (store.User, error)
+	ProvisionUser(ctx context.Context, params repository.InsertUserParameters, issuer string, subject string) (repository.User, error)
 	TouchLastLogin(ctx context.Context, issuer string, subject string) error
 }
 
@@ -684,21 +684,21 @@ func (s *SSOService) discover(issuer string) (*oidc.Provider, error) {
 // resolveUser maps a verified identity onto a dashboard account:
 // known subject first (stable even when the email changes at the IdP), then
 // account linking by email, then JIT provisioning of a non-admin member.
-func (s *SSOService) resolveUser(ctx context.Context, cfg *SSOConfig, subject string, email string) (store.User, error) {
+func (s *SSOService) resolveUser(ctx context.Context, cfg *SSOConfig, subject string, email string) (repository.User, error) {
 	user, err := s.lookupOrProvision(ctx, cfg, subject, email)
 	if err != nil {
 		// A concurrent first sign-in handled by another replica may have
 		// provisioned or linked the same identity between our lookup and our
 		// write; one retry then finds it by subject.
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			return s.lookupOrProvision(ctx, cfg, subject, email)
 		}
-		return store.User{}, err
+		return repository.User{}, err
 	}
 	return user, nil
 }
 
-func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subject string, email string) (store.User, error) {
+func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subject string, email string) (repository.User, error) {
 	issuer := cfg.Issuer
 	user, err := s.repo.FindUserBySubject(ctx, issuer, subject)
 	if err == nil {
@@ -708,8 +708,8 @@ func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subj
 		}
 		return user, nil
 	}
-	if notFoundErr := (*store.ErrResourceNotFound)(nil); !errors.As(err, &notFoundErr) {
-		return store.User{}, err
+	if notFoundErr := (*repository.ErrResourceNotFound)(nil); !errors.As(err, &notFoundErr) {
+		return repository.User{}, err
 	}
 	existing, err := s.userRepo.GetUserByEmail(ctx, email)
 	if err == nil {
@@ -718,7 +718,7 @@ func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subj
 		// untouched, so turning manual validation on never demands re-approval
 		// of accounts that already had access.
 		if err := s.repo.LinkIdentity(ctx, issuer, subject, existing.Id, email); err != nil {
-			return store.User{}, err
+			return repository.User{}, err
 		}
 		// A new sign-in door just opened on an existing account (possibly an
 		// admin's): the binding is its own security event, distinct from the
@@ -738,15 +738,15 @@ func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subj
 		}
 		return existing, nil
 	}
-	if notFoundErr := (*store.ErrResourceNotFound)(nil); !errors.As(err, &notFoundErr) {
-		return store.User{}, err
+	if notFoundErr := (*repository.ErrResourceNotFound)(nil); !errors.As(err, &notFoundErr) {
+		return repository.User{}, err
 	}
 	// JIT provisioning: always a non-admin member; promotion happens on the
 	// Users page. The empty password hash can never verify against bcrypt, so
 	// the account is SSO-only until SSO is turned off and an admin intervenes.
 	// Under manual validation the row lands disabled and the sign-in that
 	// created it is refused, so the admin has something concrete to approve.
-	user, err = s.repo.ProvisionUser(ctx, store.InsertUserParameters{
+	user, err = s.repo.ProvisionUser(ctx, repository.InsertUserParameters{
 		ID:           uuid.New().String(),
 		Email:        email,
 		PasswordHash: "",
@@ -754,7 +754,7 @@ func (s *SSOService) lookupOrProvision(ctx context.Context, cfg *SSOConfig, subj
 		Enabled:      !cfg.ManualUserValidation,
 	}, issuer, subject)
 	if err != nil {
-		return store.User{}, err
+		return repository.User{}, err
 	}
 	// The IdP created this account, no dashboard principal exists yet: the
 	// actor is the system, the identity facts go to the metadata.
@@ -801,7 +801,7 @@ func emailFromClaims(claims map[string]any) (email string, verified bool, err er
 // bare email address (no display-name form).
 func parseEmailClaim(value any) (string, bool) {
 	raw, _ := value.(string)
-	candidate := store.NormalizeEmail(raw)
+	candidate := repository.NormalizeEmail(raw)
 	if candidate == "" {
 		return "", false
 	}

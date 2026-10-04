@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
@@ -130,11 +131,11 @@ func TestGoodRepublish(t *testing.T) {
 	if previousUpdate == nil {
 		t.Fatalf("Expected previous update to exist")
 	}
-	previousMetadata, err := update.GetMetadata(*previousUpdate)
+	previousMetadata, err := update.GetMetadata(context.Background(), *previousUpdate)
 	if err != nil {
 		t.Fatalf("Error getting previous update metadata: %v", err)
 	}
-	lastMetadata, err := update.GetMetadata(*lastUpdate)
+	lastMetadata, err := update.GetMetadata(context.Background(), *lastUpdate)
 	if err != nil {
 		t.Fatalf("Error getting last update metadata: %v", err)
 	}
@@ -197,11 +198,11 @@ func TestGoodRepublishWithoutCommitHash(t *testing.T) {
 	if previousUpdate == nil {
 		t.Fatalf("Expected previous update to exist")
 	}
-	previousMetadata, err := update.GetMetadata(*previousUpdate)
+	previousMetadata, err := update.GetMetadata(context.Background(), *previousUpdate)
 	if err != nil {
 		t.Fatalf("Error getting previous update metadata: %v", err)
 	}
-	lastMetadata, err := update.GetMetadata(*lastUpdate)
+	lastMetadata, err := update.GetMetadata(context.Background(), *lastUpdate)
 	if err != nil {
 		t.Fatalf("Error getting last update metadata: %v", err)
 	}

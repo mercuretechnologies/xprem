@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -14,8 +14,8 @@ import (
 
 // seededSSOUser mirrors what the enterprise SSO provisioning inserts: a
 // member account with the empty password-hash sentinel.
-func seededSSOUser(id string, email string) store.InsertUserParameters {
-	return store.InsertUserParameters{ID: id, Email: email, PasswordHash: "", IsAdmin: false, Enabled: true}
+func seededSSOUser(id string, email string) repository.InsertUserParameters {
+	return repository.InsertUserParameters{ID: id, Email: email, PasswordHash: "", IsAdmin: false, Enabled: true}
 }
 
 // SSO-provisioned accounts carry an empty password hash: no password may ever

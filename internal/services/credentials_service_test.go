@@ -14,7 +14,7 @@ import (
 	"xprem/internal/android/androidtest"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -24,28 +24,28 @@ import (
 )
 
 type fakeIdentifierRepo struct {
-	byId map[string]store.AppIdentifierRef
+	byId map[string]repository.AppIdentifierRef
 	// appId every identifier belongs to; a mismatch resolves to nil.
 	appId string
 }
 
 func newFakeIdentifierRepo(appId string) *fakeIdentifierRepo {
-	return &fakeIdentifierRepo{byId: map[string]store.AppIdentifierRef{}, appId: appId}
+	return &fakeIdentifierRepo{byId: map[string]repository.AppIdentifierRef{}, appId: appId}
 }
 
 func (f *fakeIdentifierRepo) add(id string, platform types.Platform, identifier string) {
-	f.byId[id] = store.AppIdentifierRef{Id: id, Platform: platform, Identifier: identifier}
+	f.byId[id] = repository.AppIdentifierRef{Id: id, Platform: platform, Identifier: identifier}
 }
 
 func (f *fakeIdentifierRepo) InsertAppIdentifier(_ context.Context, _ string, _ types.Platform, _ string) (string, error) {
 	panic("not used in credentials tests")
 }
 
-func (f *fakeIdentifierRepo) GetAppIdentifiers(_ context.Context, _ string) ([]store.AppIdentifierRow, error) {
+func (f *fakeIdentifierRepo) GetAppIdentifiers(_ context.Context, _ string) ([]repository.AppIdentifierRow, error) {
 	panic("not used in credentials tests")
 }
 
-func (f *fakeIdentifierRepo) GetAppIdentifierByID(_ context.Context, appId string, identifierId string) (*store.AppIdentifierRef, error) {
+func (f *fakeIdentifierRepo) GetAppIdentifierByID(_ context.Context, appId string, identifierId string) (*repository.AppIdentifierRef, error) {
 	if appId != f.appId {
 		return nil, nil
 	}
@@ -64,19 +64,19 @@ func (f *fakeIdentifierRepo) SetBuildNumber(_ context.Context, _ string, _ strin
 	panic("not used in credentials tests")
 }
 
-func (f *fakeIdentifierRepo) AllocateBuildNumber(_ context.Context, _ string, _ string, _ func(types.Platform, string) (string, error)) (*store.AppIdentifierRef, error) {
+func (f *fakeIdentifierRepo) AllocateBuildNumber(_ context.Context, _ string, _ string, _ func(types.Platform, string) (string, error)) (*repository.AppIdentifierRef, error) {
 	panic("not used in credentials tests")
 }
 
 type fakeCredentialsRepo struct {
-	byIdentifierId map[string]store.SealedAndroidCredentials
+	byIdentifierId map[string]repository.SealedAndroidCredentials
 }
 
 func newFakeCredentialsRepo() *fakeCredentialsRepo {
-	return &fakeCredentialsRepo{byIdentifierId: map[string]store.SealedAndroidCredentials{}}
+	return &fakeCredentialsRepo{byIdentifierId: map[string]repository.SealedAndroidCredentials{}}
 }
 
-func (f *fakeCredentialsRepo) UpsertAndroidCredentials(_ context.Context, identifierId string, credentials store.SealedAndroidCredentials) error {
+func (f *fakeCredentialsRepo) UpsertAndroidCredentials(_ context.Context, identifierId string, credentials repository.SealedAndroidCredentials) error {
 	if existing, ok := f.byIdentifierId[identifierId]; ok {
 		credentials.SealedGoogleServiceAccountKey = existing.SealedGoogleServiceAccountKey
 		credentials.GoogleServiceAccountEmail = existing.GoogleServiceAccountEmail
@@ -86,7 +86,7 @@ func (f *fakeCredentialsRepo) UpsertAndroidCredentials(_ context.Context, identi
 	return nil
 }
 
-func (f *fakeCredentialsRepo) GetAndroidCredentials(_ context.Context, identifierId string) (*store.SealedAndroidCredentials, error) {
+func (f *fakeCredentialsRepo) GetAndroidCredentials(_ context.Context, identifierId string) (*repository.SealedAndroidCredentials, error) {
 	credentials, ok := f.byIdentifierId[identifierId]
 	if !ok {
 		return nil, nil
@@ -97,7 +97,7 @@ func (f *fakeCredentialsRepo) GetAndroidCredentials(_ context.Context, identifie
 func (f *fakeCredentialsRepo) UpdateGooglePlayServiceAccountKey(_ context.Context, identifierId string, sealedKey, email, projectID *string) error {
 	credentials, ok := f.byIdentifierId[identifierId]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
+		return &repository.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
 	}
 	credentials.SealedGoogleServiceAccountKey = sealedKey
 	credentials.GoogleServiceAccountEmail = email
@@ -108,7 +108,7 @@ func (f *fakeCredentialsRepo) UpdateGooglePlayServiceAccountKey(_ context.Contex
 
 func (f *fakeCredentialsRepo) DeleteAndroidCredentials(_ context.Context, identifierId string) error {
 	if _, ok := f.byIdentifierId[identifierId]; !ok {
-		return &store.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
+		return &repository.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
 	}
 	delete(f.byIdentifierId, identifierId)
 	return nil
@@ -180,7 +180,7 @@ func TestSaveAndroidCredentialsResolvesTheIdentifier(t *testing.T) {
 
 	// Unknown identifier id.
 	err := service.SaveAndroidCredentials(ctx, testAppId, "33333333-3333-3333-3333-333333333333", validAndroidInput())
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	assert.ErrorAs(t, err, &notFoundErr)
 
 	// Identifier of another app resolves to not-found too.
@@ -246,7 +246,7 @@ func TestAndroidCredentialsMetadataDoesNotDecryptServiceAccountKey(t *testing.T)
 	email := "publisher@play-project.iam.gserviceaccount.com"
 	projectID := "play-project"
 	invalidCiphertext := "not-a-sealed-service-account"
-	repo.byIdentifierId[testIdentifierId] = store.SealedAndroidCredentials{
+	repo.byIdentifierId[testIdentifierId] = repository.SealedAndroidCredentials{
 		KeyAlias:                      "upload",
 		SealedGoogleServiceAccountKey: &invalidCiphertext,
 		GoogleServiceAccountEmail:     &email,
@@ -363,15 +363,15 @@ func TestAndroidCredentialsAuditEvents(t *testing.T) {
 func TestAndroidCredentialsUnsupportedInStatelessMode(t *testing.T) {
 	service := NewCredentialsService(nil, nil)
 	ctx := context.Background()
-	assert.ErrorIs(t, service.SaveAndroidCredentials(ctx, testAppId, testIdentifierId, validAndroidInput()), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.SaveAndroidCredentials(ctx, testAppId, testIdentifierId, validAndroidInput()), repository.ErrNotSupportedInStatelessMode)
 	_, err := service.GetAndroidCredentialsMetadata(ctx, testAppId, testIdentifierId)
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.DeleteAndroidCredentials(ctx, testAppId, testIdentifierId), store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.GenerateAndroidCredentials(ctx, testAppId, testIdentifierId), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.DeleteAndroidCredentials(ctx, testAppId, testIdentifierId), repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.GenerateAndroidCredentials(ctx, testAppId, testIdentifierId), repository.ErrNotSupportedInStatelessMode)
 	_, err = service.ExportAndroidKeystore(ctx, testAppId, testIdentifierId)
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.SaveGooglePlayServiceAccountKey(ctx, testAppId, testIdentifierId, `{}`), store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.DeleteGooglePlayServiceAccountKey(ctx, testAppId, testIdentifierId), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.SaveGooglePlayServiceAccountKey(ctx, testAppId, testIdentifierId, `{}`), repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.DeleteGooglePlayServiceAccountKey(ctx, testAppId, testIdentifierId), repository.ErrNotSupportedInStatelessMode)
 }
 
 // A full imported multi-key file survives the reused export service unchanged;
@@ -401,6 +401,6 @@ func TestBuildKeystoreExportPreservesMultiKeyFile(t *testing.T) {
 	require.Equal(t, input.KeyAlias, exported.KeyAlias)
 }
 
-func (f *fakeIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(context.Context, string, types.Platform, string) (*store.AppIdentifierRef, error) {
+func (f *fakeIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(context.Context, string, types.Platform, string) (*repository.AppIdentifierRef, error) {
 	panic("not used in these tests")
 }

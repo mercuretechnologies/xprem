@@ -7,7 +7,7 @@ import (
 	"testing"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/validation"
 
 	"github.com/stretchr/testify/assert"
@@ -50,18 +50,18 @@ func newFakeEnvironmentRepo() *fakeEnvironmentRepo {
 
 func (f *fakeEnvironmentRepo) InsertEnvironment(_ context.Context, _ string, name string) (string, error) {
 	if _, ok := f.environments[name]; ok {
-		return "", &store.ErrResourceAlreadyExists{Resource: "environment", Identifier: name}
+		return "", &repository.ErrResourceAlreadyExists{Resource: "environment", Identifier: name}
 	}
 	id := "id-" + name
 	f.environments[name] = id
 	return id, nil
 }
 
-func (f *fakeEnvironmentRepo) ListEnvironments(_ context.Context, _ string) ([]store.EnvironmentRow, error) {
+func (f *fakeEnvironmentRepo) ListEnvironments(_ context.Context, _ string) ([]repository.EnvironmentRow, error) {
 	f.listCalls++
-	rows := make([]store.EnvironmentRow, 0, len(f.environments))
+	rows := make([]repository.EnvironmentRow, 0, len(f.environments))
 	for name, id := range f.environments {
-		rows = append(rows, store.EnvironmentRow{Id: id, Name: name})
+		rows = append(rows, repository.EnvironmentRow{Id: id, Name: name})
 	}
 	return rows, nil
 }
@@ -70,17 +70,17 @@ func (f *fakeEnvironmentRepo) GetEnvironmentIdByName(_ context.Context, _ string
 	if id, ok := f.environments[name]; ok {
 		return id, nil
 	}
-	return "", &store.ErrResourceNotFound{Resource: "environment", Identifier: name}
+	return "", &repository.ErrResourceNotFound{Resource: "environment", Identifier: name}
 }
 
 func (f *fakeEnvironmentRepo) DeleteEnvironment(_ context.Context, _ string, name string) error {
 	id, ok := f.environments[name]
 	if !ok {
-		return &store.ErrResourceNotFound{Resource: "environment", Identifier: name}
+		return &repository.ErrResourceNotFound{Resource: "environment", Identifier: name}
 	}
 	for _, envId := range f.channelEnvs {
 		if envId != nil && *envId == id {
-			return &store.ErrEnvironmentHasChannels{EnvironmentName: name}
+			return &repository.ErrEnvironmentHasChannels{EnvironmentName: name}
 		}
 	}
 	delete(f.environments, name)
@@ -92,11 +92,11 @@ func (f *fakeEnvironmentRepo) UpsertEnvVar(_ context.Context, environmentId stri
 	return nil
 }
 
-func (f *fakeEnvironmentRepo) ListEnvVars(_ context.Context, _ string) ([]store.EnvVarRow, error) {
+func (f *fakeEnvironmentRepo) ListEnvVars(_ context.Context, _ string) ([]repository.EnvVarRow, error) {
 	f.listCalls++
-	rows := make([]store.EnvVarRow, 0, len(f.byScopeKey))
+	rows := make([]repository.EnvVarRow, 0, len(f.byScopeKey))
 	for scopeKey, envVar := range f.byScopeKey {
-		rows = append(rows, store.EnvVarRow{EnvironmentId: scopeKey.environmentId, Key: scopeKey.key, IsPublic: envVar.isPublic})
+		rows = append(rows, repository.EnvVarRow{EnvironmentId: scopeKey.environmentId, Key: scopeKey.key, IsPublic: envVar.isPublic})
 	}
 	return rows, nil
 }
@@ -113,7 +113,7 @@ func (f *fakeEnvironmentRepo) GetSealedValue(_ context.Context, environmentId st
 func (f *fakeEnvironmentRepo) DeleteEnvVar(_ context.Context, environmentId string, key string) error {
 	scopeKey := envScopeKey{environmentId, key}
 	if _, ok := f.byScopeKey[scopeKey]; !ok {
-		return &store.ErrResourceNotFound{Resource: "env var", Identifier: key}
+		return &repository.ErrResourceNotFound{Resource: "env var", Identifier: key}
 	}
 	delete(f.byScopeKey, scopeKey)
 	return nil
@@ -121,7 +121,7 @@ func (f *fakeEnvironmentRepo) DeleteEnvVar(_ context.Context, environmentId stri
 
 func (f *fakeEnvironmentRepo) SetChannelEnvironment(_ context.Context, _ string, channelName string, environmentId *string) error {
 	if _, ok := f.channelEnvs[channelName]; !ok {
-		return &store.ErrResourceNotFound{Resource: "channel", Identifier: channelName}
+		return &repository.ErrResourceNotFound{Resource: "channel", Identifier: channelName}
 	}
 	f.channelEnvs[channelName] = environmentId
 	return nil
@@ -168,7 +168,7 @@ func TestSetEnvVarValidation(t *testing.T) {
 
 	// Unknown environment is a 404, not a silent write elsewhere.
 	err := service.SetEnvVar(ctx, "app-1", "nope", "API_URL", "v", true)
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	assert.ErrorAs(t, err, &notFoundErr)
 
 	// An empty value is legitimate.
@@ -192,7 +192,7 @@ func TestRevealEnvVarRoundTripsAndAudits(t *testing.T) {
 
 	// Same key in another environment does not exist.
 	_, err = service.RevealEnvVar(ctx, "app-1", "production", "TOKEN")
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	assert.ErrorAs(t, err, &notFoundErr)
 
 	require.NoError(t, service.DeleteEnvVar(ctx, "app-1", "staging", "TOKEN"))
@@ -229,7 +229,7 @@ func TestEnvironmentLifecycleAndListing(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, id)
 	_, err = service.CreateEnvironment(ctx, "app-1", "preview")
-	alreadyExists := (*store.ErrResourceAlreadyExists)(nil)
+	alreadyExists := (*repository.ErrResourceAlreadyExists)(nil)
 	assert.ErrorAs(t, err, &alreadyExists)
 
 	require.NoError(t, service.SetEnvVar(ctx, "app-1", "preview", "API_URL", "https://preview.example.com", true))
@@ -250,7 +250,7 @@ func TestEnvironmentLifecycleAndListing(t *testing.T) {
 
 	require.NoError(t, service.DeleteEnvironment(ctx, "app-1", "preview"))
 	err = service.DeleteEnvironment(ctx, "app-1", "preview")
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	assert.ErrorAs(t, err, &notFoundErr)
 
 	require.Len(t, recorded, 3)
@@ -276,10 +276,10 @@ func TestSetChannelEnvironment(t *testing.T) {
 
 	// A bound environment cannot be deleted.
 	err := service.DeleteEnvironment(ctx, "app-1", "production")
-	inUseErr := (*store.ErrEnvironmentHasChannels)(nil)
+	inUseErr := (*repository.ErrEnvironmentHasChannels)(nil)
 	assert.ErrorAs(t, err, &inUseErr)
 
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	unknown := "nope"
 	assert.ErrorAs(t, service.SetChannelEnvironment(ctx, "app-1", "prod-channel", &unknown), &notFoundErr)
 	assert.ErrorAs(t, service.SetChannelEnvironment(ctx, "app-1", "no-channel", &production), &notFoundErr)
@@ -302,15 +302,15 @@ func TestEnvironmentsUnsupportedInStatelessMode(t *testing.T) {
 	service := NewEnvironmentService(nil)
 	ctx := context.Background()
 	_, err := service.CreateEnvironment(ctx, "app-1", "staging")
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
 	_, err = service.ListEnvironments(ctx, "app-1")
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.DeleteEnvironment(ctx, "app-1", "staging"), store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.SetEnvVar(ctx, "app-1", "staging", "K", "v", false), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.DeleteEnvironment(ctx, "app-1", "staging"), repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.SetEnvVar(ctx, "app-1", "staging", "K", "v", false), repository.ErrNotSupportedInStatelessMode)
 	_, err = service.RevealEnvVar(ctx, "app-1", "staging", "K")
-	assert.ErrorIs(t, err, store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.DeleteEnvVar(ctx, "app-1", "staging", "K"), store.ErrNotSupportedInStatelessMode)
-	assert.ErrorIs(t, service.SetChannelEnvironment(ctx, "app-1", "prod-channel", nil), store.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, err, repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.DeleteEnvVar(ctx, "app-1", "staging", "K"), repository.ErrNotSupportedInStatelessMode)
+	assert.ErrorIs(t, service.SetChannelEnvironment(ctx, "app-1", "prod-channel", nil), repository.ErrNotSupportedInStatelessMode)
 }
 
 func TestExportAuthorizesTheResolvedEnvironment(t *testing.T) {
@@ -422,16 +422,16 @@ func TestBuildEnvironmentAuditAndDecryptionFailure(t *testing.T) {
 	require.Len(t, events, 1)
 }
 
-func (f *fakeEnvironmentRepo) ResolveEnvironmentVariables(_ context.Context, appID, channel, environment string) (*store.ResolvedEnvironment, error) {
+func (f *fakeEnvironmentRepo) ResolveEnvironmentVariables(_ context.Context, appID, channel, environment string) (*repository.ResolvedEnvironment, error) {
 	f.exportCalls++
 	f.exportApp = appID
-	resolved := &store.ResolvedEnvironment{Variables: []store.SealedEnvVar{}}
+	resolved := &repository.ResolvedEnvironment{Variables: []repository.SealedEnvVar{}}
 	if channel != "" {
 		f.channelApp = appID
 		f.channelLookups = append(f.channelLookups, channel)
 		id, found := f.channelEnvs[channel]
 		if !found {
-			return nil, &store.ErrResourceNotFound{Resource: "channel", Identifier: channel}
+			return nil, &repository.ErrResourceNotFound{Resource: "channel", Identifier: channel}
 		}
 		if id == nil {
 			return resolved, nil
@@ -445,13 +445,13 @@ func (f *fakeEnvironmentRepo) ResolveEnvironmentVariables(_ context.Context, app
 	}
 	id, found := f.environments[environment]
 	if !found {
-		return nil, &store.ErrResourceNotFound{Resource: "environment", Identifier: environment}
+		return nil, &repository.ErrResourceNotFound{Resource: "environment", Identifier: environment}
 	}
 	resolved.ID, resolved.Name = id, &environment
 	f.exportEnvironment = id
 	for scope, variable := range f.byScopeKey {
 		if scope.environmentId == id {
-			resolved.Variables = append(resolved.Variables, store.SealedEnvVar{Key: scope.key, IsPublic: variable.isPublic, SealedValue: variable.sealedValue})
+			resolved.Variables = append(resolved.Variables, repository.SealedEnvVar{Key: scope.key, IsPublic: variable.isPublic, SealedValue: variable.sealedValue})
 		}
 	}
 	return resolved, nil

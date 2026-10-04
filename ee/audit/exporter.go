@@ -14,11 +14,16 @@ import (
 	"strconv"
 	"time"
 	"xprem/config"
+	"xprem/internal/objectstore"
 )
 
-// ObjectPutter is the storage capability the archive exporter needs.
-type ObjectPutter interface {
-	PutObject(ctx context.Context, key string, body []byte) error
+// archiveLocationEnv names, per storage mode, the env var holding the
+// archive destination: a bucket or container distinct from the updates one.
+var archiveLocationEnv = map[objectstore.Mode]string{
+	objectstore.ModeS3:    "S3_BUCKET_AUDIT_LOGS_NAME",
+	objectstore.ModeGCS:   "GCS_BUCKET_AUDIT_LOGS_NAME",
+	objectstore.ModeAzure: "AZURE_BLOB_AUDIT_LOGS_CONTAINER_NAME",
+	objectstore.ModeLocal: "LOCAL_AUDIT_LOGS_BASE_PATH",
 }
 
 // exportBatchSize bounds one archive file; a var so tests can exercise the multi-batch loop cheaply.
@@ -69,29 +74,29 @@ func (s *AuditService) StartArchiveFromEnv(ctx context.Context) error {
 	if s.repo == nil {
 		return errors.New("ARCHIVE_AUDIT_LOGS requires the database control plane")
 	}
-	store, err := GetAuditLogsObjectStore()
+	archiveStore, err := objectstore.OpenDedicated(archiveLocationEnv)
 	if err != nil {
-		return err
+		return fmt.Errorf("audit archiving is enabled but %w", err)
 	}
 	intervalSeconds, intervalErr := strconv.Atoi(config.GetEnv("AUDIT_LOGS_EXPORT_INTERVAL_SECONDS"))
 	if intervalErr != nil || intervalSeconds < 10 {
 		log.Printf("⚠️  [AUDIT] Invalid AUDIT_LOGS_EXPORT_INTERVAL_SECONDS %q, using 300", config.GetEnv("AUDIT_LOGS_EXPORT_INTERVAL_SECONDS"))
 		intervalSeconds = 300
 	}
-	s.startArchive(ctx, time.Duration(intervalSeconds)*time.Second, store)
+	s.startArchive(ctx, time.Duration(intervalSeconds)*time.Second, archiveStore)
 	log.Printf("📦 [AUDIT] Archiving audit logs every %ds", intervalSeconds)
 	return nil
 }
 
 // startArchive exports the audit log to the archive destination once at boot, then on the configured interval.
-func (s *AuditService) startArchive(ctx context.Context, interval time.Duration, putter ObjectPutter) {
-	if s.repo == nil || putter == nil {
+func (s *AuditService) startArchive(ctx context.Context, interval time.Duration, archiveStore objectstore.Store) {
+	if s.repo == nil || archiveStore == nil {
 		return
 	}
 	// Set before the goroutine starts so the retention purge sees it and spares unarchived rows.
 	s.archiveEnabled = true
 	go func() {
-		s.runArchive(ctx, putter)
+		s.runArchive(ctx, archiveStore)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -99,13 +104,13 @@ func (s *AuditService) startArchive(ctx context.Context, interval time.Duration,
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runArchive(ctx, putter)
+				s.runArchive(ctx, archiveStore)
 			}
 		}
 	}()
 }
 
-func (s *AuditService) runArchive(ctx context.Context, putter ObjectPutter) {
+func (s *AuditService) runArchive(ctx context.Context, archiveStore objectstore.Store) {
 	// Bounded per tick: a huge backlog resumes at the next tick instead of running unbounded.
 	archiveCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -120,7 +125,7 @@ func (s *AuditService) runArchive(ctx context.Context, putter ObjectPutter) {
 	}
 	defer release()
 	for {
-		exported, err := s.archiveNextBatch(archiveCtx, putter)
+		exported, err := s.archiveNextBatch(archiveCtx, archiveStore)
 		if err != nil {
 			log.Printf("audit: archive export failed: %v", err)
 			return
@@ -133,7 +138,7 @@ func (s *AuditService) runArchive(ctx context.Context, putter ObjectPutter) {
 
 // archiveNextBatch exports one file and advances the cursor. It reports
 // whether a full batch was written (meaning more rows may be waiting).
-func (s *AuditService) archiveNextBatch(ctx context.Context, putter ObjectPutter) (bool, error) {
+func (s *AuditService) archiveNextBatch(ctx context.Context, archiveStore objectstore.Store) (bool, error) {
 	cursor, err := s.repo.ExportCursor(ctx)
 	if err != nil {
 		return false, err
@@ -167,7 +172,7 @@ func (s *AuditService) archiveNextBatch(ctx context.Context, putter ObjectPutter
 	lastID := events[len(events)-1].ID
 	key := fmt.Sprintf("%04d/%02d/%02d/%d-%d.ndjson",
 		firstDay.Year(), firstDay.Month(), firstDay.Day(), events[0].ID, lastID)
-	if err := putter.PutObject(ctx, key, body.Bytes()); err != nil {
+	if err := archiveStore.Put(ctx, key, bytes.NewReader(body.Bytes())); err != nil {
 		return false, err
 	}
 

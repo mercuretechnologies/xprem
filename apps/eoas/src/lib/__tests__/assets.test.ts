@@ -1,12 +1,22 @@
 // node-fetch's Response, not the DOM one: that is what fetchWithRetries resolves to.
+import fs from 'fs-extra';
 import type { Response } from 'node-fetch';
+import os from 'os';
+import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { activeRolloutConflictMessage, requestUploadUrls } from '../assets';
+import { activeRolloutConflictMessage, computeFilesRequests, requestUploadUrls } from '../assets';
+import { digestFile } from '../crypto';
+import { RequestedPlatform } from '../expoConfig';
 import { fetchWithRetries } from '../fetch';
 
 vi.mock('../fetch', () => ({
   fetchWithRetries: vi.fn(),
+}));
+
+vi.mock('../crypto', () => ({
+  digestFile: vi.fn(),
+  toBase64Url: vi.fn(),
 }));
 
 const credentials = { token: 'test-token', sessionSecret: undefined };
@@ -35,6 +45,75 @@ function requestedUrl(): URL {
   const calls = vi.mocked(fetchWithRetries).mock.calls;
   return new URL(String(calls[calls.length - 1][0]));
 }
+
+describe('computeFilesRequests path normalization', () => {
+  afterEach(() => {
+    vi.mocked(digestFile).mockReset();
+  });
+
+  it('normalizes Windows-authored asset paths to forward slashes', async () => {
+    // Windows `expo export` writes backslash asset paths, which the server rejects; digestFile is mocked so files need not exist.
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'eoas-assets-'));
+    try {
+      const outputDir = 'dist';
+      await fs.ensureDir(path.join(projectDir, outputDir));
+      await fs.writeJson(path.join(projectDir, outputDir, 'metadata.json'), {
+        version: 0,
+        bundler: 'metro',
+        fileMetadata: {
+          ios: {
+            bundle: '_expo/static/js/ios/index-5d41402abc.hbc',
+            assets: [
+              { path: 'assets\\0a328cd9c1afd0afe8e3b1ec5165b1b4', ext: 'png' },
+              { path: 'assets\\7d40544b395c5949f4646f5e150fe020', ext: 'png' },
+            ],
+          },
+        },
+      });
+      vi.mocked(digestFile).mockResolvedValue({ hash: 'digest-hash', key: 'digest-key' });
+
+      const files = await computeFilesRequests(projectDir, outputDir, RequestedPlatform.Ios);
+
+      expect(files.map(file => file.path)).toEqual([
+        'metadata.json',
+        'expoConfig.json',
+        '_expo/static/js/ios/index-5d41402abc.hbc',
+        'assets/0a328cd9c1afd0afe8e3b1ec5165b1b4',
+        'assets/7d40544b395c5949f4646f5e150fe020',
+      ]);
+      expect(files.every(file => !file.path.includes('\\'))).toBe(true);
+    } finally {
+      await fs.remove(projectDir);
+    }
+  });
+
+  it('leaves POSIX-authored paths untouched', async () => {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'eoas-assets-'));
+    try {
+      const outputDir = 'dist';
+      await fs.ensureDir(path.join(projectDir, outputDir));
+      await fs.writeJson(path.join(projectDir, outputDir, 'metadata.json'), {
+        version: 0,
+        bundler: 'metro',
+        fileMetadata: {
+          ios: {
+            bundle: '_expo/static/js/ios/index-89ab34cd.hbc',
+            assets: [{ path: 'assets/0a328cd9c1afd0afe8e3b1ec5165b1b4', ext: 'png' }],
+          },
+        },
+      });
+      vi.mocked(digestFile).mockResolvedValue({ hash: 'digest-hash', key: 'digest-key' });
+
+      const files = await computeFilesRequests(projectDir, outputDir, RequestedPlatform.Ios);
+
+      expect(files.find(file => file.platform === 'ios')?.path).toBe(
+        '_expo/static/js/ios/index-89ab34cd.hbc'
+      );
+    } finally {
+      await fs.remove(projectDir);
+    }
+  });
+});
 
 describe('requestUploadUrls publish group wire contract', () => {
   it('sends the publish group as a query parameter and returns the acknowledgment', async () => {

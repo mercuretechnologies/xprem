@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 	"xprem/internal/handlers"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/gorilla/mux"
 )
@@ -72,7 +72,7 @@ func grantResponseFrom(grant AppGrant) GrantResponse {
 
 func renderRBACServiceError(w http.ResponseWriter, err error) {
 	validationErr := (*ValidationError)(nil)
-	alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil)
+	alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil)
 	switch {
 	case errors.Is(err, ErrRequiresControlPlane):
 		handlers.RenderError(w, http.StatusBadRequest, err.Error())
@@ -154,7 +154,7 @@ func (h *RBACHandler) resolveTargetUser(w http.ResponseWriter, r *http.Request) 
 		return "", false
 	}
 	if _, err := h.service.userLookup.GetUserByID(r.Context(), userId); err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 		} else {
 			handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")

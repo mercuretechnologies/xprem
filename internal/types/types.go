@@ -97,6 +97,7 @@ type UpdateFeedQuery struct {
 	Branch          string
 	RuntimeVersion  string
 	Platform        Platform
+	LatestOnly      bool
 	UpdateUUID      string
 	PublishGroup    string
 	CommitHash      string
@@ -178,6 +179,9 @@ type UpdateDetails struct {
 	// for non-rollout updates.
 	RolloutPercentage *int    `json:"rolloutPercentage,omitempty"`
 	ControlUpdateId   *string `json:"controlUpdateId,omitempty"`
+	// SourcemapHash names the bundle's source map in the sourcemap store;
+	// nil when none was uploaded. Control-plane only.
+	SourcemapHash *string `json:"sourcemapHash,omitempty"`
 }
 
 // UpdateRef is the (update id, runtime version) pair that, with a branch,
@@ -416,6 +420,40 @@ type ChannelResolution struct {
 	BranchName string `json:"branchName"`
 	// Set only by the Postgres channel store when the channel has an active rollout.
 	Rollout *ChannelRolloutInfo `json:"rollout,omitempty"`
+}
+
+// SourcemapIndexStatus is where the index of a source map stands.
+type SourcemapIndexStatus string
+
+const (
+	SourcemapIndexPending   SourcemapIndexStatus = "pending"
+	SourcemapIndexRunning   SourcemapIndexStatus = "running"
+	SourcemapIndexStored    SourcemapIndexStatus = "stored"
+	SourcemapIndexFailed    SourcemapIndexStatus = "failed"
+	SourcemapIndexCancelled SourcemapIndexStatus = "cancelled"
+)
+
+// Reason codes of a failed or cancelled index, prefixing the underlying error.
+const (
+	SourcemapIndexReasonMapMissing  = "map_missing"
+	SourcemapIndexReasonMapInvalid  = "map_invalid"
+	SourcemapIndexReasonMapTooLarge = "map_too_large"
+	// SourcemapIndexReasonIndexTooLarge: the index would not fit the symbolication cache.
+	SourcemapIndexReasonIndexTooLarge = "index_too_large"
+	// SourcemapIndexReasonUnavailable: the license lapsed between the publish and the job.
+	SourcemapIndexReasonUnavailable = "unavailable"
+)
+
+// SourcemapIndex is the index record of one source map, as the dashboard
+// shows it on the updates that carry the map.
+type SourcemapIndex struct {
+	Hash      string               `json:"hash"`
+	Status    SourcemapIndexStatus `json:"status"`
+	Reason    string               `json:"reason,omitempty"`
+	Segments  *int                 `json:"segments,omitempty"`
+	IndexSize *int64               `json:"indexSize,omitempty"`
+	Attempts  int                  `json:"attempts"`
+	UpdatedAt string               `json:"updatedAt"`
 }
 
 // BundlePatchStatus is where a (target, source) bundle patch stands.

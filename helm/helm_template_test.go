@@ -188,8 +188,9 @@ func TestOptionalTuningVarsAreRendered(t *testing.T) {
 		"ENABLE_PREVENT_CDN_REDIRECTION_HEADER",
 		"BUCKET_MIGRATION_CONCURRENCY",
 		"CLICKHOUSE_URL",
-		"GEOIP_MMDB_PATH",
 		"DISABLE_DEVICE_TELEMETRY",
+		"OBSERVE_INGEST_LIMIT_PER_IP",
+		"OBSERVE_INGEST_LIMIT_PER_APP",
 	} {
 		if !secretKeyRefOptional(env[name]) {
 			t.Fatalf("expected %s to be rendered as an optional secret key ref", name)

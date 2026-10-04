@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +23,7 @@ type channelEnvRepo struct {
 func (r *channelEnvRepo) InsertEnvironment(_ context.Context, _, _ string) (string, error) {
 	return "", nil
 }
-func (r *channelEnvRepo) ListEnvironments(_ context.Context, _ string) ([]store.EnvironmentRow, error) {
+func (r *channelEnvRepo) ListEnvironments(_ context.Context, _ string) ([]repository.EnvironmentRow, error) {
 	return nil, nil
 }
 func (r *channelEnvRepo) GetEnvironmentIdByName(_ context.Context, _, name string) (string, error) {
@@ -33,7 +33,7 @@ func (r *channelEnvRepo) DeleteEnvironment(_ context.Context, _, _ string) error
 func (r *channelEnvRepo) UpsertEnvVar(_ context.Context, _, _ string, _ bool, _ string) error {
 	return nil
 }
-func (r *channelEnvRepo) ListEnvVars(_ context.Context, _ string) ([]store.EnvVarRow, error) {
+func (r *channelEnvRepo) ListEnvVars(_ context.Context, _ string) ([]repository.EnvVarRow, error) {
 	return nil, nil
 }
 func (r *channelEnvRepo) GetSealedValue(_ context.Context, _, _ string) (*string, error) {
@@ -85,6 +85,6 @@ func TestSetChannelEnvironmentRefusesMissingKey(t *testing.T) {
 	}
 }
 
-func (r *channelEnvRepo) ResolveEnvironmentVariables(context.Context, string, string, string) (*store.ResolvedEnvironment, error) {
+func (r *channelEnvRepo) ResolveEnvironmentVariables(context.Context, string, string, string) (*repository.ResolvedEnvironment, error) {
 	panic("unexpected environment export")
 }

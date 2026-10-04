@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -20,8 +20,8 @@ type revocationFixture struct {
 	users         *UserService
 	repo          *fakeUserRepo
 	refreshTokens *fakeRefreshTokenRepo
-	admin         store.User
-	member        store.User
+	admin         repository.User
+	member        repository.User
 	adminSession  *DashboardSession
 	memberSession *DashboardSession
 }
@@ -386,8 +386,8 @@ type unavailableUserRepo struct {
 	*fakeUserRepo
 }
 
-func (r *unavailableUserRepo) GetUserByID(context.Context, string) (store.User, error) {
-	return store.User{}, errors.New("connection refused")
+func (r *unavailableUserRepo) GetUserByID(context.Context, string) (repository.User, error) {
+	return repository.User{}, errors.New("connection refused")
 }
 
 // Changing ADMIN_PASSWORD is the only revocation lever a stateless deployment

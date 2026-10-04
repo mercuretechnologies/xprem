@@ -8,6 +8,6 @@ import (
 type Migration interface {
 	ID() string
 	Timestamp() time.Time
-	Up(b bucket.Bucket) error
-	Down(b bucket.Bucket) error
+	Up(b *bucket.Bucket) error
+	Down(b *bucket.Bucket) error
 }

@@ -24,8 +24,8 @@ const (
 
 // Pending returns the registered migrations that are not yet recorded in the
 // bucket's migration history, in application order.
-func Pending(b bucket.Bucket) ([]Migration, error) {
-	applied, err := b.RetrieveMigrationHistory()
+func Pending(b *bucket.Bucket) ([]Migration, error) {
+	applied, err := NewHistory(b.ObjectStore).Applied()
 	if err != nil {
 		return nil, fmt.Errorf("read history: %w", err)
 	}
@@ -42,7 +42,7 @@ func Pending(b bucket.Bucket) ([]Migration, error) {
 	return pending, nil
 }
 
-func RunMigrations(b bucket.Bucket) error {
+func RunMigrations(b *bucket.Bucket) error {
 	pending, err := Pending(b)
 	if err != nil {
 		return err
@@ -52,15 +52,15 @@ func RunMigrations(b bucket.Bucket) error {
 		if err := m.Up(b); err != nil {
 			return fmt.Errorf("migration %s failed: %w", m.ID(), err)
 		}
-		if err := b.ApplyMigration(m.ID()); err != nil {
+		if err := NewHistory(b.ObjectStore).Record(m.ID()); err != nil {
 			return fmt.Errorf("record migration %s: %w", m.ID(), err)
 		}
 	}
 	return nil
 }
 
-func RollbackLastMigration(b bucket.Bucket) error {
-	ag, err := b.RetrieveMigrationHistory()
+func RollbackLastMigration(b *bucket.Bucket) error {
+	ag, err := NewHistory(b.ObjectStore).Applied()
 	if err != nil {
 		return fmt.Errorf("read history: %w", err)
 	}
@@ -83,7 +83,7 @@ func RollbackLastMigration(b bucket.Bucket) error {
 	if err := target.Down(b); err != nil {
 		return fmt.Errorf("rollback %s failed: %w", last, err)
 	}
-	return b.RemoveMigrationFromHistory(last)
+	return NewHistory(b.ObjectStore).Forget(last)
 }
 
 // EnsureMigrations brings the bucket fully up to date before the caller starts
@@ -131,7 +131,7 @@ func EnsureMigrations() error {
 
 // runWhileRenewingLock runs the pending migrations while a background ticker
 // keeps the cache lock alive, then releases the lock whatever the outcome.
-func runWhileRenewingLock(b bucket.Bucket, c cache.Cache) error {
+func runWhileRenewingLock(b *bucket.Bucket, c cache.Cache) error {
 	stopRenew := make(chan struct{})
 	renewDone := make(chan struct{})
 	go func() {

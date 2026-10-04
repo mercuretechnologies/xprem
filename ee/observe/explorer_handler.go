@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"xprem/ee/identity"
+	"xprem/ee/licensing"
 	"xprem/internal/handlers"
 )
 
@@ -42,11 +43,16 @@ const (
 )
 
 type ExplorerReader interface {
+	ReadErrors(ctx context.Context, appID string, query ErrorsQuery) (ErrorsPage, error)
+	ReadUpdateErrors(ctx context.Context, appID, updateID string, limit, offset int) (UpdateErrorsPage, error)
+	ReadErrorDetails(ctx context.Context, appID, errorID string, query ErrorDetailsQuery) (ErrorDetails, error)
 	ReadOverview(ctx context.Context, appID string, query ExplorerQuery) (Overview, error)
 	ReadCheckIns(ctx context.Context, appID string, query CheckInQuery) (CheckInFeed, error)
 	ReadEvents(ctx context.Context, appID string, query ExplorerQuery) (Events, error)
 	ReadLogs(ctx context.Context, appID string, query LogsQuery) (LogsPage, error)
 	ReadBreakdown(ctx context.Context, appID string, query BreakdownQuery) (Breakdown, error)
+	ReadFleet(ctx context.Context, appID string, query ExplorerQuery) (Fleet, error)
+	ReadReleases(ctx context.Context, appID string, query ExplorerQuery) (Releases, error)
 }
 
 type IdentitySchemaReader interface {
@@ -54,8 +60,9 @@ type IdentitySchemaReader interface {
 }
 
 type ExplorerHandler struct {
-	reader ExplorerReader
-	schema IdentitySchemaReader
+	reader       ExplorerReader
+	schema       IdentitySchemaReader
+	licenseValid func() bool
 }
 
 func NewExplorerHandler(reader ExplorerReader, schema IdentitySchemaReader) *ExplorerHandler {
@@ -66,7 +73,7 @@ func NewExplorerHandler(reader ExplorerReader, schema IdentitySchemaReader) *Exp
 	if service, ok := schema.(*identity.Service); ok && service == nil {
 		schema = nil
 	}
-	return &ExplorerHandler{reader: reader, schema: schema}
+	return &ExplorerHandler{reader: reader, schema: schema, licenseValid: licensing.IsEnterprise}
 }
 
 func parseExplorerTimes(values map[string][]string, maximum time.Duration) (time.Time, time.Time, error) {
@@ -95,6 +102,9 @@ func firstValue(values map[string][]string, key string) string {
 // surface asking for a series has to derive it the same way; the caller never
 // picks it, so a wide window cannot ask for a million points.
 func Bucket(window time.Duration) time.Duration {
+	// The dashboard snaps the window start down to a boundary and keeps the end
+	// live, so "last 24 hours" arrives a few minutes over 24h.
+	window = window.Truncate(time.Hour)
 	switch {
 	case window <= 6*time.Hour:
 		return 5 * time.Minute
@@ -343,9 +353,12 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 	}
 	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, Overview{
-			Available: false,
-			Metrics:   emptyMetricSeries(),
-			Locations: []ObserveLocation{},
+			Available:     false,
+			From:          query.From,
+			To:            query.To,
+			BucketSeconds: max(int64(query.Bucket/time.Second), 1),
+			Metrics:       emptyMetricSeries(),
+			Locations:     []ObserveLocation{},
 		})
 		return
 	}
@@ -358,6 +371,50 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	handlers.RenderJSON(w, http.StatusOK, overview)
+}
+
+// GetFleetHandler splits the devices active over the period along every fleet dimension.
+func (h *ExplorerHandler) GetFleetHandler(w http.ResponseWriter, r *http.Request) {
+	query, err := h.parseBaseQuery(r, maxOverviewWindow)
+	if err != nil {
+		h.renderQueryError(w, err)
+		return
+	}
+	if h.reader == nil {
+		handlers.RenderJSON(w, http.StatusOK, Fleet{Facets: []FleetFacet{}})
+		return
+	}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	fleet, err := h.reader.ReadFleet(readContext, mux.Vars(r)["APP_ID"], query)
+	if err != nil {
+		log.Printf("observe: reading fleet failed: %v", err)
+		h.renderQueryError(w, err)
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, fleet)
+}
+
+// GetReleasesHandler reports, per channel, how much of its active fleet runs what it serves.
+func (h *ExplorerHandler) GetReleasesHandler(w http.ResponseWriter, r *http.Request) {
+	query, err := h.parseBaseQuery(r, maxOverviewWindow)
+	if err != nil {
+		h.renderQueryError(w, err)
+		return
+	}
+	if h.reader == nil {
+		handlers.RenderJSON(w, http.StatusOK, Releases{Channels: []ChannelAdoption{}})
+		return
+	}
+	readContext, cancelRead := boundedRead(r)
+	defer cancelRead()
+	releases, err := h.reader.ReadReleases(readContext, mux.Vars(r)["APP_ID"], query)
+	if err != nil {
+		log.Printf("observe: reading releases failed: %v", err)
+		h.renderQueryError(w, err)
+		return
+	}
+	handlers.RenderJSON(w, http.StatusOK, releases)
 }
 
 // GetCheckInsHandler feeds the live map with everything that checked in since
@@ -433,10 +490,13 @@ func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Req
 	}
 	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, Breakdown{
-			Available: false,
-			Metric:    metric,
-			Dimension: dimension,
-			Segments:  []BreakdownSegment{},
+			Available:     false,
+			From:          base.From,
+			To:            base.To,
+			BucketSeconds: max(int64(base.Bucket/time.Second), 1),
+			Metric:        metric,
+			Dimension:     dimension,
+			Segments:      []BreakdownSegment{},
 		})
 		return
 	}

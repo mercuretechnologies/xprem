@@ -63,6 +63,12 @@ archiveAuditLogs: "false"
 # and serve them to devices that ask for one, instead of the full bundle. Needs
 # the control plane. Patches are served by the server itself, not the CDN.
 bundleDiffing: "false"
+# Set to "true" to store the Hermes source map of every published bundle in a
+# sourcemap store (control plane only). The *_SOURCEMAPS_* destination var
+# matching storageMode then becomes required. It may name the updates bucket
+# only when that bucket is not publicly readable: a source map embeds the app's
+# source code, and the server refuses to boot with CDN_BASE_URL fronting it.
+uploadSourcemaps: "false"
 # Set to "true" to redirect patch downloads to the CDN instead of serving them
 # from the server. Only with CloudFront or a CDN_BASE_URL edge, which must add
 # the "im: bsdiff" and "expo-base-update-id" response headers on */bsdiff/*
@@ -481,6 +487,76 @@ environment:
         is: "true"
       - key: "storageMode"
         is: "local"
+  - name: "UPLOAD_SOURCEMAPS"
+    key: "uploadSourcemaps"
+    required: true
+    computed: true
+  - name: "S3_BUCKET_SOURCEMAPS_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "s3"
+  - name: "GCS_BUCKET_SOURCEMAPS_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "gcs"
+  - name: "AZURE_BLOB_SOURCEMAPS_CONTAINER_NAME"
+    value: ""
+    required:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "azure"
+  # The server defaults it to ./sourcemaps when unset.
+  - name: "LOCAL_SOURCEMAPS_BASE_PATH"
+    value: ""
+    required: false
+    enabled:
+      - key: "uploadSourcemaps"
+        is: "true"
+      - key: "storageMode"
+        is: "local"
+  # Build artifacts land in the updates bucket unless the *_BUILDS_* var of the
+  # storage mode names their own. Behind useGenericCDN the updates bucket is
+  # public, so builds stay off until they get their own.
+  - name: "S3_BUCKET_BUILDS_NAME"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+      - key: "storageMode"
+        is: "s3"
+  - name: "GCS_BUCKET_BUILDS_NAME"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+      - key: "storageMode"
+        is: "gcs"
+  - name: "AZURE_BLOB_BUILDS_CONTAINER_NAME"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+      - key: "storageMode"
+        is: "azure"
+  # Unset keeps the builds in the updates directory, readable only by the server.
+  - name: "LOCAL_BUILDS_BASE_PATH"
+    value: ""
+    required: false
+    enabled:
+      - key: "controlPlane"
+        is: "true"
+      - key: "storageMode"
+        is: "local"
   # EXPO_ACCESS_TOKEN and EXPO_APP_ID follow the same rule as the key vars
   # above: required in stateless mode, still rendered (optional) in
   # control-plane mode. EXPO_APP_ID in particular is what backward
@@ -561,15 +637,22 @@ environment:
     required: false
   # Path to a GeoLite2 .mmdb file inside the container, used to locate devices
   # in the Identity dashboard. Unset leaves devices unlocated.
-  - name: "GEOIP_MMDB_PATH"
-    value: ""
-    enabled: true
-    required: false
   # Set to "true" to record nothing about the devices being served: no device
   # registry, no update-health state, no telemetry ingestion. Updates are
   # delivered exactly the same; the Observe and Identity dashboards report the
   # feature as unavailable.
   - name: "DISABLE_DEVICE_TELEMETRY"
+    value: ""
+    enabled: true
+    required: false
+  # Telemetry batches accepted per minute, from one address to one app and for
+  # one app in total. Default server-side to 120 and 6000 when unset; 0
+  # disables a limit.
+  - name: "OBSERVE_INGEST_LIMIT_PER_IP"
+    value: ""
+    enabled: true
+    required: false
+  - name: "OBSERVE_INGEST_LIMIT_PER_APP"
     value: ""
     enabled: true
     required: false

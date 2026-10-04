@@ -232,6 +232,30 @@ export const ENV_SECTIONS: EnvSection[] = [
         value: c => or(c.cdnBaseUrl, '<https://cdn.example.com>'),
         comment: 'Base URL of the CDN fronting the bucket; the bucket must be publicly readable.',
       },
+      {
+        name: 'S3_BUCKET_BUILDS_NAME',
+        applies: c => c.delivery === 'generic-cdn' && isS3Family(c),
+        required: false,
+        value: () => '<your-private-builds-bucket>',
+        comment:
+          'Private bucket for build artifacts; builds stay off while they would share the public updates bucket.',
+      },
+      {
+        name: 'GCS_BUCKET_BUILDS_NAME',
+        applies: c => c.delivery === 'generic-cdn' && c.storage === 'gcs',
+        required: false,
+        value: () => '<your-private-builds-bucket>',
+        comment:
+          'Private bucket for build artifacts; builds stay off while they would share the public updates bucket.',
+      },
+      {
+        name: 'AZURE_BLOB_BUILDS_CONTAINER_NAME',
+        applies: c => c.delivery === 'generic-cdn' && c.storage === 'azure',
+        required: false,
+        value: () => '<your-private-builds-container>',
+        comment:
+          'Private container for build artifacts; builds stay off while they would share the public updates container.',
+      },
     ],
   },
   {
@@ -645,6 +669,13 @@ export function validateEnvMap(
     } else if (value !== undefined && isPlaceholder(value)) {
       report(`${spec.name} is still a placeholder: ${value}`);
     }
+  }
+
+  const buildsLocation = applicableVars(choices).find(spec => spec.name.includes('_BUILDS_'));
+  if (buildsLocation && !env[buildsLocation.name]) {
+    warning(
+      `${buildsLocation.name} is not set: builds stay off while CDN_BASE_URL serves the updates bucket publicly.`
+    );
   }
 
   if (env.DB_KEYS_MASTER_KEY_B64 && env.AWSSM_DB_KEYS_MASTER_KEY_SECRET_ID) {

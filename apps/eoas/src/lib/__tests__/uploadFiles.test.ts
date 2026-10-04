@@ -108,4 +108,38 @@ describe('buildUploadFiles', () => {
 
     expect(android.every(file => file.role === 'config')).toBe(true);
   });
+
+  it('claims no launch asset when metadata.json omits that platform entirely', async () => {
+    // Distinct from filtering via RequestedPlatform: the export itself never
+    // listed ios (e.g. "platforms": ["android"] in app.json).
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eoas-upload-'));
+    const dist = path.join(projectDir, 'dist');
+    const write = (relativePath: string, content: string): void => {
+      const absolutePath = path.join(dist, relativePath);
+      fs.mkdirpSync(path.dirname(absolutePath));
+      fs.writeFileSync(absolutePath, content);
+    };
+    write('_expo/static/js/android/AppEntry-android.hbc', 'android bundle');
+    write('expoConfig.json', '{}');
+    write(
+      'metadata.json',
+      JSON.stringify({
+        version: 0,
+        bundler: 'metro',
+        fileMetadata: {
+          android: {
+            bundle: '_expo/static/js/android/AppEntry-android.hbc',
+            assets: [],
+          },
+        },
+      })
+    );
+
+    const all = await computeFilesRequests(projectDir, 'dist', RequestedPlatform.All);
+    const ios = buildUploadFiles(all, 'ios');
+
+    expect(ios.every(file => file.role === 'config')).toBe(true);
+    expect(ios.some(file => file.role === 'launch')).toBe(false);
+    expect(buildUploadFiles(all, 'android').some(file => file.role === 'launch')).toBe(true);
+  });
 });

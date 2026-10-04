@@ -12,8 +12,8 @@ import (
 	cache2 "xprem/internal/cache"
 	"xprem/internal/dashboard"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -97,19 +97,7 @@ func (h *UpdateHandler) GetUpdateDetailsHandler(w http.ResponseWriter, r *http.R
 		handlers.RenderError(w, http.StatusBadRequest, "An internal error occurred while fetching update details.")
 		return
 	}
-	updatesResponse := types.UpdateDetails{
-		UpdateUUID:        update.UpdateUUID,
-		UpdateId:          update.UpdateId,
-		CreatedAt:         update.CreatedAt,
-		CommitHash:        update.CommitHash,
-		Platform:          update.Platform,
-		Message:           update.Message,
-		Type:              update.Type,
-		ExpoConfig:        update.ExpoConfig,
-		RolloutPercentage: update.RolloutPercentage,
-		ControlUpdateId:   update.ControlUpdateId,
-	}
-	marshaledResponse, _ := json.Marshal(updatesResponse)
+	marshaledResponse, _ := json.Marshal(update)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(marshaledResponse)
@@ -190,7 +178,7 @@ func renderPublishError(w http.ResponseWriter, err error, fallbackDetail string)
 		handlers.RenderError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+	if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 		handlers.RenderError(w, http.StatusBadRequest, "Publish groups require the database control plane. Republish the update by id instead.")
 		return
 	}
@@ -208,7 +196,7 @@ func renderPublishError(w http.ResponseWriter, err error, fallbackDetail string)
 }
 
 // validateBranchAndRuntime rejects the two path segments before they reach the
-// stores. Both end up as bucket path segments in stateless mode, so this is the
+// repositories. Both end up as bucket path segments in stateless mode, so this is the
 // same gate the read routes get through UpdateService.
 func validateBranchAndRuntime(w http.ResponseWriter, branchName string, runtimeVersion string) bool {
 	if err := validation.Name("branchName", branchName); err != nil {
@@ -382,7 +370,7 @@ func (h *UpdateHandler) GetPublishGroupsHandler(w http.ResponseWriter, r *http.R
 
 	page, err := h.updateService.GetPublishGroupsPage(r.Context(), appID, runtimeVersion, branchName, cursor, limit)
 	if err != nil {
-		if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+		if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 			handlers.RenderError(w, http.StatusNotFound, "Publish groups are not supported in stateless mode")
 			return
 		}
@@ -402,6 +390,15 @@ func (h *UpdateHandler) GetPublishGroupsHandler(w http.ResponseWriter, r *http.R
 func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Request) {
 	appId := mux.Vars(r)["APP_ID"]
 	params := r.URL.Query()
+	latestOnly := false
+	if raw := params.Get("latestOnly"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			handlers.RenderError(w, http.StatusBadRequest, "latestOnly must be a boolean")
+			return
+		}
+		latestOnly = parsed
+	}
 	limit := defaultUpdateFeedLimit
 	if rawLimit := params.Get("limit"); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
@@ -437,6 +434,7 @@ func (h *UpdateHandler) GetUpdateFeedHandler(w http.ResponseWriter, r *http.Requ
 		Branch:         params.Get("branch"),
 		RuntimeVersion: params.Get("runtimeVersion"),
 		Platform:       platform,
+		LatestOnly:     latestOnly,
 		UpdateUUID:     params.Get("uuid"),
 		PublishGroup:   params.Get("groupId"),
 		CommitHash:     params.Get("commitHash"),

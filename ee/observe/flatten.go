@@ -5,13 +5,12 @@
 package observe
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"sort"
 	"strconv"
 	"time"
 	"xprem/ee/identity"
+	"xprem/ee/symbolication"
 
 	"github.com/google/uuid"
 )
@@ -57,6 +56,9 @@ type MetricRow struct {
 	Value        float64
 	RouteName    string
 	CustomParams string
+	// RunningUpdateID is the resource's update, kept apart from Envelope.UpdateID
+	// which a point may override with the update it just downloaded. Not stored.
+	RunningUpdateID string
 }
 
 // LogRow mirrors the observe_logs table.
@@ -67,6 +69,8 @@ type LogRow struct {
 	SeverityText   string
 	IsFatal        bool
 	Body           string
+	// ErrorFingerprint is uuid.Nil for a record that is not an error. See errorFingerprint.
+	ErrorFingerprint uuid.UUID
 }
 
 // Wire attribute keys (resource level unless noted).
@@ -239,14 +243,15 @@ func FlattenMetrics(appID string, batch MetricBatch, now time.Time) []MetricRow 
 				}
 			}
 			envelope.SessionID = normalizeSessionID(str(sessionIDKey))
-			envelope.Attributes = marshalAttributes(point.Attributes, metricEnvelopeKeys)
+			envelope.Attributes, _ = marshalAttributes(point.Attributes, metricEnvelopeKeys)
 			envelope.Timestamp = clampTimestamp(point.TimeUnixNano, now)
 			row := MetricRow{
-				Envelope:     envelope,
-				MetricName:   truncateRunes(point.MetricName, maxMetricNameRunes),
-				Value:        point.Value,
-				RouteName:    truncateRunes(str(routeNameKey), maxRouteNameRunes),
-				CustomParams: truncateRunes(str(customParamsKey), maxCustomParamsRunes),
+				Envelope:        envelope,
+				RunningUpdateID: resourceEnvelope.UpdateID,
+				MetricName:      truncateRunes(point.MetricName, maxMetricNameRunes),
+				Value:           point.Value,
+				RouteName:       truncateRunes(str(routeNameKey), maxRouteNameRunes),
+				CustomParams:    truncateRunes(str(customParamsKey), maxCustomParamsRunes),
 			}
 			// The raw nano, not the clamped time, goes into the hash so a retried batch hashes identically.
 			hashParts := []string{
@@ -282,7 +287,8 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 			}
 			envelope := resourceEnvelope
 			envelope.SessionID = normalizeSessionID(str(sessionIDKey))
-			envelope.Attributes = marshalAttributes(record.Attributes, logEnvelopeKeys)
+			attributes, traces := marshalAttributes(record.Attributes, logEnvelopeKeys)
+			envelope.Attributes = attributes
 			envelope.Timestamp = clampTimestamp(record.TimeUnixNano, now)
 			row := LogRow{
 				Envelope:       envelope,
@@ -290,8 +296,9 @@ func FlattenLogs(appID string, batch LogBatch, now time.Time) []LogRow {
 				SeverityNumber: record.SeverityNumber,
 				SeverityText:   truncateRunes(record.SeverityText, maxSeverityTextRunes),
 				IsFatal:        isFatal,
-				Body:           truncateRunes(record.Body, maxBodyRunes),
+				Body:           boundBody(record.Body),
 			}
+			row.ErrorFingerprint = errorFingerprint(row, record.Attributes, traces)
 			hashParts := []string{
 				row.EASClientID, row.SessionID, row.UpdateID, row.EventName,
 				strconv.FormatUint(record.TimeUnixNano, 10),
@@ -322,10 +329,11 @@ var (
 	}
 )
 
-// marshalAttributes serializes the non-envelope attributes as JSON.
+// marshalAttributes serializes the non-envelope attributes as JSON, and
+// returns the stack traces it found among them, by key.
 // encoding/json sorts map keys, so the output (and therefore the content
 // hash) is deterministic across retries of the same batch.
-func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
+func marshalAttributes(attrs map[string]any, envelope map[string]bool) (string, map[string]stacktrace) {
 	names := make([]string, 0, len(attrs))
 	for key, value := range attrs {
 		if envelope[key] || value == nil {
@@ -334,17 +342,28 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 		names = append(names, key)
 	}
 	if len(names) == 0 {
-		return ""
+		return "", nil
 	}
 	// Alphabetical, matching the order the client retains, so both ends keep the same attributes past the ceiling.
 	sort.Strings(names)
+	kept := make(map[string]any, len(names))
+	for _, key := range []string{exceptionTypeKey, manualTypeKey, exceptionMessageKey, manualMessageKey} {
+		if text, isText := attrs[key].(string); isText {
+			kept[key] = truncateRunes(text, maxAttributeValueRunes)
+		}
+	}
+	traces := readStacktraces(attrs, names)
+	for key, trace := range traces {
+		kept[key] = trace.text
+	}
 	if len(names) > maxAttributesPerRecord {
 		names = names[:maxAttributesPerRecord]
 	}
-
-	kept := make(map[string]any, len(names))
 	budget := maxAttributesBytes
 	for _, key := range names {
+		if _, isKept := kept[key]; isKept {
+			continue
+		}
 		value := attrs[key]
 		if text, isText := value.(string); isText {
 			value = truncateRunes(text, maxAttributeValueRunes)
@@ -368,27 +387,17 @@ func marshalAttributes(attrs map[string]any, envelope map[string]bool) string {
 		kept[key] = value
 	}
 	if len(kept) == 0 {
-		return ""
+		return "", nil
 	}
 	out, err := json.Marshal(kept)
 	if err != nil {
-		return ""
+		return "", nil
 	}
-	return string(out)
+	return string(out), traces
 }
 
 // contentKey fingerprints a record's client-authored fields, so a batch the SDK re-sends collapses at read time
-// instead of counting twice. Parts are length-prefixed rather than NUL-separated so two fields adjacent on the
-// wire (routeName, customParams) can't be shifted into producing the same hash.
+// instead of counting twice.
 func contentKey(parts ...string) uuid.UUID {
-	h := sha256.New()
-	var length [8]byte
-	for _, part := range parts {
-		binary.LittleEndian.PutUint64(length[:], uint64(len(part)))
-		_, _ = h.Write(length[:])
-		_, _ = h.Write([]byte(part))
-	}
-	var key uuid.UUID
-	copy(key[:], h.Sum(nil)[:16])
-	return key
+	return symbolication.Fingerprint(parts...)
 }

@@ -18,8 +18,9 @@ import (
 	"unicode/utf8"
 	"xprem/config"
 	"xprem/internal/bucket"
+	"xprem/internal/objectstore"
+	"xprem/internal/repository"
 	"xprem/internal/requestmeta"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -34,6 +35,11 @@ var ErrBuildConflict = errors.New("build ID already refers to different content"
 var ErrBuildNotReady = errors.New("build artifact is not ready")
 var ErrBuildIntegrity = errors.New("uploaded artifact size or SHA-256 does not match")
 var ErrBuildState = errors.New("build is not awaiting an artifact upload")
+
+// ErrBuildStorageUnavailable reports builds turned off because their artifacts
+// would sit in the publicly served updates bucket.
+var ErrBuildStorageUnavailable = errors.New("builds are turned off on this server: the operator must give build artifacts a private bucket of their own (see the server log)")
+
 var buildHash = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var fingerprintHash = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
@@ -50,14 +56,15 @@ type BuildRepository interface {
 	ListLogs(context.Context, string, string, int32) ([]types.BuildLogChunk, error)
 }
 type BuildService struct {
-	repo        BuildRepository
-	identifiers AppIdentifierRepository
-	storage     bucket.Bucket
-	now         func() time.Time
+	repo          BuildRepository
+	identifiers   AppIdentifierRepository
+	artifactStore BuildArtifactStore
+	now           func() time.Time
 }
 
-func NewBuildService(repo BuildRepository, identifiers AppIdentifierRepository, storage bucket.Bucket) *BuildService {
-	return &BuildService{repo: repo, identifiers: identifiers, storage: storage, now: time.Now}
+// NewBuildService takes a nil artifactStore when builds are turned off.
+func NewBuildService(repo BuildRepository, identifiers AppIdentifierRepository, artifactStore BuildArtifactStore) *BuildService {
+	return &BuildService{repo: repo, identifiers: identifiers, artifactStore: artifactStore, now: time.Now}
 }
 
 // BuildStartMetadata is what the CLI knows before compiling.
@@ -88,8 +95,8 @@ type FailBuildInput struct {
 	FinishedAt time.Time `json:"finishedAt"`
 }
 type BuildRegistration struct {
-	Build  *types.BuildRecord    `json:"build"`
-	Upload *bucket.UploadRequest `json:"upload,omitempty"`
+	Build  *types.BuildRecord         `json:"build"`
+	Upload *objectstore.UploadRequest `json:"upload,omitempty"`
 }
 
 func validateBuildID(id string) error {
@@ -238,7 +245,10 @@ func artifactRef(b types.BuildRecord) bucket.BuildArtifact {
 
 func (s *BuildService) newRecord(ctx context.Context, appID, identifierID, id string, artifactType types.BuildArtifactType) (*types.BuildRecord, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
+	}
+	if s.artifactStore == nil {
+		return nil, ErrBuildStorageUnavailable
 	}
 	if err := validateBuildID(id); err != nil {
 		return nil, err
@@ -248,7 +258,7 @@ func (s *BuildService) newRecord(ctx context.Context, appID, identifierID, id st
 		return nil, err
 	}
 	if ref == nil {
-		return nil, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierID}
+		return nil, &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierID}
 	}
 	if ref.Platform != types.PlatformAndroid && ref.Platform != types.PlatformIOS {
 		return nil, validation.Errorf("platform", "unsupported build platform %q", ref.Platform)
@@ -329,7 +339,7 @@ func (s *BuildService) RegisterArtifact(ctx context.Context, appID, identifierID
 	if existing.Status == types.BuildStatusReady {
 		return result, nil
 	}
-	result.Upload, err = s.storage.RequestBuildArtifactUploadURL(ctx, existing.AppID, artifactRef(*existing))
+	result.Upload, err = s.artifactStore.PresignPut(ctx, existing.AppID, artifactRef(*existing))
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +348,7 @@ func (s *BuildService) RegisterArtifact(ctx context.Context, appID, identifierID
 
 func (s *BuildService) Get(ctx context.Context, appID, id string) (*types.BuildRecord, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, validation.Errorf("buildId", "invalid UUID")
@@ -348,7 +358,7 @@ func (s *BuildService) Get(ctx context.Context, appID, id string) (*types.BuildR
 
 func (s *BuildService) List(ctx context.Context, appID string, limit, offset int32, rawCursor string) (types.BuildsPage, error) {
 	if s.repo == nil {
-		return types.BuildsPage{}, store.ErrNotSupportedInStatelessMode
+		return types.BuildsPage{}, repository.ErrNotSupportedInStatelessMode
 	}
 	if limit < 1 || limit > 100 || offset < 0 || offset > 100000 || (rawCursor != "" && offset != 0) {
 		return types.BuildsPage{}, validation.Errorf("pagination", "invalid limit, offset, or cursor combination")
@@ -390,7 +400,7 @@ func (s *BuildService) AppendLogs(ctx context.Context, appID, identifierID, id s
 		return err
 	}
 	if build.AppIdentifierID != identifierID {
-		return &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	if err := validateBuildLogEvents(content); err != nil {
 		return err
@@ -410,14 +420,14 @@ func (s *BuildService) ListLogs(ctx context.Context, appID, id string, after int
 
 func (s *BuildService) transition(ctx context.Context, appID, identifierID, id string, decide func(types.BuildRecord) (*types.BuildRecord, error)) (*types.BuildRecord, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	if err := validateBuildID(id); err != nil {
 		return nil, err
 	}
 	return s.repo.Transition(ctx, appID, id, func(current types.BuildRecord) (*types.BuildRecord, error) {
 		if current.AppIdentifierID != identifierID {
-			return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+			return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 		}
 		return decide(current)
 	})
@@ -447,8 +457,9 @@ func (s *BuildService) Fail(ctx context.Context, appID, identifierID, id string,
 		staged = current.Status == types.BuildStatusUploading
 		return failed(current, input.FinishedAt), nil
 	})
-	if err == nil && staged {
-		_ = s.storage.DeleteBuildArtifact(ctx, artifactRef(*record), true)
+	// With builds off, the staging sweep deletes the upload later.
+	if err == nil && staged && s.artifactStore != nil {
+		_ = s.artifactStore.Delete(ctx, artifactRef(*record), true)
 	}
 	return record, err
 }
@@ -463,6 +474,9 @@ func (s *BuildService) Complete(ctx context.Context, appID, identifierID, id str
 	staged, err := s.transition(ctx, appID, identifierID, id, uploadable)
 	if err != nil || staged.Status == types.BuildStatusReady {
 		return staged, err
+	}
+	if s.artifactStore == nil {
+		return nil, ErrBuildStorageUnavailable
 	}
 	// The artifact is verified outside the row lock so log appends are not blocked meanwhile.
 	if err := s.verifyStaged(ctx, *staged); err != nil {
@@ -485,13 +499,13 @@ func (s *BuildService) Complete(ctx context.Context, appID, identifierID, id str
 		return &next, nil
 	})
 	if err == nil {
-		_ = s.storage.DeleteBuildArtifact(ctx, artifactRef(*completed), true)
+		_ = s.artifactStore.Delete(ctx, artifactRef(*completed), true)
 	}
 	return completed, err
 }
 
 func (s *BuildService) verifyStaged(ctx context.Context, b types.BuildRecord) error {
-	file, err := s.storage.GetBuildArtifact(ctx, artifactRef(b), true)
+	file, err := s.artifactStore.Get(ctx, artifactRef(b), true)
 	if err != nil {
 		return err
 	}
@@ -516,17 +530,23 @@ func (s *BuildService) verifyStaged(ctx context.Context, b types.BuildRecord) er
 	if _, err = temporary.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	return s.storage.PutBuildArtifact(ctx, artifactRef(b), false, temporary)
+	return s.artifactStore.Put(ctx, artifactRef(b), false, temporary)
 }
 
 func (s *BuildService) Download(ctx context.Context, record types.BuildRecord) (*types.BucketFile, error) {
+	if s.artifactStore == nil {
+		return nil, ErrBuildStorageUnavailable
+	}
 	if record.Status != types.BuildStatusReady {
 		return nil, ErrBuildNotReady
 	}
-	return s.storage.GetBuildArtifact(ctx, artifactRef(record), false)
+	return s.artifactStore.Get(ctx, artifactRef(record), false)
 }
 
 func (s *BuildService) DownloadURL(ctx context.Context, record types.BuildRecord, shareExpiresAt time.Time) (string, error) {
+	if s.artifactStore == nil {
+		return "", ErrBuildStorageUnavailable
+	}
 	if record.Status != types.BuildStatusReady {
 		return "", ErrBuildNotReady
 	}
@@ -535,7 +555,7 @@ func (s *BuildService) DownloadURL(ctx context.Context, record types.BuildRecord
 	if shareExpiresAt.Before(expiresAt) {
 		expiresAt = shareExpiresAt
 	}
-	return s.storage.RequestBuildArtifactDownloadURL(ctx, artifactRef(record), expiresAt)
+	return s.artifactStore.PresignGet(ctx, artifactRef(record), expiresAt)
 }
 
 type countingReader struct {
@@ -552,7 +572,10 @@ func (r *countingReader) Read(p []byte) (int, error) {
 // UploadLocal stores the body in staging; anything beyond the declared size is discarded.
 func (s *BuildService) UploadLocal(ctx context.Context, appID, identifierID, id, token string, body io.Reader) error {
 	if s.repo == nil {
-		return store.ErrNotSupportedInStatelessMode
+		return repository.ErrNotSupportedInStatelessMode
+	}
+	if s.artifactStore == nil {
+		return ErrBuildStorageUnavailable
 	}
 	if err := bucket.ValidateBuildUploadToken(token, appID, identifierID, id); err != nil {
 		return ErrUnauthorized
@@ -562,17 +585,17 @@ func (s *BuildService) UploadLocal(ctx context.Context, appID, identifierID, id,
 		return err
 	}
 	if b.AppIdentifierID != identifierID {
-		return &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	if b.Status != types.BuildStatusUploading {
 		return ErrBuildState
 	}
 	reader := &countingReader{Reader: io.LimitReader(body, b.Size+1)}
-	if err := s.storage.PutBuildArtifact(ctx, artifactRef(*b), true, reader); err != nil {
+	if err := s.artifactStore.Put(ctx, artifactRef(*b), true, reader); err != nil {
 		return err
 	}
 	if reader.n > b.Size {
-		_ = s.storage.DeleteBuildArtifact(ctx, artifactRef(*b), true)
+		_ = s.artifactStore.Delete(ctx, artifactRef(*b), true)
 		return ErrBuildIntegrity
 	}
 	return nil
@@ -597,6 +620,9 @@ func (s *BuildService) CreateShare(ctx context.Context, appID, id string, hours 
 	b, err := s.Get(ctx, appID, id)
 	if err != nil {
 		return types.BuildShare{}, "", err
+	}
+	if s.artifactStore == nil {
+		return types.BuildShare{}, "", ErrBuildStorageUnavailable
 	}
 	if b.Status != types.BuildStatusReady || !installableFromLink(*b) {
 		return types.BuildShare{}, "", validation.Errorf("build", "only ready APK and iOS Ad Hoc builds can be shared")
@@ -642,10 +668,10 @@ func (s *BuildService) RevokeShare(ctx context.Context, appID, id, shareID strin
 // ResolveShare returns ErrResourceNotFound for unknown, expired or revoked links.
 func (s *BuildService) ResolveShare(ctx context.Context, token string) (*types.BuildRecord, time.Time, error) {
 	if s.repo == nil {
-		return nil, time.Time{}, store.ErrNotSupportedInStatelessMode
+		return nil, time.Time{}, repository.ErrNotSupportedInStatelessMode
 	}
 	if !buildHash.MatchString(token) {
-		return nil, time.Time{}, &store.ErrResourceNotFound{Resource: "share", Identifier: "link"}
+		return nil, time.Time{}, &repository.ErrResourceNotFound{Resource: "share", Identifier: "link"}
 	}
 	return s.repo.ResolveShare(ctx, tokenHash(token))
 }

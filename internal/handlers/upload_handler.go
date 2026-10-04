@@ -29,8 +29,11 @@ func NewUploadHandler(deploymentService *services.DeploymentService) *UploadHand
 }
 
 type RequestUploadURLsRequest struct {
-	Files   []services.FileUploadItem `json:"files"`
-	Message string                    `json:"message,omitempty"`
+	Files []services.FileUploadItem `json:"files"`
+	// Sourcemap is the launch asset's source map; absent when the export has
+	// none or the CLI predates source map uploads.
+	Sourcemap *services.SourcemapUploadItem `json:"sourcemap,omitempty"`
+	Message   string                        `json:"message,omitempty"`
 }
 
 // manifestKeyPattern is the md5 hex expo-updates uses as its on-device cache
@@ -97,6 +100,10 @@ func parsePublishGroupTarget(r *http.Request) (*string, error) {
 	return &normalized, nil
 }
 
+type markUpdateAsUploadedResponse struct {
+	UpdateUUID string `json:"updateUUID,omitempty"`
+}
+
 func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 	vars := mux.Vars(r)
@@ -133,7 +140,7 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		RuntimeVersion: runtimeVersion,
 		UpdateID:       updateId,
 	}
-	err = h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
+	updateUUID, err := h.deploymentService.ProcessUploadedUpdate(r.Context(), params)
 	if err != nil {
 		if errors.Is(err, services.ErrUnauthorized) {
 			RenderCliAuthError(w, err)
@@ -162,7 +169,11 @@ func (h *UploadHandler) MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *ht
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(markUpdateAsUploadedResponse{UpdateUUID: updateUUID}); err != nil {
+		log.Printf("[RequestID: %s] Error encoding response: %v", requestID, err)
+	}
 }
 
 func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *http.Request) {
@@ -176,14 +187,14 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		return
 	}
 
-	filePath, tokenAppId, _, err := bucket.ValidateUploadTokenAndResolveFilePath(token)
+	key, tokenAppId, _, err := bucket.ValidateUploadToken(token)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error validating upload token: %v", requestID, err)
 		http.Error(w, "Error validating upload token", http.StatusBadRequest)
 		return
 	}
 	// No branch check here: the router already judged the branch this token
-	// claims, and ValidateUploadTokenAndResolveFilePath pins filePath inside it.
+	// claims, and ValidateUploadToken pins the key inside it.
 
 	file, err := firstMultipartFile(r)
 	if err != nil {
@@ -198,13 +209,13 @@ func (h *UploadHandler) RequestUploadLocalFileHandler(w http.ResponseWriter, r *
 		AppID:      appId,
 		Token:      token,
 		Body:       file,
-		FilePath:   filePath,
+		Key:        key,
 		TokenAppID: tokenAppId,
 	}
 
 	if err := h.deploymentService.RequestUploadLocalFile(r.Context(), params); err != nil {
-		if errors.Is(err, services.ErrInvalidBucketType) {
-			http.Error(w, "Invalid bucket type", http.StatusInternalServerError)
+		if errors.Is(err, services.ErrInvalidStorageMode) {
+			http.Error(w, "Invalid storage mode", http.StatusInternalServerError)
 			return
 		}
 		if errors.Is(err, services.ErrInvalidToken) {
@@ -319,6 +330,13 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if bodyReq.Sourcemap != nil {
+		if err := bucket.ValidateUploadFile(bodyReq.Sourcemap.Path, bodyReq.Sourcemap.Hash); err != nil {
+			log.Printf("[RequestID: %s] Invalid sourcemap: %v", requestID, err)
+			http.Error(w, fmt.Sprintf("%s: %v", bodyReq.Sourcemap.Path, err), http.StatusBadRequest)
+			return
+		}
+	}
 
 	params := services.RequestUploadURLParams{
 		RequestID:         requestID,
@@ -328,6 +346,7 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 		CommitHash:        commitHash,
 		RuntimeVersion:    runtimeVersion,
 		Files:             bodyReq.Files,
+		Sourcemap:         bodyReq.Sourcemap,
 		Message:           bodyReq.Message,
 		RolloutPercentage: rolloutPercentage,
 		PublishGroupID:    publishGroup,

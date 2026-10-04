@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"xprem/config"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/validation"
 
 	"github.com/gorilla/mux"
@@ -104,8 +104,8 @@ func setPublicIosDeviceHeaders(w http.ResponseWriter) {
 
 // isInvalidIosDeviceLink groups missing links and unsupported stateless deployments as invalid links.
 func isInvalidIosDeviceLink(err error) bool {
-	var notFound *store.ErrResourceNotFound
-	return errors.As(err, &notFound) || errors.Is(err, store.ErrNotSupportedInStatelessMode)
+	var notFound *repository.ErrResourceNotFound
+	return errors.As(err, &notFound) || errors.Is(err, repository.ErrNotSupportedInStatelessMode)
 }
 
 // renderPublicIosDeviceError answers unknown, expired and revoked links identically.

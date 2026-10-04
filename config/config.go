@@ -228,6 +228,18 @@ func LoadConfig() {
 	if _, err := parseBundleDiffingPatchMaxRatio(); err != nil {
 		log.Fatalf("Invalid BUNDLE_DIFFING_PATCH_MAX_RATIO: %v", err)
 	}
+	for _, key := range []string{"OBSERVE_INGEST_LIMIT_PER_IP", "OBSERVE_INGEST_LIMIT_PER_APP"} {
+		if _, err := parseLimit(GetEnv(key)); err != nil {
+			log.Fatalf("Invalid %s: %v", key, err)
+		}
+	}
+}
+
+// IsSourcemapUploadEnabled reports whether publishes store the bundle's source
+// map alongside the update (UPLOAD_SOURCEMAPS=true, off by default).
+func IsSourcemapUploadEnabled() bool {
+	enabled, _ := strconv.ParseBool(GetEnv("UPLOAD_SOURCEMAPS"))
+	return enabled && IsDBMode()
 }
 
 // IsBundleDiffingEnabled reports whether bundle patches are computed at
@@ -284,6 +296,37 @@ func parseBundleDiffingPatchMaxRatio() (float64, error) {
 	return parseRatio(GetEnv("BUNDLE_DIFFING_PATCH_MAX_RATIO"))
 }
 
+// ObserveIngestLimitPerIP is how many telemetry batches one address may send
+// to one app per minute (OBSERVE_INGEST_LIMIT_PER_IP, default 120, 0 disables).
+func ObserveIngestLimitPerIP() int {
+	return limitOrDefault("OBSERVE_INGEST_LIMIT_PER_IP")
+}
+
+// ObserveIngestLimitPerApp is how many telemetry batches one app may receive
+// per minute (OBSERVE_INGEST_LIMIT_PER_APP, default 6000, 0 disables).
+func ObserveIngestLimitPerApp() int {
+	return limitOrDefault("OBSERVE_INGEST_LIMIT_PER_APP")
+}
+
+func limitOrDefault(key string) int {
+	limit, err := parseLimit(GetEnv(key))
+	if err != nil {
+		limit, _ = parseLimit(DefaultEnvValues[key])
+	}
+	return limit
+}
+
+func parseLimit(value string) (int, error) {
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	if limit < 0 {
+		return 0, fmt.Errorf("%d is negative", limit)
+	}
+	return limit, nil
+}
+
 func parseMB(value string) (int64, error) {
 	mb, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
@@ -316,7 +359,7 @@ var DefaultEnvValues = map[string]string{
 
 	// Audit archive (ee/audit): opt-in periodic NDJSON export of the audit
 	// log to a DEDICATED bucket/container/directory (per-provider name
-	// variables, see bucket.GetAuditLogsObjectStore). Off by default:
+	// variables, see ee/audit). Off by default:
 	// writing to the operator's storage must be a choice.
 	"ARCHIVE_AUDIT_LOGS":                 "false",
 	"AUDIT_LOGS_EXPORT_INTERVAL_SECONDS": "300",
@@ -336,9 +379,21 @@ var DefaultEnvValues = map[string]string{
 	"BUNDLE_DIFFING_MAX_BUNDLE_SIZE_MB": "64",
 	"BUNDLE_DIFFING_PATCH_MAX_RATIO":    "0.3",
 
+	// Source map uploads: off by default. The maps land in their own store,
+	// which may be the updates one when it is not publicly readable: a map
+	// embeds the app's source code.
+	"UPLOAD_SOURCEMAPS":          "false",
+	"LOCAL_SOURCEMAPS_BASE_PATH": "./sourcemaps",
+
 	// Client-controlled CDN bypass: opt-in because every asset client can use
 	// the header once it is enabled.
 	"ENABLE_PREVENT_CDN_REDIRECTION_HEADER": "false",
+
+	// Telemetry ingestion budgets, in batches per minute. The SDK sends a few
+	// batches each time the app goes to the background, so the per-app default
+	// leaves room for about 100K monthly active users.
+	"OBSERVE_INGEST_LIMIT_PER_IP":  "120",
+	"OBSERVE_INGEST_LIMIT_PER_APP": "6000",
 
 	// Default address to bind to
 	"BIND_TO_ADDRESS": "0.0.0.0",

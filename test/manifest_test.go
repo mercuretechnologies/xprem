@@ -443,7 +443,7 @@ func TestSkippingNotValidUpdatesAndCache(t *testing.T) {
 	}
 	assert.Equal(t, "1674170951", lastUpdate.UpdateId, "Expected a specific update id")
 	resolvedBucket := bucket.GetBucket()
-	file, _ := resolvedBucket.GetFile(*lastUpdate, ".check")
+	file, _ := resolvedBucket.UpdateStore.GetFile(context.Background(), *lastUpdate, ".check")
 	defer file.Reader.Close()
 	cache := cache2.GetCache()
 	cacheKey := update.ComputeLastUpdateCacheKey("test-app-id", "branch-4", "1", "android")

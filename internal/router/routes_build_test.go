@@ -20,8 +20,8 @@ import (
 	"xprem/internal/android/androidtest"
 	"xprem/internal/bucket"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -40,16 +40,16 @@ type buildIdentifierRepo struct {
 	idLookups int
 }
 
-func (repo *buildIdentifierRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*store.AppIdentifierRef, error) {
+func (repo *buildIdentifierRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*repository.AppIdentifierRef, error) {
 	repo.app = app
 	repo.idLookups++
 	if app != "app-1" || id != buildID {
 		return nil, nil
 	}
-	return &store.AppIdentifierRef{Id: buildID, Platform: repo.platform}, nil
+	return &repository.AppIdentifierRef{Id: buildID, Platform: repo.platform}, nil
 }
 
-func (repo *buildIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(_ context.Context, app string, platform types.Platform, identifier string) (*store.AppIdentifierRef, error) {
+func (repo *buildIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(_ context.Context, app string, platform types.Platform, identifier string) (*repository.AppIdentifierRef, error) {
 	repo.app = app
 	if repo.lookupErr != nil {
 		return nil, repo.lookupErr
@@ -57,7 +57,7 @@ func (repo *buildIdentifierRepo) GetAppIdentifierByPlatformAndIdentifier(_ conte
 	if app != "app-1" || platform != repo.platform || identifier != "com.example.app" {
 		return nil, nil
 	}
-	return &store.AppIdentifierRef{Id: buildID, Platform: repo.platform, Identifier: identifier}, nil
+	return &repository.AppIdentifierRef{Id: buildID, Platform: repo.platform, Identifier: identifier}, nil
 }
 
 type recordingBuildPolicy struct {
@@ -331,24 +331,24 @@ func TestAndroidBuildCredentialsPlatform(t *testing.T) {
 
 type buildCredentialsRepo struct {
 	services.CredentialsRepository
-	credentials *store.SealedAndroidCredentials
+	credentials *repository.SealedAndroidCredentials
 	read        bool
 }
 
-func (repo *buildCredentialsRepo) GetAndroidCredentials(context.Context, string) (*store.SealedAndroidCredentials, error) {
+func (repo *buildCredentialsRepo) GetAndroidCredentials(context.Context, string) (*repository.SealedAndroidCredentials, error) {
 	repo.read = true
 	return repo.credentials, nil
 }
 
-func (repo *buildCredentialsRepo) UpsertAndroidCredentials(_ context.Context, _ string, credentials store.SealedAndroidCredentials) error {
+func (repo *buildCredentialsRepo) UpsertAndroidCredentials(_ context.Context, _ string, credentials repository.SealedAndroidCredentials) error {
 	repo.credentials = &credentials
 	return nil
 }
 
-func (repo *buildIdentifierRepo) AllocateBuildNumber(ctx context.Context, app, id string, next func(types.Platform, string) (string, error)) (*store.AppIdentifierRef, error) {
+func (repo *buildIdentifierRepo) AllocateBuildNumber(ctx context.Context, app, id string, next func(types.Platform, string) (string, error)) (*repository.AppIdentifierRef, error) {
 	ref, err := repo.GetAppIdentifierByID(ctx, app, id)
 	if err != nil || ref == nil {
-		return nil, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: id}
 	}
 	previous := strconv.FormatInt(repo.allocated, 10)
 	value, err := next(ref.Platform, previous)
@@ -517,7 +517,7 @@ type localUploadBuildRepo struct{ services.BuildRepository }
 
 func (localUploadBuildRepo) Get(_ context.Context, app, id string) (*types.BuildRecord, error) {
 	if app != "app-1" || id != buildID {
-		return nil, &store.ErrResourceNotFound{Resource: "build", Identifier: id}
+		return nil, &repository.ErrResourceNotFound{Resource: "build", Identifier: id}
 	}
 	return &types.BuildRecord{ID: id, AppID: app, AppIdentifierID: buildID, ArtifactType: types.BuildArtifactAPK, Status: types.BuildStatusUploading, Size: 3}, nil
 }
@@ -560,7 +560,12 @@ func TestBuildLocalUploadRequiresBothTokensAndBuildPermission(t *testing.T) {
 			}
 			access := &buildAccessRepo{access: apikeyrestrictions.ApiKeyAccess{ApiKeyID: 42, BuildRules: []apikeyrestrictions.BuildRule{{AppIdentifierID: identifier, Actions: []apikeyrestrictions.BuildAction{apikeyrestrictions.BuildActionCreate}}}}}
 			identifiers := &buildIdentifierRepo{platform: types.PlatformAndroid}
-			service := services.NewBuildService(localUploadBuildRepo{}, identifiers, &bucket.LocalBucket{BasePath: root})
+			t.Setenv("STORAGE_MODE", "local")
+			t.Setenv("LOCAL_BUILDS_BASE_PATH", root)
+			t.Setenv("BUCKET_KEY_PREFIX", "")
+			artifactStore, err := bucket.OpenBuildArtifactStore()
+			require.NoError(t, err)
+			service := services.NewBuildService(localUploadBuildRepo{}, identifiers, artifactStore)
 			container := &AppContainer{AppRepo: buildAppRepo{}, CliAuthService: services.NewCliAuthService(localUploadCliRepo{}), ApiKeyAccessService: apikeyrestrictions.NewApiKeyAccessService(access), AppIdentifierRepo: identifiers, BuildHandler: handlers.NewBuildHandler(nil, nil, nil, nil), BuildRegistryHandler: handlers.NewBuildRegistryHandler(service)}
 			router := mux.NewRouter()
 			registerBuildRoutes(router, container)

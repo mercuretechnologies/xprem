@@ -6,7 +6,7 @@ import (
 	"net/mail"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/google/uuid"
 )
@@ -14,12 +14,12 @@ import (
 // UserRepository is the users table. It has no bucket implementation: user
 // accounts only exist on the control plane.
 type UserRepository interface {
-	InsertUser(ctx context.Context, params store.InsertUserParameters) (store.User, error)
-	GetUserByEmail(ctx context.Context, email string) (store.User, error)
-	GetUserByID(ctx context.Context, id string) (store.User, error)
-	GetUsers(ctx context.Context) ([]store.User, error)
+	InsertUser(ctx context.Context, params repository.InsertUserParameters) (repository.User, error)
+	GetUserByEmail(ctx context.Context, email string) (repository.User, error)
+	GetUserByID(ctx context.Context, id string) (repository.User, error)
+	GetUsers(ctx context.Context) ([]repository.User, error)
 	// DeleteUserByID, UpdateUserIsAdmin and UpdateUserEnabled enforce the "at
-	// least one enabled admin" invariant atomically (store.ErrWouldLeaveNoAdmin).
+	// least one enabled admin" invariant atomically (repository.ErrWouldLeaveNoAdmin).
 	DeleteUserByID(ctx context.Context, id string) error
 	// These three writes also retire the account's sessions in the same
 	// statement whenever the change is one its live sessions must not survive.
@@ -73,7 +73,7 @@ func (s *UserService) SetOnAuditEvent(record auditlog.RecordFunc) {
 
 // recordUserEvent reports one account mutation. The actor comes from the
 // request context, never from the actorUserId parameters some methods take.
-func (s *UserService) recordUserEvent(ctx context.Context, action auditlog.Action, target store.User, metadata map[string]any) {
+func (s *UserService) recordUserEvent(ctx context.Context, action auditlog.Action, target repository.User, metadata map[string]any) {
 	recordManagementEvent(ctx, s.onAuditEvent, auditlog.Event{
 		Action:        action,
 		TargetType:    "user",
@@ -103,41 +103,41 @@ func (s *UserService) requireControlPlane() error {
 	return nil
 }
 
-func (s *UserService) GetUsers(ctx context.Context) ([]store.User, error) {
+func (s *UserService) GetUsers(ctx context.Context) ([]repository.User, error) {
 	if err := s.requireControlPlane(); err != nil {
 		return nil, err
 	}
 	return s.userRepo.GetUsers(ctx)
 }
 
-func (s *UserService) GetMe(ctx context.Context, userId string, email string) (store.User, error) {
+func (s *UserService) GetMe(ctx context.Context, userId string, email string) (repository.User, error) {
 	if s.userRepo == nil {
-		return store.User{Email: email, IsAdmin: true, Enabled: true}, nil
+		return repository.User{Email: email, IsAdmin: true, Enabled: true}, nil
 	}
 	return s.userRepo.GetUserByID(ctx, userId)
 }
 
-func (s *UserService) CreateUser(ctx context.Context, email string, password string, isAdmin bool) (store.User, error) {
+func (s *UserService) CreateUser(ctx context.Context, email string, password string, isAdmin bool) (repository.User, error) {
 	if err := s.requireControlPlane(); err != nil {
-		return store.User{}, err
+		return repository.User{}, err
 	}
 	if s.ssoEnforced != nil && s.ssoEnforced(ctx) {
-		return store.User{}, ErrUserCreationDisabledBySSO
+		return repository.User{}, ErrUserCreationDisabledBySSO
 	}
-	normalizedEmail := store.NormalizeEmail(email)
+	normalizedEmail := repository.NormalizeEmail(email)
 	// The addr comparison rejects mailbox forms like "Jane <jane@acme.dev>",
 	// which ParseAddress accepts but a login lookup would never match.
 	if addr, err := mail.ParseAddress(normalizedEmail); err != nil || addr.Address != normalizedEmail {
-		return store.User{}, &ValidationError{Reason: errors.New("invalid email address")}
+		return repository.User{}, &ValidationError{Reason: errors.New("invalid email address")}
 	}
 	if err := crypto.ValidatePasswordPolicy(password); err != nil {
-		return store.User{}, &ValidationError{Reason: err}
+		return repository.User{}, &ValidationError{Reason: err}
 	}
 	passwordHash, err := crypto.HashPassword(password)
 	if err != nil {
-		return store.User{}, err
+		return repository.User{}, err
 	}
-	user, err := s.userRepo.InsertUser(ctx, store.InsertUserParameters{
+	user, err := s.userRepo.InsertUser(ctx, repository.InsertUserParameters{
 		ID:           uuid.New().String(),
 		Email:        normalizedEmail,
 		PasswordHash: passwordHash,
@@ -145,7 +145,7 @@ func (s *UserService) CreateUser(ctx context.Context, email string, password str
 		Enabled:      true,
 	})
 	if err != nil {
-		return store.User{}, err
+		return repository.User{}, err
 	}
 	s.recordUserEvent(ctx, auditlog.ActionUserCreated, user, map[string]any{"is_admin": isAdmin})
 	return user, nil
@@ -161,13 +161,13 @@ func (s *UserService) DeleteUser(ctx context.Context, actorUserId string, target
 	// Read before the delete, since there is no row left to name afterwards.
 	target, targetErr := s.userRepo.GetUserByID(ctx, targetUserId)
 	if err := s.userRepo.DeleteUserByID(ctx, targetUserId); err != nil {
-		if errors.Is(err, store.ErrWouldLeaveNoAdmin) {
+		if errors.Is(err, repository.ErrWouldLeaveNoAdmin) {
 			return ErrLastAdmin
 		}
 		return err
 	}
 	if targetErr != nil {
-		target = store.User{Id: targetUserId, Email: targetUserId}
+		target = repository.User{Id: targetUserId, Email: targetUserId}
 	}
 	s.recordUserEvent(ctx, auditlog.ActionUserDeleted, target, nil)
 	return nil
@@ -182,7 +182,7 @@ func (s *UserService) SetUserAdmin(ctx context.Context, actorUserId string, targ
 	}
 	target, targetErr := s.userRepo.GetUserByID(ctx, targetUserId)
 	if err := s.userRepo.UpdateUserIsAdmin(ctx, targetUserId, isAdmin); err != nil {
-		if errors.Is(err, store.ErrWouldLeaveNoAdmin) {
+		if errors.Is(err, repository.ErrWouldLeaveNoAdmin) {
 			return ErrLastAdmin
 		}
 		return err
@@ -194,7 +194,7 @@ func (s *UserService) SetUserAdmin(ctx context.Context, actorUserId string, targ
 		return nil
 	}
 	if targetErr != nil {
-		target = store.User{Id: targetUserId, Email: targetUserId}
+		target = repository.User{Id: targetUserId, Email: targetUserId}
 	}
 	action := auditlog.ActionUserAdminGranted
 	if !isAdmin {
@@ -216,7 +216,7 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 	}
 	target, targetErr := s.userRepo.GetUserByID(ctx, targetUserId)
 	if err := s.userRepo.UpdateUserEnabled(ctx, targetUserId, enabled); err != nil {
-		if errors.Is(err, store.ErrWouldLeaveNoAdmin) {
+		if errors.Is(err, repository.ErrWouldLeaveNoAdmin) {
 			return ErrLastAdmin
 		}
 		return err
@@ -225,7 +225,7 @@ func (s *UserService) SetUserEnabled(ctx context.Context, actorUserId string, ta
 		return nil
 	}
 	if targetErr != nil {
-		target = store.User{Id: targetUserId, Email: targetUserId}
+		target = repository.User{Id: targetUserId, Email: targetUserId}
 	}
 	if enabled {
 		s.recordUserEvent(ctx, auditlog.ActionUserApproved, target, nil)

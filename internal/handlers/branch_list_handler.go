@@ -4,8 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -105,7 +105,7 @@ func branchListErrorResponse(err error) (int, string) {
 	if validation.IsValidationError(err) {
 		return http.StatusBadRequest, err.Error()
 	}
-	if errors.Is(err, store.ErrNotSupportedInStatelessMode) {
+	if errors.Is(err, repository.ErrNotSupportedInStatelessMode) {
 		return http.StatusNotFound, "Branch surfing is not enabled for this channel"
 	}
 	return http.StatusInternalServerError, "Internal operational error"

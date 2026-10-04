@@ -19,9 +19,9 @@ import (
 	"xprem/internal/crypto"
 	"xprem/internal/handlers"
 	"xprem/internal/metrics"
+	"xprem/internal/repository"
 	infrastructure "xprem/internal/router"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 )
 
@@ -53,8 +53,7 @@ func testContainer() *infrastructure.AppContainer {
 // package-level service helpers (e.g. services.PreWarmManifestCache) directly
 // rather than through a handler.
 func testUpdateService() *services.UpdateService {
-	resolvedBucket := bucket.GetBucket()
-	return services.NewUpdateService(store.NewBucketUpdateStore(resolvedBucket), resolvedBucket)
+	return services.NewUpdateService(repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore))
 }
 
 // testLatestUpdate reads the newest update straight from the bucket store, the
@@ -62,7 +61,7 @@ func testUpdateService() *services.UpdateService {
 // testUpdateService().GetLatestUpdate: the service reads through the lastUpdate
 // cache, which would let an assertion pass on a value a previous step cached.
 func testLatestUpdate(appId, branch, runtimeVersion string, platform types.Platform) (*types.Update, error) {
-	return store.NewBucketUpdateStore(bucket.GetBucket()).
+	return repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore).
 		GetLatestUpdate(context.Background(), appId, branch, runtimeVersion, platform)
 }
 
@@ -71,12 +70,12 @@ func testLatestUpdate(appId, branch, runtimeVersion string, platform types.Platf
 // lives on the store rather than in internal/update, which assertions would
 // otherwise reach for.
 func testUpdate(appId, branch, runtimeVersion, updateId string) (*types.Update, error) {
-	return store.NewBucketUpdateStore(bucket.GetBucket()).
+	return repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore).
 		GetUpdate(context.Background(), appId, branch, runtimeVersion, updateId)
 }
 
 func testUpdateType(update types.Update) (types.UpdateType, error) {
-	return store.NewBucketUpdateStore(bucket.GetBucket()).
+	return repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore).
 		GetUpdateType(context.Background(), update)
 }
 

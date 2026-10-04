@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { EnterpriseExplainerDialog } from '@/ee/components/EnterpriseExplainerDialog';
+import { branchProtectionFeature } from '@/ee/lib/enterpriseFeatures';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
 import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { AdminOnlyNote } from '@/components/ui/admin-only-note';
@@ -329,11 +330,7 @@ export const BranchesTable = () => {
       <EnterpriseExplainerDialog
         open={isExplainerOpen}
         onOpenChange={setIsExplainerOpen}
-        feature={{
-          name: 'Branch protection',
-          description:
-            'Protect critical branches like production so they cannot be deleted, by anyone, until the protection is lifted. Restricting who may publish on a branch is a separate feature: it is decided per API token, on the API tokens page.',
-        }}
+        feature={branchProtectionFeature}
       />
     </div>
   );

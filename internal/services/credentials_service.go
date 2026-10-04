@@ -10,7 +10,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
 	"xprem/internal/keyStore"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 )
@@ -22,8 +22,8 @@ const maxKeystoreBytes = 512 * 1024
 type CredentialsRepository interface {
 	// UpsertAndroidCredentials changes only the signing material on conflict;
 	// the separately managed Google Play service account key is preserved.
-	UpsertAndroidCredentials(ctx context.Context, identifierId string, credentials store.SealedAndroidCredentials) error
-	GetAndroidCredentials(ctx context.Context, identifierId string) (*store.SealedAndroidCredentials, error)
+	UpsertAndroidCredentials(ctx context.Context, identifierId string, credentials repository.SealedAndroidCredentials) error
+	GetAndroidCredentials(ctx context.Context, identifierId string) (*repository.SealedAndroidCredentials, error)
 	UpdateGooglePlayServiceAccountKey(ctx context.Context, identifierId string, sealedKey, email, projectID *string) error
 	DeleteAndroidCredentials(ctx context.Context, identifierId string) error
 }
@@ -95,16 +95,16 @@ func androidCredentialAAD(identifierId string, field string) []byte {
 
 // resolveAndroidIdentifier maps (app, identifier id) to the identifier row,
 // refusing unknown ids and non-android platforms.
-func (s *CredentialsService) resolveAndroidIdentifier(ctx context.Context, appId string, identifierId string) (*store.AppIdentifierRef, error) {
+func (s *CredentialsService) resolveAndroidIdentifier(ctx context.Context, appId string, identifierId string) (*repository.AppIdentifierRef, error) {
 	if s.repo == nil || s.identifiers == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
 	ref, err := s.identifiers.GetAppIdentifierByID(ctx, appId, identifierId)
 	if err != nil {
 		return nil, err
 	}
 	if ref == nil {
-		return nil, &store.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
+		return nil, &repository.ErrResourceNotFound{Resource: "app identifier", Identifier: identifierId}
 	}
 	if ref.Platform != types.PlatformAndroid {
 		return nil, validation.Errorf("identifier", "identifier %q is an %s identifier, android credentials require an android one", ref.Identifier, ref.Platform)
@@ -164,21 +164,21 @@ func (s *CredentialsService) SaveAndroidCredentials(ctx context.Context, appId s
 	return nil
 }
 
-func sealAndroidKeystore(identifierId, keyAlias string, keystore []byte, keystorePassword, keyPassword string) (store.SealedAndroidCredentials, error) {
+func sealAndroidKeystore(identifierId, keyAlias string, keystore []byte, keystorePassword, keyPassword string) (repository.SealedAndroidCredentials, error) {
 	masterKey := []byte(keyStore.ReadDBKeysMasterKey())
 	sealedKeystore, err := crypto.SealAESGCM(keystore, masterKey, androidCredentialAAD(identifierId, "keystore"))
 	if err != nil {
-		return store.SealedAndroidCredentials{}, fmt.Errorf("failed to seal keystore: %w", err)
+		return repository.SealedAndroidCredentials{}, fmt.Errorf("failed to seal keystore: %w", err)
 	}
 	sealedKeystorePassword, err := crypto.SealAESGCM([]byte(keystorePassword), masterKey, androidCredentialAAD(identifierId, "keystore_password"))
 	if err != nil {
-		return store.SealedAndroidCredentials{}, fmt.Errorf("failed to seal keystore password: %w", err)
+		return repository.SealedAndroidCredentials{}, fmt.Errorf("failed to seal keystore password: %w", err)
 	}
 	sealedKeyPassword, err := crypto.SealAESGCM([]byte(keyPassword), masterKey, androidCredentialAAD(identifierId, "key_password"))
 	if err != nil {
-		return store.SealedAndroidCredentials{}, fmt.Errorf("failed to seal key password: %w", err)
+		return repository.SealedAndroidCredentials{}, fmt.Errorf("failed to seal key password: %w", err)
 	}
-	return store.SealedAndroidCredentials{
+	return repository.SealedAndroidCredentials{
 		KeyAlias:               keyAlias,
 		SealedKeystore:         sealedKeystore,
 		SealedKeystorePassword: sealedKeystorePassword,
@@ -282,7 +282,7 @@ func (s *CredentialsService) ExportAndroidKeystore(ctx context.Context, appId st
 		return nil, err
 	}
 	if credentials == nil {
-		return nil, &store.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
+		return nil, &repository.ErrResourceNotFound{Resource: "android credentials", Identifier: identifierId}
 	}
 	masterKey := []byte(keyStore.ReadDBKeysMasterKey())
 	keystore, err := crypto.UnsealAESGCM(credentials.SealedKeystore, masterKey, androidCredentialAAD(identifierId, "keystore"))

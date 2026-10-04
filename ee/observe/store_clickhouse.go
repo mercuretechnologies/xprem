@@ -76,7 +76,7 @@ func (s *ClickHouseTelemetrySink) InsertLogs(ctx context.Context, rows []LogRow)
 		(app_id, eas_client_id, update_id, update_group_id, branch, channel, runtime_version, platform,
 		 session_id, event_name, severity_number, severity_text, is_fatal, body, attributes,
 		 os_name, os_version, device_model, country_code, lat, lng, app_version, app_build_number,
-		 eas_build_id, environment, sdk_version, timestamp, content_key)`)
+		 eas_build_id, environment, sdk_version, timestamp, content_key, error_fingerprint)`)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (s *ClickHouseTelemetrySink) InsertLogs(ctx context.Context, rows []LogRow)
 			row.SeverityNumber, row.SeverityText, isFatal, row.Body, row.Attributes,
 			row.OSName, row.OSVersion, row.DeviceModel, row.CountryCode, row.Lat, row.Lng, row.AppVersion,
 			row.AppBuildNumber, row.EASBuildID, row.Environment, row.SDKVersion,
-			row.Timestamp, row.ContentKey,
+			row.Timestamp, row.ContentKey, row.ErrorFingerprint,
 		); err != nil {
 			return err
 		}

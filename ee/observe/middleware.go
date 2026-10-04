@@ -5,9 +5,15 @@
 package observe
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"time"
 	"xprem/config"
 	"xprem/internal/cache"
+	"xprem/internal/handlers"
+	"xprem/internal/helpers"
 	"xprem/internal/services"
 
 	"github.com/gorilla/mux"
@@ -60,4 +66,51 @@ func CachedAppResolverMiddleware(appRepo services.AppRepository) func(http.Handl
 // isValidAppID applies the same syntactic guard as AppResolverMiddleware.
 func isValidAppID(id string) bool {
 	return config.ValidateAppId(id, "appId") == nil
+}
+
+// ingestLimitWindow is the fixed window both ingestion budgets are counted over.
+const ingestLimitWindow = time.Minute
+
+// IngestLimitMiddleware answers 429 once an address, or the whole app, has sent
+// its budget of batches in the current minute. The SDK keeps a refused batch
+// and sends it again after Retry-After. A limit of 0 disables that budget.
+func IngestLimitMiddleware(perIP, perApp int) func(http.Handler) http.Handler {
+	c := cache.GetCache()
+	secret := []byte(config.GetEnv("JWT_SECRET"))
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			appID := mux.Vars(r)["APP_ID"]
+			// The address is counted first: a throttled address never spends the app's budget.
+			if ip := helpers.ClientIP(r); ip.IsValid() && overBudget(c, ingestIPKey(secret, appID, ip.String()), perIP) {
+				refuseOverBudget(w)
+				return
+			}
+			if overBudget(c, "observe:ingest_app:"+appID, perApp) {
+				refuseOverBudget(w)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// overBudget counts one request and fails open when the cache is unreachable.
+func overBudget(c cache.Cache, key string, limit int) bool {
+	if limit <= 0 {
+		return false
+	}
+	count, err := c.Incr(key, int(ingestLimitWindow.Seconds()))
+	return err == nil && count > int64(limit)
+}
+
+// ingestIPKey hashes the address so the cache holds no IP.
+func ingestIPKey(secret []byte, appID, ip string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(ip))
+	return "observe:ingest_ip:" + appID + ":" + hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+func refuseOverBudget(w http.ResponseWriter) {
+	observeBatch(resultThrottled)
+	handlers.RenderThrottled(w, ingestLimitWindow)
 }

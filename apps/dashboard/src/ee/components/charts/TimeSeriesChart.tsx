@@ -13,16 +13,26 @@ import {
   buildChartTheme,
   GlyphSeries,
   Grid,
+  LineSeries,
   Tooltip,
   XYChart,
+  type GlyphProps,
 } from '@visx/xychart';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import {
+  linePoints,
+  pointDescription,
+  pointSampleSize,
+  sameBucket,
+  seriesTimeDomain,
+  seriesTimestamp,
+  seriesValueDomain,
+  timeAxisFormatter,
+  type TimeSeriesPoint,
+} from './timeSeries';
 
-export type TimeSeriesPoint = {
-  timestamp: Date;
-  value: number;
-};
+export type { TimeSeriesPoint } from './timeSeries';
 
 export type TimeSeriesDefinition = {
   key: string;
@@ -54,18 +64,20 @@ export type TimeSeriesChartProps = {
   // comparison, so the rest stays on screen as context.
   highlightedKey?: string | null;
   maximum?: number;
-  // Frames the axis around the data instead of anchoring it at zero, and caps
-  // it at the 98th percentile. For durations, where nothing starts at zero and
-  // one 12-second outlier flattens everything else. Off by default: on a
-  // counter, zero is the reference and the spike is the information, so both
-  // of those would be lies.
+  // Frames durations around their real values, including zero and outliers.
+  // Counters keep their zero baseline and a nondegenerate all-zero domain.
   frameToData?: boolean;
+  timeDomain?: [Date, Date];
+  pointIntervalMs?: number;
+  // Discrete measurements use dots and a line, without an area implying that
+  // missing measurements were observed continuously.
+  showPoints?: boolean;
   ariaLabel: string;
   height?: number;
   className?: string;
 };
 
-const xAccessor = (point: TimeSeriesPoint) => point.timestamp;
+const xAccessor = seriesTimestamp;
 const yAccessor = (point: TimeSeriesPoint) => point.value;
 
 const chartTheme = buildChartTheme({
@@ -113,26 +125,6 @@ const formatCompactNumber = (value: number) =>
     maximumFractionDigits: Math.abs(value) >= 1_000 ? 1 : 0,
   }).format(value);
 
-const DAY_MS = 24 * 60 * 60 * 1_000;
-
-// Tiered, because the tick labels sit on one line: "Apr 9, 02:00 PM" is over
-// ninety pixels wide and five of them collide on any chart narrower than a full
-// page. Each tier drops the smallest unit that no longer separates two
-// neighbouring ticks at that span.
-const timeFormatter = (start: number, end: number) => {
-  const span = end - start;
-  if (span < DAY_MS) {
-    return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
-  }
-  if (span < 7 * DAY_MS) {
-    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit' });
-  }
-  if (span < 365 * DAY_MS) {
-    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-  }
-  return new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
-};
-
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',
@@ -141,23 +133,59 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   second: '2-digit',
 });
 
-// A single unlucky bucket can sit three times above every other point, and
-// framing the axis on the raw maximum then flattens the whole comparison into
-// a thin band. Percentiles frame what the data does; the outlier still draws,
-// it just no longer dictates the scale.
-const quantile = (sorted: number[], fraction: number) => {
-  if (sorted.length === 0) return 0;
-  const position = (sorted.length - 1) * fraction;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  if (lower === upper) return sorted[lower];
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
-};
+// visx installs focus/blur emitters only when callbacks are supplied; its
+// internal handlers show and hide the tooltip before invoking these callbacks.
+const enableGlyphFocus = () => undefined;
 
-const SinglePointGlyph = ({ x, y, color }: { x: number; y: number; color: string }) => (
-  <g pointerEvents="none">
-    <circle cx={x} cy={y} r={6} fill="hsl(var(--background))" stroke={color} strokeWidth={2} />
-    <circle cx={x} cy={y} r={2.25} fill={color} />
+const PointGlyph = ({
+  x,
+  y,
+  color,
+  prominent,
+  opacity = 1,
+  ariaLabel,
+  onFocus,
+  onBlur,
+  onPointerMove,
+  onPointerOut,
+  onPointerUp,
+}: {
+  x: number;
+  y: number;
+  color: string;
+  prominent: boolean;
+  opacity?: number;
+  ariaLabel?: string;
+} & Pick<
+  GlyphProps<TimeSeriesPoint>,
+  'onFocus' | 'onBlur' | 'onPointerMove' | 'onPointerOut' | 'onPointerUp'
+>) => (
+  <g
+    pointerEvents={ariaLabel ? undefined : 'none'}
+    opacity={opacity}
+    tabIndex={ariaLabel ? 0 : undefined}
+    role={ariaLabel ? 'img' : undefined}
+    aria-label={ariaLabel}
+    aria-hidden={ariaLabel ? undefined : true}
+    className={
+      ariaLabel
+        ? 'focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-primary'
+        : undefined
+    }
+    onFocus={onFocus}
+    onBlur={onBlur}
+    onPointerMove={onPointerMove}
+    onPointerOut={onPointerOut}
+    onPointerUp={onPointerUp}>
+    <circle
+      cx={x}
+      cy={y}
+      r={prominent ? 6 : 3.5}
+      fill="hsl(var(--background))"
+      stroke={color}
+      strokeWidth={prominent ? 2 : 1.5}
+    />
+    {prominent && <circle cx={x} cy={y} r={2.25} fill={color} />}
   </g>
 );
 
@@ -229,6 +257,9 @@ export const TimeSeriesChart = ({
   formatAxisValue = formatCompactNumber,
   maximum,
   frameToData = false,
+  timeDomain,
+  pointIntervalMs,
+  showPoints = false,
   ariaLabel,
   highlightedKey,
   height = 192,
@@ -255,59 +286,22 @@ export const TimeSeriesChart = ({
     .map(annotation => annotation.timestamp.getTime())
     .filter(Number.isFinite);
   const domainTimestamps = [...timestamps, ...annotationTimestamps];
-  const now = Date.now();
-  const start = domainTimestamps.length > 0 ? Math.min(...domainTimestamps) : now;
-  const end = domainTimestamps.length > 0 ? Math.max(...domainTimestamps) : now;
-  const xDomain =
-    start === end
-      ? [new Date(start - 30_000), new Date(end + 30_000)]
-      : [new Date(start), new Date(end)];
-  const formatTime = timeFormatter(start, end);
-  // Sorted once: both bounds below read the same distribution, and rebuilding
-  // it in each of them made the two memos look independent when they are not.
-  const sortedValues = useMemo(
+  const xDomain = seriesTimeDomain(domainTimestamps, timeDomain);
+  const [start, end] = xDomain.map(date => date.getTime());
+  const formatTime = timeAxisFormatter(start, end);
+  const [yMinimum, yMaximum] = useMemo(
     () =>
-      series
-        .flatMap(item => item.points.map(point => point.value))
-        .sort((left, right) => left - right),
-    [series]
+      seriesValueDomain(
+        series.flatMap(item => item.points.map(point => point.value)),
+        frameToData,
+        maximum
+      ),
+    [series, frameToData, maximum]
   );
-  const calculatedMaximum = useMemo(() => {
-    if (maximum != null) return maximum;
-    const values = sortedValues;
-    if (values.length === 0) return 2;
-    const highest = values[values.length - 1];
-    // A counter is read against zero and its peak is the point, so the axis
-    // covers the real maximum. The floor of 2 keeps an all-zero series (a
-    // healthy update reporting no faults) pinned to the bottom of the plot
-    // instead of collapsing the domain to [0, 0), which puts a flat zero line
-    // through the middle of the chart.
-    if (!frameToData) return Math.max(2, highest);
-    // Enough points for a percentile to mean anything, otherwise the maximum
-    // IS the data.
-    const top = values.length >= 12 ? quantile(values, 0.98) : highest;
-    return Math.max(2, top, highest * 0.25);
-  }, [maximum, sortedValues, frameToData]);
-  const yMaximum = maximum ?? calculatedMaximum * 1.08;
-  // Durations rarely start at zero. Anchoring the axis there squeezes six
-  // series that all sit between 350ms and 730ms into a twelve-pixel band,
-  // where a 70% gap between two devices looks like no gap at all. Only under
-  // frameToData: zero is kept whenever the data reaches down to it, when the
-  // caller fixed the maximum.
-  const yMinimum = useMemo(() => {
-    if (maximum != null || !frameToData) return 0;
-    if (sortedValues.length === 0) return 0;
-    const lowest = sortedValues[0];
-    // The ceiling BEFORE the 8% headroom, which is what the low-to-high ratio
-    // has to measure. Reading it back off yMaximum meant dividing the margin
-    // out again three lines after applying it.
-    const highest = calculatedMaximum;
-    if (lowest <= 0 || highest <= 0) return 0;
-    return lowest / highest > 0.35 ? lowest * 0.9 : 0;
-  }, [maximum, sortedValues, calculatedMaximum, frameToData]);
-  // The spacing the series are bucketed at, taken as the smallest real gap:
-  // it is what decides whether a point belongs to the timestamp being hovered.
+  // Callers with sparse bucketed measurements supply the real interval. Other
+  // charts retain their inferred spacing for cross-series tooltip matching.
   const bucketMs = (() => {
+    if (pointIntervalMs && pointIntervalMs > 0) return pointIntervalMs;
     let smallest = Infinity;
     for (const item of series) {
       for (let index = 1; index < item.points.length; index += 1) {
@@ -319,9 +313,7 @@ export const TimeSeriesChart = ({
     return smallest;
   })();
 
-  // Annotations count: they widen the x domain a few lines up, and a period
-  // with publish markers but no telemetry is exactly when seeing where the
-  // publishes landed matters.
+  // Publication markers can still give an otherwise empty chart context.
   if (domainTimestamps.length === 0) return null;
 
   // The left margin holds the y labels, so it has to be as wide as the widest
@@ -391,10 +383,10 @@ export const TimeSeriesChart = ({
                       height={Math.max(0, height - margin.top - margin.bottom)}
                     />
                   </clipPath>
-                  {series.map(item => (
+                  {series.map((item, index) => (
                     <linearGradient
                       key={item.key}
-                      id={`${gradientPrefix}-${item.key}`}
+                      id={`${gradientPrefix}-${index}`}
                       x1="0"
                       x2="0"
                       y1="0"
@@ -409,6 +401,10 @@ export const TimeSeriesChart = ({
                   orientation="bottom"
                   numTicks={xTickCount(Math.max(0, width - margin.left - margin.right))}
                   tickFormat={value => formatTime.format(value as Date)}
+                  tickLabelProps={(_value, index, ticks) => ({
+                    textAnchor:
+                      index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle',
+                  })}
                   hideTicks
                 />
                 <Axis
@@ -418,48 +414,91 @@ export const TimeSeriesChart = ({
                   hideAxisLine
                   hideTicks
                 />
-                {series.map(item => (
-                  <AreaSeries
-                    key={item.key}
-                    dataKey={item.key}
-                    data={item.points}
-                    xAccessor={xAccessor}
-                    yAccessor={yAccessor}
-                    // The gradient under the curve reads well for a single
-                    // series and turns into an opaque pile as soon as several
-                    // overlap, hiding the very comparison the chart is for.
-                    fill={series.length > 1 ? 'transparent' : `url(#${gradientPrefix}-${item.key})`}
-                    // The ceiling sits on the 98th percentile so one outlier
-                    // cannot flatten the comparison; clipping keeps whatever
-                    // sits above it inside the plot instead of drawing over
-                    // the axis.
-                    clipPath={`url(#${gradientPrefix}-plot)`}
-                    renderLine
-                    lineProps={{
-                      stroke: item.color,
-                      strokeWidth: dimmed(item.key)
-                        ? 1.25
-                        : highlightedKey === item.key
-                          ? 2.75
-                          : series.length > 1
-                            ? 1.75
-                            : 2.25,
-                      strokeOpacity: dimmed(item.key) ? 0.22 : 1,
-                      clipPath: `url(#${gradientPrefix}-plot)`,
-                    }}
-                  />
-                ))}
-                {series.map(item =>
-                  item.points.length === 1 ? (
-                    <GlyphSeries
-                      key={`${item.key}-single-point`}
-                      dataKey={`${item.key}-single-point`}
-                      data={item.points}
+                {series.map((item, index) => {
+                  const lineProps = {
+                    stroke: item.color,
+                    strokeWidth: dimmed(item.key)
+                      ? 1.25
+                      : highlightedKey === item.key
+                        ? 2.75
+                        : series.length > 1
+                          ? 1.75
+                          : 2.25,
+                    strokeOpacity: dimmed(item.key) ? 0.22 : 1,
+                    clipPath: `url(#${gradientPrefix}-plot)`,
+                  };
+                  return showPoints ? (
+                    <LineSeries
+                      key={`${item.key}-line`}
+                      dataKey={`${item.key}-line`}
+                      data={linePoints(item.points, pointIntervalMs)}
                       xAccessor={xAccessor}
                       yAccessor={yAccessor}
                       enableEvents={false}
-                      renderGlyph={({ x, y }) => (
-                        <SinglePointGlyph x={x} y={y} color={item.color} />
+                      {...lineProps}
+                    />
+                  ) : (
+                    <AreaSeries
+                      key={item.key}
+                      dataKey={item.key}
+                      data={item.points}
+                      xAccessor={xAccessor}
+                      yAccessor={yAccessor}
+                      // Overlapping areas would hide comparisons between series.
+                      fill={series.length > 1 ? 'transparent' : `url(#${gradientPrefix}-${index})`}
+                      clipPath={`url(#${gradientPrefix}-plot)`}
+                      renderLine
+                      lineProps={lineProps}
+                    />
+                  );
+                })}
+                {series.map(item =>
+                  showPoints || item.points.length === 1 ? (
+                    <GlyphSeries
+                      key={`${item.key}-points`}
+                      dataKey={showPoints ? item.key : `${item.key}-single-point`}
+                      data={item.points}
+                      xAccessor={xAccessor}
+                      yAccessor={yAccessor}
+                      enableEvents={showPoints}
+                      onFocus={showPoints ? enableGlyphFocus : undefined}
+                      onBlur={showPoints ? enableGlyphFocus : undefined}
+                      renderGlyph={({
+                        x,
+                        y,
+                        datum,
+                        onFocus,
+                        onBlur,
+                        onPointerMove,
+                        onPointerOut,
+                        onPointerUp,
+                      }) => (
+                        <PointGlyph
+                          x={x}
+                          y={y}
+                          color={item.color}
+                          prominent={
+                            item.points.length === 1 ||
+                            (showPoints && datum === item.points[item.points.length - 1])
+                          }
+                          opacity={dimmed(item.key) ? 0.22 : 1}
+                          ariaLabel={
+                            showPoints
+                              ? pointDescription(
+                                  datum,
+                                  item.label,
+                                  formatValue,
+                                  date => timestampFormatter.format(date),
+                                  datum === item.points[item.points.length - 1]
+                                )
+                              : undefined
+                          }
+                          onFocus={onFocus}
+                          onBlur={onBlur}
+                          onPointerMove={onPointerMove}
+                          onPointerOut={onPointerOut}
+                          onPointerUp={onPointerUp}
+                        />
                       )}
                     />
                   ) : null
@@ -483,7 +522,22 @@ export const TimeSeriesChart = ({
                 <Tooltip<TimeSeriesPoint>
                   snapTooltipToDatumX
                   showVerticalCrosshair
-                  showSeriesGlyphs
+                  showSeriesGlyphs={!showPoints}
+                  showDatumGlyph={showPoints}
+                  renderGlyph={
+                    showPoints
+                      ? ({ x, y, key }) => (
+                          <circle
+                            cx={x}
+                            cy={y}
+                            r={5}
+                            fill="hsl(var(--background))"
+                            stroke={series.find(item => item.key === key)?.color}
+                            strokeWidth={2}
+                          />
+                        )
+                      : undefined
+                  }
                   verticalCrosshairStyle={{
                     stroke: 'hsl(var(--muted-foreground))',
                     strokeDasharray: '3 4',
@@ -502,7 +556,15 @@ export const TimeSeriesChart = ({
                     return (
                       <div className="space-y-2">
                         <div className="font-mono text-[10px] text-muted-foreground">
-                          {timestampFormatter.format(nearest.timestamp)}
+                          {nearest.intervalStart && nearest.intervalEnd ? (
+                            <>
+                              {timestampFormatter.format(nearest.intervalStart)}
+                              {' – '}
+                              {timestampFormatter.format(nearest.intervalEnd)}
+                            </>
+                          ) : (
+                            timestampFormatter.format(nearest.timestamp)
+                          )}
                         </div>
                         <div className="space-y-1">
                           {series.map(item => {
@@ -513,26 +575,32 @@ export const TimeSeriesChart = ({
                             // would show its latest value under a timestamp
                             // where it had none, so a series that misses this
                             // bucket is left out of the tooltip entirely.
-                            if (
-                              !point ||
-                              Math.abs(point.timestamp.getTime() - nearest.timestamp.getTime()) >
-                                bucketMs / 2
-                            )
-                              return null;
+                            if (!point || !sameBucket(point, nearest, bucketMs)) return null;
+                            const latest = item.points[item.points.length - 1];
+                            const latestInterval =
+                              showPoints && latest && sameBucket(point, latest, 0);
                             return (
-                              <div
-                                key={item.key}
-                                className="flex items-center justify-between gap-5 text-xs">
-                                <span className="flex items-center gap-1.5 text-muted-foreground">
-                                  <span
-                                    className="h-1.5 w-1.5 rounded-full"
-                                    style={{ backgroundColor: item.color }}
-                                  />
-                                  {item.label}
-                                </span>
-                                <span className="font-mono font-medium tabular-nums">
-                                  {formatValue(point.value)}
-                                </span>
+                              <div key={item.key} className="space-y-0.5 text-xs">
+                                <div className="flex items-center justify-between gap-5">
+                                  <span className="flex items-center gap-1.5 text-muted-foreground">
+                                    <span
+                                      className="h-1.5 w-1.5 rounded-full"
+                                      style={{ backgroundColor: item.color }}
+                                    />
+                                    {item.label}
+                                  </span>
+                                  <span className="font-mono font-medium tabular-nums">
+                                    {formatValue(point.value)}
+                                  </span>
+                                </div>
+                                {point.intervalStart && (
+                                  <div className="flex items-center justify-between gap-5 pl-3 text-[10px] text-muted-foreground">
+                                    <span>
+                                      {latestInterval && 'Latest interval · '}Median (p50)
+                                    </span>
+                                    <span>{pointSampleSize(point)}</span>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -565,7 +633,14 @@ export const TimeSeriesChart = ({
                       key={annotation.key}
                       type="button"
                       title={annotation.label}
-                      onClick={() => setOpenAnnotation(annotation)}
+                      data-chart-annotation={gradientPrefix}
+                      aria-expanded={openAnnotation?.key === annotation.key}
+                      aria-haspopup="dialog"
+                      onClick={() =>
+                        setOpenAnnotation(previous =>
+                          previous?.key === annotation.key ? null : annotation
+                        )
+                      }
                       style={position}
                       className={cn(
                         shared,
@@ -607,6 +682,18 @@ export const TimeSeriesChart = ({
             align="center"
             side="bottom"
             sideOffset={6}
+            onInteractOutside={event => {
+              // This chart's marker click owns the toggle. Dismissing on its
+              // pointerdown first would make the subsequent click reopen it.
+              const target = event.detail.originalEvent.target;
+              if (
+                target instanceof Element &&
+                target.closest('[data-chart-annotation]')?.getAttribute('data-chart-annotation') ===
+                  gradientPrefix
+              ) {
+                event.preventDefault();
+              }
+            }}
             className="w-72 overflow-hidden p-0">
             {openAnnotation &&
               renderAnnotationDetails(openAnnotation, () => setOpenAnnotation(null))}

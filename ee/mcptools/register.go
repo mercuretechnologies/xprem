@@ -16,7 +16,7 @@ import (
 )
 
 // identityUpdateHealth is what the device registry answers per update; aliased
-// so the health tool does not repeat the store's package path.
+// so the health tool does not repeat the repository's package path.
 type identityUpdateHealth = identity.UpdateHealth
 
 // Deps carries what the enterprise tools need from the composition root;
@@ -47,7 +47,9 @@ type Deps struct {
 	// Explorer reads the telemetry: logs, events and timings. Nil in
 	// stateless mode and under DISABLE_DEVICE_TELEMETRY; present but serving
 	// degraded answers without ClickHouse.
-	Explorer *observe.Explorer
+	Explorer observe.ExplorerReader
+	// LicenseValid defaults to licensing.IsEnterprise when nil.
+	LicenseValid func() bool
 }
 
 // registrations is the enterprise tool table, the ee twin of the MIT one.
@@ -65,6 +67,8 @@ var registrations = []struct {
 	{register: registerCountOnlineDevices, access: &identityAccess},
 	{register: registerGetDeviceAttributes, access: &identityAccess},
 	{register: registerQueryLogs, access: &observeAccess},
+	{register: registerQueryErrors, access: &observeAccess},
+	{register: registerGetErrorDetails, access: &observeAccess},
 	{register: registerGetObserveOverview, access: &observeAccess},
 	{register: registerGetMetricBreakdown, access: &observeAccess},
 	{register: registerGetObserveEvents, access: &observeAccess},

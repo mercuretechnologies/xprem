@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Braces, KeyRound, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Braces, KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, describeApiError, IdentitySchemaKey, IdentityValueType } from '@/lib/api';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { useToast } from '@/hooks/use-toast';
@@ -21,6 +21,8 @@ import {
 import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EnterpriseFeatureGate } from '@/ee/components/EnterpriseFeatureGate';
+import { identityAttributesFeature } from '@/ee/lib/enterpriseFeatures';
+import { AttributesPitch } from './AttributesPitch';
 
 type Draft = {
   originalKey?: string;
@@ -82,7 +84,7 @@ export const IdentityAttributes = () => {
 
   return (
     <div className="space-y-5">
-      <EnterpriseFeatureGate>
+      <EnterpriseFeatureGate feature={identityAttributesFeature} fallback={<AttributesPitch />}>
         <section className="overflow-hidden rounded-xl border bg-card shadow-card">
           <div className="flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl">
@@ -133,8 +135,8 @@ export const IdentityAttributes = () => {
               </div>
               <h3 className="mt-4 text-sm font-medium">Could not load Identity attributes</h3>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                The server did not answer, so the declared keys are unknown. This is not the same
-                as an empty allowlist.
+                The server did not answer, so the declared keys are unknown. This is not the same as
+                an empty allowlist.
               </p>
             </div>
           )}
@@ -200,14 +202,6 @@ export const IdentityAttributes = () => {
           ))}
         </section>
       </EnterpriseFeatureGate>
-
-      <div className="flex gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-3 text-sm text-emerald-800 dark:text-emerald-200">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-        <p>
-          Identity values stay in PostgreSQL. Observe only sends the matching active cohort to
-          ClickHouse while executing a filtered query.
-        </p>
-      </div>
 
       <Dialog open={draft != null} onOpenChange={open => !open && setDraft(null)}>
         <DialogContent>

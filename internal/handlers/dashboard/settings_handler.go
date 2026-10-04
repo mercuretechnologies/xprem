@@ -37,6 +37,7 @@ type SettingsEnv struct {
 	SERVER_VERSION             string `json:"SERVER_VERSION"`
 	CONTROL_PLANE_ENABLED      bool   `json:"CONTROL_PLANE_ENABLED"`
 	BUNDLE_DIFFING             bool   `json:"BUNDLE_DIFFING"`
+	UPLOAD_SOURCEMAPS          bool   `json:"UPLOAD_SOURCEMAPS"`
 	CACHE_MODE                 string `json:"CACHE_MODE"`
 	REDIS_HOST                 string `json:"REDIS_HOST"`
 	REDIS_PORT                 string `json:"REDIS_PORT"`
@@ -114,6 +115,7 @@ func (h *SettingsHandler) GetSettingsHandler(w http.ResponseWriter, r *http.Requ
 		SERVER_VERSION:                         version.Version,
 		CONTROL_PLANE_ENABLED:                  config.IsDBMode(),
 		BUNDLE_DIFFING:                         config.IsBundleDiffingEnabled(),
+		UPLOAD_SOURCEMAPS:                      config.IsSourcemapUploadEnabled(),
 		CACHE_MODE:                             config.GetEnv("CACHE_MODE"),
 		REDIS_HOST:                             config.GetEnv("REDIS_HOST"),
 		REDIS_PORT:                             config.GetEnv("REDIS_PORT"),

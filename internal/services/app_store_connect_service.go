@@ -16,7 +16,7 @@ import (
 	"xprem/internal/ios"
 	"xprem/internal/keyStore"
 	"xprem/internal/providers/appstoreconnect"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -86,7 +86,7 @@ func (s *IosCredentialsService) SaveAppStoreConnectApiKey(ctx context.Context, a
 	if err != nil {
 		return fmt.Errorf("failed to seal app store connect private key: %w", err)
 	}
-	err = s.repo.UpsertAppStoreConnectApiKey(ctx, appId, store.SealedAppStoreConnectApiKey{
+	err = s.repo.UpsertAppStoreConnectApiKey(ctx, appId, repository.SealedAppStoreConnectApiKey{
 		KeyID:            input.KeyID,
 		IssuerID:         input.IssuerID,
 		SealedPrivateKey: sealed,
@@ -268,7 +268,7 @@ func (s *IosCredentialsService) ImportIosCertificate(ctx context.Context, appId 
 // saveIosCertificate seals a PKCS#12 file into the pool and returns the id of its pool row.
 func (s *IosCredentialsService) saveIosCertificate(ctx context.Context, appId string, certificate *ios.Certificate, p12 []byte, password string) (string, error) {
 	masterKey := []byte(keyStore.ReadDBKeysMasterKey())
-	certificateId, err := s.repo.SaveIosCertificate(ctx, store.IosCertificate{
+	certificateId, err := s.repo.SaveIosCertificate(ctx, repository.IosCertificate{
 		CommonName:      certificate.CommonName,
 		SerialNumber:    certificate.SerialNumber,
 		FingerprintSHA1: certificate.FingerprintSHA1,

@@ -303,7 +303,7 @@ func TestAttributeCountIsBoundedAlphabetically(t *testing.T) {
 	for i := 0; i < maxAttributesPerRecord+50; i++ {
 		attrs[fmt.Sprintf("k%04d", i)] = "v"
 	}
-	out := marshalAttributes(attrs, map[string]bool{})
+	out, _ := marshalAttributes(attrs, map[string]bool{})
 
 	var kept map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &kept))

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"xprem/internal/bucket"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/update"
 
@@ -29,7 +29,7 @@ func TestRepublishCASUpdateRemainsDownloadable(t *testing.T) {
 	t.Setenv("STORAGE_MODE", "local")
 	t.Setenv("DB_URL", "")
 	bucket.ResetBucketInstance()
-	repo := store.NewBucketUpdateStore(bucket.GetBucket())
+	repo := repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore)
 	ctx := context.Background()
 	original, err := repo.GetUpdate(ctx, "test-app-id", "branch-2", "1", "1737455526")
 	require.NoError(t, err)
@@ -77,14 +77,14 @@ func TestRepublishCASUpdateRemainsDownloadable(t *testing.T) {
 func composeStoredManifest(t *testing.T, published types.Update) types.UpdateManifest {
 	t.Helper()
 	ctx := context.Background()
-	repo := store.NewBucketUpdateStore(bucket.GetBucket())
-	metadata, err := update.GetMetadata(published)
+	repo := repository.NewBucketUpdateRepository(bucket.GetBucket().UpdateStore)
+	metadata, err := update.GetMetadata(ctx, published)
 	require.NoError(t, err)
 	stored, err := repo.RetrieveUpdateStoredMetadata(ctx, published)
 	require.NoError(t, err)
 	mapping, err := repo.GetUpdateAssetMapping(ctx, published)
 	require.NoError(t, err)
-	manifest, err := update.ComposeUpdateManifest(&metadata, published, stored, mapping, types.PlatformIOS)
+	manifest, err := update.ComposeUpdateManifest(ctx, &metadata, published, stored, mapping, types.PlatformIOS)
 	require.NoError(t, err)
 	return manifest
 }

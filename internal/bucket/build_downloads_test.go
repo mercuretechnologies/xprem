@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"xprem/internal/objectstore"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,17 +38,17 @@ func TestBuildArtifactDownloadURLs(t *testing.T) {
 
 	for _, tc := range []struct {
 		name                        string
-		storage                     Bucket
+		mode                        objectstore.Mode
 		host, pathPrefix, signature string
 	}{
-		{"s3", &S3Bucket{BucketName: "artifacts", KeyPrefix: "prefix/"}, "artifacts.s3.us-east-1.amazonaws.com", "/prefix/", "X-Amz-Signature"},
-		{"gcs", &GCSBucket{BucketName: "artifacts", KeyPrefix: "prefix/"}, "storage.googleapis.com", "/artifacts/prefix/", "X-Goog-Signature"},
-		{"azure", &AzureBucket{ContainerName: "artifacts", KeyPrefix: "prefix/"}, "buildtest.blob.core.windows.net", "/artifacts/prefix/", "sig"},
+		{"s3", objectstore.ModeS3, "artifacts.s3.us-east-1.amazonaws.com", "/prefix/", "X-Amz-Signature"},
+		{"gcs", objectstore.ModeGCS, "storage.googleapis.com", "/artifacts/prefix/", "X-Goog-Signature"},
+		{"azure", objectstore.ModeAzure, "buildtest.blob.core.windows.net", "/artifacts/prefix/", "sig"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			storage := &validatingBucket{Inner: tc.storage}
+			store := &BuildArtifactStore{objectStore: objectstore.WithPrefix(objectstore.Open(tc.mode, "artifacts"), "prefix/")}
 			deadline := time.Now().Add(30 * time.Second).UTC().Truncate(time.Second)
-			signed, err := storage.RequestBuildArtifactDownloadURL(context.Background(), testArtifact(), deadline)
+			signed, err := store.PresignGet(context.Background(), testArtifact(), deadline)
 			require.NoError(t, err)
 			parsed, err := url.Parse(signed)
 			require.NoError(t, err)
@@ -88,18 +89,18 @@ func TestBuildArtifactDownloadURLs(t *testing.T) {
 func TestBuildArtifactDownloadFallbacks(t *testing.T) {
 	t.Setenv("DISABLE_S3_DIRECT_CDN", "true")
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS_B64", "")
-	for _, storage := range []Bucket{&LocalBucket{}, &S3Bucket{}, &GCSBucket{}} {
-		url, err := storage.RequestBuildArtifactDownloadURL(context.Background(), testArtifact(), time.Now().Add(time.Minute))
+	for _, mode := range []objectstore.Mode{objectstore.ModeLocal, objectstore.ModeS3, objectstore.ModeGCS} {
+		store := &BuildArtifactStore{objectStore: objectstore.Open(mode, t.TempDir())}
+		url, err := store.PresignGet(context.Background(), testArtifact(), time.Now().Add(time.Minute))
 		require.NoError(t, err)
-		require.Empty(t, url)
+		require.Empty(t, url, mode)
 	}
 }
 
 func TestBuildArtifactDownloadRejectsInvalidInputBeforeSigning(t *testing.T) {
-	storage := &validatingBucket{Inner: &stubBucket{}}
-	_, err := storage.RequestBuildArtifactDownloadURL(context.Background(), BuildArtifact{}, time.Now().Add(time.Minute))
+	store := &BuildArtifactStore{objectStore: unreachableObjectStore{}}
+	_, err := store.PresignGet(context.Background(), BuildArtifact{}, time.Now().Add(time.Minute))
 	require.Error(t, err)
-	_, err = storage.RequestBuildArtifactDownloadURL(context.Background(), testArtifact(), time.Now().Add(-time.Second))
-	require.ErrorIs(t, err, ErrBuildDownloadExpired)
-	require.False(t, storage.Inner.(*stubBucket).called)
+	_, err = store.PresignGet(context.Background(), testArtifact(), time.Now().Add(-time.Second))
+	require.ErrorIs(t, err, objectstore.ErrDownloadExpired)
 }

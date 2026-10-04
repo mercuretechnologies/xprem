@@ -5,7 +5,7 @@ import { api, BundlePatchRecord, BundlePatchStatus, describeApiError } from '@/l
 import { useSelectedApp } from '@/lib/SelectedAppContext';
 import { useAppPermission } from '@/ee/lib/PermissionsContext';
 import { useToast } from '@/hooks/use-toast';
-import { formatTimestamp } from '@/lib/utils';
+import { describeReason, formatBytes, formatTimestamp } from '@/lib/utils';
 import { UpdateDetailsOrigin, updateDetailsPath, updateTitle } from '@/lib/update-format';
 import { ApiError } from '@/components/APIError';
 import { Badge } from '@/components/ui/badge';
@@ -47,18 +47,6 @@ const REASONS: Record<string, string> = {
   verification_failed: 'Patch did not rebuild the target bundle',
 };
 
-const describeReason = (reason: string) => {
-  const code = reason.split(':')[0].trim();
-  const label = REASONS[code];
-  return label ? { label, detail: reason === code ? undefined : reason } : { label: reason };
-};
-
-const formatBytes = (bytes: number) => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-};
-
 const isLive = (patch: BundlePatchRecord) =>
   patch.status === 'pending' || patch.status === 'running';
 
@@ -68,7 +56,7 @@ const PatchOutcome = ({ patch }: { patch: BundlePatchRecord }) => {
   const measured =
     patch.patchSize != null && patch.fullDownloadSize != null && patch.fullDownloadSize > 0;
   const share = measured ? patch.patchSize! / patch.fullDownloadSize! : 0;
-  const reason = patch.reason ? describeReason(patch.reason) : null;
+  const reason = patch.reason ? describeReason(patch.reason, REASONS) : null;
 
   if (patch.status === 'pending' || patch.status === 'running') {
     return (

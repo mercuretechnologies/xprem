@@ -5,8 +5,8 @@ import (
 	"errors"
 	"log"
 	"time"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -34,16 +34,18 @@ type BuildReader interface {
 }
 
 func buildError(err error, action, appID string) error {
-	var notFound *store.ErrResourceNotFound
+	var notFound *repository.ErrResourceNotFound
 	switch {
 	case errors.As(err, &notFound):
 		return errors.New("build not found; list the builds with get_builds")
 	case validation.IsValidationError(err):
 		return err
-	case errors.Is(err, store.ErrNotSupportedInStatelessMode):
+	case errors.Is(err, repository.ErrNotSupportedInStatelessMode):
 		return errors.New("builds require the control plane; this deployment runs in stateless mode")
 	case errors.Is(err, services.ErrBuildNotReady):
 		return errors.New("only a ready build can be downloaded")
+	case errors.Is(err, services.ErrBuildStorageUnavailable):
+		return err
 	}
 	log.Printf("mcp could not %s for app %s: %v", action, appID, err)
 	return errors.New("could not " + action + ", try again later")

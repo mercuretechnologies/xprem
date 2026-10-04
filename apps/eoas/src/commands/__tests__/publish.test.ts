@@ -71,14 +71,19 @@ function distFile(...segments: string[]): string {
 
 // The export the CLI believes it produced. spawnAsync is mocked, so this mock
 // writes what `expo export` would have written.
-function writeExport(): void {
+function writeExport(platforms: ('ios' | 'android')[] = ['ios']): void {
   fs.ensureDirSync(distFile('bundles'));
+  const fileMetadata: Record<string, { bundle: string; assets: unknown[] }> = {};
+  for (const platform of platforms) {
+    const bundle = `bundles/${platform}-abc.hbc`;
+    fileMetadata[platform] = { bundle, assets: [] };
+    fs.writeFileSync(distFile('bundles', `${platform}-abc.hbc`), 'BUNDLE BYTES');
+  }
   fs.writeJsonSync(distFile('metadata.json'), {
     version: 0,
     bundler: 'metro',
-    fileMetadata: { ios: { bundle: 'bundles/ios-abc.hbc', assets: [] } },
+    fileMetadata,
   });
-  fs.writeFileSync(distFile('bundles', 'ios-abc.hbc'), 'BUNDLE BYTES');
 }
 
 function uploadRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -124,9 +129,24 @@ function loggedErrors(): string {
     .join('\n');
 }
 
-function runPublish(): Promise<unknown> {
+function loggedInfos(): string {
+  return vi
+    .mocked(Log.withInfo)
+    .mock.calls.flat()
+    .map(arg => String(arg))
+    .join('\n');
+}
+
+function requestUploadUrlCalls(): string[] {
+  return vi
+    .mocked(fetchWithRetries)
+    .mock.calls.map(([url]) => String(url))
+    .filter(url => url.includes('/requestUploadUrl/'));
+}
+
+function runPublish(platform = 'ios'): Promise<unknown> {
   return Publish.run(
-    ['--branch', 'main', '--platform', 'ios', '--nonInteractive', '--disableRepositoryCheck'],
+    ['--branch', 'main', '--platform', platform, '--nonInteractive', '--disableRepositoryCheck'],
     eoasRoot
   );
 }
@@ -145,6 +165,7 @@ beforeEach(() => {
     throw new Error(`process.exit(${code})`);
   }) as any);
   vi.spyOn(Log, 'error').mockImplementation(() => {});
+  vi.spyOn(Log, 'withInfo').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -326,5 +347,50 @@ describe('publish against an honest server response', () => {
     expect(marked).toHaveLength(1);
     // The numeric updateId reached the query string as a string.
     expect(new URL(marked[0]).searchParams.get('updateId')).toBe('1753800000000');
+  });
+
+  it('skips platforms with no exported bundle when --platform is all', async () => {
+    // Repro: app.json "platforms": ["android"] so expo export emits only android,
+    // while --platform all still resolves an ios runtime version.
+    vi.mocked(spawnAsync).mockImplementation((async () => {
+      writeExport(['android']);
+      return { stdout: 'exported', stderr: '' };
+    }) as any);
+    respondWith([
+      uploadRequest(),
+      uploadRequest({
+        requestUploadUrl: 'https://storage.example.com/upload/expoConfig.json',
+        fileName: 'expoConfig.json',
+        filePath: 'expoConfig.json',
+      }),
+      uploadRequest({
+        requestUploadUrl: 'https://storage.example.com/upload/android-abc.hbc',
+        fileName: 'android-abc.hbc',
+        filePath: 'bundles/android-abc.hbc',
+      }),
+    ]);
+
+    await runPublish('all');
+
+    // Both platforms are named on the export: with no --platform, expo export
+    // bundles web too.
+    const exportArgs = vi.mocked(spawnAsync).mock.calls.map(([, args]) => args as string[]);
+    const exportCall = exportArgs.find(args => args.includes('export'));
+    expect(exportCall).toEqual(
+      expect.arrayContaining(['--platform', 'ios', '--platform', 'android'])
+    );
+    expect(exportCall).not.toContain('web');
+
+    const uploadRequests = requestUploadUrlCalls();
+    expect(uploadRequests).toHaveLength(1);
+    expect(new URL(uploadRequests[0]).searchParams.get('platform')).toBe('android');
+    expect(loggedInfos()).toMatch(/No bundle exported for ios, skipping\./);
+
+    const marked = vi
+      .mocked(fetchWithRetries)
+      .mock.calls.map(([url]) => String(url))
+      .filter(url => url.includes('/markUpdateAsUploaded/'));
+    expect(marked).toHaveLength(1);
+    expect(new URL(marked[0]).searchParams.get('platform')).toBe('android');
   });
 });

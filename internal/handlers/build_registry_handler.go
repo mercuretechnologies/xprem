@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,8 +14,9 @@ import (
 	"xprem/config"
 	"xprem/internal/bucket"
 	"xprem/internal/ios"
+	"xprem/internal/objectstore"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -30,19 +32,20 @@ func NewBuildRegistryHandler(service *services.BuildService) *BuildRegistryHandl
 }
 
 func renderBuildRegistryError(w http.ResponseWriter, err error) {
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	switch {
 	case errors.Is(err, services.ErrUnauthorized):
 		RenderError(w, http.StatusUnauthorized, "Invalid or expired upload authorization.")
-	case errors.Is(err, services.ErrBuildConflict), errors.Is(err, services.ErrBuildNotReady), errors.Is(err, services.ErrBuildState), errors.Is(err, store.ErrBuildLogOffset):
+	case errors.Is(err, services.ErrBuildConflict), errors.Is(err, services.ErrBuildNotReady), errors.Is(err, services.ErrBuildState), errors.Is(err, repository.ErrBuildLogOffset):
 		RenderError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrBuildIntegrity):
 		RenderError(w, http.StatusBadRequest, err.Error())
 	case errors.As(err, &missing):
 		RenderError(w, http.StatusNotFound, "Build not found.")
-	case validation.IsValidationError(err), errors.Is(err, store.ErrNotSupportedInStatelessMode):
+	case validation.IsValidationError(err), errors.Is(err, repository.ErrNotSupportedInStatelessMode), errors.Is(err, services.ErrBuildStorageUnavailable):
 		RenderError(w, http.StatusBadRequest, err.Error())
 	default:
+		log.Printf("[BUILD] Could not process the build request: %v", err)
 		RenderError(w, http.StatusInternalServerError, "Could not process the build request.")
 	}
 }
@@ -271,12 +274,13 @@ func (h *BuildRegistryHandler) resolveShare(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 	b, expiresAt, err := h.service.ResolveShare(r.Context(), mux.Vars(r)["TOKEN"])
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	switch {
-	case errors.As(err, &missing), errors.Is(err, store.ErrNotSupportedInStatelessMode):
+	case errors.As(err, &missing), errors.Is(err, repository.ErrNotSupportedInStatelessMode):
 		http.Error(w, "Expired link", http.StatusBadRequest)
 		return nil, time.Time{}, false
 	case err != nil:
+		log.Printf("[BUILD] Could not resolve a sharing link: %v", err)
 		http.Error(w, "Could not resolve this sharing link.", http.StatusInternalServerError)
 		return nil, time.Time{}, false
 	}
@@ -333,9 +337,12 @@ func (h *BuildRegistryHandler) PublicShareArtifact(w http.ResponseWriter, r *htt
 func (h *BuildRegistryHandler) serveSharedArtifact(w http.ResponseWriter, r *http.Request, b types.BuildRecord, expiresAt time.Time) {
 	downloadURL, err := h.service.DownloadURL(r.Context(), b, expiresAt)
 	switch {
-	case errors.Is(err, bucket.ErrBuildDownloadExpired):
+	case errors.Is(err, objectstore.ErrDownloadExpired):
 		http.Error(w, "Expired link", http.StatusBadRequest)
+	case errors.Is(err, services.ErrBuildStorageUnavailable):
+		http.Error(w, "Builds are turned off on this server.", http.StatusServiceUnavailable)
 	case err != nil:
+		log.Printf("[BUILD] Could not sign a shared build download: %v", err)
 		http.Error(w, "Could not resolve this sharing link.", http.StatusInternalServerError)
 	case downloadURL != "":
 		w.Header().Set("Location", downloadURL)

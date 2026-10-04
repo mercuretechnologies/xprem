@@ -10,7 +10,7 @@ import (
 	"xprem/internal/crypto"
 	"xprem/internal/database/postgres/pgdb"
 	"xprem/internal/keyStore"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/google/uuid"
 )
@@ -264,7 +264,7 @@ func TestCanonicalAppIdMatchesWhatTheRowReadsBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("uuid.Parse(%q) unexpectedly failed: %v", raw, err)
 		}
-		if rowValue := store.ToPgUUID(raw).String(); rowValue != parsed.String() {
+		if rowValue := repository.ToPgUUID(raw).String(); rowValue != parsed.String() {
 			t.Errorf("id %q: the row reads back as %q but the aad would be sealed under %q",
 				raw, rowValue, parsed.String())
 		}

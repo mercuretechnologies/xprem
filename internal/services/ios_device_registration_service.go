@@ -15,7 +15,7 @@ import (
 	"xprem/internal/auditlog"
 	"xprem/internal/ios"
 	"xprem/internal/providers/appstoreconnect"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -137,7 +137,7 @@ func (s *IosCredentialsService) CreateIosDeviceInvitation(ctx context.Context, a
 	}
 	token := base64.RawURLEncoding.EncodeToString(tokenSecret)
 	actorType, actorId, actorDisplay := auditActorFromContext(ctx)
-	invitation := store.NewIosDeviceInvitation{
+	invitation := repository.NewIosDeviceInvitation{
 		Id:           uuid.NewString(),
 		AppId:        appId,
 		TokenHash:    tokenHash(token),
@@ -246,7 +246,7 @@ func (s *IosCredentialsService) ListAppleDevices(ctx context.Context, appId stri
 	if err != nil {
 		return nil, err
 	}
-	registrations := map[string]store.RegisteredIosDevice{}
+	registrations := map[string]repository.RegisteredIosDevice{}
 	for _, registration := range registered {
 		registrations[registration.UDID] = registration
 	}
@@ -296,7 +296,7 @@ func (s *IosCredentialsService) SetAppleDeviceEnabled(ctx context.Context, appId
 		return err
 	}
 	if !appleDeviceIdPattern.MatchString(deviceId) {
-		return &store.ErrResourceNotFound{Resource: "apple device", Identifier: deviceId}
+		return &repository.ErrResourceNotFound{Resource: "apple device", Identifier: deviceId}
 	}
 	client, err := s.appStoreConnectClient(ctx, appId)
 	if err != nil {
@@ -309,7 +309,7 @@ func (s *IosCredentialsService) SetAppleDeviceEnabled(ctx context.Context, appId
 	device, err := client.UpdateDeviceStatus(ctx, deviceId, status)
 	var apiErr *appstoreconnect.APIError
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-		return &store.ErrResourceNotFound{Resource: "apple device", Identifier: deviceId}
+		return &repository.ErrResourceNotFound{Resource: "apple device", Identifier: deviceId}
 	}
 	if err != nil {
 		return appStoreConnectError(err)
@@ -337,11 +337,11 @@ func appleTimestamp(value string) string {
 
 // activeIosDeviceInvitation resolves a token; unknown, expired and revoked links are all not found, a
 // consumed link is ErrIosDeviceInvitationUsed.
-func (s *IosCredentialsService) activeIosDeviceInvitation(ctx context.Context, token string) (*store.ActiveIosDeviceInvitation, error) {
+func (s *IosCredentialsService) activeIosDeviceInvitation(ctx context.Context, token string) (*repository.ActiveIosDeviceInvitation, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
-	notFound := &store.ErrResourceNotFound{Resource: "ios device invitation", Identifier: "link"}
+	notFound := &repository.ErrResourceNotFound{Resource: "ios device invitation", Identifier: "link"}
 	if !iosDeviceInvitationToken.MatchString(token) {
 		return nil, notFound
 	}
@@ -374,9 +374,9 @@ func (s *IosCredentialsService) GetPublicIosDeviceInvitation(ctx context.Context
 // GetPublicIosDeviceRegistration answers for a registration of the link, even once the link expired or was revoked.
 func (s *IosCredentialsService) GetPublicIosDeviceRegistration(ctx context.Context, token string, registrationId string) (*PublicIosDeviceRegistration, error) {
 	if s.repo == nil {
-		return nil, store.ErrNotSupportedInStatelessMode
+		return nil, repository.ErrNotSupportedInStatelessMode
 	}
-	notFound := &store.ErrResourceNotFound{Resource: "ios device registration", Identifier: "link"}
+	notFound := &repository.ErrResourceNotFound{Resource: "ios device registration", Identifier: "link"}
 	if _, err := uuid.Parse(registrationId); err != nil || !iosDeviceInvitationToken.MatchString(token) {
 		return nil, notFound
 	}
@@ -436,7 +436,7 @@ func (s *IosCredentialsService) EnrollIosDevice(ctx context.Context, token strin
 		}
 		return "", ErrIosDeviceInvitationUsed
 	}
-	registration := store.IosDeviceRegistration{
+	registration := repository.IosDeviceRegistration{
 		InvitationId: invitation.Id,
 		UDID:         attributes.UDID,
 		DeviceName:   appleDeviceName(attributes, invitation.Label),
@@ -463,7 +463,7 @@ func (s *IosCredentialsService) EnrollIosDevice(ctx context.Context, token strin
 		if releaseErr := s.repo.ReleaseIosDeviceInvitation(ctx, invitation.Id, claimToken); releaseErr != nil {
 			log.Printf("ios device invitation release failed: %v", releaseErr)
 		}
-		if errors.Is(err, store.ErrIosDeviceInvitationClaimLost) {
+		if errors.Is(err, repository.ErrIosDeviceInvitationClaimLost) {
 			return "", ErrIosDeviceInvitationUsed
 		}
 		return "", err

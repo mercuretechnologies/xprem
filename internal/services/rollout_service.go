@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"xprem/internal/auditlog"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -120,9 +120,9 @@ func (s *RolloutService) disambiguateStartRefusal(ctx context.Context, appId str
 		if *channel.BranchName == branchName {
 			return &RolloutRequestError{Status: http.StatusBadRequest, Message: fmt.Sprintf("the rollout branch must differ from the channel's current branch %q", branchName)}
 		}
-		return &store.ErrResourceNotFound{Resource: "branch", Identifier: fmt.Sprintf("%s (appId: %s)", branchName, appId)}
+		return &repository.ErrResourceNotFound{Resource: "branch", Identifier: fmt.Sprintf("%s (appId: %s)", branchName, appId)}
 	}
-	return &store.ErrResourceNotFound{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
+	return &repository.ErrResourceNotFound{Resource: "channel", Identifier: fmt.Sprintf("%s (appId: %s)", channelName, appId)}
 }
 
 func (s *RolloutService) UpdateChannelRolloutPercentage(ctx context.Context, appId string, channelName string, percentage int) (*types.ChannelRollout, error) {

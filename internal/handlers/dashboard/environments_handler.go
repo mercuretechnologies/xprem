@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"xprem/internal/handlers"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )
@@ -45,7 +45,7 @@ func (h *EnvironmentsHandler) CreateEnvironmentHandler(w http.ResponseWriter, r 
 	}
 	id, err := h.environmentService.CreateEnvironment(r.Context(), appId, requestBody.Name)
 	if err != nil {
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
@@ -62,7 +62,7 @@ func (h *EnvironmentsHandler) DeleteEnvironmentHandler(w http.ResponseWriter, r 
 	vars := mux.Vars(r)
 	err := h.environmentService.DeleteEnvironment(r.Context(), vars["APP_ID"], vars["ENVIRONMENT"])
 	if err != nil {
-		if inUseErr := (*store.ErrEnvironmentHasChannels)(nil); errors.As(err, &inUseErr) {
+		if inUseErr := (*repository.ErrEnvironmentHasChannels)(nil); errors.As(err, &inUseErr) {
 			handlers.RenderError(w, http.StatusConflict, inUseErr.Error())
 			return
 		}

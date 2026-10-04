@@ -25,10 +25,14 @@ import (
 )
 
 type recordingExplorer struct {
-	overviewQuery  ExplorerQuery
-	logsQuery      LogsQuery
-	breakdownQuery BreakdownQuery
-	checkInQuery   CheckInQuery
+	overviewQuery     ExplorerQuery
+	logsQuery         LogsQuery
+	breakdownQuery    BreakdownQuery
+	checkInQuery      CheckInQuery
+	errorsQuery       ErrorsQuery
+	errorDetailsQuery ErrorDetailsQuery
+	errorDetailsID    string
+	errorsCalls       int
 }
 
 func (r *recordingExplorer) ReadCheckIns(_ context.Context, _ string, query CheckInQuery) (CheckInFeed, error) {
@@ -51,9 +55,37 @@ func (r *recordingExplorer) ReadLogs(_ context.Context, _ string, query LogsQuer
 	return LogsPage{Available: true, Logs: []ObserveLog{}}, nil
 }
 
+func (r *recordingExplorer) ReadFleet(_ context.Context, _ string, query ExplorerQuery) (Fleet, error) {
+	r.overviewQuery = query
+	return Fleet{Available: true, Facets: []FleetFacet{}}, nil
+}
+
+func (r *recordingExplorer) ReadReleases(_ context.Context, _ string, query ExplorerQuery) (Releases, error) {
+	r.overviewQuery = query
+	return Releases{Available: true, Channels: []ChannelAdoption{}}, nil
+}
+
 func (r *recordingExplorer) ReadBreakdown(_ context.Context, _ string, query BreakdownQuery) (Breakdown, error) {
 	r.breakdownQuery = query
 	return Breakdown{Available: true, Segments: []BreakdownSegment{}}, nil
+}
+
+func (r *recordingExplorer) ReadErrors(_ context.Context, _ string, query ErrorsQuery) (ErrorsPage, error) {
+	r.errorsQuery = query
+	r.errorsCalls++
+	return ErrorsPage{}, nil
+}
+
+func (r *recordingExplorer) ReadUpdateErrors(_ context.Context, _ string, updateID string, limit, offset int) (UpdateErrorsPage, error) {
+	r.errorsCalls++
+	return UpdateErrorsPage{UpdateID: updateID, Limit: limit, Offset: offset, Errors: []UpdateErrorSummary{}}, nil
+}
+
+func (r *recordingExplorer) ReadErrorDetails(_ context.Context, _ string, errorID string, query ErrorDetailsQuery) (ErrorDetails, error) {
+	r.errorDetailsQuery = query
+	r.errorDetailsID = errorID
+	r.errorsCalls++
+	return ErrorDetails{}, nil
 }
 
 type staticSchema struct {
@@ -67,6 +99,9 @@ func (s staticSchema) GetSchema(context.Context, string) (identity.Schema, error
 func serveExplorer(handler *ExplorerHandler, path string) *httptest.ResponseRecorder {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/apps/{APP_ID}/observe/overview", handler.GetOverviewHandler)
+	router.HandleFunc("/api/apps/{APP_ID}/observe/errors", handler.GetErrorsHandler)
+	router.HandleFunc("/api/apps/{APP_ID}/observe/updates/{UPDATE_ID}/errors", handler.GetUpdateErrorsHandler)
+	router.HandleFunc("/api/apps/{APP_ID}/observe/errors/groups/{ERROR_ID}", handler.GetErrorDetailsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/events", handler.GetEventsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/logs", handler.GetLogsHandler)
 	router.HandleFunc("/api/apps/{APP_ID}/observe/breakdown", handler.GetBreakdownHandler)

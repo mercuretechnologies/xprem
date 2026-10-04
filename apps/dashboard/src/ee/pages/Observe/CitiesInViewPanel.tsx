@@ -47,6 +47,7 @@ export const CitiesInViewPanel = ({
   // country at ingestion, so it is the finest place the metrics can honour.
   const metricsHref = (place: MapPlace) => {
     const params = new URLSearchParams(searchParams);
+    params.delete('errorId');
     params.set(filterParam('countryCode'), place.countryCode);
     return `/observe/metrics?${params.toString()}`;
   };

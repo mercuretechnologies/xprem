@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { api, type ObserveLogsQuery } from '@/lib/api';
-import { liveInterval, type periods } from './filters';
+import { liveInterval, type WindowSpec } from './filters';
 import { useOlderRecords } from './useOlderRecords';
 
 // The record stream the event table is built on: a live head query, older
@@ -27,7 +27,7 @@ export const useLogStream = ({
   // window, which slides on its own in live mode.
   signature: string;
   live: boolean;
-  periodSpec: (typeof periods)[number];
+  periodSpec: WindowSpec;
   rowHeight?: number;
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);

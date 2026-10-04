@@ -11,8 +11,8 @@ import (
 	"time"
 	"xprem/config"
 	"xprem/internal/crypto"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -107,7 +107,7 @@ func (s *OAuthService) ExchangeAuthorizationCode(ctx context.Context, req Exchan
 	}
 	code, err := s.codeRepo.ConsumeOAuthAuthorizationCode(ctx, req.Code)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, ErrInvalidGrant
 		}
 		return nil, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
@@ -131,7 +131,7 @@ func (s *OAuthService) ExchangeAuthorizationCode(ctx context.Context, req Exchan
 	}
 	tokenId := uuid.New().String()
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	if err := s.refreshRepo.InsertRefreshToken(ctx, store.InsertRefreshTokenParameters{
+	if err := s.refreshRepo.InsertRefreshToken(ctx, repository.InsertRefreshTokenParameters{
 		ID:        tokenId,
 		UserID:    principal.UserId,
 		FamilyID:  uuid.New().String(),
@@ -173,7 +173,7 @@ func (s *OAuthService) RefreshAccessToken(ctx context.Context, tokenString strin
 
 	successorId := uuid.New().String()
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	_, err = s.refreshRepo.RotateRefreshToken(ctx, store.RotateRefreshTokenParameters{
+	_, err = s.refreshRepo.RotateRefreshToken(ctx, repository.RotateRefreshTokenParameters{
 		OldID:     spentId,
 		NewID:     successorId,
 		ExpiresAt: expiresAt,
@@ -184,7 +184,7 @@ func (s *OAuthService) RefreshAccessToken(ctx context.Context, tokenString strin
 		}
 		return s.issueTokenPair(*principal, successorId, expiresAt)
 	}
-	notFoundErr := (*store.ErrResourceNotFound)(nil)
+	notFoundErr := (*repository.ErrResourceNotFound)(nil)
 	if !errors.As(err, &notFoundErr) {
 		return nil, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
 	}
@@ -232,7 +232,7 @@ func (s *OAuthService) RefreshAccessToken(ctx context.Context, tokenString strin
 func (s *OAuthService) principalForUser(ctx context.Context, userId string) (*services.DashboardPrincipal, error) {
 	user, err := s.userRepo.GetUserByID(ctx, userId)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, ErrInvalidGrant
 		}
 		return nil, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)
@@ -300,7 +300,7 @@ func (s *OAuthService) AuthenticateMCPToken(ctx context.Context, tokenString str
 
 	user, err := s.userRepo.GetUserByID(ctx, claims.UserID)
 	if err != nil {
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			return nil, time.Time{}, services.ErrSessionRevoked
 		}
 		return nil, time.Time{}, fmt.Errorf("%w: %v", services.ErrAuthUnavailable, err)

@@ -189,7 +189,7 @@ func RolloutPercentage(field, value string) (int, error) {
 }
 
 // NumericID validates a positive integer id passed as a string (branch id, API
-// key id). Guards the string→int64 conversion the stores do so a malformed id
+// key id). Guards the string→int64 conversion the repositories do so a malformed id
 // fails with a 400 instead of a 500.
 func NumericID(field, value string) error {
 	if value == "" {

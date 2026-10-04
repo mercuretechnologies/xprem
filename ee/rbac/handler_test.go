@@ -11,8 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
@@ -87,7 +87,7 @@ func TestGrantHandlersContract(t *testing.T) {
 		RolePermissions:  []Permission{PermBranchDelete},
 		ExtraPermissions: []Permission{PermCertificateRead},
 	}}
-	lookup := &fakeUserLookup{users: map[string]store.User{"member-1": {Id: "member-1"}}}
+	lookup := &fakeUserLookup{users: map[string]repository.User{"member-1": {Id: "member-1"}}}
 	run := newHandlerRig(NewRBACHandler(withLookup(licensedService(repo), lookup)))
 
 	// The read resolves the role and precomputes the effective union.
@@ -122,7 +122,7 @@ func TestGrantHandlersContract(t *testing.T) {
 func TestMyPermissionsHandler(t *testing.T) {
 	repo := newFakeRepo()
 	repo.grants["member-1"] = []AppGrant{{AppID: "app-1", ExtraPermissions: []Permission{PermBranchCreate}}}
-	lookup := &fakeUserLookup{users: map[string]store.User{
+	lookup := &fakeUserLookup{users: map[string]repository.User{
 		"member-1": {Id: "member-1"},
 		"admin-1":  {Id: "admin-1", IsAdmin: true},
 	}}

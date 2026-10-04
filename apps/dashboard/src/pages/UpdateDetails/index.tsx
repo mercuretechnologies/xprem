@@ -27,6 +27,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { RolloutBar } from '@/components/rollout/RolloutBar';
 import { UpdateHealthHistory } from '@/ee/components/UpdateHealthHistory';
 import { BundlePatchesSection } from './BundlePatchesSection';
+import { SourcemapIndexSection } from '@/ee/components/SourcemapIndexSection';
+import { UpdateErrorsSection } from '@/ee/components/UpdateErrorsSection';
 
 const CopyButton = ({ value, label }: { value: string; label: string }) => {
   const [copied, setCopied] = useState(false);
@@ -87,7 +89,7 @@ export const UpdateDetails = () => {
   const runtimeVersion = params.runtimeVersion ?? '';
   const updateId = params.updateId ?? '';
   const { selectedAppId } = useSelectedApp();
-  const { CONTROL_PLANE_ENABLED, BUNDLE_DIFFING } = useSettings();
+  const { CONTROL_PLANE_ENABLED, BUNDLE_DIFFING, UPLOAD_SOURCEMAPS } = useSettings();
   const [showRawConfig, setShowRawConfig] = useState(false);
   // Keyed on what the fetch actually uses. Never updateUUID: every rollback
   // row shares the literal "Rollback to embedded", so two rollbacks from
@@ -331,6 +333,19 @@ export const UpdateDetails = () => {
             platform={platformLabel(data.platform)}
             origin={fromFeed ? 'updates' : 'branch'}
           />
+        )}
+
+        {UPLOAD_SOURCEMAPS && CONTROL_PLANE_ENABLED && !isRollback && data.sourcemapHash && (
+          <SourcemapIndexSection
+            branch={branch}
+            runtimeVersion={runtimeVersion}
+            updateId={data.updateId}
+            sourcemapHash={data.sourcemapHash}
+          />
+        )}
+
+        {CONTROL_PLANE_ENABLED && !isRollback && isUuid(data.updateUUID) && (
+          <UpdateErrorsSection updateUUID={data.updateUUID} />
         )}
       </div>
     </div>

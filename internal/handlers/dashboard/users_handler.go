@@ -8,8 +8,8 @@ import (
 	"time"
 	"xprem/internal/handlers"
 	"xprem/internal/ratelimit"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 
 	"github.com/gorilla/mux"
 )
@@ -44,7 +44,7 @@ type UserResponse struct {
 	LastConnectedAt string `json:"lastConnectedAt,omitempty"`
 }
 
-func userResponseFrom(user store.User) UserResponse {
+func userResponseFrom(user repository.User) UserResponse {
 	createdAt := ""
 	if !user.CreatedAt.IsZero() {
 		createdAt = user.CreatedAt.UTC().Format(time.RFC3339)
@@ -81,11 +81,11 @@ func renderUserServiceError(w http.ResponseWriter, err error) {
 			handlers.RenderError(w, http.StatusBadRequest, validationErr.Error())
 			return
 		}
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusNotFound, notFoundErr.Error())
 			return
 		}
-		if alreadyExistsErr := (*store.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
+		if alreadyExistsErr := (*repository.ErrResourceAlreadyExists)(nil); errors.As(err, &alreadyExistsErr) {
 			handlers.RenderError(w, http.StatusConflict, alreadyExistsErr.Error())
 			return
 		}
@@ -106,7 +106,7 @@ func (h *UsersHandler) GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Only a missing row means the session is a leftover of a deleted
 		// account; an infrastructure failure must not read as a dead session.
-		if notFoundErr := (*store.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
+		if notFoundErr := (*repository.ErrResourceNotFound)(nil); errors.As(err, &notFoundErr) {
 			handlers.RenderError(w, http.StatusUnauthorized, "Invalid token")
 			return
 		}

@@ -12,10 +12,11 @@ import (
 )
 
 type fakeBuilds struct {
-	calls  int
-	status types.BuildStatus
-	url    string
-	chunks []types.BuildLogChunk
+	calls       int
+	status      types.BuildStatus
+	url         string
+	downloadErr error
+	chunks      []types.BuildLogChunk
 }
 
 func (f *fakeBuilds) List(context.Context, string, int32, int32, string) (types.BuildsPage, error) {
@@ -38,7 +39,7 @@ func (f *fakeBuilds) DownloadURL(_ context.Context, record types.BuildRecord, _ 
 	if record.Status != types.BuildStatusReady {
 		return "", services.ErrBuildNotReady
 	}
-	return f.url, nil
+	return f.url, f.downloadErr
 }
 
 func buildDeps(builds *fakeBuilds, authorize func(Access) error) Deps {
@@ -121,6 +122,7 @@ func TestGetBuildDownloadURLExplainsRefusals(t *testing.T) {
 	}{
 		"not ready":     {&fakeBuilds{status: types.BuildStatusBuilding}, "only a ready build"},
 		"local storage": {&fakeBuilds{status: types.BuildStatusReady}, "cannot sign download links"},
+		"builds off":    {&fakeBuilds{status: types.BuildStatusReady, downloadErr: services.ErrBuildStorageUnavailable}, "builds are turned off"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := getBuildDownloadURLHandler(buildDeps(tc.builds, func(Access) error { return nil }))(context.Background(), req, input)

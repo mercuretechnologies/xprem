@@ -19,7 +19,7 @@ import (
 	"xprem/internal/dashboard"
 	"xprem/internal/jobs"
 	"xprem/internal/providers/expo"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 	"xprem/internal/types"
 	update2 "xprem/internal/update"
 	"xprem/internal/validation"
@@ -110,7 +110,7 @@ func historyJobStatus(job *rivertype.JobRow) *HistoryJobStatus {
 
 func (s *Service) StartHistoryImport(ctx context.Context, auth types.Auth, expoAppId string, limit int) (string, error) {
 	if !config.IsDBMode() {
-		return "", store.ErrNotSupportedInStatelessMode
+		return "", repository.ErrNotSupportedInStatelessMode
 	}
 	if err := requireExpoAuth(auth); err != nil {
 		return "", err
@@ -252,7 +252,7 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 		return "", fmt.Errorf("failed to upsert branch %q and runtime version %q: %w", historyUpdate.BranchName, historyUpdate.RuntimeVersion, err)
 	}
 
-	params := store.ImportUpdateParams{
+	params := repository.ImportUpdateParams{
 		AppId:          appId,
 		UpdateId:       updateId,
 		BranchName:     historyUpdate.BranchName,
@@ -303,8 +303,8 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 	if skipReason != "" {
 		return skipReason, nil
 	}
-	if err := s.writeHistoryConfigFiles(update, platform, historyUpdate, &served.Manifest); err != nil {
-		s.deleteHistoryUpdateFolder(update)
+	if err := s.writeHistoryConfigFiles(ctx, update, platform, historyUpdate, &served.Manifest); err != nil {
+		s.deleteHistoryUpdateFolder(ctx, update)
 		return "", err
 	}
 
@@ -315,7 +315,7 @@ func (s *Service) importHistoryUpdate(ctx context.Context, appId string, history
 	inserted, err := s.updateRepo.ImportUpdate(ctx, params)
 	if err != nil {
 		// Without the row the config files are unreachable orphans.
-		s.deleteHistoryUpdateFolder(update)
+		s.deleteHistoryUpdateFolder(ctx, update)
 		return "", err
 	}
 	touched[branchRuntime{branch: historyUpdate.BranchName, runtime: historyUpdate.RuntimeVersion}] = true
@@ -397,7 +397,7 @@ func (s *Service) ensureHistoryBlob(ctx context.Context, appId string, asset exp
 		declaredHash = ""
 	}
 	if declaredHash != "" {
-		exists, err := s.bucket.BlobExists(ctx, appId, declaredHash)
+		exists, err := s.blobStore.Exists(ctx, appId, declaredHash)
 		if err != nil {
 			return "", fmt.Errorf("failed to check cas for asset %q: %w", asset.Key, err)
 		}
@@ -417,7 +417,7 @@ func (s *Service) ensureHistoryBlob(ctx context.Context, appId string, asset exp
 	if declaredHash != "" && computedHash != declaredHash {
 		return "", &skipUpdate{reason: fmt.Sprintf("asset %q does not match its manifest hash", asset.Key)}
 	}
-	if err := s.bucket.PutBlob(ctx, appId, computedHash, bytes.NewReader(data)); err != nil {
+	if err := s.blobStore.Put(ctx, appId, computedHash, bytes.NewReader(data)); err != nil {
 		return "", fmt.Errorf("failed to write asset %q into cas: %w", asset.Key, err)
 	}
 	return computedHash, nil
@@ -443,7 +443,7 @@ func shapeHistoryAsset(asset expo.HistoryAsset, isLaunchAsset bool) types.Shaped
 
 // writeHistoryConfigFiles writes the update folder's config files; the assets
 // themselves live in cas/.
-func (s *Service) writeHistoryConfigFiles(update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, manifest *expo.HistoryManifest) error {
+func (s *Service) writeHistoryConfigFiles(ctx context.Context, update types.Update, platform types.Platform, historyUpdate expo.HistoryUpdate, manifest *expo.HistoryManifest) error {
 	platformMetadata := types.PlatformMetadata{
 		Bundle: "bundles/" + string(platform) + "-" + historyAssetFileName(manifest.LaunchAsset, 0) + ".bundle",
 	}
@@ -470,7 +470,7 @@ func (s *Service) writeHistoryConfigFiles(update types.Update, platform types.Pl
 	if err != nil {
 		return err
 	}
-	if err := s.bucket.UploadFileIntoUpdate(update, "metadata.json", bytes.NewReader(metadataBytes)); err != nil {
+	if err := s.updateStore.PutFile(ctx, update, "metadata.json", bytes.NewReader(metadataBytes)); err != nil {
 		return fmt.Errorf("failed to write metadata.json into the bucket: %w", err)
 	}
 
@@ -479,7 +479,7 @@ func (s *Service) writeHistoryConfigFiles(update types.Update, platform types.Pl
 		if err != nil {
 			return err
 		}
-		if err := s.bucket.UploadFileIntoUpdate(update, "expoConfig.json", bytes.NewReader(expoConfigBytes)); err != nil {
+		if err := s.updateStore.PutFile(ctx, update, "expoConfig.json", bytes.NewReader(expoConfigBytes)); err != nil {
 			return fmt.Errorf("failed to write expoConfig.json into the bucket: %w", err)
 		}
 	}
@@ -497,7 +497,7 @@ func (s *Service) writeHistoryConfigFiles(update types.Update, platform types.Pl
 	if err != nil {
 		return err
 	}
-	if err := s.bucket.UploadFileIntoUpdate(update, "update-metadata.json", bytes.NewReader(storedMetadataBytes)); err != nil {
+	if err := s.updateStore.PutFile(ctx, update, "update-metadata.json", bytes.NewReader(storedMetadataBytes)); err != nil {
 		return fmt.Errorf("failed to write update-metadata.json into the bucket: %w", err)
 	}
 	return nil
@@ -531,8 +531,9 @@ func (s *Service) invalidateHistoryServingCaches(appId string, touched map[branc
 	}
 }
 
-func (s *Service) deleteHistoryUpdateFolder(update types.Update) {
-	if err := s.bucket.DeleteUpdateFolder(update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
+func (s *Service) deleteHistoryUpdateFolder(ctx context.Context, update types.Update) {
+	// The cleanup often follows a canceled job; it must still run.
+	if err := s.updateStore.Delete(context.WithoutCancel(ctx), update.AppId, update.Branch, update.RuntimeVersion, update.UpdateId); err != nil {
 		log.Printf("[expo-import] failed to clean up update folder %s: %v", update.UpdateId, err)
 	}
 }

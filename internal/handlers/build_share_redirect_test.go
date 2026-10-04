@@ -18,21 +18,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type shareRedirectBucket struct {
-	bucket.Bucket
+type shareRedirectStore struct {
+	services.BuildArtifactStore
 	deadline       time.Time
 	ref            bucket.BuildArtifact
 	signed, opened bool
 	err            error
 }
 
-func (b *shareRedirectBucket) RequestBuildArtifactDownloadURL(_ context.Context, ref bucket.BuildArtifact, deadline time.Time) (string, error) {
-	b.ref, b.deadline, b.signed = ref, deadline, true
-	return "https://bucket.example.com/build.apk?signature=private", b.err
+func (s *shareRedirectStore) PresignGet(_ context.Context, ref bucket.BuildArtifact, deadline time.Time) (string, error) {
+	s.ref, s.deadline, s.signed = ref, deadline, true
+	return "https://bucket.example.com/build.apk?signature=private", s.err
 }
 
-func (b *shareRedirectBucket) GetBuildArtifact(context.Context, bucket.BuildArtifact, bool) (*types.BucketFile, error) {
-	b.opened = true
+func (s *shareRedirectStore) Get(context.Context, bucket.BuildArtifact, bool) (*types.BucketFile, error) {
+	s.opened = true
 	return nil, errors.New("must not open the artifact for a redirect")
 }
 
@@ -61,7 +61,7 @@ func TestPublicShareRedirectsWithoutOpeningArtifact(t *testing.T) {
 			repo := newRegistryRepo()
 			repo.shares[hex.EncodeToString(hash[:])] = share
 			repo.builds[registryBuild] = types.BuildRecord{ID: registryBuild, AppID: registryApp, AppIdentifierID: registryIdentifier, Status: types.BuildStatusReady, ArtifactType: types.BuildArtifactAPK}
-			storage := &shareRedirectBucket{err: tc.err}
+			storage := &shareRedirectStore{err: tc.err}
 			handler := NewBuildRegistryHandler(services.NewBuildService(repo, nil, storage))
 			request := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/build-shares/"+token, nil), map[string]string{"TOKEN": token})
 			response := httptest.NewRecorder()

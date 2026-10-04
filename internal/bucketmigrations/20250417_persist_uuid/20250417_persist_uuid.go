@@ -26,7 +26,7 @@ func init() {
 	bucketmigration.Register(bucketmigration.BaseMigration{
 		Id:       "20250417_persist_uuid",
 		Time:     time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC),
-		UpFunc:   func(b bucket.Bucket) error { return nil },
-		DownFunc: func(b bucket.Bucket) error { return nil },
+		UpFunc:   func(b *bucket.Bucket) error { return nil },
+		DownFunc: func(b *bucket.Bucket) error { return nil },
 	})
 }

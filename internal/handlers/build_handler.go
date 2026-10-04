@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"xprem/internal/providers/appstoreconnect"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 	"xprem/internal/validation"
 
@@ -32,15 +32,15 @@ func (h *BuildHandler) SetEnvironmentAuthorizer(authorize func(r *http.Request, 
 }
 
 func RenderBuildInputError(w http.ResponseWriter, err error) {
-	var missing *store.ErrResourceNotFound
+	var missing *repository.ErrResourceNotFound
 	switch {
-	case errors.Is(err, store.ErrBuildNumberExhausted):
+	case errors.Is(err, repository.ErrBuildNumberExhausted):
 		RenderError(w, http.StatusConflict, err.Error())
 	case validation.IsValidationError(err):
 		RenderError(w, http.StatusBadRequest, err.Error())
 	case errors.As(err, &missing):
 		RenderError(w, http.StatusNotFound, missing.Error())
-	case errors.Is(err, store.ErrNotSupportedInStatelessMode):
+	case errors.Is(err, repository.ErrNotSupportedInStatelessMode):
 		RenderError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, appstoreconnect.ErrUnavailable):
 		RenderError(w, http.StatusBadGateway, "App Store Connect could not be reached. Try again in a few minutes.")

@@ -9,8 +9,8 @@ import (
 	"xprem/ee/licensing"
 	"xprem/ee/rbac"
 	dashhandlers "xprem/internal/handlers/dashboard"
+	"xprem/internal/repository"
 	"xprem/internal/services"
-	"xprem/internal/store"
 	"xprem/internal/types"
 
 	"github.com/gorilla/mux"
@@ -24,11 +24,11 @@ type counterContractRepo struct {
 	writes   int
 }
 
-func (r *counterContractRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*store.AppIdentifierRef, error) {
+func (r *counterContractRepo) GetAppIdentifierByID(_ context.Context, app, id string) (*repository.AppIdentifierRef, error) {
 	if app != "app-1" || id != buildID {
 		return nil, nil
 	}
-	return &store.AppIdentifierRef{Id: id, Platform: r.platform, BuildNumber: "42"}, nil
+	return &repository.AppIdentifierRef{Id: id, Platform: r.platform, BuildNumber: "42"}, nil
 }
 func (r *counterContractRepo) SetBuildNumber(_ context.Context, _, _ string, value string) error {
 	r.saved = value

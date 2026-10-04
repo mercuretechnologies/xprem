@@ -5,7 +5,7 @@ import (
 	"testing"
 	"xprem/internal/auditlog"
 	"xprem/internal/crypto"
-	"xprem/internal/store"
+	"xprem/internal/repository"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,11 +17,11 @@ func (f *fakeAuditRecorder) Record(_ context.Context, event auditlog.Event) {
 	f.events = append(f.events, event)
 }
 
-func seededPasswordUser(t *testing.T, repo *fakeUserRepo, email string, password string, enabled bool) store.User {
+func seededPasswordUser(t *testing.T, repo *fakeUserRepo, email string, password string, enabled bool) repository.User {
 	t.Helper()
 	hash, err := crypto.HashPassword(password)
 	require.NoError(t, err)
-	user, err := repo.InsertUser(context.Background(), store.InsertUserParameters{
+	user, err := repo.InsertUser(context.Background(), repository.InsertUserParameters{
 		ID: "pw-user-1", Email: email, PasswordHash: hash, Enabled: enabled,
 	})
 	require.NoError(t, err)
