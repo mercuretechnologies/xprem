@@ -14,6 +14,11 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
+	"xprem/internal/crypto"
+	"xprem/internal/objectstore"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,6 +91,142 @@ func TestValidateUploadTokenPinsTheKeyToItsBranch(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+// Both claims grant the same file while old and new replicas overlap. The
+// legacy field is only for the updates directory, never a dedicated map store.
+func TestLocalUploadTokensCarryTheLegacyPath(t *testing.T) {
+	dir := localUploadEnv(t)
+	t.Setenv("BUCKET_KEY_PREFIX", "tenant-a")
+	ResetBucketInstance()
+	b := GetBucket()
+	for _, tc := range []struct {
+		name, key string
+		presign   func() (*objectstore.UploadRequest, error)
+	}{
+		{"update", "app-1/production/1/123/metadata.json", func() (*objectstore.UploadRequest, error) {
+			return b.UpdateStore.PresignPut(context.Background(), "app-1", "production", "1", "123", "metadata.json")
+		}},
+		{"blob", BlobObjectKey("app-1", testBlobHash), func() (*objectstore.UploadRequest, error) {
+			return b.BlobStore.PresignPut(context.Background(), "app-1", testBlobHash, "production")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upload, err := tc.presign()
+			require.NoError(t, err)
+			claims := uploadClaims{}
+			_, err = crypto.DecodeAndExtractJWTToken("test_jwt_secret", upload.Headers[LocalUploadTokenHeader], &claims)
+			require.NoError(t, err)
+			assert.Equal(t, tc.key, claims.Key)
+			assert.Equal(t, filepath.Join(dir, "tenant-a", filepath.FromSlash(tc.key)), claims.FilePath)
+			// Removing key models the claims the old server reads.
+			claims.Key = ""
+			legacy, err := crypto.GenerateJWTToken("test_jwt_secret", claims)
+			require.NoError(t, err)
+			key, appID, branch, err := ValidateUploadToken(legacy)
+			require.NoError(t, err)
+			assert.Equal(t, tc.key, key)
+			assert.Equal(t, "app-1", appID)
+			assert.Equal(t, "production", branch)
+		})
+	}
+	store := sourcemapEnv(t, t.TempDir())
+	upload, err := store.PresignPut(context.Background(), "app-1", testBlobHash, "production")
+	require.NoError(t, err)
+	claims := uploadClaims{}
+	_, err = crypto.DecodeAndExtractJWTToken("test_jwt_secret", upload.Headers[LocalUploadTokenHeader], &claims)
+	require.NoError(t, err)
+	assert.Empty(t, claims.FilePath, "source maps were never supported by the old upload store")
+}
+
+func legacyUploadToken(t *testing.T, filePath, key, appID, branch string) string {
+	t.Helper()
+	token, err := crypto.GenerateJWTToken("test_jwt_secret", jwt.MapClaims{
+		"filePath": filePath, "key": key, "appId": appID, "branch": branch,
+		"sub": GetSubjectForApp(appID), "action": "uploadLocalFile",
+		"exp": time.Now().Add(10 * time.Minute).Unix(),
+	})
+	require.NoError(t, err)
+	return token
+}
+
+func TestLegacyUploadTokenAcceptsRelativeConfiguredRoots(t *testing.T) {
+	localUploadEnv(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", "./updates")
+	t.Setenv("BUCKET_KEY_PREFIX", "./tenant-a//")
+	key, appID, branch, err := ValidateUploadToken(legacyUploadToken(t,
+		"updates/tenant-a/app-1/production/1/123/metadata.json", "", "app-1", "production"))
+	require.NoError(t, err)
+	assert.Equal(t, "app-1/production/1/123/metadata.json", key)
+	assert.Equal(t, "app-1", appID)
+	assert.Equal(t, "production", branch)
+}
+
+func TestLegacyUploadTokenRejectsPathsOutsideItsGrant(t *testing.T) {
+	dir := localUploadEnv(t)
+	t.Setenv("BUCKET_KEY_PREFIX", "tenant-a")
+	root := filepath.Join(dir, "tenant-a")
+	validPath := filepath.Join(root, "app-1", "production", "1", "123", "metadata.json")
+	for name, filePath := range map[string]string{
+		"outside root":                filepath.Join(t.TempDir(), "app-1", "production", "1", "123", "metadata.json"),
+		"root sharing a prefix":       filepath.Join(dir, "tenant-ab", "app-1", "production", "1", "123", "metadata.json"),
+		"outside configured prefix":   filepath.Join(dir, "app-1", "production", "1", "123", "metadata.json"),
+		"another app":                 filepath.Join(root, "app-2", "production", "1", "123", "metadata.json"),
+		"another branch":              filepath.Join(root, "app-1", "other", "1", "123", "metadata.json"),
+		"branch sharing a prefix":     filepath.Join(root, "app-1", "production-next", "1", "123", "metadata.json"),
+		"branch directory":            filepath.Join(root, "app-1", "production"),
+		"root directory":              root,
+		"traversal outside root":      root + "/app-1/production/../../../outside/file",
+		"traversal to another branch": root + "/app-1/production/../other/file",
+		"blob of another app":         filepath.Join(root, "app-2", "cas", testBlobHash),
+		"invalid blob hash":           filepath.Join(root, "app-1", "cas", "invalid-hash"),
+		"backslashes":                 validPath + `\..\file`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, _, err := ValidateUploadToken(legacyUploadToken(t, filePath, "", "app-1", "production"))
+			assert.Error(t, err)
+		})
+	}
+	for _, claims := range []struct{ filePath, key, appID, branch string }{
+		{validPath, "app-1/production/1/123/other.json", "app-1", "production"},
+		{validPath, "", "app-1", ""},
+		{validPath, "", "../app-1", "production"},
+		{validPath, "", "app-1", "production/../other"},
+	} {
+		_, _, _, err := ValidateUploadToken(legacyUploadToken(t, claims.filePath, claims.key, claims.appID, claims.branch))
+		assert.Error(t, err)
+	}
+}
+
+func TestLegacyUploadTokenRejectsSymlinkEscapes(t *testing.T) {
+	dir := localUploadEnv(t)
+	branch := filepath.Join(dir, "app-1", "production")
+	require.NoError(t, os.MkdirAll(branch, 0o755))
+	for name, target := range map[string]string{
+		"outside":        t.TempDir(),
+		"another-branch": filepath.Join(dir, "app-1", "other"),
+		"dangling":       filepath.Join(t.TempDir(), "missing"),
+	} {
+		if name == "another-branch" {
+			require.NoError(t, os.MkdirAll(target, 0o755))
+		}
+		link := filepath.Join(branch, name)
+		require.NoError(t, os.Symlink(target, link))
+		_, _, _, err := ValidateUploadToken(legacyUploadToken(t, filepath.Join(link, "new", "metadata.json"), "", "app-1", "production"))
+		assert.Error(t, err, name)
+	}
+}
+
+func TestLegacyUploadTokenAcceptsTheConfiguredRootSymlink(t *testing.T) {
+	localUploadEnv(t)
+	root := filepath.Join(t.TempDir(), "updates")
+	require.NoError(t, os.Symlink(t.TempDir(), root))
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
+	key, _, _, err := ValidateUploadToken(legacyUploadToken(t,
+		filepath.Join(root, "app-1", "production", "1", "123", "metadata.json"), "", "app-1", "production"))
+	require.NoError(t, err)
+	assert.Equal(t, "app-1/production/1/123/metadata.json", key)
 }
 
 func TestHandleUploadVerifiesBlobsAndWritesAtomically(t *testing.T) {

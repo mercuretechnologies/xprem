@@ -9,6 +9,8 @@ import (
 	"hash"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"xprem/config"
@@ -28,7 +30,13 @@ func presignUpload(ctx context.Context, objectStore objectstore.Store, localUplo
 	if !localUploads {
 		return objectStore.PresignPut(ctx, key)
 	}
-	token, err := mintUploadToken(uploadClaims{Key: key, AppID: appId, Branch: branch})
+	claims := uploadClaims{Key: key, AppID: appId, Branch: branch}
+	// Old replicas still read filePath during a rolling deploy. Only updates
+	// and CAS blobs share that legacy store; source maps may live elsewhere.
+	if keyInBranch(key, appId, branch) || isBlobKey(key, appId) {
+		claims.FilePath = filepath.Join(localUploadRoot(), filepath.FromSlash(key))
+	}
+	token, err := mintUploadToken(claims)
 	if err != nil {
 		return nil, err
 	}
@@ -47,10 +55,11 @@ func presignUpload(ctx context.Context, objectStore objectstore.Store, localUplo
 // uploadClaims is the claim set of a local upload token.
 type uploadClaims struct {
 	jwt.RegisteredClaims
-	Key    string `json:"key"`
-	Action string `json:"action"`
-	AppID  string `json:"appId"`
-	Branch string `json:"branch"`
+	Key      string `json:"key,omitempty"`
+	FilePath string `json:"filePath,omitempty"`
+	Action   string `json:"action"`
+	AppID    string `json:"appId"`
+	Branch   string `json:"branch"`
 }
 
 func mintUploadToken(claims uploadClaims) (string, error) {
@@ -78,11 +87,24 @@ func ValidateUploadToken(token string) (key string, appId string, branch string,
 		return "", "", "", err
 	}
 	key, appId, branch = claims.Key, claims.AppID, claims.Branch
-	if appId == "" || claims.Subject != GetSubjectForApp(appId) {
+	if validateSegment("appId", appId) != nil || claims.Subject != GetSubjectForApp(appId) {
 		return "", "", "", errors.New("invalid token sub")
 	}
 	if claims.Action != "uploadLocalFile" {
 		return "", "", "", errors.New("invalid token action")
+	}
+	if validateSegment("branch", branch) != nil {
+		return "", "", "", errors.New("invalid token branch")
+	}
+	if claims.FilePath != "" {
+		legacyKey, err := legacyUploadKey(claims.FilePath, appId, branch)
+		if err != nil {
+			return "", "", "", err
+		}
+		if key != "" && key != legacyKey {
+			return "", "", "", errors.New("upload token key does not match its filePath")
+		}
+		key = legacyKey
 	}
 	// A blob or sourcemap key sits outside any branch, but the branch claim is
 	// still required so scoped keys can be judged.
@@ -91,6 +113,84 @@ func ValidateUploadToken(token string) (key string, appId string, branch string,
 		return "", "", "", errors.New("upload token key does not match its branch")
 	}
 	return key, appId, branch, nil
+}
+
+func localUploadRoot() string {
+	return filepath.Join(config.GetEnv("LOCAL_BUCKET_BASE_PATH"), ResolveKeyPrefix())
+}
+
+// legacyUploadKey translates an old filePath grant into the same relative key
+// modern uploads use. A path is authorized only inside the configured updates
+// root and the token's app/branch, including when existing directories contain
+// symlinks. Source maps never used these legacy grants.
+func legacyUploadKey(filePath, appId, branch string) (string, error) {
+	root, err := filepath.Abs(localUploadRoot())
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", err
+	}
+	relative, err := pathStrictlyUnder(root, target)
+	if err != nil {
+		return "", err
+	}
+	key := filepath.ToSlash(relative)
+	if !(keyInBranch(key, appId, branch) || isBlobKey(key, appId)) {
+		return "", errors.New("upload token filePath does not match its branch")
+	}
+	resolvedRoot, err := resolveUploadPath(root)
+	if err != nil {
+		return "", err
+	}
+	resolvedTarget, err := resolveUploadPath(target)
+	if err != nil {
+		return "", err
+	}
+	resolvedRelative, err := pathStrictlyUnder(resolvedRoot, resolvedTarget)
+	if err != nil {
+		return "", err
+	}
+	if resolvedRelative != relative {
+		return "", errors.New("upload token filePath resolves outside its authorized key")
+	}
+	return key, nil
+}
+
+func pathStrictlyUnder(root, target string) (string, error) {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", errors.New("upload token filePath is outside the updates directory")
+	}
+	return relative, nil
+}
+
+// resolveUploadPath resolves existing symlinks while allowing a new upload's
+// remaining directories and file to be absent. A dangling symlink is refused.
+func resolveUploadPath(path string) (string, error) {
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		if _, statErr := os.Lstat(path); statErr == nil || !os.IsNotExist(statErr) {
+			return "", err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(path))
+		path = parent
+	}
 }
 
 func keyInBranch(key, appId, branch string) bool {
