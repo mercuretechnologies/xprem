@@ -118,7 +118,7 @@ func ValidateUploadFile(name, hash string) error {
 }
 
 func ReservedBranchName(branch string) bool {
-	return branch == casDir || branch == bsDiffDir || branch == sourcemapsDir
+	return branch == casDir || branch == bsDiffDir
 }
 
 func updatePrefix(appId, branch, runtimeVersion, updateId string) string {
@@ -130,10 +130,10 @@ func BlobObjectKey(appId, hash string) string {
 	return appId + "/" + casDir + "/" + hash
 }
 
-// SourcemapObjectKey is {appId}/sourcemaps/{hash}: the source map of the
-// bundle blob with that hash.
+// SourcemapObjectKey is sourcemaps/{appId}/{hash}.map. Maps live outside an
+// app's branch namespace, so existing branches named sourcemaps stay usable.
 func SourcemapObjectKey(appId, hash string) string {
-	return appId + "/" + sourcemapsDir + "/" + hash
+	return sourcemapsDir + "/" + appId + "/" + hash + ".map"
 }
 
 // BSDiffBranchPrefix is {appId}/bsdiff/{branch}/, under which every patch of

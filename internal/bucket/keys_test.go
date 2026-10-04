@@ -59,6 +59,8 @@ func TestObjectKeys(t *testing.T) {
 	assert.Equal(t, "app-1/bsdiff/main/6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f/0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", BSDiffObjectKey("app-1", "main", "6f2b1c4e-1b3a-4b4e-9c1d-0a1b2c3d4e5f", "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d"))
 	assert.True(t, ReservedBranchName("cas"))
 	assert.True(t, ReservedBranchName("bsdiff"))
+	assert.False(t, ReservedBranchName("sourcemaps"))
+	assert.Equal(t, "sourcemaps/app-1/"+testBlobHash+".map", SourcemapObjectKey("app-1", testBlobHash))
 }
 
 func TestResolveKeyPrefix(t *testing.T) {

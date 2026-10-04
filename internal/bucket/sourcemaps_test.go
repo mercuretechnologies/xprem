@@ -3,9 +3,12 @@ package bucket
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,8 +32,8 @@ func TestOpenSourcemapStoreIsNilWhenOff(t *testing.T) {
 	assert.Nil(t, store)
 }
 
-// The store may share the updates directory: its prefix is reserved there, and
-// the shared directory keeps the updates' permissions.
+// The store may share the updates directory: maps live outside app branches,
+// and the shared directory keeps the updates' permissions.
 func TestSourcemapStoreSharesTheUpdatesLocation(t *testing.T) {
 	dir := localUploadEnv(t)
 	store := sourcemapEnv(t, dir)
@@ -38,17 +41,17 @@ func TestSourcemapStoreSharesTheUpdatesLocation(t *testing.T) {
 	content := []byte(`{"version":3}`)
 
 	require.NoError(t, store.Put(ctx, "app-1", blobHash(content), bytes.NewReader(content)))
-	written, err := os.ReadFile(filepath.Join(dir, "app-1", sourcemapsDir, blobHash(content)))
+	written, err := os.ReadFile(filepath.Join(dir, sourcemapsDir, "app-1", blobHash(content)+".map"))
 	require.NoError(t, err)
 	assert.Equal(t, content, written)
-	info, err := os.Stat(filepath.Join(dir, "app-1", sourcemapsDir))
+	info, err := os.Stat(filepath.Join(dir, sourcemapsDir, "app-1"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
 
 	branches, err := GetBucket().UpdateStore.Branches(ctx, "app-1")
 	require.NoError(t, err)
 	assert.Empty(t, branches, "the sourcemaps directory is not a branch")
-	assert.True(t, ReservedBranchName(sourcemapsDir))
+	assert.False(t, ReservedBranchName(sourcemapsDir))
 }
 
 func TestSourcemapStoreLivesUnderTheKeyPrefix(t *testing.T) {
@@ -60,7 +63,7 @@ func TestSourcemapStoreLivesUnderTheKeyPrefix(t *testing.T) {
 	content := []byte(`{"version":3}`)
 
 	require.NoError(t, store.Put(ctx, "app-1", blobHash(content), bytes.NewReader(content)))
-	assert.FileExists(t, filepath.Join(dir, "tenant-a", "app-1", sourcemapsDir, blobHash(content)))
+	assert.FileExists(t, filepath.Join(dir, "tenant-a", sourcemapsDir, "app-1", blobHash(content)+".map"))
 	exists, err := store.Exists(ctx, "app-1", blobHash(content))
 	require.NoError(t, err)
 	assert.True(t, exists)
@@ -78,7 +81,7 @@ func TestSourcemapStorePutVerifiesTheHash(t *testing.T) {
 
 	err := store.Put(ctx, "app-1", blobHash([]byte("what the CLI hashed")), bytes.NewReader([]byte("what it sent")))
 	require.ErrorIs(t, err, ErrBlobHashMismatch)
-	assert.NoFileExists(t, filepath.Join(dir, "app-1", sourcemapsDir, blobHash([]byte("what the CLI hashed"))))
+	assert.NoFileExists(t, filepath.Join(dir, sourcemapsDir, "app-1", blobHash([]byte("what the CLI hashed"))+".map"))
 }
 
 func TestSourcemapUploadTokenGrantsItsKey(t *testing.T) {
@@ -98,6 +101,55 @@ func TestSourcemapUploadTokenGrantsItsKey(t *testing.T) {
 
 	_, ok = SourcemapKeyHash(key, "app-2")
 	assert.False(t, ok, "a sourcemap key belongs to one app")
-	_, ok = SourcemapKeyHash("app-1/"+sourcemapsDir+"/not-a-hash", "app-1")
+	_, ok = SourcemapKeyHash(sourcemapsDir+"/app-1/not-a-hash.map", "app-1")
+	assert.False(t, ok)
+}
+
+func TestSourcemapsDoNotHideOrOverwriteAnExistingBranch(t *testing.T) {
+	dir := localUploadEnv(t)
+	ctx := context.Background()
+	update := types.Update{AppId: "app-1", Branch: "sourcemaps", RuntimeVersion: "1", UpdateId: "123"}
+	// These files represent a branch already published by a previous release.
+	branchFile := filepath.Join(dir, "app-1", "sourcemaps", "1", "123", "metadata.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(branchFile), 0o755))
+	require.NoError(t, os.WriteFile(branchFile, []byte("existing update"), 0o644))
+
+	for _, enabled := range []string{"false", "true"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv("UPLOAD_SOURCEMAPS", enabled)
+			if enabled == "true" {
+				store := sourcemapEnv(t, dir)
+				content := []byte(`{"version":3}`)
+				require.NoError(t, store.Put(ctx, update.AppId, blobHash(content), bytes.NewReader(content)))
+				require.NoError(t, store.PutIndex(ctx, update.AppId, blobHash(content), strings.NewReader("map index")))
+			}
+			b := GetBucket()
+			branches, err := b.UpdateStore.Branches(ctx, update.AppId)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"sourcemaps"}, branches)
+			file, err := b.UpdateStore.GetFile(ctx, update, "metadata.json")
+			require.NoError(t, err)
+			require.NotNil(t, file)
+			body, err := io.ReadAll(file.Reader)
+			require.NoError(t, err)
+			require.NoError(t, file.Reader.Close())
+			assert.Equal(t, "existing update", string(body))
+			require.NoError(t, b.UpdateStore.PutFile(ctx, update, "expoConfig.json", strings.NewReader(`{}`)))
+		})
+	}
+}
+
+func TestSourcemapKeyHashRequiresTheExactMapNamespace(t *testing.T) {
+	for _, key := range []string{
+		"app-1/sourcemaps/" + testBlobHash,
+		"sourcemaps/app-1/" + testBlobHash,
+		"sourcemaps/app-1/" + testBlobHash + ".map.idx",
+		"sourcemaps/app-1/" + testBlobHash + ".map/other",
+		"sourcemaps/app-1/other/" + testBlobHash + ".map",
+	} {
+		_, ok := SourcemapKeyHash(key, "app-1")
+		assert.False(t, ok, key)
+	}
+	_, ok := SourcemapKeyHash("sourcemaps/../app-1/"+testBlobHash+".map", "../app-1")
 	assert.False(t, ok)
 }
