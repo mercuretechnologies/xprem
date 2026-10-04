@@ -4438,7 +4438,7 @@ WITH served AS (
     FROM channels ch JOIN channel_rollouts cr ON cr.channel_id = ch.id
     WHERE ch.app_id = $1
 ),
-newest AS (
+newest AS MATERIALIZED (
     SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
            u.branch_id, rv.version AS runtime_version, u.platform,
            u.update_uuid, u.update_type,
@@ -4513,6 +4513,8 @@ type ListObserveChannelAdoptionRow struct {
 // Per channel, the active devices and how many already run what that channel
 // serves them: the newest update of its branch (or rollout branch) for their
 // runtime and platform, or the control an update rollout keeps them on.
+// This CTE is referenced by a per-device EXISTS below. Materialize the heads
+// once so PostgreSQL does not repeat their DISTINCT ON for every device.
 func (q *Queries) ListObserveChannelAdoption(ctx context.Context, arg ListObserveChannelAdoptionParams) ([]ListObserveChannelAdoptionRow, error) {
 	rows, err := q.db.Query(ctx, listObserveChannelAdoption,
 		arg.AppID,

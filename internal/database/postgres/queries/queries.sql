@@ -1662,7 +1662,9 @@ WITH served AS (
     FROM channels ch JOIN channel_rollouts cr ON cr.channel_id = ch.id
     WHERE ch.app_id = $1
 ),
-newest AS (
+-- This CTE is referenced by a per-device EXISTS below. Materialize the heads
+-- once so PostgreSQL does not repeat their DISTINCT ON for every device.
+newest AS MATERIALIZED (
     SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
            u.branch_id, rv.version AS runtime_version, u.platform,
            u.update_uuid, u.update_type,
