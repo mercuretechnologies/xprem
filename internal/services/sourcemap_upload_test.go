@@ -185,6 +185,9 @@ func TestProcessUploadedUpdateRetriesUnavailableSourcemapVerification(t *testing
 			process := ProcessUpdateParams{AppID: h.appId, BranchName: "main", RuntimeVersion: "1", UpdateID: update.UpdateId, Platform: types.PlatformIOS}
 			_, err = svc.ProcessUploadedUpdate(ctx, process)
 			require.Error(t, err)
+			published, validErr := h.updateRepo.IsUpdateValid(ctx, *update)
+			require.NoError(t, validErr)
+			require.False(t, published, "failed source map verification must not publish the update")
 			metadata, readErr := stores.UpdateStore.GetFile(ctx, *update, "metadata.json")
 			require.NoError(t, readErr)
 			if mode == "map missing" {
@@ -198,11 +201,15 @@ func TestProcessUploadedUpdateRetriesUnavailableSourcemapVerification(t *testing
 				require.ErrorIs(t, err, transient)
 			}
 			require.NotNil(t, metadata, "temporary source map failures must preserve valid uploaded files")
+			require.NoError(t, metadata.Reader.Close())
 			svc.SetSourcemapStore(store)
 			svc.updateRepo = repository
 			manifestID, err := svc.ProcessUploadedUpdate(ctx, process)
 			require.NoError(t, err, "finalization must succeed without re-upload after recovery")
 			require.NotEmpty(t, manifestID)
+			published, validErr = h.updateRepo.IsUpdateValid(ctx, *update)
+			require.NoError(t, validErr)
+			require.True(t, published)
 		})
 	}
 }
