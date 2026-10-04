@@ -462,6 +462,19 @@ export type IdentityDevicePage = {
   nextCursor?: string | null;
 };
 
+export type ObserveMetricWindow = {
+  from: string;
+  to: string;
+  bucketSeconds: number;
+};
+
+export type ObserveMetricPoint = {
+  timestamp: string;
+  value: number;
+  samples: number;
+  devices: number;
+};
+
 // One row of "who is this metric slow for". `values` are the raw column values
 // and double as the filters to drill in with; `contexts` qualify them when they
 // mean nothing alone (an OS version without its OS name).
@@ -476,7 +489,7 @@ export type ObserveBreakdownSegment = {
   samples: number;
   p50: number;
   p90: number;
-  points?: Array<{ timestamp: string; value: number }>;
+  points?: ObserveMetricPoint[];
 };
 
 export type ObserveBreakdownDimension =
@@ -509,7 +522,7 @@ export type ObserveConditionDefinition = {
   sessionScoped?: boolean;
 };
 
-export type ObserveBreakdown = {
+export type ObserveBreakdown = ObserveMetricWindow & {
   available: boolean;
   metric: string;
   dimension: ObserveBreakdownDimension;
@@ -543,7 +556,7 @@ export type ObserveMetric = {
     // which cards it can answer for, instead of asking each of them.
     reportsConditions?: boolean;
   };
-  points: Array<{ timestamp: string; value: number }>;
+  points: ObserveMetricPoint[];
 };
 
 // The active device registry split along one dimension. An empty value is one
@@ -585,7 +598,7 @@ export type ObserveReleases = {
   channels: ObserveChannelAdoption[];
 };
 
-export type ObserveOverview = {
+export type ObserveOverview = ObserveMetricWindow & {
   available: boolean;
   summary: {
     users: number;

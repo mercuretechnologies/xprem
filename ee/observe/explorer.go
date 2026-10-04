@@ -123,6 +123,9 @@ type MetricDefinition struct {
 type ObserveMetricPoint struct {
 	Timestamp time.Time `json:"timestamp"`
 	Value     float64   `json:"value"`
+	// Samples and Devices describe the deduplicated measurements in this bucket.
+	Samples uint64 `json:"samples"`
+	Devices uint64 `json:"devices"`
 }
 
 type MetricStats struct {
@@ -155,10 +158,13 @@ type ObserveSummary struct {
 	Platforms []string `json:"platforms"`
 }
 type Overview struct {
-	Available bool              `json:"available"`
-	Summary   ObserveSummary    `json:"summary"`
-	Metrics   []MetricSeries    `json:"metrics"`
-	Locations []ObserveLocation `json:"locations"`
+	Available     bool              `json:"available"`
+	From          time.Time         `json:"from"`
+	To            time.Time         `json:"to"`
+	BucketSeconds int64             `json:"bucketSeconds"`
+	Summary       ObserveSummary    `json:"summary"`
+	Metrics       []MetricSeries    `json:"metrics"`
+	Locations     []ObserveLocation `json:"locations"`
 }
 
 // observeCohortLimit caps the identity cohort an attribute filter resolves to.
@@ -361,12 +367,16 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 		return Overview{}, err
 	}
 	query = resolvedQuery
+	overview := Overview{
+		Available:     e.clickhouse != nil,
+		From:          query.From.UTC(),
+		To:            query.To.UTC(),
+		BucketSeconds: max(int64(query.Bucket/time.Second), 1),
+		Metrics:       []MetricSeries{},
+		Locations:     []ObserveLocation{},
+	}
 	if emptyUpdateGroup {
-		return Overview{
-			Available: e.clickhouse != nil,
-			Metrics:   []MetricSeries{},
-			Locations: []ObserveLocation{},
-		}, nil
+		return overview, nil
 	}
 	locations, err := e.cachedLocations(ctx, appID, query.From, query)
 	if err != nil {
@@ -376,12 +386,8 @@ func (e *Explorer) readOverview(ctx context.Context, appID string, query Explore
 	if err != nil {
 		return Overview{}, err
 	}
-	overview := Overview{
-		Available: e.clickhouse != nil,
-		Summary:   ObserveSummary{Users: activeUsers},
-		Metrics:   []MetricSeries{},
-		Locations: locations,
-	}
+	overview.Summary.Users = activeUsers
+	overview.Locations = locations
 	if e.clickhouse == nil {
 		return overview, nil
 	}
@@ -580,11 +586,12 @@ func (e *Explorer) readMetricPoints(
 	sql := sqlf(`
 		SELECT metric_name,
 		       toStartOfInterval(timestamp, toIntervalSecond(?)) AS bucket,
-		       toFloat64(quantileTDigest(0.5)(value))
+		       toFloat64(quantileTDigest(0.5)(value)), count(), uniqExact(eas_client_id)
 		FROM (
 			SELECT any(m.metric_name) AS metric_name,
 			       any(m.timestamp) AS timestamp,
-			       any(m.value) AS value
+			       any(m.value) AS value,
+			       any(m.eas_client_id) AS eas_client_id
 			FROM %s
 			WHERE %s
 			GROUP BY m.content_key
@@ -603,7 +610,7 @@ func (e *Explorer) readMetricPoints(
 	for rows.Next() {
 		var name string
 		var point ObserveMetricPoint
-		if err := rows.Scan(&name, &point.Timestamp, &point.Value); err != nil {
+		if err := rows.Scan(&name, &point.Timestamp, &point.Value, &point.Samples, &point.Devices); err != nil {
 			return nil, err
 		}
 		points[name] = append(points[name], point)

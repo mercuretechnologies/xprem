@@ -5,7 +5,13 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Info, ServerCrash } from 'lucide-react';
-import { api, ObserveBreakdownDimension, ObserveMetric } from '@/lib/api';
+import {
+  api,
+  ObserveBreakdownDimension,
+  ObserveMetric,
+  ObserveMetricPoint,
+  ObserveMetricWindow,
+} from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -13,13 +19,9 @@ import { TimeSeriesChart, type TimeSeriesChartProps } from '@/ee/components/char
 import { liveInterval, type ObserveFilters } from './filters';
 import { ObserveNotice } from './ObserveNotice';
 import { TelemetryUnavailable } from './TelemetryUnavailable';
-import {
-  duration,
-  exactNumber,
-  formatChange,
-  relativeChange,
-  withoutPartialBucket,
-} from './format';
+import { exactNumber, formatChange, relativeChange } from './format';
+import { histogramIntervalLabel } from './errorHistogram';
+import { metricChartPoints, metricDuration as duration } from './metricChart';
 import {
   dimensionSpec,
   isDimension,
@@ -139,6 +141,7 @@ type RankedSegment = {
   devices: number;
   p50: number;
   p90: number;
+  points?: ObserveMetricPoint[];
   ranked: boolean;
   change: number | null;
 };
@@ -228,6 +231,7 @@ const SegmentRow = ({
 // everywhere or in a single place.
 const MetricSection = ({
   metric,
+  window,
   filters,
   dimension,
   annotations,
@@ -237,6 +241,7 @@ const MetricSection = ({
   branchReach,
 }: {
   metric: ObserveMetric;
+  window: ObserveMetricWindow | undefined;
   filters: ObserveFilters;
   dimension: ObserveBreakdownDimension | undefined;
   annotations: Array<{ key: string; label: string; timestamp: Date }>;
@@ -268,6 +273,13 @@ const MetricSection = ({
 
   const baseline = breakdownQuery.data?.overall;
   const baselineP50 = baseline?.p50 ?? metric.stats.median;
+  const snapshot = dimension ? breakdownQuery.data : window;
+  const chartWindow =
+    snapshot?.from && snapshot.to && snapshot.bucketSeconds > 0 ? snapshot : undefined;
+  const timeDomain: [Date, Date] = [
+    new Date(chartWindow?.from ?? filters.query.from ?? Date.now() - filters.periodSpec.windowMs),
+    new Date(chartWindow?.to ?? filters.query.to ?? Date.now()),
+  ];
 
   const segments = useMemo<RankedSegment[]>(
     () =>
@@ -315,15 +327,7 @@ const MetricSection = ({
           key: segment.id,
           label: segment.label,
           color: seriesColors[index % seriesColors.length],
-          points: withoutPartialBucket(
-            (
-              (segment as RankedSegment & { points?: Array<{ timestamp: string; value: number }> })
-                .points ?? []
-            ).map(point => ({
-              timestamp: new Date(point.timestamp),
-              value: point.value,
-            }))
-          ),
+          points: metricChartPoints(segment.points ?? [], chartWindow),
         }))
         .filter(entry => entry.points.length > 0);
     }
@@ -332,15 +336,10 @@ const MetricSection = ({
         key: metric.id,
         label: metric.label,
         color: seriesColors[0],
-        points: withoutPartialBucket(
-          metric.points.map(point => ({
-            timestamp: new Date(point.timestamp),
-            value: point.value,
-          }))
-        ),
+        points: metricChartPoints(metric.points, chartWindow),
       },
     ];
-  }, [dimension, metric, segments]);
+  }, [dimension, metric, segments, chartWindow]);
 
   const colorOf = (id: string, index: number) =>
     index < INLINE_SEGMENTS && series.some(entry => entry.key === id)
@@ -387,33 +386,46 @@ const MetricSection = ({
               alternating value/label along a line: a percentile and its number
               read as one thing, and the three stay comparable. */}
           <div className="mt-1.5 flex items-baseline gap-6">
-            <span className="flex flex-col">
-              <span className="font-mono text-xl font-semibold leading-tight">
-                {duration(baselineP50)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p50</span>
-            </span>
-            <span className="flex flex-col">
-              <span className="font-mono text-sm font-medium leading-tight text-muted-foreground">
-                {duration(baseline?.p90 ?? metric.stats.p90)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p90</span>
-            </span>
-            <span className="flex flex-col">
-              <span className="font-mono text-sm font-medium leading-tight text-muted-foreground">
-                {duration(metric.stats.p99)}
-              </span>
-              <span className="text-[10px] text-muted-foreground">p99</span>
-            </span>
+            {[
+              { label: 'Median (p50)', percentile: 50, value: baselineP50 },
+              { label: 'p90', percentile: 90, value: baseline?.p90 ?? metric.stats.p90 },
+              { label: 'p99', percentile: 99, value: metric.stats.p99 },
+            ].map(({ label, percentile, value }) => (
+              <Tooltip key={percentile}>
+                <TooltipTrigger
+                  type="button"
+                  className="flex cursor-help flex-col items-start rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`${label}: ${duration(value)}`}>
+                  <span
+                    className={
+                      percentile === 50
+                        ? 'font-mono text-xl font-semibold leading-tight'
+                        : 'font-mono text-sm font-medium leading-tight text-muted-foreground'
+                    }>
+                    {duration(value)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{label}</span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">
+                  {percentile}% of measurements in this period are at or below this duration.
+                </TooltipContent>
+              </Tooltip>
+            ))}
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          {exactNumber.format(baseline?.devices ?? metric.stats.devices)} devices ·{' '}
-          {exactNumber.format(baseline?.samples ?? metric.stats.count)} samples
+          {exactNumber.format(baseline?.devices ?? metric.stats.devices)}{' '}
+          {(baseline?.devices ?? metric.stats.devices) === 1 ? 'device' : 'devices'} ·{' '}
+          {exactNumber.format(baseline?.samples ?? metric.stats.count)}{' '}
+          {(baseline?.samples ?? metric.stats.count) === 1 ? 'measurement' : 'measurements'}
         </p>
       </div>
 
-      <div className="px-3 py-2">
+      <div className="px-3 pb-2 pt-3">
+        <div className="flex items-center justify-between gap-2 px-2 text-[11px] text-muted-foreground">
+          <span>Median over time</span>
+          {chartWindow && <span>{histogramIntervalLabel(chartWindow.bucketSeconds)}</span>}
+        </div>
         {series.some(entry => entry.points.length > 0) ? (
           <TimeSeriesChart
             series={series}
@@ -422,9 +434,10 @@ const MetricSection = ({
             renderAnnotationDetails={renderAnnotationDetails}
             formatValue={duration}
             formatAxisValue={duration}
-            // Durations: nothing starts at zero and one cold start at twelve
-            // seconds would flatten every other curve against the axis.
             frameToData
+            showPoints
+            timeDomain={timeDomain}
+            pointIntervalMs={chartWindow ? chartWindow.bucketSeconds * 1_000 : undefined}
             highlightedKey={highlighted}
             ariaLabel={`${metric.label} over time`}
             height={200}
@@ -434,7 +447,11 @@ const MetricSection = ({
             {breakdownQuery.isLoading ? (
               <p className="text-sm text-muted-foreground">Loading…</p>
             ) : (
-              <p className="text-sm text-muted-foreground">Not enough points to draw a trend</p>
+              <p className="max-w-xs text-sm text-muted-foreground">
+                {dimension
+                  ? `A segment needs at least ${MIN_DEVICES_TO_RANK} devices to appear on this chart`
+                  : 'No measurements in this period'}
+              </p>
             )}
           </div>
         )}
@@ -558,6 +575,7 @@ const PublishedHere = ({
 );
 
 export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
+  const [showPublishes, setShowPublishes] = useState(false);
   const updateGroups = useUpdateGroups(filters);
   // undefined when nothing is split, or when the URL names something this
   // build does not know: a stale link must land on the unsplit view rather
@@ -680,6 +698,23 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
         </p>
       )}
 
+      {metrics.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+          <p className="max-w-2xl leading-relaxed">
+            Each dot shows the median duration for an interval. Gaps mean no measurements. Hover a
+            dot to see its duration and sample size. Scales adapt to each metric.
+            {showPublishes && ' Numbered markers show published update groups.'}
+          </p>
+          <button
+            type="button"
+            aria-pressed={showPublishes}
+            onClick={() => setShowPublishes(previous => !previous)}
+            className={`shrink-0 rounded-md border px-3 py-1.5 transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showPublishes ? 'border-primary/40 bg-primary/10 text-foreground' : 'bg-card'}`}>
+            {showPublishes ? 'Hide publishes' : 'Show publishes'}
+          </button>
+        </div>
+      )}
+
       {/* Its own provider: the app mounts none, and the sidebar's covers only
           the sidebar. Radix is happy with one per subtree. */}
       <TooltipProvider delayDuration={150}>
@@ -688,9 +723,10 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
             <MetricSection
               key={metric.id}
               metric={metric}
+              window={overview}
               filters={filters}
               dimension={dimension}
-              annotations={updateGroupMarkers}
+              annotations={showPublishes ? updateGroupMarkers : []}
               renderAnnotationDetails={renderMarkedGroups}
               updateTitles={updateNames}
               branchOfUpdate={branchOfUpdate}

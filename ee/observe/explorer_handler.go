@@ -353,9 +353,12 @@ func (h *ExplorerHandler) GetOverviewHandler(w http.ResponseWriter, r *http.Requ
 	}
 	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, Overview{
-			Available: false,
-			Metrics:   emptyMetricSeries(),
-			Locations: []ObserveLocation{},
+			Available:     false,
+			From:          query.From,
+			To:            query.To,
+			BucketSeconds: max(int64(query.Bucket/time.Second), 1),
+			Metrics:       emptyMetricSeries(),
+			Locations:     []ObserveLocation{},
 		})
 		return
 	}
@@ -487,10 +490,13 @@ func (h *ExplorerHandler) GetBreakdownHandler(w http.ResponseWriter, r *http.Req
 	}
 	if h.reader == nil {
 		handlers.RenderJSON(w, http.StatusOK, Breakdown{
-			Available: false,
-			Metric:    metric,
-			Dimension: dimension,
-			Segments:  []BreakdownSegment{},
+			Available:     false,
+			From:          base.From,
+			To:            base.To,
+			BucketSeconds: max(int64(base.Bucket/time.Second), 1),
+			Metric:        metric,
+			Dimension:     dimension,
+			Segments:      []BreakdownSegment{},
 		})
 		return
 	}
