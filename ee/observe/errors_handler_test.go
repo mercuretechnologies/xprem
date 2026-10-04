@@ -33,6 +33,14 @@ func (r fakeErrorReader) ReadErrorGroup(context.Context, string, string, string)
 type indexStateFunc func() error
 
 func (f indexStateFunc) UpdateIndexState(context.Context, string, string) error { return f() }
+func (f indexStateFunc) Available() bool                                        { return true }
+
+type availableIndexState struct {
+	indexStateFunc
+	enabled bool
+}
+
+func (s availableIndexState) Available() bool { return s.enabled }
 
 func askErrorGroup(t *testing.T, handler *ErrorsHandler, query string) ErrorGroupAnswer {
 	t.Helper()
@@ -81,7 +89,10 @@ func TestStoredErrorGroupRequiresAvailableIndexing(t *testing.T) {
 	for _, state := range []error{nil, symbolication.ErrUnavailable, symbolication.ErrIndexFailed} {
 		calls := 0
 		group := &ErrorGroup{Fingerprint: uuid.NewString(), Culprit: "private-source.ts"}
-		handler := NewErrorsHandler(fakeErrorReader{group: group, calls: &calls}, indexStateFunc(func() error { return state }))
+		handler := NewErrorsHandler(fakeErrorReader{group: group, calls: &calls}, availableIndexState{
+			indexStateFunc: func() error { t.Fatal("stored groups must not open or check an index"); return state },
+			enabled:        state != symbolication.ErrUnavailable,
+		})
 		answer := askErrorGroup(t, handler, "?updateId="+uuid.NewString())
 		if state == symbolication.ErrUnavailable {
 			assert.Equal(t, ErrorGroupUnavailable, answer.Status)

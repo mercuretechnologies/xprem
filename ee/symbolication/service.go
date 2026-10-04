@@ -64,6 +64,9 @@ func (s *Service) available() bool {
 	return s != nil && s.store != nil && s.indexes != nil && s.jobs != nil && s.licenseValid()
 }
 
+// Available reports feature and license availability without reading an index.
+func (s *Service) Available() bool { return s.available() }
+
 // GetUpdateSourcemap answers ErrNoSourcemap for an update published without a map.
 func (s *Service) GetUpdateSourcemap(ctx context.Context, appId, branch, runtimeVersion, updateId string) (*UpdateSourcemap, error) {
 	if !s.available() {
