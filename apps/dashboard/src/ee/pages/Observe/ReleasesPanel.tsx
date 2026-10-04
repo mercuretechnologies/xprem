@@ -300,8 +300,8 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
           <span>Channel</span>
           <span>Serving</span>
           <span>Up to date</span>
-          <span className="text-right">Crash-free</span>
-          <span>Status</span>
+          <span className="text-right">Global crash-free</span>
+          <span>Global status</span>
         </div>
         <ul className="divide-y">
           {rows.map(row => (
@@ -342,18 +342,25 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
                 className="text-[13px] tabular-nums lg:text-right"
                 title={
                   row.health
-                    ? `${exactNumber.format(row.health.successfulDevices)} launched fine · ${exactNumber.format(row.health.faultyDevices)} crashed`
+                    ? `Current health across all devices on this release: ${exactNumber.format(row.health.successfulDevices)} launched fine · ${exactNumber.format(row.health.faultyDevices)} crashed`
                     : undefined
                 }>
                 {percentLabel(row.health?.healthPercent)}
               </span>
-              <span className="inline-flex items-center gap-2 text-[13px]">
+              <span
+                className="inline-flex items-center gap-2 text-[13px]"
+                title="Current status across all devices on the served releases">
                 <span className={cn('h-2 w-2 rounded-full', statusStyle[row.status].dot)} />
                 {statusStyle[row.status].label}
               </span>
             </li>
           ))}
         </ul>
+        <p className="border-t px-4 py-2 text-[12px] text-muted-foreground">
+          Up to date follows the selected cohort. Crash-free and status show current health across
+          all devices on each release, independently of the time range and cohort filters.
+          {hasCurves && ' The chart follows the time range across all devices.'}
+        </p>
         {hasCurves && (
           <div className="border-t px-4 pb-3 pt-3.5">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
