@@ -20,9 +20,13 @@ import (
 
 type fakeErrorReader struct {
 	group *ErrorGroup
+	calls *int
 }
 
 func (r fakeErrorReader) ReadErrorGroup(context.Context, string, string, string) (*ErrorGroup, error) {
+	if r.calls != nil {
+		*r.calls++
+	}
 	return r.group, nil
 }
 
@@ -71,6 +75,27 @@ func TestErrorGroupIsReadyOnceGrouped(t *testing.T) {
 	assert.Equal(t, ErrorGroupReady, answer.Status)
 	require.NotNil(t, answer.Group)
 	assert.Equal(t, "LabScreen.tsx in onPress", answer.Group.Culprit)
+}
+
+func TestStoredErrorGroupRequiresAvailableIndexing(t *testing.T) {
+	for _, state := range []error{nil, symbolication.ErrUnavailable, symbolication.ErrIndexFailed} {
+		calls := 0
+		group := &ErrorGroup{Fingerprint: uuid.NewString(), Culprit: "private-source.ts"}
+		handler := NewErrorsHandler(fakeErrorReader{group: group, calls: &calls}, indexStateFunc(func() error { return state }))
+		answer := askErrorGroup(t, handler, "?updateId="+uuid.NewString())
+		if state == symbolication.ErrUnavailable {
+			assert.Equal(t, ErrorGroupUnavailable, answer.Status)
+			assert.Nil(t, answer.Group)
+			assert.Zero(t, calls, "stored source details must not be read while indexing is unavailable")
+		} else {
+			assert.Equal(t, ErrorGroupReady, answer.Status)
+			require.NotNil(t, answer.Group)
+			assert.Equal(t, 1, calls)
+		}
+	}
+	answer := askErrorGroup(t, NewErrorsHandler(fakeErrorReader{group: &ErrorGroup{Culprit: "private-source.ts"}}, nil), "?updateId="+uuid.NewString())
+	assert.Equal(t, ErrorGroupUnavailable, answer.Status)
+	assert.Nil(t, answer.Group)
 }
 
 func TestErrorGroupWithoutTheControlPlaneIsUnavailable(t *testing.T) {

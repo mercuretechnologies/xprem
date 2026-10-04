@@ -80,6 +80,18 @@ func (h *ErrorsHandler) GetErrorGroupHandler(w http.ResponseWriter, r *http.Requ
 	readContext, cancelRead := boundedRead(r)
 	defer cancelRead()
 	appID := mux.Vars(r)["APP_ID"]
+	// Availability applies to stored groups too. Checking it first also avoids
+	// querying ClickHouse while indexing or its license is unavailable.
+	status, err := h.missingGroupStatus(readContext, appID, updateID.String())
+	if err != nil {
+		log.Printf("observe: reading the index state of update %s failed: %v", updateID, err)
+		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
+		return
+	}
+	if status == ErrorGroupUnavailable {
+		handlers.RenderJSON(w, http.StatusOK, ErrorGroupAnswer{Status: status})
+		return
+	}
 	group, err := h.reader.ReadErrorGroup(readContext, appID, updateID.String(), fingerprint.String())
 	if err != nil {
 		log.Printf("observe: reading an error group failed: %v", err)
@@ -88,12 +100,6 @@ func (h *ErrorsHandler) GetErrorGroupHandler(w http.ResponseWriter, r *http.Requ
 	}
 	if group != nil {
 		handlers.RenderJSON(w, http.StatusOK, ErrorGroupAnswer{Status: ErrorGroupReady, Group: group})
-		return
-	}
-	status, err := h.missingGroupStatus(readContext, appID, updateID.String())
-	if err != nil {
-		log.Printf("observe: reading the index state of update %s failed: %v", updateID, err)
-		handlers.RenderError(w, http.StatusInternalServerError, "An internal error occurred.")
 		return
 	}
 	handlers.RenderJSON(w, http.StatusOK, ErrorGroupAnswer{Status: status})
