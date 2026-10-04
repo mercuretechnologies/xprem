@@ -372,6 +372,12 @@ func OpenIndex(r io.ReaderAt) (*Index, error) {
 
 // SourceText reads the text of one source; "" when the map carried none.
 func (x *Index) SourceText(source int) (string, error) {
+	return x.sourceText(source, maxIndexCacheBytes)
+}
+
+// sourceText checks the stored span before allocating or reading its text.
+// Context callers have a smaller budget than callers reading a whole source.
+func (x *Index) sourceText(source int, maxBytes uint32) (string, error) {
 	if source < 0 || source >= len(x.texts) {
 		return "", fmt.Errorf("%w: source %d out of range", ErrInvalidIndex, source)
 	}
@@ -379,7 +385,7 @@ func (x *Index) SourceText(source int) (string, error) {
 	if s.length == 0 {
 		return "", nil
 	}
-	if s.length > maxIndexCacheBytes {
+	if s.length > maxBytes {
 		return "", fmt.Errorf("%w: source %d spans %d bytes", ErrInvalidIndex, source, s.length)
 	}
 	buf := make([]byte, s.length)
