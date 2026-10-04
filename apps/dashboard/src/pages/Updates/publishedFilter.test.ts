@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resolveRange } from '@/lib/timeRange';
+import { describeRange, resolveRange } from '@/lib/timeRange';
 import { resolvePublishedFilter } from './publishedFilter';
 
 const now = Date.parse('2026-10-04T12:00:00Z');
@@ -29,11 +29,25 @@ test('legacy date windows remain UTC and inclusive through the last nanosecond o
 });
 
 test('one-sided date filters never invent a bound on the unselected side', () => {
-  assert.equal(resolvePublishedFilter('', '2026-09-27', now).from, '');
-  assert.equal(resolvePublishedFilter('', '2026-09-27', now).to, '2026-09-27');
-  assert.equal(resolvePublishedFilter('2026-09-27', '', now).from, '2026-09-27');
-  assert.equal(resolvePublishedFilter('2026-09-27', '', now).to, '');
-  assert.equal(resolvePublishedFilter('', '1900-01-01', now).from, '');
+  const before = resolvePublishedFilter('', '1900-01-01', now);
+  assert.deepEqual(before, {
+    from: '',
+    to: '1900-01-01',
+    range: { from: '', to: '1900-01-01T23:59:59.999999999Z' },
+  });
+  assert.match(describeRange(before.range!), /^Through /);
+
+  const after = resolvePublishedFilter('2026-09-27', '', now);
+  assert.deepEqual(after, {
+    from: '2026-09-27',
+    to: '',
+    range: { from: '2026-09-27T00:00:00Z', to: '' },
+  });
+  assert.match(describeRange(after.range!), /^From /);
+  assert.deepEqual(resolvePublishedFilter('1900-01-01', '', now).range, {
+    from: '1900-01-01T00:00:00Z',
+    to: '',
+  });
 });
 
 test('relative ranges still resolve once against the supplied clock and can end now', () => {

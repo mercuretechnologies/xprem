@@ -163,6 +163,7 @@ export const TimeRangePicker = ({
   value,
   onChange,
   allowAllTime = false,
+  allowOpenBounds = false,
   maxRangeMs = Infinity,
   className,
   popoverClassName,
@@ -170,6 +171,8 @@ export const TimeRangePicker = ({
   value: TimeRange | null;
   onChange: (range: TimeRange | null) => void;
   allowAllTime?: boolean;
+  // Enable only when the consumer can apply each bound independently.
+  allowOpenBounds?: boolean;
   // The widest range the data behind the picker can be asked for.
   maxRangeMs?: number;
   className?: string;
@@ -181,11 +184,21 @@ export const TimeRangePicker = ({
   const [recent, setRecent] = useState<TimeRange[]>([]);
 
   const fits = (lengthMs: number) => lengthMs > 0 && lengthMs <= maxRangeMs;
+  const validRange = (range: TimeRange) => {
+    if (fits(rangeLengthMs(range, Date.now()))) return true;
+    const from = range.from.trim();
+    const to = range.to.trim();
+    return (
+      allowOpenBounds &&
+      Boolean(from) !== Boolean(to) &&
+      parseTimeExpression(from || to, Date.now()) !== null
+    );
+  };
   const openPicker = (next: boolean) => {
     if (next) {
       setDraft(value ?? defaultRange);
       setSearch('');
-      setRecent(readRecentRanges().filter(range => fits(rangeLengthMs(range, Date.now()))));
+      setRecent(readRecentRanges().filter(validRange));
     }
     setOpen(next);
   };
@@ -196,7 +209,7 @@ export const TimeRangePicker = ({
   };
 
   const draftLength = rangeLengthMs(draft, Date.now());
-  const draftValid = fits(draftLength);
+  const draftValid = validRange(draft);
   const apply = () => {
     if (!draftValid) return;
     rememberRange(draft);
@@ -217,6 +230,7 @@ export const TimeRangePicker = ({
   const label = value ? describeRange(value) : 'All time';
   const zone = browserZone();
   const step = (next: TimeRange | null) => next && onChange(next);
+  const canShift = value !== null && rangeLengthMs(value, Date.now()) > 0;
 
   return (
     <div
@@ -227,7 +241,7 @@ export const TimeRangePicker = ({
       <button
         type="button"
         aria-label="Earlier"
-        disabled={!value}
+        disabled={!canShift}
         onClick={() => value && step(shiftRange(value, -1, Date.now()))}
         className="flex h-9 w-8 items-center justify-center border-r text-muted-foreground hover:bg-accent disabled:opacity-40">
         <ChevronLeft className="h-4 w-4" />
@@ -337,7 +351,7 @@ export const TimeRangePicker = ({
       <button
         type="button"
         aria-label="Later"
-        disabled={!value || value.to === 'now'}
+        disabled={!canShift || value?.to === 'now'}
         onClick={() => value && step(shiftRange(value, 1, Date.now()))}
         className="flex h-9 w-8 items-center justify-center border-l text-muted-foreground hover:bg-accent disabled:opacity-40">
         <ChevronRight className="h-4 w-4" />
@@ -345,7 +359,7 @@ export const TimeRangePicker = ({
       <button
         type="button"
         aria-label="Zoom out"
-        disabled={!value}
+        disabled={!canShift}
         onClick={() => value && step(zoomOutRange(value, Date.now(), maxRangeMs))}
         className="flex h-9 w-8 items-center justify-center border-l text-muted-foreground hover:bg-accent disabled:opacity-40">
         <ZoomOut className="h-4 w-4" />

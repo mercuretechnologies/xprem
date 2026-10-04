@@ -23,8 +23,8 @@ export const resolvePublishedFilter = (from: string, to: string, now: number) =>
   const range: TimeRange | null =
     start || end
       ? {
-          from: pickerBound(start, false) || '2000-01-01T00:00:00Z',
-          to: pickerBound(end, true) || 'now',
+          from: pickerBound(start, false),
+          to: pickerBound(end, true),
         }
       : null;
   return { from: queryBound(start, false), to: queryBound(end, true), range };

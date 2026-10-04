@@ -120,6 +120,13 @@ export const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString
 // A quick range by its name; otherwise the shortest spelling of the bounds,
 // with the day written once when both ends share it.
 export const describeRange = (range: TimeRange) => {
+  if (!range.from || !range.to) {
+    const expression = range.from || range.to;
+    if (!expression) return 'All time';
+    const bound = parseTimeExpression(expression, Date.now());
+    const label = bound ? `${dayLabel.format(bound)} ${timeLabel.format(bound)}` : expression;
+    return `${range.from ? 'From' : 'Through'} ${label}`;
+  }
   const quick = quickRanges.find(entry => entry.from === range.from && entry.to === range.to);
   if (quick) return quick.label;
   const resolved = resolveRange(range, Date.now());

@@ -554,6 +554,7 @@ export const Updates = () => {
                           setFilters({ from: next?.from ?? '', to: next?.to ?? '' })
                         }
                         allowAllTime
+                        allowOpenBounds
                       />
                     </FilterField>
                   </div>
