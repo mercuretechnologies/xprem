@@ -19,6 +19,7 @@ let uploaded: Buffer;
 let finalized: boolean;
 let failFinalize: boolean;
 let missingRegistry: boolean;
+let localUpload: boolean;
 let registrations: string[];
 let requests: string[];
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -42,6 +43,7 @@ beforeEach(async () => {
   finalized = false;
   failFinalize = false;
   missingRegistry = false;
+  localUpload = false;
   registrations = [];
   requests = [];
   server = http.createServer(async (req, res) => {
@@ -52,7 +54,7 @@ beforeEach(async () => {
     }
     const body = Buffer.concat(chunks);
     res.setHeader('content-type', 'application/json');
-    if (req.url === '/upload/sensitive-token') {
+    if (req.url === '/upload/sensitive-token' || req.url === `/artifacts/${id}/upload`) {
       headers = req.headers;
       uploaded = body;
       res.end('{}');
@@ -81,11 +83,17 @@ beforeEach(async () => {
         ...(finalized
           ? {}
           : {
-              upload: {
-                url: `${endpoint}/upload/sensitive-token`,
-                method: 'PUT',
-                headers: { 'x-ms-blob-type': 'BlockBlob' },
-              },
+              upload: localUpload
+                ? {
+                    url: `${endpoint}/artifacts/${id}/upload`,
+                    method: 'PUT',
+                    headers: { 'local-upload-token': 'upload-grant' },
+                  }
+                : {
+                    url: `${endpoint}/upload/sensitive-token`,
+                    method: 'PUT',
+                    headers: { 'x-ms-blob-type': 'BlockBlob' },
+                  },
             }),
       })
     );
@@ -135,6 +143,14 @@ it('streams the artifact with only upload headers and finalizes the same build I
   ]);
   expect(await fs.readFile(file, 'utf8')).toBe('signed APK bytes');
   expect(JSON.parse(registrations[0]).metadata).toEqual(metadata);
+});
+it("authenticates the upload to the server's own route with the API token", async () => {
+  localUpload = true;
+  const file = await artifact();
+  await uploadBuildArtifact(file, endpoint, buildLog);
+  expect(uploaded.toString()).toBe('signed APK bytes');
+  expect(headers.authorization).toBe('Bearer test-registered-token');
+  expect(headers['local-upload-token']).toBe('upload-grant');
 });
 it.each([
   { mode: 'release' as const, channel: 'stable', override: undefined, expectedChannel: 'stable' },

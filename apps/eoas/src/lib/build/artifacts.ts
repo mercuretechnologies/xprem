@@ -10,6 +10,7 @@ import { BuildInputs } from './prepare';
 import { BuildServerError, request } from './server';
 import { BuildStep } from './steps';
 import { assertSafeUploadUrl } from '../assets';
+import { getAuthHeaders, retrieveCredentials } from '../auth';
 import { digestFile } from '../crypto';
 import GitClient from '../vcs/clients/git';
 
@@ -188,6 +189,9 @@ async function uploadArtifact(file: string, serverUrl: string, log: LogWriter): 
     throw new Error('Invalid artifact upload response.');
   }
   assertSafeUploadUrl(upload.url);
+  // Local storage uploads through the server's own route, which also checks the API token.
+  // A bucket URL never receives it.
+  const uploadAuth = upload.url === `${url}/upload` ? getAuthHeaders(retrieveCredentials()) : {};
   log.info(`Uploading ${path.basename(file)} (${(size / 1048576).toFixed(1)} MB)`);
   const stream = fs.createReadStream(file);
   let sent = 0;
@@ -203,7 +207,7 @@ async function uploadArtifact(file: string, serverUrl: string, log: LogWriter): 
     const response = await originalFetch(upload.url, {
       method: 'PUT',
       body: stream,
-      headers: { ...upload.headers, 'Content-Length': String(size) },
+      headers: { ...upload.headers, ...uploadAuth, 'Content-Length': String(size) },
       redirect: 'error',
       timeout: 30 * 60 * 1000,
     });
