@@ -575,7 +575,7 @@ const PublishedHere = ({
 );
 
 export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
-  const [showPublishes, setShowPublishes] = useState(false);
+  const [showPublishes, setShowPublishes] = useState(true);
   const updateGroups = useUpdateGroups(filters);
   // undefined when nothing is split, or when the URL names something this
   // build does not know: a stale link must land on the unsplit view rather
@@ -703,14 +703,14 @@ export const MetricsView = ({ filters }: { filters: ObserveFilters }) => {
           <p className="max-w-2xl leading-relaxed">
             Each dot shows the median duration for an interval. Gaps mean no measurements. Hover a
             dot to see its duration and sample size. Scales adapt to each metric.
-            {showPublishes && ' Numbered markers show published update groups.'}
+            {showPublishes && ' Numbered markers show releases published in this period.'}
           </p>
           <button
             type="button"
             aria-pressed={showPublishes}
             onClick={() => setShowPublishes(previous => !previous)}
             className={`shrink-0 rounded-md border px-3 py-1.5 transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${showPublishes ? 'border-primary/40 bg-primary/10 text-foreground' : 'bg-card'}`}>
-            {showPublishes ? 'Hide publishes' : 'Show publishes'}
+            {showPublishes ? 'Hide releases' : 'Show releases'}
           </button>
         </div>
       )}
