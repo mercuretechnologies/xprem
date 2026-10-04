@@ -36,6 +36,9 @@ var (
 	ErrTokenAppMismatch   = errors.New("upload token does not match the requested application context")
 	ErrUploadFailed       = errors.New("failed to write upload file stream to destination storage")
 	ErrUploadHashMismatch = errors.New("uploaded file does not match its hash")
+	// ErrSourcemapVerificationUnavailable preserves the upload while the map
+	// store or its metadata cannot be checked. The caller can retry finalization.
+	ErrSourcemapVerificationUnavailable = errors.New("source map verification is temporarily unavailable")
 	// ErrActiveRolloutBlocksPublish refuses any publish, republish or rollback on a
 	// (branch, runtime version) that has an active per-update rollout.
 	ErrActiveRolloutBlocksPublish = errors.New("a progressive rollout is active on this branch and runtime version; finish or revert it from the dashboard first")
@@ -266,10 +269,10 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 			log.Printf("[RequestID: %s] Invalid expoConfig.json, folder deleted", params.RequestID)
 			return "", fmt.Errorf("%w: %s", ErrInvalidUpdate, errorVerify)
 		}
-		if errors.Is(errorVerify, update2.ErrExpoConfigUnreadable) {
+		if errors.Is(errorVerify, update2.ErrExpoConfigUnreadable) || errors.Is(errorVerify, ErrSourcemapVerificationUnavailable) {
 			// A transient storage/read failure must not destroy the uploaded
 			// files: surface it as a retryable error and keep the folder.
-			log.Printf("[RequestID: %s] expoConfig.json read failure, keeping folder: %v", params.RequestID, errorVerify)
+			log.Printf("[RequestID: %s] Update verification unavailable, keeping folder: %v", params.RequestID, errorVerify)
 			return "", errorVerify
 		}
 		log.Printf("[RequestID: %s] Invalid update, deleting folder...", params.RequestID)
@@ -298,15 +301,18 @@ func (s *DeploymentService) ProcessUploadedUpdate(ctx context.Context, params Pr
 // and fails when the store does not hold that map.
 func (s *DeploymentService) verifySourcemapUploaded(ctx context.Context, update types.Update) (*string, error) {
 	hash, err := s.updateRepo.GetUpdateSourcemapHash(ctx, update)
-	if err != nil || hash == nil {
-		return nil, err
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading source map metadata: %w", ErrSourcemapVerificationUnavailable, err)
+	}
+	if hash == nil {
+		return nil, nil
 	}
 	if s.sourcemapStore == nil {
-		return nil, fmt.Errorf("sourcemap %s declared but sourcemap uploads are disabled", *hash)
+		return nil, fmt.Errorf("%w: sourcemap %s declared but sourcemap uploads are disabled", ErrSourcemapVerificationUnavailable, *hash)
 	}
 	exists, err := s.sourcemapStore.Exists(ctx, update.AppId, *hash)
 	if err != nil {
-		return nil, fmt.Errorf("checking sourcemap %s: %w", *hash, err)
+		return nil, fmt.Errorf("%w: checking sourcemap %s: %w", ErrSourcemapVerificationUnavailable, *hash, err)
 	}
 	if !exists {
 		return nil, fmt.Errorf("missing sourcemap %s in update", *hash)

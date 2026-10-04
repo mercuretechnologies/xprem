@@ -2,11 +2,13 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"xprem/internal/bucket"
+	"xprem/internal/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,4 +129,80 @@ func TestVerifySourcemapUploaded_NothingDeclared(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.verifySourcemapUploaded(ctx, *update)
 	require.NoError(t, err)
+}
+
+type unavailableSourcemapStore struct {
+	*bucket.SourcemapStore
+	err error
+}
+
+func (s unavailableSourcemapStore) Exists(context.Context, string, string) (bool, error) {
+	return false, s.err
+}
+
+type unavailableSourcemapMetadata struct {
+	UpdateRepository
+	err error
+}
+
+func (r unavailableSourcemapMetadata) GetUpdateSourcemapHash(context.Context, types.Update) (*string, error) {
+	return nil, r.err
+}
+
+func TestProcessUploadedUpdateRetriesUnavailableSourcemapVerification(t *testing.T) {
+	for _, mode := range []string{"storage timeout", "metadata timeout", "uploads disabled", "map missing"} {
+		t.Run(mode, func(t *testing.T) {
+			svc, h, store := newSourcemapTestHarness(t)
+			ctx := context.Background()
+			sourcemap := sourcemapUpload()
+			params := publishParams(h, publishFiles(launchAssetPath))
+			params.Sourcemap = &sourcemap
+			resp, err := svc.RequestUploadURLs(ctx, params)
+			require.NoError(t, err)
+			update, err := h.updateRepo.GetUpdate(ctx, h.appId, "main", "1", strconv.FormatInt(resp.UpdateID, 10))
+			require.NoError(t, err)
+			stores := bucket.GetBucket()
+			require.NoError(t, stores.UpdateStore.PutFile(ctx, *update, "metadata.json", strings.NewReader(`{"version":0,"bundler":"metro","fileMetadata":{"ios":{"bundle":"bundles/launch.hbc","assets":[]}}}`)))
+			require.NoError(t, stores.UpdateStore.PutFile(ctx, *update, "expoConfig.json", strings.NewReader(`{"name":"healthy-upload"}`)))
+			for _, file := range params.Files {
+				if file.Role != FileRoleConfig {
+					require.NoError(t, stores.BlobStore.Put(ctx, h.appId, file.Hash, strings.NewReader(file.Path)))
+				}
+			}
+			if mode != "map missing" {
+				require.NoError(t, store.Put(ctx, h.appId, sourcemap.Hash, strings.NewReader(sourcemap.Path)))
+			}
+			transient := errors.New("storage timeout")
+			repository := svc.updateRepo
+			switch mode {
+			case "storage timeout":
+				svc.SetSourcemapStore(unavailableSourcemapStore{store, transient})
+			case "uploads disabled":
+				svc.SetSourcemapStore(nil)
+			case "metadata timeout":
+				svc.updateRepo = unavailableSourcemapMetadata{repository, transient}
+			}
+			process := ProcessUpdateParams{AppID: h.appId, BranchName: "main", RuntimeVersion: "1", UpdateID: update.UpdateId, Platform: types.PlatformIOS}
+			_, err = svc.ProcessUploadedUpdate(ctx, process)
+			require.Error(t, err)
+			metadata, readErr := stores.UpdateStore.GetFile(ctx, *update, "metadata.json")
+			require.NoError(t, readErr)
+			if mode == "map missing" {
+				require.ErrorIs(t, err, ErrInvalidUpdate)
+				require.Nil(t, metadata)
+				return
+			}
+			require.ErrorIs(t, err, ErrSourcemapVerificationUnavailable)
+			require.NotErrorIs(t, err, ErrInvalidUpdate)
+			if mode == "storage timeout" || mode == "metadata timeout" {
+				require.ErrorIs(t, err, transient)
+			}
+			require.NotNil(t, metadata, "temporary source map failures must preserve valid uploaded files")
+			svc.SetSourcemapStore(store)
+			svc.updateRepo = repository
+			manifestID, err := svc.ProcessUploadedUpdate(ctx, process)
+			require.NoError(t, err, "finalization must succeed without re-upload after recovery")
+			require.NotEmpty(t, manifestID)
+		})
+	}
 }
