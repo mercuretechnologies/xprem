@@ -190,8 +190,9 @@ func TestProcessUploadedUpdateRetriesUnavailableSourcemapVerification(t *testing
 			require.False(t, published, "failed source map verification must not publish the update")
 			metadata, readErr := stores.UpdateStore.GetFile(ctx, *update, "metadata.json")
 			require.NoError(t, readErr)
-			if mode == "map missing" {
+			if mode == "map missing" || mode == "uploads disabled" {
 				require.ErrorIs(t, err, ErrInvalidUpdate)
+				require.NotErrorIs(t, err, ErrSourcemapVerificationUnavailable)
 				require.Nil(t, metadata)
 				return
 			}

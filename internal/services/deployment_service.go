@@ -308,7 +308,7 @@ func (s *DeploymentService) verifySourcemapUploaded(ctx context.Context, update 
 		return nil, nil
 	}
 	if s.sourcemapStore == nil {
-		return nil, fmt.Errorf("%w: sourcemap %s declared but sourcemap uploads are disabled", ErrSourcemapVerificationUnavailable, *hash)
+		return nil, fmt.Errorf("sourcemap %s declared but sourcemap uploads are disabled", *hash)
 	}
 	exists, err := s.sourcemapStore.Exists(ctx, update.AppId, *hash)
 	if err != nil {
