@@ -1346,6 +1346,14 @@ export class ApiClient {
     });
   }
 
+  public async resetUserPassword(userId: string, newPassword: string) {
+    return this.request<void>(`/api/users/${encodeURIComponent(userId)}/password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword }),
+    });
+  }
+
   public async deleteUser(userId: string) {
     return this.request<void>(`/api/users/${encodeURIComponent(userId)}`, {
       method: 'DELETE',

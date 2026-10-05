@@ -34,6 +34,7 @@ func registerAccountRoutes(
 
 	accountSubrouter.Handle("/users", adminOnly(http.HandlerFunc(container.UsersHandler.GetUsersHandler))).Methods(http.MethodGet)
 	accountSubrouter.Handle("/users", adminOnly(http.HandlerFunc(container.UsersHandler.CreateUserHandler))).Methods(http.MethodPost)
+	accountSubrouter.Handle("/users/{USER_ID}/password", adminOnly(http.HandlerFunc(container.UsersHandler.ResetUserPasswordHandler))).Methods(http.MethodPut)
 	accountSubrouter.Handle("/users/{USER_ID}", adminOnly(http.HandlerFunc(container.UsersHandler.UpdateUserHandler))).Methods(http.MethodPatch)
 	accountSubrouter.Handle("/users/{USER_ID}", adminOnly(http.HandlerFunc(container.UsersHandler.DeleteUserHandler))).Methods(http.MethodDelete)
 

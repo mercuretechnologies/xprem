@@ -34,13 +34,15 @@ type UserRepository interface {
 
 // Business-rule violations, mapped to explicit 4xx responses by the handlers.
 var (
-	ErrUsersRequireControlPlane  = errors.New("user accounts are managed in the database: this deployment runs in stateless mode, where the only account comes from ADMIN_EMAIL and ADMIN_PASSWORD")
-	ErrCannotChangeOwnAdminFlag  = errors.New("you cannot change your own admin status")
-	ErrCannotDeleteOwnAccount    = errors.New("you cannot delete your own account")
-	ErrCannotDisableOwnAccount   = errors.New("you cannot disable your own account")
-	ErrLastAdmin                 = errors.New("there must always be at least one enabled admin")
-	ErrInvalidCurrentPassword    = errors.New("the current password is incorrect")
-	ErrUserCreationDisabledBySSO = errors.New("SSO is active: accounts are provisioned automatically on their first SSO sign-in")
+	ErrUsersRequireControlPlane   = errors.New("user accounts are managed in the database: this deployment runs in stateless mode, where the only account comes from ADMIN_EMAIL and ADMIN_PASSWORD")
+	ErrCannotChangeOwnAdminFlag   = errors.New("you cannot change your own admin status")
+	ErrCannotDeleteOwnAccount     = errors.New("you cannot delete your own account")
+	ErrCannotDisableOwnAccount    = errors.New("you cannot disable your own account")
+	ErrLastAdmin                  = errors.New("there must always be at least one enabled admin")
+	ErrInvalidCurrentPassword     = errors.New("the current password is incorrect")
+	ErrUserCreationDisabledBySSO  = errors.New("SSO is active: accounts are provisioned automatically on their first SSO sign-in")
+	ErrCannotResetOwnPassword     = errors.New("use My account to change your own password with your current password")
+	ErrPasswordResetDisabledBySSO = errors.New("SSO is active: members sign in through the identity provider, where their passwords are managed")
 )
 
 // ValidationError wraps a user-input validation failure (email format,
@@ -272,5 +274,43 @@ func (s *UserService) ChangePassword(ctx context.Context, userId string, current
 			Outcome:       auditlog.OutcomeSuccess,
 		})
 	}
+	return nil
+}
+
+// ResetPassword lets an administrator recover another account without its
+// current password. Self-service still requires the current password through
+// ChangePassword, and only the target account's sessions are retired.
+func (s *UserService) ResetPassword(ctx context.Context, actorUserId string, targetUserId string, newPassword string) error {
+	if err := s.requireControlPlane(); err != nil {
+		return err
+	}
+	if actorUserId == targetUserId {
+		return ErrCannotResetOwnPassword
+	}
+	target, err := s.userRepo.GetUserByID(ctx, targetUserId)
+	if err != nil {
+		return err
+	}
+	// UUID aliases in a URL (for example uppercase or without hyphens) can
+	// resolve to the same row, so compare the stored identity as well.
+	if actorUserId == target.Id {
+		return ErrCannotResetOwnPassword
+	}
+	// Members cannot use password sign-in while SSO is enforced. Admins keep
+	// passwords for their existing break-glass sign-in path.
+	if s.ssoEnforced != nil && s.ssoEnforced(ctx) && !target.IsAdmin {
+		return ErrPasswordResetDisabledBySSO
+	}
+	if err := crypto.ValidatePasswordPolicy(newPassword); err != nil {
+		return &ValidationError{Reason: err}
+	}
+	passwordHash, err := crypto.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.userRepo.UpdateUserPassword(ctx, targetUserId, passwordHash); err != nil {
+		return err
+	}
+	s.recordUserEvent(ctx, auditlog.ActionUserPasswordChanged, target, map[string]any{"reset": true})
 	return nil
 }
