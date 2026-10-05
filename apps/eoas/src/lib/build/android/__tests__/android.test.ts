@@ -19,6 +19,8 @@ import {
   resolveIdentifier,
 } from '../../server';
 import { createLogUploader } from '../../upload';
+import { restoreAndroidCache } from '../cache';
+import { withGradleHome } from '../gradleHome';
 import { buildAndroid } from '../index';
 import { resolveAndroidTools } from '../tools';
 
@@ -30,6 +32,8 @@ vi.mock('../../artifacts', () => ({
 }));
 vi.mock('../../fingerprint', () => ({ fingerprintBuild: vi.fn() }));
 vi.mock('../../upload', () => ({ createLogUploader: vi.fn() }));
+vi.mock('../cache', () => ({ restoreAndroidCache: vi.fn() }));
+vi.mock('../gradleHome', () => ({ withGradleHome: vi.fn() }));
 
 vi.mock('@expo/spawn-async', () => ({ default: vi.fn() }));
 vi.mock('../../server', async importOriginal => ({
@@ -58,6 +62,15 @@ describe('Android orchestration', () => {
   let gradleProfileHtml: string | undefined;
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.mocked(withGradleHome).mockImplementation(
+      async (_build, work) => await work('/eoas-gradle-home')
+    );
+    vi.mocked(restoreAndroidCache).mockResolvedValue({
+      args: ['--build-cache', '--init-script', '/cache.gradle'],
+      env: { CCACHE_DIR: '/eoas-ccache' },
+      report: vi.fn(),
+      save: vi.fn(),
+    });
     events.length = 0;
     vi.mocked(startBuildRecord).mockImplementation(async () => {
       events.push('start');
@@ -199,7 +212,6 @@ describe('Android orchestration', () => {
       if (command.endsWith('gradlew')) {
         events.push('gradle');
         expect(args).toContain(':app:bundleRelease');
-        expect(args).toContain('--profile');
         expect(options?.env?.JAVA_HOME).toBe('/checked/jdk');
         expect(await fs.readFile(path.join(cwd, 'gradlew'), 'utf8')).not.toContain('\r');
         expect((await fs.stat(path.join(cwd, 'gradlew'))).mode & 0o111).toBe(0o111);
@@ -224,8 +236,30 @@ describe('Android orchestration', () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.remove(project);
   });
+  it.each([undefined, '/user/gradle-home'])(
+    'uses ordinary Gradle configuration with remote cache disabled (GRADLE_USER_HOME: %s)',
+    async gradleHome => {
+      vi.stubEnv('GRADLE_USER_HOME', gradleHome);
+      vi.stubEnv('CCACHE_DIR', '/user/ccache');
+      await buildAndroid(project, {
+        profile: 'production',
+        envFile: 'override.env',
+        remoteCache: false,
+      });
+      const [, args, spawn] = vi
+        .mocked(spawnAsync)
+        .mock.calls.find(([command]) => command.endsWith('gradlew'))!;
+      expect(args).toEqual([':app:bundleRelease', '--no-daemon', '--console=plain']);
+      expect(spawn?.env?.GRADLE_USER_HOME).toBe(gradleHome);
+      expect(spawn?.env?.CCACHE_DIR).toBe('/user/ccache');
+      expect(withGradleHome).not.toHaveBeenCalled();
+      expect(restoreAndroidCache).not.toHaveBeenCalled();
+      expect(uploadBuildArtifact).toHaveBeenCalledOnce();
+    }
+  );
   it('explains how to configure a missing xprem.json before contacting the server', async () => {
     await fs.remove(path.join(project, 'xprem.json'));
     await expect(buildAndroid(project, { profile: 'production' })).rejects.toThrow(

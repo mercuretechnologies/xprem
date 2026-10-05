@@ -15,8 +15,26 @@ let exportDir: string;
 let outsideDir: string;
 
 const manifest: AssetToUpload[] = [
-  { path: 'metadata.json', name: 'metadata.json', ext: 'json', hash: 'unused' },
-  { path: 'bundles/ios-abc.hbc', name: 'ios-abc.hbc', ext: 'hbc', hash: 'unused' },
+  {
+    path: 'metadata.json',
+    name: 'metadata.json',
+    ext: 'json',
+    hash: 'unused',
+    key: 'metadata',
+    platform: null,
+    isLaunchAsset: false,
+    isSourcemap: false,
+  },
+  {
+    path: 'bundles/ios-abc.hbc',
+    name: 'ios-abc.hbc',
+    ext: 'hbc',
+    hash: 'unused',
+    key: 'ios-abc',
+    platform: 'ios',
+    isLaunchAsset: true,
+    isSourcemap: false,
+  },
 ];
 
 function item(overrides: Partial<RequestUploadUrlItem> = {}): RequestUploadUrlItem {

@@ -33,22 +33,32 @@ type BuildArtifactDeleter interface {
 	Delete(context.Context, bucket.BuildArtifact, bool) error
 }
 
+// BuildCacheDeleter removes one cache archive; absent archives are not an error.
+type BuildCacheDeleter interface {
+	Delete(context.Context, bucket.BuildCacheObject) error
+}
+
 // BuildCleanup drains the build_artifact_cleanup outbox, sweeps stale staging
 // uploads and fails abandoned builds. Final artifacts of ready builds are never touched.
 type BuildCleanup struct {
 	db            database.DBTX
 	artifactStore BuildArtifactDeleter
+	cacheStore    BuildCacheDeleter
 }
 
-func NewBuildCleanup(db database.DBTX, artifactStore BuildArtifactDeleter) *BuildCleanup {
-	return &BuildCleanup{db: db, artifactStore: artifactStore}
+func NewBuildCleanup(db database.DBTX, artifactStore BuildArtifactDeleter, cacheStore BuildCacheDeleter) *BuildCleanup {
+	return &BuildCleanup{db: db, artifactStore: artifactStore, cacheStore: cacheStore}
 }
 
 // Start runs the cleanup loops until the returned stop function is called.
 func (c *BuildCleanup) Start(parent context.Context) func() {
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		c.loop(ctx, buildStagingSweepInterval, "build cache", c.SweepCache)
+	}()
 	go func() {
 		defer wg.Done()
 		c.loop(ctx, buildOutboxInterval, "outbox", c.DrainOutbox)
@@ -90,6 +100,58 @@ func (c *BuildCleanup) loop(ctx context.Context, interval time.Duration, name st
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *BuildCleanup) SweepCache(ctx context.Context) (int, error) {
+	q := pgdb.New(c.db)
+	for {
+		expired, err := q.ExpireBuildCacheObjects(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if expired < 100 {
+			break
+		}
+	}
+	total := 0
+	for {
+		processed, deleted, err := c.sweepCacheBatch(ctx)
+		total += deleted
+		if err != nil || processed < 4 {
+			return total, err
+		}
+	}
+}
+
+// Commit each small batch so a slow bucket cannot roll back earlier deletions.
+func (c *BuildCleanup) sweepCacheBatch(ctx context.Context) (int, int, error) {
+	tx, err := c.db.Begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+	q := pgdb.New(tx)
+	objects, err := q.DueBuildCacheCleanup(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	deleted := 0
+	for _, object := range objects {
+		itemCtx, cancel := context.WithTimeout(ctx, buildCleanupItemTimeout)
+		err = c.cacheStore.Delete(itemCtx, bucket.BuildCacheObject{AppID: object.AppID.String(), IdentifierID: object.AppIdentifierID.String(), Namespace: object.Namespace, ID: object.ID.String()})
+		cancel()
+		if err != nil {
+			log.Printf("[BUILD-CACHE] object %s cleanup failed: %v", object.ID.String(), err)
+			err = q.RetryBuildCacheCleanup(ctx, object.ID)
+		} else {
+			err = q.DeleteBuildCacheCleanup(ctx, object.ID)
+			deleted++
+		}
+		if err != nil {
+			return len(objects), deleted, err
+		}
+	}
+	return len(objects), deleted, tx.Commit(ctx)
 }
 
 // DrainOutbox deletes the final and staging objects of one batch of due

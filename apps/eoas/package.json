@@ -4,9 +4,10 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.eslint.json",
     "watch": "tsc --project tsconfig.json --watch",
     "lint": "eslint .",
-    "test": "npm run build && vitest run"
+    "test": "npm run typecheck && npm run build && vitest run"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -15,6 +15,8 @@ export enum BuildStep {
   PREBUILD = 'Prebuild',
   POST_INSTALL_HOOK = 'Post-install hook',
   CONFIGURE_ANDROID_SIGNING = 'Configure Android signing',
+  RESTORE_BUILD_CACHE = 'Restore build cache',
+  SAVE_BUILD_CACHE = 'Save build cache',
   BUILD_APK = 'Building signed APK',
   BUILD_AAB = 'Building signed AAB',
   GRADLE_BUILD_PROFILE = 'Gradle build profile',

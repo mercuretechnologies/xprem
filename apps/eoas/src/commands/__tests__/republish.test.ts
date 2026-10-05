@@ -2,6 +2,7 @@
 // command runs for real, with the project/auth/network seams mocked. Pins the
 // mode question (publish group vs single update), the group POST wire format,
 // and the fallbacks that skip the question.
+import { Response } from 'node-fetch';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -99,9 +100,13 @@ function answerPrompts(answers: Record<string, PromptAnswer>): void {
 }
 
 function promptedNames(): string[] {
-  return vi
-    .mocked(promptAsync)
-    .mock.calls.map(([questions]) => (Array.isArray(questions) ? questions[0] : questions).name);
+  return vi.mocked(promptAsync).mock.calls.map(([questions]) => {
+    const name = (Array.isArray(questions) ? questions[0] : questions).name;
+    if (typeof name !== 'string') {
+      throw new Error('Expected a prompt with a string name');
+    }
+    return name;
+  });
 }
 
 function lastPostUrl(): URL {
@@ -113,11 +118,9 @@ describe('republish command flow', () => {
   beforeEach(() => {
     vi.mocked(fetchRuntimeVersions).mockResolvedValue(runtimeVersionsPayload);
     vi.mocked(fetchPublishGroups).mockResolvedValue(null);
-    vi.mocked(fetchWithRetries).mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ publishGroup: 'new-group', updates: [] }),
-    } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValue(
+      new Response(JSON.stringify({ publishGroup: 'new-group', updates: [] }))
+    );
   });
 
   afterEach(() => {

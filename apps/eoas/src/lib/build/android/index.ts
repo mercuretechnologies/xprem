@@ -3,6 +3,8 @@ import fg from 'fast-glob';
 import fs from 'fs-extra';
 import path from 'path';
 
+import { AndroidCache, restoreAndroidCache } from './cache';
+import { withGradleHome } from './gradleHome';
 import { BuildStep } from '../steps';
 import { logGradleProfile } from './gradleProfile';
 import { runPostInstallHook } from '../hooks';
@@ -47,9 +49,21 @@ export async function buildAndroid(project: string, options: AndroidBuildOptions
         build.credentials.keyPassword,
       ]);
       buildLog.maskSecrets(secrets);
-      return await withTemporaryDirectory(buildLog, temporary =>
-        runNativeBuild(build, androidBuild(build), temporary, buildLog, secrets)
-      );
+      const run = (): Promise<string> =>
+        withTemporaryDirectory(
+          buildLog,
+          temporary => runNativeBuild(build, androidBuild(build), temporary, buildLog, secrets),
+          options.remoteCache === false ? undefined : project
+        );
+      if (options.remoteCache === false) {
+        buildLog.general.info('Remote cache disabled. Using the local Gradle configuration.');
+        return await run();
+      }
+      return await withGradleHome(build, async directory => {
+        build.env = { ...build.env, GRADLE_USER_HOME: directory };
+        buildLog.general.info(`Gradle home: ${directory}`);
+        return await run();
+      });
     },
     options.verbose || Log.isDebug
   );
@@ -95,6 +109,7 @@ async function prepareBuild(
 
 function androidBuild(build: AndroidBuild): NativeBuild {
   const { applicationId, artifact, developmentClient, mode } = build.android;
+  let cache: AndroidCache | undefined;
   return {
     platform: 'android',
     displayName: 'Android',
@@ -109,6 +124,19 @@ function androidBuild(build: AndroidBuild): NativeBuild {
         throw new Error('Allocated build number exceeds the Android versionCode limit.');
       }
       return { ...expo, android: { ...expo.android, package: applicationId, versionCode } };
+    },
+    restoreCache: async ({ temporary, buildLog }) => {
+      if (build.options.remoteCache === false) {
+        return;
+      }
+      cache = await buildLog.runStep(BuildStep.RESTORE_BUILD_CACHE, stepLog =>
+        restoreAndroidCache(build, temporary, stepLog)
+      );
+    },
+    saveCache: async ({ buildLog }) => {
+      if (cache) {
+        await buildLog.runStep(BuildStep.SAVE_BUILD_CACHE, stepLog => cache!.save(stepLog));
+      }
     },
     compile: async ({ working, temporary, buildNumber, buildLog, secrets }) => {
       await runPostInstallHook(build, working, buildLog, secrets);
@@ -127,11 +155,29 @@ function androidBuild(build: AndroidBuild): NativeBuild {
       });
       await buildLog.runStep(
         artifact === 'apk' ? BuildStep.BUILD_APK : BuildStep.BUILD_AAB,
-        stepLog => runBuildCommand(gradleCommand(build, working, signing), stepLog, secrets)
+        async stepLog => {
+          const command = gradleCommand(build, working, signing);
+          if (cache) {
+            command.args.push(
+              '--profile',
+              '--gradle-user-home',
+              build.env.GRADLE_USER_HOME!,
+              ...cache.args
+            );
+            command.env = { ...command.env, ...cache.env };
+          }
+          try {
+            await runBuildCommand(command, stepLog, secrets);
+          } finally {
+            await cache?.report(stepLog);
+          }
+        }
       );
-      await buildLog.runStep(BuildStep.GRADLE_BUILD_PROFILE, stepLog =>
-        logGradleProfile(path.join(working, 'android'), stepLog)
-      );
+      if (cache) {
+        await buildLog.runStep(BuildStep.GRADLE_BUILD_PROFILE, stepLog =>
+          logGradleProfile(path.join(working, 'android'), stepLog)
+        );
+      }
     },
     findArtifact: async ({ working }) => {
       const candidates = await fg(
@@ -208,7 +254,7 @@ function gradleCommand(build: AndroidBuild, working: string, signing: string): B
   return {
     title: `Building signed ${artifact.toUpperCase()}`,
     command: path.join(working, 'android/gradlew'),
-    args: [`:app:${task}`, '--no-daemon', '--console=plain', '--profile'],
+    args: [`:app:${task}`, '--no-daemon', '--console=plain'],
     cwd: path.join(working, 'android'),
     env: { ...build.env, EOAS_SIGNING_FILE: signing, LC_ALL: 'C.UTF-8' },
   };

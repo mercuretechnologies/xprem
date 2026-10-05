@@ -47,6 +47,11 @@ export default class Build extends Command {
       description: 'Stream build logs to xprem for live viewing in the dashboard',
       default: false,
     }),
+    'remote-cache': Flags.boolean({
+      description: 'Use xprem remote Gradle and C/C++ caches for Android builds',
+      default: true,
+      allowNo: true,
+    }),
   };
   static override examples = [
     '<%= config.bin %> build --profile production --channel production --envFile .env.build',
@@ -64,6 +69,7 @@ export default class Build extends Command {
       packageRunner: flags.packageRunner,
       verbose: flags.verbose,
       stream: flags.stream,
+      remoteCache: flags['remote-cache'],
     };
     try {
       const platform = await resolvePlatform(flags.platform as BuildPlatform | undefined, options);
