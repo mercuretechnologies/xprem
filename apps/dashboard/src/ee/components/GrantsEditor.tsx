@@ -120,6 +120,7 @@ export const GrantsEditor = ({
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-medium">{appName(grant.appId)}</p>
             <Button
+              type="button"
               variant="ghost"
               size="sm"
               disabled={disabled}
@@ -133,6 +134,7 @@ export const GrantsEditor = ({
           <div className="mt-3 space-y-1.5">
             <p className="text-xs font-medium text-muted-foreground">Role on this app</p>
             <Combobox
+              modal
               options={roleOptions}
               disabled={disabled}
               value={grant.roleId ?? NO_ROLE_VALUE}
@@ -195,6 +197,7 @@ export const GrantsEditor = ({
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Grant access to</p>
           <Combobox
+            modal
             options={availableApps.map(app => ({ value: app.id, label: app.name || app.id }))}
             disabled={disabled}
             value=""
