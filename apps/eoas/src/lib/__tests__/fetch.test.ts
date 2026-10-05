@@ -1,5 +1,5 @@
 import FormData from 'form-data';
-import { Response } from 'node-fetch';
+import fetch, { Response } from 'node-fetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -16,16 +16,10 @@ vi.mock('node-fetch', async importOriginal => {
   return { ...actual, default: vi.fn() };
 });
 
-const mockFetch = vi.mocked((await import('node-fetch')).default);
+const mockFetch = vi.mocked(fetch);
 
 function response(status: number, headers: Record<string, string> = {}): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: {
-      get: (name: string) => headers[name.toLowerCase()] ?? null,
-    },
-  } as unknown as Response;
+  return new Response(undefined, { status, headers });
 }
 
 beforeEach(() => {

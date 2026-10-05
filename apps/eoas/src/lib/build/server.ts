@@ -109,7 +109,14 @@ export async function request<T>(
     retry = true,
     body,
     timeout = 30000,
-  }: { method?: string; retry?: boolean; body?: unknown; timeout?: number } = {}
+    signal,
+  }: {
+    method?: string;
+    retry?: boolean;
+    body?: unknown;
+    timeout?: number;
+    signal?: AbortSignal;
+  } = {}
 ): Promise<T> {
   const credentials = retrieveCredentials();
   if (detectServerImplementation() !== 'eoo' || !credentials.token) {
@@ -124,6 +131,7 @@ export async function request<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: 'error',
     timeout,
+    signal,
   };
   let response: Response;
   try {

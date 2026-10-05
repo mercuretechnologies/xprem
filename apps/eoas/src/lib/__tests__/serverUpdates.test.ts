@@ -1,3 +1,4 @@
+import { Response } from 'node-fetch';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fetchWithRetries } from '../fetch';
@@ -116,10 +117,7 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
       items: [update({ updateId: '10', publishGroup: 'group-a' })],
       nextCursor: '10',
     };
-    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
-      ok: true,
-      json: async () => payload,
-    } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce(new Response(JSON.stringify(payload)));
 
     const page = await fetchUpdates({
       baseUrl: 'https://ota.example.com',
@@ -138,10 +136,7 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
 
   it('wraps the bare-array response of pre-pagination servers into a page', async () => {
     const legacyBody = [update({ updateId: '10' }), update({ updateId: '9', platform: 'android' })];
-    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
-      ok: true,
-      json: async () => legacyBody,
-    } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce(new Response(JSON.stringify(legacyBody)));
 
     const page = await fetchUpdates({
       baseUrl: 'https://ota.example.com',
@@ -158,11 +153,7 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
       items: [],
       nextCursor: null,
     };
-    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => payload,
-    } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce(new Response(JSON.stringify(payload)));
 
     await expect(
       fetchPublishGroups({
@@ -180,7 +171,7 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
   });
 
   it('treats a missing publish-group endpoint as unsupported', async () => {
-    vi.mocked(fetchWithRetries).mockResolvedValueOnce({ ok: false, status: 404 } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce(new Response(undefined, { status: 404 }));
     await expect(
       fetchPublishGroups({
         baseUrl: 'https://ota.example.com',
@@ -193,10 +184,7 @@ describe('fetchUpdates and fetchRuntimeVersions', () => {
   });
 
   it('throws with the server text on a failed listing', async () => {
-    vi.mocked(fetchWithRetries).mockResolvedValueOnce({
-      ok: false,
-      text: async () => 'boom',
-    } as Response);
+    vi.mocked(fetchWithRetries).mockResolvedValueOnce(new Response('boom', { status: 500 }));
     await expect(
       fetchRuntimeVersions({
         baseUrl: 'https://ota.example.com',

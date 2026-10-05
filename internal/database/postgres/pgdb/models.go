@@ -173,6 +173,28 @@ type BuildArtifactCleanup struct {
 	CreatedAt       pgtype.Timestamptz      `json:"created_at"`
 }
 
+type BuildCacheCleanup struct {
+	ID              pgtype.UUID               `json:"id"`
+	AppID           pgtype.UUID               `json:"app_id"`
+	AppIdentifierID pgtype.UUID               `json:"app_identifier_id"`
+	Namespace       types.BuildCacheNamespace `json:"namespace"`
+	Size            int64                     `json:"size"`
+	DueAt           pgtype.Timestamptz        `json:"due_at"`
+}
+
+type BuildCacheObject struct {
+	ID              pgtype.UUID               `json:"id"`
+	AppID           pgtype.UUID               `json:"app_id"`
+	AppIdentifierID pgtype.UUID               `json:"app_identifier_id"`
+	Namespace       types.BuildCacheNamespace `json:"namespace"`
+	CacheKey        string                    `json:"cache_key"`
+	Size            int64                     `json:"size"`
+	Sha256          string                    `json:"sha256"`
+	CreatedAt       pgtype.Timestamptz        `json:"created_at"`
+	ExpiresAt       pgtype.Timestamptz        `json:"expires_at"`
+	PublishedAt     pgtype.Timestamptz        `json:"published_at"`
+}
+
 type BuildLogChunk struct {
 	BuildID    pgtype.UUID        `json:"build_id"`
 	ByteOffset int32              `json:"byte_offset"`

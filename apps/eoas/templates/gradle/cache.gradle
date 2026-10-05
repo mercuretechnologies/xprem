@@ -1,0 +1,6 @@
+if (GradleVersion.current() >= GradleVersion.version('8.8')) {
+  beforeSettings { settings ->
+    settings.caches.buildCache.setRemoveUnusedEntriesAfterDays(3)
+    settings.caches.cleanup = Cleanup.ALWAYS
+  }
+}

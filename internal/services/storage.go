@@ -43,3 +43,12 @@ type BuildArtifactStore interface {
 	PresignPut(ctx context.Context, appID string, ref bucket.BuildArtifact) (*objectstore.UploadRequest, error)
 	PresignGet(ctx context.Context, ref bucket.BuildArtifact, expiresAt time.Time) (string, error)
 }
+
+// BuildCacheStore holds the cache archives of native builds.
+type BuildCacheStore interface {
+	Get(ctx context.Context, ref bucket.BuildCacheObject) (*types.BucketFile, error)
+	Put(ctx context.Context, ref bucket.BuildCacheObject, body io.Reader) error
+	Delete(ctx context.Context, ref bucket.BuildCacheObject) error
+	PresignPut(ctx context.Context, ref bucket.BuildCacheObject) (*objectstore.UploadRequest, error)
+	PresignGet(ctx context.Context, ref bucket.BuildCacheObject, expiresAt time.Time) (string, error)
+}
