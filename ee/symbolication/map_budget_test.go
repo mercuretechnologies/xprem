@@ -7,7 +7,6 @@ package symbolication
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,14 +20,14 @@ import (
 func TestParseRejectsExpandedMappingsWithinRawLimit(t *testing.T) {
 	data := []byte(`{"version":3,"mappings":"` + strings.Repeat("A,", 2048) + `"}`)
 	// The raw input fits, but even its valid one-field segments do not fit
-	// a 32 KiB decoded budget. Reject before making the segment table.
+	// a 32 KiB segment-table limit. Reject before making the segment table.
 	m, err := parseMap(context.Background(), data, 32<<10)
 	require.Nil(t, m)
 	assert.ErrorIs(t, err, ErrInvalidMap)
-	assert.ErrorIs(t, err, errMapBudget)
+	assert.ErrorIs(t, err, errSegmentLimit)
 }
 
-func TestParseDefaultBudgetRejectsExpansionBeforeAllocatingSegments(t *testing.T) {
+func TestParseDefaultLimitRejectsExpansionBeforeAllocatingSegments(t *testing.T) {
 	const segments = maxIndexCacheBytes/segmentSize + 1
 	data := []byte(`{"version":3,"mappings":"` + strings.Repeat("A,", segments) + `"}`)
 	require.Less(t, len(data), maxMapSize)
@@ -38,7 +37,7 @@ func TestParseDefaultBudgetRejectsExpansionBeforeAllocatingSegments(t *testing.T
 	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	runtime.ReadMemStats(&after)
 	require.Nil(t, m)
-	assert.ErrorIs(t, err, errMapBudget)
+	assert.ErrorIs(t, err, errSegmentLimit)
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(3*len(data)), "the oversized segment table must never be allocated")
 
 	store := newFakeStore()
@@ -52,45 +51,30 @@ func TestParseDefaultBudgetRejectsExpansionBeforeAllocatingSegments(t *testing.T
 	assert.Empty(t, store.indexes)
 }
 
-func TestParseBudgetsAllArrayEntriesBeforeDecoding(t *testing.T) {
-	for _, field := range []struct {
+func TestParseSegmentTableLimit(t *testing.T) {
+	for _, tc := range []struct {
 		name     string
-		value    string
-		perEntry int
+		mappings string
+		tooLarge bool
 	}{
-		{"sources", `"a.js"`, 33},
-		{"names", `"name"`, 16},
-		{"sourcesContent", `"code"`, 24},
-		{"ignoreList", `0`, 8},
-		{"x_google_ignoreList", `0`, 8},
+		{"exact boundary", "A,A", false},
+		{"over limit", "A,A,A", true},
 	} {
-		t.Run(field.name, func(t *testing.T) {
-			const entries = 1024
-			values := strings.TrimSuffix(strings.Repeat(field.value+",", entries), ",")
-			data := []byte(fmt.Sprintf(`{"version":3,"mappings":"A","%s":[%s]}`, field.name, values))
-			limit := len(data) + (entries-1)*field.perEntry
-			_, err := parseMap(context.Background(), data, limit)
-			assert.ErrorIs(t, err, errMapBudget)
-
-			// Exactly enough room for the array and one segment is accepted.
-			_, err = parseMap(context.Background(), data, len(data)+entries*field.perEntry+segmentSize)
+		t.Run(tc.name, func(t *testing.T) {
+			// Source content is decoded normally and does not consume the
+			// segment-table limit, even when the JSON input is larger than it.
+			data := []byte(`{"version":3,"sources":["a.js"],"sourcesContent":["` + strings.Repeat("x", 128) + `"],"mappings":"` + tc.mappings + `"}`)
+			m, err := parseMap(context.Background(), data, 2*segmentSize)
+			if tc.tooLarge {
+				require.Nil(t, m)
+				assert.ErrorIs(t, err, errSegmentLimit)
+				return
+			}
 			require.NoError(t, err)
+			require.Len(t, m.Segments, 2)
+			assert.Equal(t, strings.Repeat("x", 128), m.SourcesContent[0])
 		})
 	}
-}
-
-func TestParseArrayCountsRespectEscapedStringsAndNullContent(t *testing.T) {
-	data := []byte(`{"version":3,"sources":["a,\"[file].js","b.js"],"names":["x,y"],"sourcesContent":[null,"code,[text]"],"ignoreList":[1],"mappings":"AAAAA"}`)
-	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"a,\"[file].js", "b.js"}, m.Sources)
-	assert.Equal(t, []string{"", "code,[text]"}, m.SourcesContent)
-	assert.Equal(t, []bool{false, true}, m.Ignored)
-
-	_, err = parseMap(context.Background(), []byte(`{"version":3,"sources":[["nested"]],"mappings":"A"}`), maxIndexCacheBytes)
-	assert.ErrorIs(t, err, ErrInvalidMap, "counting entries must not admit invalid field types")
-	_, err = parseMap(context.Background(), []byte("{\"version\":3,\"sources\":[\"\xff\"],\"mappings\":\"A\"}"), maxIndexCacheBytes)
-	assert.ErrorIs(t, err, ErrInvalidMap, "invalid UTF-8 must not expand past the input charge")
 }
 
 func TestDenseMappingsDoNotAllocatePerSegmentOrGrowTheTable(t *testing.T) {

@@ -8,6 +8,7 @@ package symbolication
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -16,6 +17,8 @@ import (
 // ErrInvalidMap reports a file that is not a usable source map. Retrying
 // cannot fix it.
 var ErrInvalidMap = errors.New("invalid source map")
+
+var errSegmentLimit = fmt.Errorf("%w: source map segment table exceeds its size limit", ErrInvalidMap)
 
 // Map is a parsed source map.
 type Map struct {
@@ -53,13 +56,26 @@ type rawMap struct {
 	GoogleIgnoreList []int     `json:"x_google_ignoreList"`
 }
 
-// parseMap decodes a source map within the worker's memory budget.
-func parseMap(ctx context.Context, data []byte, maxDecodedBytes int) (*Map, error) {
-	raw, budget, err := readMap(ctx, data, maxDecodedBytes)
-	if err != nil {
+// parseMap decodes a source map, limiting only its segment table.
+// The worker bounds the raw file and serialized index separately.
+func parseMap(ctx context.Context, data []byte, maxSegmentBytes int) (*Map, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	segments, err := decodeMappings(ctx, raw.Mappings, len(raw.Sources), len(raw.Names), budget/segmentSize)
+	var raw rawMap
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidMap, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if raw.Version != 3 {
+		return nil, fmt.Errorf("%w: version %d, expected 3", ErrInvalidMap, raw.Version)
+	}
+	if raw.Mappings == "" {
+		return nil, fmt.Errorf("%w: no mappings", ErrInvalidMap)
+	}
+	segments, err := decodeMappings(ctx, raw.Mappings, len(raw.Sources), len(raw.Names), maxSegmentBytes/segmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +114,28 @@ var base64Values = func() [256]int8 {
 	}
 	return values
 }()
+
+// countSegments rejects an expanded table before allocating its backing array.
+func countSegments(ctx context.Context, mappings string, maximum int) (int, error) {
+	count, inSegment := 0, false
+	for i := 0; i < len(mappings); i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
+		if mappings[i] == ',' || mappings[i] == ';' {
+			inSegment = false
+		} else if !inSegment {
+			count++
+			if count > maximum {
+				return 0, errSegmentLimit
+			}
+			inSegment = true
+		}
+	}
+	return count, nil
+}
 
 // decodeMappings turns the VLQ string into absolute segments, in generated
 // order, which is the order the string lists them in: "," ends a segment

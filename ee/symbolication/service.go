@@ -270,7 +270,7 @@ func (s *Service) buildIndex(ctx context.Context, appId, hash string, rebuild bo
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return indexOutcome{}, err
 		}
-		if errors.Is(err, errMapBudget) {
+		if errors.Is(err, errSegmentLimit) {
 			return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonIndexTooLarge, err))
 		}
 		return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonMapInvalid, err))
