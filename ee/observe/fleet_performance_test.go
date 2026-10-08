@@ -74,7 +74,15 @@ func TestChannelAdoptionDoesNotRescanUpdateHistoryPerDevice(t *testing.T) {
 		ActiveSince: pgtype.Timestamptz{Time: time.Now().Add(-24 * time.Hour), Valid: true},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []pgdb.ListObserveChannelAdoptionRow{{ChannelName: "production", ActiveDevices: devices, UpToDateDevices: devices}}, rows)
+	require.Len(t, rows, 100)
+	var active, upToDate int64
+	for _, row := range rows {
+		require.Equal(t, "production", row.ChannelName)
+		active += row.ActiveDevices
+		upToDate += row.UpToDateDevices
+	}
+	require.Equal(t, int64(devices), active)
+	require.Equal(t, int64(devices), upToDate)
 
 	// Count the actual update rows visited instead of asserting a duration:
 	// the old correlated plan reads two million rows for these 1,000 devices,

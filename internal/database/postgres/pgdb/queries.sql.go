@@ -4453,6 +4453,7 @@ newest AS MATERIALIZED (
     ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
 )
 SELECT d.channel_name::text AS channel_name,
+       COALESCE(d.runtime_version, '')::text AS runtime_version,
        COUNT(*) AS active_devices,
        COUNT(*) FILTER (WHERE d.current_update_id IS NULL) AS embedded_devices,
        COUNT(*) FILTER (WHERE EXISTS (
@@ -4481,8 +4482,8 @@ WHERE d.app_id = $1
   AND (coalesce(cardinality($13::text[]), 0) = 0 OR d.platform = ANY($13::text[]))
   AND (coalesce(cardinality($14::text[]), 0) = 0 OR d.channel_name = ANY($14::text[]))
   AND (coalesce(cardinality($15::text[]), 0) = 0 OR d.app_version = ANY($15::text[]))
-GROUP BY d.channel_name
-ORDER BY active_devices DESC, d.channel_name
+GROUP BY d.channel_name, d.runtime_version
+ORDER BY active_devices DESC, d.channel_name, d.runtime_version
 `
 
 type ListObserveChannelAdoptionParams struct {
@@ -4505,14 +4506,16 @@ type ListObserveChannelAdoptionParams struct {
 
 type ListObserveChannelAdoptionRow struct {
 	ChannelName     string `json:"channel_name"`
+	RuntimeVersion  string `json:"runtime_version"`
 	ActiveDevices   int64  `json:"active_devices"`
 	EmbeddedDevices int64  `json:"embedded_devices"`
 	UpToDateDevices int64  `json:"up_to_date_devices"`
 }
 
-// Per channel, the active devices and how many already run what that channel
-// serves them: the newest update of its branch (or rollout branch) for their
-// runtime and platform, or the control an update rollout keeps them on.
+// Per channel and runtime version, the active devices and how many already run
+// what that channel serves them: the newest update of its branch (or rollout
+// branch) for their runtime and platform, or the control an update rollout
+// keeps them on.
 // This CTE is referenced by a per-device EXISTS below. Materialize the heads
 // once so PostgreSQL does not repeat their DISTINCT ON for every device.
 func (q *Queries) ListObserveChannelAdoption(ctx context.Context, arg ListObserveChannelAdoptionParams) ([]ListObserveChannelAdoptionRow, error) {
@@ -4542,6 +4545,7 @@ func (q *Queries) ListObserveChannelAdoption(ctx context.Context, arg ListObserv
 		var i ListObserveChannelAdoptionRow
 		if err := rows.Scan(
 			&i.ChannelName,
+			&i.RuntimeVersion,
 			&i.ActiveDevices,
 			&i.EmbeddedDevices,
 			&i.UpToDateDevices,
