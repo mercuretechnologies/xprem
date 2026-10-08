@@ -588,6 +588,7 @@ export type ObserveFleet = {
 
 export type ObserveChannelAdoption = {
   channel: string;
+  runtimeVersion: string;
   activeDevices: number;
   embeddedDevices: number;
   upToDateDevices: number;
