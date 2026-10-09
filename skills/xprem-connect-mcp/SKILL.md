@@ -69,11 +69,11 @@ The **docs** MCP stays at `https://mercure-technologies.gitbook.io/xprem/~gitboo
 
 The agent acts as the connected dashboard account and cannot do more than that account.
 
-- Community default (no Enterprise RBAC): members can use **read** tools on apps they see. Certificate download and every **write** (create/delete branches and channels, rollback, republish) is **admin** only.
-- Enterprise RBAC: per-app permissions; writes can be granted app by app. The audit-log tool stays admin-only.
+- Community default (no Enterprise RBAC): members can use **read** tools on apps they see. Certificate download and every **write** (create apps, create/delete branches and channels, rollback, republish) is **admin** only.
+- Enterprise RBAC: per-app permissions; writes can be granted app by app. The audit-log and `create_app` tools stay admin-only.
 
 Destructive tools (`delete_branch`, `delete_channel`, `rollback_branch`) declare the MCP destructive annotation. **Always ask for explicit confirmation** before calling them.
 
-Core MIT tools (confirm the current list on the live page) include `whoami`, `get_apps`, `get_branches`, `get_channels`, `get_updates`, `create_branch`, `create_channel`, `rollback_branch`, `republish_update`, and related read/write tools. Enterprise / Observe tools (`query_logs`, `get_observe_overview`, device search, audit) are **not** MIT — do not treat them as available on every deploy.
+Core MIT tools (confirm the current list on the live page) include `whoami`, `get_apps`, `get_branches`, `get_channels`, `get_updates`, `create_app`, `create_branch`, `create_channel`, `rollback_branch`, `republish_update`, and related read/write tools. Enterprise / Observe tools (`query_logs`, `get_observe_overview`, device search, audit) are **not** MIT — do not treat them as available on every deploy.
 
 After connect, start with `whoami`.
