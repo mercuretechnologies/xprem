@@ -253,7 +253,8 @@ async function findCcache(env: NodeJS.ProcessEnv): Promise<string | undefined> {
       await fs.access(executable, fs.constants.X_OK);
       const { stdout } = await spawnAsync(executable, ['--version'], { env });
       const version = /ccache version (\d+)\.(\d+)/.exec(stdout);
-      if (version && Number(version[1]) === 4 && Number(version[2]) >= 11) {
+      const [major, minor] = version ? [Number(version[1]), Number(version[2])] : [0, 0];
+      if (major > 4 || (major === 4 && minor >= 11)) {
         return executable;
       }
     } catch {
