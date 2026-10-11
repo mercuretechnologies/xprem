@@ -13,8 +13,6 @@ import (
 var ErrBuildCacheArchive = errors.New("cache must be a TAR archive containing only regular files and directories")
 var buildCacheArchiveKey = regexp.MustCompile(`^archive-v1-[a-f0-9]{64}$`)
 
-// Gradle and ccache snapshots are uncompressed TARs. Inspect them without extracting anything
-// on the server; the CLI performs the same path and file-type checks on restore.
 func validateBuildCacheArchive(reader io.Reader) error {
 	archive := tar.NewReader(reader)
 	var size int64

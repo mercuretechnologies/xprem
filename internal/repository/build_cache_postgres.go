@@ -71,8 +71,6 @@ func (s *PostgresBuildCacheRepository) Publish(ctx context.Context, object types
 		if err != nil || saved.PublishedAt != nil {
 			return err
 		}
-		// Replace the previous object atomically; its bytes remain available
-		// for in-flight downloads until the cleanup outbox deletes them.
 		if err = q.RemovePreviousBuildCacheObject(ctx, pgdb.RemovePreviousBuildCacheObjectParams{AppID: app, AppIdentifierID: identifier, Namespace: saved.Namespace, CacheKey: saved.CacheKey, ID: id}); err != nil {
 			return err
 		}
