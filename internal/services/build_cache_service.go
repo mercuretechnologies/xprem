@@ -79,7 +79,7 @@ func (s *BuildCacheService) Reserve(ctx context.Context, appID, identifierID str
 	if err != nil {
 		return nil, err
 	}
-	upload, err := s.cacheStore.PresignPut(ctx, cacheRef(*object))
+	upload, err := s.cacheStore.PresignPut(ctx, cacheRef(*object), objectstore.Upload{Size: object.Size, SHA256: object.SHA256})
 	if err != nil {
 		return nil, errors.Join(err, s.repo.Delete(ctx, *object))
 	}
@@ -113,11 +113,19 @@ func (s *BuildCacheService) Find(ctx context.Context, appID, identifierID string
 }
 
 func (s *BuildCacheService) Complete(ctx context.Context, appID, identifierID, id string) (*types.BuildCacheObject, error) {
+	ctx, cancel := context.WithTimeout(ctx, types.MaxBuildCacheUploadDuration)
+	defer cancel()
 	object, err := s.Get(ctx, appID, identifierID, id)
 	if err != nil || object.PublishedAt != nil {
 		return object, err
 	}
-	file, err := s.cacheStore.Get(ctx, cacheRef(*object))
+	ref := cacheRef(*object)
+	file, err := s.cacheStore.GetUpload(ctx, ref)
+	staged := file != nil
+	if err == nil && file == nil {
+		// A retry may find the copied archive before its metadata was published.
+		file, err = s.cacheStore.Get(ctx, ref)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -125,28 +133,26 @@ func (s *BuildCacheService) Complete(ctx context.Context, appID, identifierID, i
 		return nil, ErrBuildCacheIntegrity
 	}
 	defer file.Reader.Close()
-	hash := sha256.New()
-	limited := &io.LimitedReader{R: file.Reader, N: object.Size + 1}
-	reader := io.TeeReader(limited, hash)
-	contentErr := validateCacheContent(object.Namespace, reader)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
+	if err := validateCacheObject(*object, file.Reader); err != nil {
+		if errors.Is(err, ErrBuildCacheIntegrity) || errors.Is(err, ErrBuildCacheArchive) {
+			err = errors.Join(err, s.repo.Delete(ctx, *object))
+		}
 		return nil, err
 	}
-	if limited.N != 1 || hex.EncodeToString(hash.Sum(nil)) != object.SHA256 {
-		contentErr = ErrBuildCacheIntegrity
-	}
-	if contentErr != nil {
-		// The outbox waits for the signed URL to expire before deleting bytes.
-		if err := s.repo.Delete(ctx, *object); err != nil {
+	if staged {
+		if err := s.cacheStore.Publish(ctx, ref); err != nil {
 			return nil, err
 		}
-		return nil, contentErr
+	}
+	if err := s.cacheStore.DeleteUpload(ctx, ref); err != nil {
+		return nil, err
 	}
 	return s.repo.Publish(ctx, *object)
 }
 
 func (s *BuildCacheService) UploadLocal(ctx context.Context, appID, identifierID, id string, body io.Reader) error {
+	ctx, cancel := context.WithTimeout(ctx, types.MaxBuildCacheUploadDuration)
+	defer cancel()
 	object, err := s.Get(ctx, appID, identifierID, id)
 	if err != nil {
 		return err
@@ -154,7 +160,36 @@ func (s *BuildCacheService) UploadLocal(ctx context.Context, appID, identifierID
 	if object.PublishedAt != nil {
 		return bucket.ErrCacheObjectExists
 	}
-	return s.cacheStore.Put(ctx, cacheRef(*object), io.LimitReader(body, object.Size+1))
+	ref := cacheRef(*object)
+	if err := s.cacheStore.Put(ctx, ref, io.LimitReader(body, object.Size+1)); err != nil {
+		return err
+	}
+	// The reservation may have been published or deleted while the body was streaming.
+	current, err := s.Get(ctx, appID, identifierID, id)
+	switch {
+	case err == nil && current.PublishedAt == nil:
+		return nil
+	case err == nil:
+		err = bucket.ErrCacheObjectExists
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cleanupCancel()
+	return errors.Join(err, s.cacheStore.DeleteUpload(cleanupCtx, ref))
+}
+
+func validateCacheObject(object types.BuildCacheObject, body io.Reader) error {
+	hash := sha256.New()
+	limited := &io.LimitedReader{R: body, N: object.Size + 1}
+	reader := io.TeeReader(limited, hash)
+	contentErr := validateCacheContent(object.Namespace, reader)
+	_, err := io.Copy(io.Discard, reader)
+	if err != nil {
+		return err
+	}
+	if limited.N != 1 || hex.EncodeToString(hash.Sum(nil)) != object.SHA256 {
+		return ErrBuildCacheIntegrity
+	}
+	return contentErr
 }
 
 // DownloadURL signs an object returned by Find, which only returns published entries.

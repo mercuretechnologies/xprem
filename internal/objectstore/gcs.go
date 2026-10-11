@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"xprem/config"
@@ -160,15 +161,25 @@ func (s *gcsStore) ListPrefixes(ctx context.Context, prefix string) ([]string, e
 	}
 }
 
-func (s *gcsStore) PresignPut(_ context.Context, key string) (*UploadRequest, error) {
+func (s *gcsStore) PresignPut(_ context.Context, key string, upload Upload) (*UploadRequest, error) {
 	if s.bucket == "" {
 		return nil, errors.New("gcs store: bucket name not set")
 	}
-	url, err := gcp.SignedURL(s.bucket, key, "PUT", "", 15*time.Minute)
+	if upload.Size < 0 {
+		return nil, errors.New("upload size must not be negative")
+	}
+	var signedHeaders []string
+	var headers map[string]string
+	if upload.Size > 0 {
+		length := strconv.FormatInt(upload.Size, 10)
+		signedHeaders = []string{"content-length:" + length}
+		headers = map[string]string{"Content-Length": length}
+	}
+	url, err := gcp.SignedURL(s.bucket, key, "PUT", "", 15*time.Minute, signedHeaders...)
 	if err != nil {
 		return nil, fmt.Errorf("error generating signed URL: %w", err)
 	}
-	return &UploadRequest{URL: url, Method: "PUT"}, nil
+	return &UploadRequest{URL: url, Method: "PUT", Headers: headers}, nil
 }
 
 // PresignGet returns "" without a service account key to sign with.

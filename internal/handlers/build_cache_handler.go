@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
+	"time"
 	"xprem/internal/bucket"
 	"xprem/internal/repository"
 	"xprem/internal/services"
@@ -23,6 +26,7 @@ func NewBuildCacheHandler(service *services.BuildCacheService) *BuildCacheHandle
 func renderBuildCacheError(w http.ResponseWriter, err error) {
 	w.Header().Set("Cache-Control", "no-store")
 	var missing *repository.ErrResourceNotFound
+	var timeout net.Error
 	switch {
 	case errors.As(err, &missing):
 		RenderError(w, http.StatusNotFound, "Cache object not found.")
@@ -30,6 +34,8 @@ func renderBuildCacheError(w http.ResponseWriter, err error) {
 		RenderError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, repository.ErrBuildCacheFull):
 		RenderError(w, http.StatusRequestEntityTooLarge, err.Error())
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
+		RenderError(w, http.StatusRequestTimeout, "Cache upload timed out.")
 	case validation.IsValidationError(err), errors.Is(err, services.ErrBuildCacheIntegrity), errors.Is(err, services.ErrBuildCacheArchive), errors.Is(err, bucket.ErrCacheDirectUploadRequired):
 		RenderError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, repository.ErrNotSupportedInStatelessMode), errors.Is(err, services.ErrBuildStorageUnavailable):
@@ -64,12 +70,33 @@ func (h *BuildCacheHandler) Complete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BuildCacheHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
-	err := h.service.UploadLocal(r.Context(), mux.Vars(r)["APP_ID"], services.BuildIdentifierFromContext(r.Context()), mux.Vars(r)["UPLOAD_ID"], http.MaxBytesReader(w, r.Body, types.MaxBuildCacheObjectBytes+1))
+	ctx, finish, err := boundBuildCacheUpload(w, r)
+	if err != nil {
+		renderBuildCacheError(w, err)
+		return
+	}
+	defer finish()
+	err = h.service.UploadLocal(ctx, mux.Vars(r)["APP_ID"], services.BuildIdentifierFromContext(ctx), mux.Vars(r)["UPLOAD_ID"], http.MaxBytesReader(w, r.Body, types.MaxBuildCacheObjectBytes+1))
 	if err != nil {
 		renderBuildCacheError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func boundBuildCacheUpload(w http.ResponseWriter, r *http.Request) (context.Context, func(), error) {
+	ctx, cancel := context.WithTimeout(r.Context(), types.MaxBuildCacheUploadDuration)
+	deadline, _ := ctx.Deadline()
+	controller := http.NewResponseController(w)
+	if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		cancel()
+		return nil, nil, err
+	}
+	return ctx, func() {
+		cancel()
+		_ = r.Body.Close()
+		_ = controller.SetReadDeadline(time.Time{})
+	}, nil
 }
 
 func (h *BuildCacheHandler) Find(w http.ResponseWriter, r *http.Request) {

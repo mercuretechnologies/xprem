@@ -52,6 +52,11 @@ func (s *BuildArtifactStore) CacheStore() *BuildCacheStore {
 	return &BuildCacheStore{objectStore: s.objectStore, localUploads: s.localUploads}
 }
 
+// uploadKey is where an archive waits between its upload and its publication.
+func uploadKey(key string) string {
+	return key + ".upload"
+}
+
 func (s *BuildCacheStore) key(ref BuildCacheObject) (string, error) {
 	if err := ref.Validate(); err != nil {
 		return "", err
@@ -68,7 +73,16 @@ func (s *BuildCacheStore) Get(ctx context.Context, ref BuildCacheObject) (*types
 	return s.objectStore.Get(ctx, key)
 }
 
-// Put receives local uploads only; cloud uploads go straight to a signed URL.
+// GetUpload returns the unpublished upload, or nil when it is absent.
+func (s *BuildCacheStore) GetUpload(ctx context.Context, ref BuildCacheObject) (*types.BucketFile, error) {
+	key, err := s.key(ref)
+	if err != nil {
+		return nil, err
+	}
+	return s.objectStore.Get(ctx, uploadKey(key))
+}
+
+// Put receives local uploads at the unpublished key.
 func (s *BuildCacheStore) Put(ctx context.Context, ref BuildCacheObject, body io.Reader) error {
 	key, err := s.key(ref)
 	if err != nil {
@@ -77,7 +91,25 @@ func (s *BuildCacheStore) Put(ctx context.Context, ref BuildCacheObject, body io
 	if !s.localUploads {
 		return ErrCacheDirectUploadRequired
 	}
-	return s.objectStore.Put(ctx, key, body)
+	return s.objectStore.Put(ctx, uploadKey(key), body)
+}
+
+// Publish copies the unpublished archive to the published key.
+func (s *BuildCacheStore) Publish(ctx context.Context, ref BuildCacheObject) error {
+	key, err := s.key(ref)
+	if err != nil {
+		return err
+	}
+	return s.objectStore.Copy(ctx, uploadKey(key), key)
+}
+
+// DeleteUpload succeeds when the unpublished upload is already absent.
+func (s *BuildCacheStore) DeleteUpload(ctx context.Context, ref BuildCacheObject) error {
+	key, err := s.key(ref)
+	if err != nil {
+		return err
+	}
+	return s.objectStore.Delete(ctx, uploadKey(key))
 }
 
 // Delete succeeds when the archive is already absent.
@@ -86,12 +118,11 @@ func (s *BuildCacheStore) Delete(ctx context.Context, ref BuildCacheObject) erro
 	if err != nil {
 		return err
 	}
-	return s.objectStore.Delete(ctx, key)
+	return errors.Join(s.objectStore.Delete(ctx, key), s.objectStore.Delete(ctx, uploadKey(key)))
 }
 
-// PresignPut returns nil, nil on disk: the CLI then uploads through the
-// server's authenticated cache route.
-func (s *BuildCacheStore) PresignPut(ctx context.Context, ref BuildCacheObject) (*objectstore.UploadRequest, error) {
+// PresignPut returns nil for local uploads and a signed staging URL otherwise.
+func (s *BuildCacheStore) PresignPut(ctx context.Context, ref BuildCacheObject, upload objectstore.Upload) (*objectstore.UploadRequest, error) {
 	key, err := s.key(ref)
 	if err != nil {
 		return nil, err
@@ -99,7 +130,7 @@ func (s *BuildCacheStore) PresignPut(ctx context.Context, ref BuildCacheObject) 
 	if s.localUploads {
 		return nil, nil
 	}
-	return s.objectStore.PresignPut(ctx, key)
+	return s.objectStore.PresignPut(ctx, uploadKey(key), upload)
 }
 
 // PresignGet returns "" when the server must stream the archive itself.

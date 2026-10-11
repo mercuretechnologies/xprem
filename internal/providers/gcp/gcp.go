@@ -66,11 +66,12 @@ func loadGoogleCreds() (*googleCreds, error) {
 	return &c, nil
 }
 
-func SignedURL(bucket, key, method, contentType string, expires time.Duration) (string, error) {
+func SignedURL(bucket, key, method, contentType string, expires time.Duration, headers ...string) (string, error) {
 	return signedURL(bucket, key, &storage.SignedURLOptions{
 		Method:      method,
 		Expires:     time.Now().Add(expires),
 		ContentType: contentType,
+		Headers:     headers,
 	})
 }
 

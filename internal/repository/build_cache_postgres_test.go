@@ -58,9 +58,10 @@ func TestBuildCachePublicationAndReplacement(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.Complete(ctx, f.app, f.identifier, upload.Object.ID)
 	require.NoError(t, err, "completion is retryable")
+	require.NoError(t, repo.Delete(ctx, *upload.Object))
 	duplicate, err := service.Reserve(ctx, f.app, f.identifier, input)
 	require.NoError(t, err)
-	require.True(t, duplicate.Cached)
+	require.True(t, duplicate.Cached, "retiring a stale pending reference must preserve a concurrent publication")
 	require.Equal(t, upload.Object.ID, duplicate.Object.ID)
 	require.ErrorIs(t, service.UploadLocal(ctx, f.app, f.identifier, upload.Object.ID, strings.NewReader("evil!")), bucket.ErrCacheObjectExists)
 	published, err := artifactStore.CacheStore().Get(ctx, bucket.BuildCacheObject{AppID: f.app, IdentifierID: f.identifier, Namespace: input.Namespace, ID: upload.Object.ID})
@@ -287,6 +288,10 @@ func TestBuildCacheHTTPRejectsForeignAndExpiredUploads(t *testing.T) {
 				var before string
 				require.NoError(t, owner.pool.QueryRow(ctx, "SELECT to_jsonb(c)::text FROM build_cache_objects c WHERE id = $1", id).Scan(&before))
 				ref := bucket.BuildCacheObject{AppID: owner.app, IdentifierID: owner.identifier, Namespace: input.Namespace, ID: id}
+				storedKey := ref.Key()
+				if !published {
+					storedKey += ".upload"
+				}
 				for _, operation := range []struct {
 					name, method string
 					handle       http.HandlerFunc
@@ -306,7 +311,7 @@ func TestBuildCacheHTTPRejectsForeignAndExpiredUploads(t *testing.T) {
 						var after string
 						require.NoError(t, owner.pool.QueryRow(ctx, "SELECT to_jsonb(c)::text FROM build_cache_objects c WHERE id = $1", id).Scan(&after))
 						require.Equal(t, before, after, "refused requests must not mutate the owner's cache entry")
-						stored, err := os.ReadFile(filepath.Join(storageDir, filepath.FromSlash(ref.Key())))
+						stored, err := os.ReadFile(filepath.Join(storageDir, filepath.FromSlash(storedKey)))
 						require.NoError(t, err)
 						require.Equal(t, content, string(stored))
 						var queued int

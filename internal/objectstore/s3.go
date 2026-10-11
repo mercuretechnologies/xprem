@@ -2,6 +2,9 @@ package objectstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +16,7 @@ import (
 	"xprem/internal/types"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -200,21 +204,51 @@ func (s *s3Store) ListPrefixes(ctx context.Context, prefix string) ([]string, er
 	return names, nil
 }
 
-func (s *s3Store) PresignPut(ctx context.Context, key string) (*UploadRequest, error) {
+func (s *s3Store) PresignPut(ctx context.Context, key string, upload Upload) (*UploadRequest, error) {
+	input := &s3.PutObjectInput{Bucket: awssdk.String(s.bucket), Key: awssdk.String(key)}
+	if upload.Size < 0 {
+		return nil, errors.New("upload size must not be negative")
+	}
+	if upload.Size > 0 {
+		input.ContentLength = awssdk.Int64(upload.Size)
+	}
+	if upload.SHA256 != "" {
+		digest, err := hex.DecodeString(upload.SHA256)
+		if err != nil || len(digest) != sha256.Size {
+			return nil, errors.New("invalid SHA-256 checksum")
+		}
+		input.ChecksumSHA256 = awssdk.String(base64.StdEncoding.EncodeToString(digest))
+	}
 	client, err := s.client()
 	if err != nil {
 		return nil, err
 	}
-	presigned, err := s3.NewPresignClient(client).PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: awssdk.String(s.bucket),
-		Key:    awssdk.String(key),
-	}, func(opt *s3.PresignOptions) {
+	presigner := s3.NewPresignClient(client, func(opt *s3.PresignOptions) {
+		// Hoisting would move the checksum into the query string, where S3 does not enforce it.
+		if input.ChecksumSHA256 != nil {
+			opt.Presigner = v4.NewSigner(func(options *v4.SignerOptions) {
+				options.DisableHeaderHoisting = true
+				options.DisableURIPathEscaping = true
+			})
+		}
+	})
+	presigned, err := presigner.PresignPutObject(ctx, input, func(opt *s3.PresignOptions) {
 		opt.Expires = 15 * time.Minute
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error presigning URL: %w", err)
 	}
-	return &UploadRequest{URL: presigned.URL, Method: "PUT"}, nil
+	var headers map[string]string
+	for name, values := range presigned.SignedHeader {
+		if strings.EqualFold(name, "Host") {
+			continue
+		}
+		if headers == nil {
+			headers = make(map[string]string)
+		}
+		headers[name] = strings.Join(values, ",")
+	}
+	return &UploadRequest{URL: presigned.URL, Method: "PUT", Headers: headers}, nil
 }
 
 // PresignGet returns "" under DISABLE_S3_DIRECT_CDN, whose endpoint clients

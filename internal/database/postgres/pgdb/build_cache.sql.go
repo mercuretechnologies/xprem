@@ -48,7 +48,7 @@ func (q *Queries) DeleteBuildCacheCleanup(ctx context.Context, id pgtype.UUID) e
 }
 
 const deleteBuildCacheObject = `-- name: DeleteBuildCacheObject :exec
-DELETE FROM build_cache_objects WHERE app_id = $1 AND app_identifier_id = $2 AND id = $3
+DELETE FROM build_cache_objects WHERE app_id = $1 AND app_identifier_id = $2 AND id = $3 AND published_at IS NULL
 `
 
 type DeleteBuildCacheObjectParams struct {

@@ -189,7 +189,7 @@ func (s *azureStore) ListPrefixes(ctx context.Context, prefix string) ([]string,
 
 // PresignPut carries the header Azure requires on the PUT, so the uploader
 // stays provider-agnostic.
-func (s *azureStore) PresignPut(_ context.Context, key string) (*UploadRequest, error) {
+func (s *azureStore) PresignPut(_ context.Context, key string, _ Upload) (*UploadRequest, error) {
 	if s.container == "" {
 		return nil, errors.New("azure store: container name not set")
 	}

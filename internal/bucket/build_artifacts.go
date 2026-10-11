@@ -163,7 +163,7 @@ func (s *BuildArtifactStore) PresignPut(ctx context.Context, appID string, ref B
 		return nil, err
 	}
 	if !s.localUploads {
-		return s.objectStore.PresignPut(ctx, key)
+		return s.objectStore.PresignPut(ctx, key, objectstore.Upload{})
 	}
 	return localBuildUpload(appID, ref)
 }

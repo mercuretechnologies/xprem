@@ -5,6 +5,7 @@ import "time"
 const MaxBuildCacheObjectBytes int64 = 512 << 20
 const MaxBuildCacheBytes int64 = 10 << 30
 const MaxBuildCacheObjects = 100
+const MaxBuildCacheUploadDuration = 75 * time.Minute
 
 // BuildCacheNamespace identifies the cache protocol, independently of the build platform.
 type BuildCacheNamespace string

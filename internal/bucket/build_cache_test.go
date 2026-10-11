@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"xprem/internal/objectstore"
 	"xprem/internal/types"
 
 	"github.com/stretchr/testify/require"
@@ -21,11 +22,12 @@ func TestLocalBuildCacheRoundTripsNextToTheArtifacts(t *testing.T) {
 	store := artifactStore.CacheStore()
 	ctx := context.Background()
 	ref := testCacheObject()
-	upload, err := store.PresignPut(ctx, ref)
+	upload, err := store.PresignPut(ctx, ref, objectstore.Upload{})
 	require.NoError(t, err)
 	require.Nil(t, upload, "local archives go through the server's cache route")
 	require.NoError(t, store.Put(ctx, ref, strings.NewReader("archive")))
-	require.FileExists(t, filepath.Join(dir, "tenant", filepath.FromSlash(ref.Key())))
+	require.FileExists(t, filepath.Join(dir, "tenant", filepath.FromSlash(ref.Key()+".upload")))
+	require.NoError(t, store.Publish(ctx, ref))
 	file, err := store.Get(ctx, ref)
 	require.NoError(t, err)
 	content, err := io.ReadAll(file.Reader)
@@ -39,7 +41,7 @@ func TestLocalBuildCacheRoundTripsNextToTheArtifacts(t *testing.T) {
 	require.Nil(t, file)
 }
 
-func TestCloudBuildCacheRefusesServerUploads(t *testing.T) {
+func TestCloudBuildCacheRequiresSignedUploads(t *testing.T) {
 	store := &BuildCacheStore{objectStore: unreachableObjectStore{}}
 	require.ErrorIs(t, store.Put(context.Background(), testCacheObject(), strings.NewReader("archive")), ErrCacheDirectUploadRequired)
 }
@@ -61,11 +63,11 @@ func TestBuildCacheValidationRejectsInvalidPaths(t *testing.T) {
 			case "uploadId":
 				ref.ID = "../ota"
 			}
-			store := &BuildCacheStore{objectStore: unreachableObjectStore{}, localUploads: true}
+			store := &BuildCacheStore{objectStore: unreachableObjectStore{}}
 			_, err := store.Get(ctx, ref)
 			require.Error(t, err)
 			require.Error(t, store.Delete(ctx, ref))
-			_, err = store.PresignPut(ctx, ref)
+			_, err = store.PresignPut(ctx, ref, objectstore.Upload{})
 			require.Error(t, err)
 			_, err = store.PresignGet(ctx, ref, time.Now().Add(time.Minute))
 			require.Error(t, err)
