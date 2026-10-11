@@ -194,9 +194,9 @@ describe('publish native platform selection', () => {
         slug: 'test-app',
         platforms: [configuredPlatform, 'web'],
       });
-      vi.mocked(spawnAsync).mockImplementation((async (_command, args) => {
-        const selected = (args as string[]).flatMap((arg, index) =>
-          arg === '--platform' ? [(args as string[])[index + 1]] : []
+      vi.mocked(spawnAsync).mockImplementation((async (_command: string, args: string[]) => {
+        const selected = args.flatMap((arg, index) =>
+          arg === '--platform' ? [args[index + 1]] : []
         );
         // Like Expo, reject attempts to export a platform absent from the project.
         if (selected.some(candidate => candidate !== configuredPlatform)) {
