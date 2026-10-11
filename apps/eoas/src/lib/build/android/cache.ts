@@ -63,14 +63,7 @@ export async function restoreAndroidCache(
       try {
         const restored = await restoreCacheArchive(archive);
         if (archive.namespace === 'gradle' && restored) {
-          for (const name of gradleCacheDirectories) {
-            const destination = path.join(gradleCache, name);
-            await fs.remove(destination);
-            const source = path.join(archive.directory, name);
-            if (await fs.pathExists(source)) {
-              await fs.move(source, destination);
-            }
-          }
+          await installGradleCache(archive.directory, gradleCache);
         }
         if (archive.namespace === 'ccache') {
           // Inode indexes and compiler configuration belong to the current machine.
@@ -179,6 +172,28 @@ export async function restoreAndroidCache(
       );
     },
   };
+}
+
+// Stages each restored directory next to its destination first, so a failed
+// copy leaves the local cache in place.
+async function installGradleCache(source: string, cache: string): Promise<void> {
+  const staged = gradleCacheDirectories.map(name => ({
+    restored: path.join(source, name),
+    destination: path.join(cache, name),
+    staging: path.join(cache, `${name}.restoring`),
+  }));
+  for (const { restored, staging } of staged) {
+    await fs.remove(staging);
+    if (await fs.pathExists(restored)) {
+      await fs.move(restored, staging);
+    }
+  }
+  for (const { destination, staging } of staged) {
+    await fs.remove(destination);
+    if (await fs.pathExists(staging)) {
+      await fs.rename(staging, destination);
+    }
+  }
 }
 
 async function snapshotGradleCache(
