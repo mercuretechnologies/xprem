@@ -127,7 +127,7 @@ async function stopProcessTree(pid?: number): Promise<void> {
   let signalled = false;
   let forced = false;
   while (owned.length) {
-    const current = await readProcesses(owned.map(process => process.pid));
+    const current = await readProcesses();
     const remaining = owned.filter(process =>
       current.some(
         candidate =>
@@ -169,21 +169,32 @@ function signalProcess(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-async function readProcesses(pids?: number[]): Promise<OwnedProcess[]> {
-  const { stdout } = await spawnAsync(
-    'ps',
-    [...(pids ? ['-p', pids.join(',')] : ['-ax']), '-o', 'pid=,ppid=,stat=,lstart='],
-    { env: { ...process.env, LC_ALL: 'C' } }
-  ).catch(error => {
-    if (pids && error.status === 1) {
-      return { stdout: '' };
-    }
-    throw error;
-  });
+const psOptions = { env: { ...process.env, LC_ALL: 'C' } };
+
+// BusyBox ps (Alpine) has no lstart column; survivors are then matched by PID alone.
+let startColumn: Promise<boolean> | undefined;
+
+function hasStartColumn(): Promise<boolean> {
+  return (startColumn ??= spawnAsync('ps', ['-A', '-o', 'lstart='], psOptions).then(
+    () => true,
+    () => false
+  ));
+}
+
+async function readProcesses(): Promise<OwnedProcess[]> {
+  const columns = (await hasStartColumn()) ? 'pid=,ppid=,stat=,lstart=' : 'pid=,ppid=,stat=';
+  const { stdout } = await spawnAsync('ps', ['-A', '-o', columns], psOptions);
   return stdout.split('\n').flatMap(line => {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+?))?\s*$/.exec(line);
     return match
-      ? [{ pid: Number(match[1]), parent: Number(match[2]), state: match[3], started: match[4] }]
+      ? [
+          {
+            pid: Number(match[1]),
+            parent: Number(match[2]),
+            state: match[3],
+            started: match[4] ?? '',
+          },
+        ]
       : [];
   });
 }
