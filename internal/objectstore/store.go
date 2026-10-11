@@ -30,7 +30,7 @@ type Store interface {
 	// that hold further keys.
 	ListPrefixes(ctx context.Context, prefix string) ([]string, error)
 	// PresignPut returns a request an uploader can PUT the object with.
-	PresignPut(ctx context.Context, key string) (*UploadRequest, error)
+	PresignPut(ctx context.Context, key string, upload Upload) (*UploadRequest, error)
 	// PresignGet returns a URL that downloads the object until the download
 	// expires, or "" when the store cannot sign one and the server streams it.
 	PresignGet(ctx context.Context, key string, download Download) (string, error)
@@ -53,6 +53,13 @@ type UploadRequest struct {
 	URL     string            `json:"url"`
 	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// Upload carries optional size and hexadecimal SHA-256 signing constraints.
+// A positive Size constrains length; supported constraints depend on the provider.
+type Upload struct {
+	Size   int64
+	SHA256 string
 }
 
 // requirePrefix refuses the empty prefix, which names every object of the store.

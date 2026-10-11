@@ -26,7 +26,7 @@ const LocalUploadTokenHeader = "local-upload-token"
 // route with a token scoped to the app and the branch.
 func presignUpload(ctx context.Context, objectStore objectstore.Store, localUploads bool, appId, branch, key string) (*objectstore.UploadRequest, error) {
 	if !localUploads {
-		return objectStore.PresignPut(ctx, key)
+		return objectStore.PresignPut(ctx, key, objectstore.Upload{})
 	}
 	token, err := mintUploadToken(uploadClaims{Key: key, AppID: appId, Branch: branch})
 	if err != nil {

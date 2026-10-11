@@ -17,22 +17,18 @@ export interface BuildCommand {
   silence?: { warnAfterMs: number; stopAfterMs: number };
 }
 
-let active: ChildProcess | undefined;
+interface RunningCommand {
+  child: ChildProcess;
+  stopping?: Promise<void>;
+}
 
-// Stops the command in progress, if any, and resolves once it has exited.
+let active: RunningCommand | undefined;
+
+// Cancellation includes detached descendants, such as Gradle's single-use daemon.
 export async function terminateBuildCommand(): Promise<void> {
-  const child = active;
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return;
+  if (active) {
+    await (active.stopping ??= stopProcessTree(active.child.pid));
   }
-  await new Promise<void>(resolve => {
-    const forceKill = setTimeout(() => child.kill('SIGKILL'), 5000);
-    child.once('exit', () => {
-      clearTimeout(forceKill);
-      resolve();
-    });
-    child.kill('SIGTERM');
-  });
 }
 
 export async function runBuildCommand(
@@ -44,7 +40,8 @@ export async function runBuildCommand(
   let timers: NodeJS.Timeout[] = [];
   try {
     const running = spawnAsync(command, args, { cwd, env });
-    active = running.child;
+    const current: RunningCommand = { child: running.child };
+    active = current;
     if (silence) {
       const minutes = (ms: number): string => `${Math.round(ms / 60000)} minutes`;
       timers = [
@@ -53,7 +50,8 @@ export async function runBuildCommand(
         }, silence.warnAfterMs),
         setTimeout(() => {
           stopped = true;
-          void stopProcessTree(running.child.pid);
+          // The command's finally block awaits and reports cancellation failures.
+          void terminateBuildCommand().catch(() => {});
         }, silence.stopAfterMs),
       ];
     }
@@ -74,13 +72,17 @@ export async function runBuildCommand(
     try {
       await running;
     } finally {
-      active = undefined;
       timers.forEach(timer => {
         clearTimeout(timer);
       });
       streams.forEach(stream => {
         stream.close();
       });
+      try {
+        await current.stopping;
+      } finally {
+        active = undefined;
+      }
     }
   } catch (error) {
     if (stopped && silence) {
@@ -94,16 +96,107 @@ export async function runBuildCommand(
   }
 }
 
-// A child left alive keeps the output of the command open, so the whole tree is stopped.
+interface OwnedProcess {
+  pid: number;
+  parent: number;
+  state: string;
+  startedAt: number;
+}
+
+// Snapshot descendants before cancellation reparents them, and check their start times
+// before signalling survivors so a recycled PID cannot target another command.
 async function stopProcessTree(pid?: number): Promise<void> {
   if (!pid) {
     return;
   }
-  const { stdout } = await spawnAsync('pgrep', ['-P', String(pid)]).catch(() => ({ stdout: '' }));
-  await Promise.all(stdout.split('\n').map(Number).filter(Boolean).map(stopProcessTree));
-  try {
-    process.kill(pid);
-  } catch {
-    // Already exited.
+  const processes = await readProcesses();
+  const owned: OwnedProcess[] = [];
+  const collect = (parent: number): void => {
+    const current = processes.find(candidate => candidate.pid === parent);
+    if (current) {
+      owned.push(current);
+    }
+    processes
+      .filter(candidate => candidate.parent === parent)
+      .forEach(child => {
+        collect(child.pid);
+      });
+  };
+  collect(pid);
+  let deadline = Date.now() + 5000;
+  let signalled = false;
+  let forced = false;
+  while (owned.length) {
+    const current = await readProcesses();
+    const remaining = owned.filter(process =>
+      current.some(
+        candidate =>
+          candidate.pid === process.pid &&
+          sameStart(candidate, process) &&
+          !candidate.state.startsWith('Z')
+      )
+    );
+    if (!remaining.length) {
+      return;
+    }
+    if (!signalled) {
+      remaining.reverse().forEach(process => {
+        signalProcess(process.pid, 'SIGTERM');
+      });
+      signalled = true;
+    }
+    if (Date.now() >= deadline) {
+      if (forced) {
+        throw new Error('Could not stop the build process tree.');
+      }
+      remaining.reverse().forEach(process => {
+        signalProcess(process.pid, 'SIGKILL');
+      });
+      forced = true;
+      deadline = Date.now() + 5000;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
+}
+
+function signalProcess(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      throw error;
+    }
+  }
+}
+
+// ps reports the elapsed time in whole seconds, so two readings of one process differ slightly.
+function sameStart(a: OwnedProcess, b: OwnedProcess): boolean {
+  return Math.abs(a.startedAt - b.startedAt) <= 2000;
+}
+
+// The etime column is [[dd-]hh:]mm:ss.
+function elapsedMs(etime: string): number {
+  const [days, clock] = etime.includes('-') ? etime.split('-') : ['0', etime];
+  const seconds = clock.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+  return (Number(days) * 86400 + seconds) * 1000;
+}
+
+async function readProcesses(): Promise<OwnedProcess[]> {
+  const now = Date.now();
+  const { stdout } = await spawnAsync('ps', ['-A', '-o', 'pid=,ppid=,stat=,etime='], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  return stdout.split('\n').flatMap(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*$/.exec(line);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            parent: Number(match[2]),
+            state: match[3],
+            startedAt: now - elapsedMs(match[4]),
+          },
+        ]
+      : [];
+  });
 }

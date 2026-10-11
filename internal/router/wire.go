@@ -41,6 +41,7 @@ type AppContainer struct {
 	AppIdentifierRepo           services.AppIdentifierRepository
 	BuildHandler                *handlers.BuildHandler
 	BuildRegistryHandler        *handlers.BuildRegistryHandler
+	BuildCacheHandler           *handlers.BuildCacheHandler
 	AuthHandler                 *dashhandlers.AuthHandler
 	BlobService                 *services.BlobService
 	DashboardAuthService        *services.DashboardAuthService
@@ -133,6 +134,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	// exist on the control plane.
 	var buildRepo services.BuildRepository
 	var buildArtifactStore services.BuildArtifactStore
+	var buildCacheStore services.BuildCacheStore
+	var buildCacheRepo services.BuildCacheRepository
 	var buildCleanup *services.BuildCleanup
 	var appIdentifierRepo services.AppIdentifierRepository
 	var credentialsRepo services.CredentialsRepository
@@ -217,13 +220,15 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		sourcemapIndexRepo = symbolication.NewPostgresIndexRepository(dbEngine)
 		appIdentifierRepo = repository.NewPostgresAppIdentifierRepository(dbEngine)
 		buildRepo = repository.NewPostgresBuildRepository(dbEngine)
+		buildCacheRepo = repository.NewPostgresBuildCacheRepository(dbEngine)
 		artifactStore, err := bucket.OpenBuildArtifactStore()
 		if err != nil {
 			log.Fatalf("Build artifact storage: %v", err)
 		}
-		buildCleanup = services.NewBuildCleanup(dbEngine.DB, artifactStore)
+		buildCleanup = services.NewBuildCleanup(dbEngine.DB, artifactStore, artifactStore.CacheStore())
 		if buildsAllowed(artifactStore) {
 			buildArtifactStore = artifactStore
+			buildCacheStore = artifactStore.CacheStore()
 		}
 		credentialsRepo = repository.NewPostgresCredentialsRepository(dbEngine)
 		iosCredentialsRepo = repository.NewPostgresIosCredentialsRepository(dbEngine)
@@ -382,6 +387,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 	rolloutService := services.NewRolloutService(rolloutRepo, channelRepo, updateRepo, deploymentService)
 	rolloutService.SetOnAuditEvent(auditService.Record)
 	buildService := services.NewBuildService(buildRepo, appIdentifierRepo, buildArtifactStore)
+	buildCacheService := services.NewBuildCacheService(buildCacheRepo, buildCacheStore)
 	if buildCleanup != nil {
 		addCleanup(buildCleanup.Start(ctx))
 	}
@@ -462,6 +468,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		AppIdentifierRepo:           appIdentifierRepo,
 		BuildHandler:                buildHandler,
 		BuildRegistryHandler:        handlers.NewBuildRegistryHandler(buildService),
+		BuildCacheHandler:           handlers.NewBuildCacheHandler(buildCacheService),
 		EnvironmentsHandler:         dashhandlers.NewEnvironmentsHandler(environmentService),
 		ExpoProtocolHandler:         handlers.NewExpoProtocolHandler(expoProtocolService),
 		LicenseHandler:              licensing.NewLicenseHandler(licenseService),

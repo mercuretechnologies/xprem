@@ -45,6 +45,14 @@ sql:
             go_type:
               import: "xprem/internal/types"
               type: "BuildArtifactType"
+          - column: "build_cache_objects.namespace"
+            go_type:
+              import: "xprem/internal/types"
+              type: "BuildCacheNamespace"
+          - column: "build_cache_cleanup.namespace"
+            go_type:
+              import: "xprem/internal/types"
+              type: "BuildCacheNamespace"
           - column: "updates.platform"
             go_type:
               import: "xprem/internal/types"

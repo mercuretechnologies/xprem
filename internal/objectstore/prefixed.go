@@ -62,8 +62,8 @@ func (p *prefixed) ListPrefixes(ctx context.Context, prefix string) ([]string, e
 	return p.inner.ListPrefixes(ctx, p.prefix+prefix)
 }
 
-func (p *prefixed) PresignPut(ctx context.Context, key string) (*UploadRequest, error) {
-	return p.inner.PresignPut(ctx, p.prefix+key)
+func (p *prefixed) PresignPut(ctx context.Context, key string, upload Upload) (*UploadRequest, error) {
+	return p.inner.PresignPut(ctx, p.prefix+key, upload)
 }
 
 func (p *prefixed) PresignGet(ctx context.Context, key string, download Download) (string, error) {

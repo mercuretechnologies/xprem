@@ -66,9 +66,11 @@ func (s *localStore) Get(_ context.Context, key string) (*types.BucketFile, erro
 	return &types.BucketFile{Reader: file, CreatedAt: info.ModTime()}, nil
 }
 
-// Put streams body into a temporary file next to the target and renames it
-// into place, so an interrupted write leaves nothing at the key.
-func (s *localStore) Put(_ context.Context, key string, body io.Reader) error {
+// Put atomically replaces the object with the uploaded bytes.
+func (s *localStore) Put(ctx context.Context, key string, body io.Reader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	target, err := s.path(key)
 	if err != nil {
 		return err
@@ -101,6 +103,9 @@ func (s *localStore) Put(_ context.Context, key string, body io.Reader) error {
 	syncErr := tmp.Sync()
 	closeErr := tmp.Close()
 	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), target)
@@ -198,7 +203,7 @@ func (s *localStore) ListPrefixes(_ context.Context, prefix string) ([]string, e
 
 // PresignPut has no answer on a filesystem: local uploads go through the
 // server's own upload route.
-func (s *localStore) PresignPut(context.Context, string) (*UploadRequest, error) {
+func (s *localStore) PresignPut(context.Context, string, Upload) (*UploadRequest, error) {
 	return nil, errors.New("local store: uploads go through the server's upload route")
 }
 

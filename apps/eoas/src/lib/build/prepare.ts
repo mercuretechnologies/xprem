@@ -23,6 +23,7 @@ export interface BuildOptions {
   packageRunner?: string;
   verbose?: boolean;
   stream?: boolean;
+  remoteCache?: boolean;
 }
 
 export type NodeEnv = 'development' | 'production';
