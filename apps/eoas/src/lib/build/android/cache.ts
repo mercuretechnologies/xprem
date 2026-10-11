@@ -174,24 +174,41 @@ export async function restoreAndroidCache(
   };
 }
 
-// Stages each restored directory next to its destination first, so a failed
-// copy leaves the local cache in place.
+// installGradleCache swaps the restored build-cache-1 and journal-1 into the Gradle home.
+// A directory absent from the archive leaves its local counterpart untouched.
 async function installGradleCache(source: string, cache: string): Promise<void> {
-  const staged = gradleCacheDirectories.map(name => ({
-    restored: path.join(source, name),
-    destination: path.join(cache, name),
-    staging: path.join(cache, `${name}.restoring`),
-  }));
-  for (const { restored, staging } of staged) {
-    await fs.remove(staging);
-    if (await fs.pathExists(restored)) {
-      await fs.move(restored, staging);
+  const restored: string[] = [];
+  for (const name of gradleCacheDirectories) {
+    if (await fs.pathExists(path.join(source, name))) {
+      restored.push(name);
     }
   }
-  for (const { destination, staging } of staged) {
-    await fs.remove(destination);
-    if (await fs.pathExists(staging)) {
-      await fs.rename(staging, destination);
+  const staging = (name: string): string => path.join(cache, `${name}.restoring`);
+  const replaced = (name: string): string => path.join(cache, `${name}.replaced`);
+  try {
+    for (const name of restored) {
+      await fs.remove(staging(name));
+      await fs.move(path.join(source, name), staging(name));
+    }
+    for (const name of restored) {
+      const destination = path.join(cache, name);
+      await fs.remove(replaced(name));
+      if (await fs.pathExists(destination)) {
+        await fs.rename(destination, replaced(name));
+      }
+      try {
+        await fs.rename(staging(name), destination);
+      } catch (error) {
+        if (await fs.pathExists(replaced(name))) {
+          await fs.rename(replaced(name), destination);
+        }
+        throw error;
+      }
+    }
+  } finally {
+    for (const name of restored) {
+      await fs.remove(staging(name));
+      await fs.remove(replaced(name));
     }
   }
 }
