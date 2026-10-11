@@ -105,11 +105,14 @@ func isBlobKey(key, appId string) bool {
 
 // SourcemapKeyHash returns the hash a source map key of appId names.
 func SourcemapKeyHash(key, appId string) (string, bool) {
-	prefix := appId + "/" + sourcemapsDir + "/"
-	if !strings.HasPrefix(key, prefix) {
+	if validateSegment("appId", appId) != nil {
 		return "", false
 	}
-	hash := strings.TrimPrefix(key, prefix)
+	prefix := sourcemapsDir + "/" + appId + "/"
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, ".map") {
+		return "", false
+	}
+	hash := strings.TrimSuffix(strings.TrimPrefix(key, prefix), ".map")
 	return hash, ValidateBlobHash(hash) == nil
 }
 

@@ -47,9 +47,11 @@ type Fleet struct {
 	Facets          []FleetFacet `json:"facets"`
 }
 
-// ChannelAdoption is how many active devices of a channel already run what it serves them.
+// ChannelAdoption is how many active devices of a channel, on one runtime
+// version, already run what it serves them.
 type ChannelAdoption struct {
 	Channel         string `json:"channel"`
+	RuntimeVersion  string `json:"runtimeVersion"`
 	ActiveDevices   uint64 `json:"activeDevices"`
 	EmbeddedDevices uint64 `json:"embeddedDevices"`
 	UpToDateDevices uint64 `json:"upToDateDevices"`
@@ -181,6 +183,7 @@ func (e *Explorer) readReleases(ctx context.Context, appID string, query Explore
 	for _, row := range rows {
 		releases.Channels = append(releases.Channels, ChannelAdoption{
 			Channel:         row.ChannelName,
+			RuntimeVersion:  row.RuntimeVersion,
 			ActiveDevices:   uint64(max(row.ActiveDevices, 0)),
 			EmbeddedDevices: uint64(max(row.EmbeddedDevices, 0)),
 			UpToDateDevices: uint64(max(row.UpToDateDevices, 0)),

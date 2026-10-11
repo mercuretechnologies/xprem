@@ -387,6 +387,30 @@ func TestHandleLogsRuntimeRecoveryUsesEventOrder(t *testing.T) {
 	}, mutator.runtime)
 }
 
+func TestHandleLogsFingerprintsALowSeverityManualCrash(t *testing.T) {
+	for _, severity := range []int{0, 9, 13} {
+		t.Run(fmt.Sprintf("severity_%d", severity), func(t *testing.T) {
+			body := []byte(strings.Replace(runtimeRecoveryLogsFixture,
+				`"attributes": [{"key": "event.name", "value": {"stringValue": "xprem_js_crash"}}]`,
+				fmt.Sprintf(`"severityNumber": %d, "attributes": [{"key": "event.name", "value": {"stringValue": "xprem_js_crash"}}]`, severity), 1))
+			mutator := &recordingMutator{}
+			sink := &capturingSink{}
+			handler := NewIngestHandler(identity.NewService(mutator), sink, nil, nil)
+			response := serveIngest(handler, http.MethodPost, logsPath, body)
+			require.Equal(t, http.StatusNoContent, response.Code)
+			require.Len(t, mutator.runtime, 2)
+			require.Equal(t, "failure", mutator.runtime[0].kind)
+			require.Len(t, sink.logs, 2)
+			crash := sink.logs[1]
+			require.Equal(t, JSCrashEventName, crash.EventName)
+			require.EqualValues(t, severity, crash.SeverityNumber)
+			require.False(t, crash.IsFatal, "the original fatal flag is retained")
+			require.NotEqual(t, uuid.Nil, crash.ErrorFingerprint)
+			require.Equal(t, uuid.Nil, sink.logs[0].ErrorFingerprint, "the healthy launch is not an error")
+		})
+	}
+}
+
 const sdkExceptionLogsFixture = `{
   "resourceLogs": [{
     "resource": {"attributes": [

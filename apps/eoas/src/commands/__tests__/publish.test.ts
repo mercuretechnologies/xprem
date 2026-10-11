@@ -11,8 +11,10 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getPrivateExpoConfigAsync } from '../../lib/expoConfig';
 import { fetchWithRetries } from '../../lib/fetch';
 import Log from '../../lib/log';
+import { resolveRuntimeVersionAsync } from '../../lib/runtimeVersion';
 import Publish from '../publish';
 
 vi.mock('@expo/spawn-async', () => ({ default: vi.fn() }));
@@ -41,7 +43,7 @@ vi.mock('../../lib/vcs', () => ({
 }));
 vi.mock('../../lib/package', () => ({ isExpoInstalled: () => true }));
 vi.mock('../../lib/runtimeVersion', () => ({
-  resolveRuntimeVersionAsync: async () => ({ runtimeVersion: '1.0.0' }),
+  resolveRuntimeVersionAsync: vi.fn(async () => ({ runtimeVersion: '1.0.0' })),
 }));
 vi.mock('../../lib/workflow', async importOriginal => ({
   ...(await importOriginal<typeof import('../../lib/workflow')>()),
@@ -51,7 +53,7 @@ vi.mock('../../lib/expoConfig', async importOriginal => {
   const original = await importOriginal<typeof import('../../lib/expoConfig')>();
   return {
     ...original,
-    getPrivateExpoConfigAsync: async () => ({}),
+    getPrivateExpoConfigAsync: vi.fn(async () => ({ name: 'test-app', slug: 'test-app' })),
     getPublicExpoConfigAsync: async () => ({ name: 'test-app' }),
     requireExpoAppId: () => 'app-1',
     resolveServerUrl: async () => 'https://ota.example.com',
@@ -144,14 +146,21 @@ function requestUploadUrlCalls(): string[] {
     .filter(url => url.includes('/requestUploadUrl/'));
 }
 
-function runPublish(platform = 'ios'): Promise<unknown> {
+function runPublish(platform: string | null = 'ios'): Promise<unknown> {
   return Publish.run(
-    ['--branch', 'main', '--platform', platform, '--nonInteractive', '--disableRepositoryCheck'],
+    [
+      '--branch',
+      'main',
+      ...(platform === null ? [] : ['--platform', platform]),
+      '--nonInteractive',
+      '--disableRepositoryCheck',
+    ],
     eoasRoot
   );
 }
 
 beforeEach(() => {
+  vi.mocked(getPrivateExpoConfigAsync).mockResolvedValue({ name: 'test-app', slug: 'test-app' });
   previousCwd = process.cwd();
   projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eoas-project-'));
   secretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eoas-secrets-'));
@@ -174,6 +183,95 @@ afterEach(() => {
   fs.removeSync(secretDir);
   vi.restoreAllMocks();
   vi.clearAllMocks();
+});
+
+describe('publish native platform selection', () => {
+  it.each(['ios', 'android'] as const)(
+    'publishes only the configured %s platform by default, without exporting web',
+    async configuredPlatform => {
+      vi.mocked(getPrivateExpoConfigAsync).mockResolvedValue({
+        name: 'test-app',
+        slug: 'test-app',
+        platforms: [configuredPlatform, 'web'],
+      });
+      vi.mocked(spawnAsync).mockImplementation((async (_command, args) => {
+        const selected = (args as string[]).flatMap((arg, index) =>
+          arg === '--platform' ? [(args as string[])[index + 1]] : []
+        );
+        // Like Expo, reject attempts to export a platform absent from the project.
+        if (selected.some(candidate => candidate !== configuredPlatform)) {
+          throw new Error('Unsupported native platform');
+        }
+        writeExport([configuredPlatform]);
+        return { stdout: 'exported', stderr: '' };
+      }) as any);
+      respondWith([]);
+
+      await runPublish(null);
+
+      expect(
+        vi.mocked(resolveRuntimeVersionAsync).mock.calls.map(([options]) => options.platform)
+      ).toEqual([configuredPlatform]);
+      const requested = requestUploadUrlCalls();
+      expect(requested).toHaveLength(1);
+      expect(new URL(requested[0]).searchParams.get('platform')).toBe(configuredPlatform);
+    }
+  );
+
+  it.each([{ platforms: undefined }, { platforms: ['ios', 'android', 'web'] as const }])(
+    'exports both native platforms when both are available, but never web (%j)',
+    async ({ platforms }) => {
+      vi.mocked(getPrivateExpoConfigAsync).mockResolvedValue({
+        name: 'test-app',
+        slug: 'test-app',
+        ...(platforms ? { platforms: [...platforms] } : {}),
+      });
+      vi.mocked(spawnAsync).mockImplementation((async () => {
+        writeExport(['ios', 'android']);
+        return { stdout: 'exported', stderr: '' };
+      }) as any);
+      respondWith([]);
+
+      await runPublish('all');
+
+      const args = vi.mocked(spawnAsync).mock.calls[0][1] as string[];
+      expect(args.slice(-4)).toEqual(['--platform', 'ios', '--platform', 'android']);
+      expect(requestUploadUrlCalls()).toHaveLength(2);
+    }
+  );
+
+  it('preserves an explicit platform instead of silently substituting the configured platform', async () => {
+    vi.mocked(getPrivateExpoConfigAsync).mockResolvedValue({
+      name: 'test-app',
+      slug: 'test-app',
+      platforms: ['android'],
+    });
+    respondWith([]);
+
+    await runPublish('ios');
+
+    expect(vi.mocked(spawnAsync).mock.calls[0][1]?.slice(-2)).toEqual(['--platform', 'ios']);
+    expect(
+      vi.mocked(resolveRuntimeVersionAsync).mock.calls.map(([options]) => options.platform)
+    ).toEqual(['ios']);
+  });
+
+  it('rejects a web-only configuration before cleaning the output or resolving runtimes', async () => {
+    vi.mocked(getPrivateExpoConfigAsync).mockResolvedValue({
+      name: 'test-app',
+      slug: 'test-app',
+      platforms: ['web'],
+    });
+    fs.ensureDirSync(distFile());
+    fs.writeFileSync(distFile('existing-output'), 'keep');
+
+    await expect(runPublish('all')).rejects.toThrow(/process\.exit\(1\)/);
+
+    expect(loggedErrors()).toMatch(/No iOS or Android platform is enabled/);
+    expect(spawnAsync).not.toHaveBeenCalled();
+    expect(resolveRuntimeVersionAsync).not.toHaveBeenCalled();
+    expect(fs.readFileSync(distFile('existing-output'), 'utf8')).toBe('keep');
+  });
 });
 
 describe('publish against a hostile server response', () => {

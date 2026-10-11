@@ -20,15 +20,27 @@ import (
 
 type fakeErrorReader struct {
 	group *ErrorGroup
+	calls *int
 }
 
 func (r fakeErrorReader) ReadErrorGroup(context.Context, string, string, string) (*ErrorGroup, error) {
+	if r.calls != nil {
+		(*r.calls)++
+	}
 	return r.group, nil
 }
 
 type indexStateFunc func() error
 
 func (f indexStateFunc) UpdateIndexState(context.Context, string, string) error { return f() }
+func (f indexStateFunc) Available() bool                                        { return true }
+
+type availableIndexState struct {
+	indexStateFunc
+	enabled bool
+}
+
+func (s availableIndexState) Available() bool { return s.enabled }
 
 func askErrorGroup(t *testing.T, handler *ErrorsHandler, query string) ErrorGroupAnswer {
 	t.Helper()
@@ -64,13 +76,55 @@ func TestErrorGroupStatusSaysWhyAGroupIsMissing(t *testing.T) {
 	}
 }
 
-func TestErrorGroupIsReadyOnceGrouped(t *testing.T) {
+func TestStoredErrorGroupDoesNotRecheckIndexState(t *testing.T) {
 	group := &ErrorGroup{Fingerprint: uuid.NewString(), Culprit: "LabScreen.tsx in onPress"}
-	handler := NewErrorsHandler(fakeErrorReader{group: group}, indexStateFunc(func() error { return nil }))
+	indexReads := 0
+	handler := NewErrorsHandler(fakeErrorReader{group: group}, indexStateFunc(func() error {
+		indexReads++
+		return symbolication.ErrIndexFailed
+	}))
 	answer := askErrorGroup(t, handler, "?updateId="+uuid.NewString())
 	assert.Equal(t, ErrorGroupReady, answer.Status)
 	require.NotNil(t, answer.Group)
 	assert.Equal(t, "LabScreen.tsx in onPress", answer.Group.Culprit)
+	assert.Zero(t, indexReads, "a stored group remains usable after an index rebuild fails")
+}
+
+func TestStoredErrorGroupRechecksAvailabilityOnEveryRequest(t *testing.T) {
+	reads := 0
+	indexes := &availableIndexState{
+		indexStateFunc: func() error { t.Fatal("stored groups must not open or check an index"); return nil },
+		enabled:        true,
+	}
+	handler := NewErrorsHandler(fakeErrorReader{group: &ErrorGroup{Culprit: "private-source.ts"}, calls: &reads}, indexes)
+	query := "?updateId=" + uuid.NewString()
+	answer := askErrorGroup(t, handler, query)
+	require.Equal(t, ErrorGroupReady, answer.Status)
+	require.NotNil(t, answer.Group)
+	require.Equal(t, 1, reads)
+
+	indexes.enabled = false
+	answer = askErrorGroup(t, handler, query)
+	assert.Equal(t, ErrorGroupUnavailable, answer.Status)
+	assert.Nil(t, answer.Group)
+	assert.Equal(t, 1, reads, "loss of availability must prevent another read of stored source details")
+}
+
+func TestStoredErrorGroupWithoutIndexingIsUnavailable(t *testing.T) {
+	for name, indexes := range map[string]IndexStateReader{
+		"nil interface": nil,
+		"nil service":   (*symbolication.Service)(nil),
+		"disabled":      symbolication.NewService(nil, nil, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reads := 0
+			handler := NewErrorsHandler(fakeErrorReader{group: &ErrorGroup{Culprit: "private-source.ts"}, calls: &reads}, indexes)
+			answer := askErrorGroup(t, handler, "?updateId="+uuid.NewString())
+			assert.Equal(t, ErrorGroupUnavailable, answer.Status)
+			assert.Nil(t, answer.Group)
+			assert.Zero(t, reads, "unavailable indexing must prevent reading stored source details")
+		})
+	}
 }
 
 func TestErrorGroupWithoutTheControlPlaneIsUnavailable(t *testing.T) {

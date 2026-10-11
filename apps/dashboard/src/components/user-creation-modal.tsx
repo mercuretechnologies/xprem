@@ -87,12 +87,12 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }: CreateUserMo
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={open => !open && handleClose()}>
+    <Dialog open={isOpen} onOpenChange={open => !open && !isSubmitting && handleClose()}>
       <DialogContent
         className={
           rbacEnabled ? 'max-h-[85vh] overflow-y-auto sm:max-w-[560px]' : 'sm:max-w-[420px]'
         }>
-        <form onSubmit={handleSubmit}>
+        <form id="create-user" method="post" onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle className="text-lg">Create user</DialogTitle>
             <DialogDescription>
@@ -107,11 +107,13 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }: CreateUserMo
               </Label>
               <Input
                 id="new-user-email"
+                name="username"
                 type="email"
+                autoComplete="username"
                 placeholder="e.g., jane@acme.dev"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                disabled={isSubmitting}
+                readOnly={isSubmitting}
                 autoFocus
                 className="h-9"
               />
@@ -122,11 +124,12 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }: CreateUserMo
               </Label>
               <Input
                 id="new-user-password"
+                name="new-password"
                 type="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                disabled={isSubmitting}
+                readOnly={isSubmitting}
                 className="h-9"
               />
               <PasswordRulesChecklist password={password} />

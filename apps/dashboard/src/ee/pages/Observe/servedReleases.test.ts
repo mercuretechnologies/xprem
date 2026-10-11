@@ -5,7 +5,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { UpdateFeedPage, UpdateFeedQuery, UpdateFeedRecord } from '@/lib/api';
-import { readServingHeads, servedReleases, servingBranches } from './servedReleases';
+import {
+  currentRuntime,
+  onRuntime,
+  readServingHeads,
+  servedReleases,
+  servingBranches,
+} from './servedReleases';
 
 const head = (overrides: Partial<UpdateFeedRecord> = {}): UpdateFeedRecord => ({
   branch: 'production',
@@ -148,4 +154,30 @@ test('a failed continuation rejects the complete serving read instead of present
     }),
     /Feed unavailable/
   );
+});
+
+test('the runtime of the newest head is the current one, whatever older runtimes the branch still serves', () => {
+  const stale = head({ runtimeVersion: 'fingerprint-old', createdAt: '2025-01-01T10:00:00Z' });
+  const current = head({
+    runtimeVersion: '2.0.0',
+    updateId: '2',
+    updateUUID: '22222222-2222-4222-8222-222222222222',
+    createdAt: '2026-10-03T10:00:00Z',
+  });
+  const currentAndroid = head({
+    runtimeVersion: '2.0.0',
+    platform: 'android',
+    updateId: '3',
+    updateUUID: '33333333-3333-4333-8333-333333333333',
+    createdAt: '2026-09-01T10:00:00Z',
+  });
+  const served = servedReleases([stale, current, currentAndroid]);
+  const runtime = currentRuntime(served);
+  assert.equal(runtime, '2.0.0');
+  assert.deepEqual(
+    onRuntime(served, runtime).map(release => release.record.updateId),
+    ['2', '3']
+  );
+  assert.equal(currentRuntime([]), undefined);
+  assert.deepEqual(onRuntime(served, undefined), []);
 });

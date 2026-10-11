@@ -15,6 +15,7 @@ import { DataTable } from '@/components/DataTable';
 import { TimestampCell } from '@/components/ui/timestamp-cell';
 import { DeleteDialog } from '@/components/ui/delete-dialog';
 import { CreateUserModal } from '@/components/user-creation-modal';
+import { ResetUserPasswordDialog } from '@/components/reset-user-password-dialog';
 
 export const Users = () => {
   const { CONTROL_PLANE_ENABLED, SSO_ENABLED } = useSettings();
@@ -24,6 +25,7 @@ export const Users = () => {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [userForRoles, setUserForRoles] = useState<UserRecord | null>(null);
+  const [userForPasswordReset, setUserForPasswordReset] = useState<UserRecord | null>(null);
   const [userToDelete, setUserToDelete] = useState<UserRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [togglingEnabledId, setTogglingEnabledId] = useState<string | null>(null);
@@ -237,6 +239,17 @@ export const Users = () => {
                       <UserCog className="h-3.5 w-3.5" />
                       Roles
                     </Button>
+                    {(!SSO_ENABLED || row.original.isAdmin) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setUserForPasswordReset(row.original)}
+                        className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+                        title="Reset password and sign out this user's sessions">
+                        <KeyRound className="h-3.5 w-3.5" />
+                        Reset password
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -262,6 +275,11 @@ export const Users = () => {
       />
 
       <UserRolesSheet user={userForRoles} onClose={() => setUserForRoles(null)} />
+
+      <ResetUserPasswordDialog
+        user={userForPasswordReset}
+        onClose={() => setUserForPasswordReset(null)}
+      />
 
       <DeleteDialog
         isOpen={!!userToDelete}

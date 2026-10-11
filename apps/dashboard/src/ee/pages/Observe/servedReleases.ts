@@ -68,3 +68,14 @@ export const servedReleases = (
     (left, right) => Date.parse(right.record.createdAt) - Date.parse(left.record.createdAt)
   );
 };
+
+// The runtime of the newest head is the one the channel ships today.
+export const currentRuntime = (releases: ServedRelease[]) =>
+  releases
+    .slice()
+    .sort(
+      (left, right) => Date.parse(right.record.createdAt) - Date.parse(left.record.createdAt)
+    )[0]?.record.runtimeVersion;
+
+export const onRuntime = (releases: ServedRelease[], runtime: string | undefined) =>
+  releases.filter(release => release.record.runtimeVersion === runtime);

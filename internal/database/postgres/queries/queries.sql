@@ -1676,9 +1676,10 @@ SELECT 'osVersion', COALESCE(os_version, ''), COALESCE(os_name, ''), COUNT(*) FR
 UNION ALL
 SELECT 'country', COALESCE(country_code, ''), '', COUNT(*) FROM fleet GROUP BY 2;
 
--- Per channel, the active devices and how many already run what that channel
--- serves them: the newest update of its branch (or rollout branch) for their
--- runtime and platform, or the control an update rollout keeps them on.
+-- Per channel and runtime version, the active devices and how many already run
+-- what that channel serves them: the newest update of its branch (or rollout
+-- branch) for their runtime and platform, or the control an update rollout
+-- keeps them on.
 -- name: ListObserveChannelAdoption :many
 WITH served AS (
     SELECT ch.name AS channel_name, ch.branch_id FROM channels ch WHERE ch.app_id = $1
@@ -1687,7 +1688,9 @@ WITH served AS (
     FROM channels ch JOIN channel_rollouts cr ON cr.channel_id = ch.id
     WHERE ch.app_id = $1
 ),
-newest AS (
+-- This CTE is referenced by a per-device EXISTS below. Materialize the heads
+-- once so PostgreSQL does not repeat their DISTINCT ON for every device.
+newest AS MATERIALIZED (
     SELECT DISTINCT ON (u.branch_id, u.runtime_version_id, u.platform)
            u.branch_id, rv.version AS runtime_version, u.platform,
            u.update_uuid, u.update_type,
@@ -1702,6 +1705,7 @@ newest AS (
     ORDER BY u.branch_id, u.runtime_version_id, u.platform, u.id DESC
 )
 SELECT d.channel_name::text AS channel_name,
+       COALESCE(d.runtime_version, '')::text AS runtime_version,
        COUNT(*) AS active_devices,
        COUNT(*) FILTER (WHERE d.current_update_id IS NULL) AS embedded_devices,
        COUNT(*) FILTER (WHERE EXISTS (
@@ -1730,8 +1734,8 @@ WHERE d.app_id = $1
   AND (coalesce(cardinality(sqlc.arg('platform')::text[]), 0) = 0 OR d.platform = ANY(sqlc.arg('platform')::text[]))
   AND (coalesce(cardinality(sqlc.arg('channel')::text[]), 0) = 0 OR d.channel_name = ANY(sqlc.arg('channel')::text[]))
   AND (coalesce(cardinality(sqlc.arg('app_version')::text[]), 0) = 0 OR d.app_version = ANY(sqlc.arg('app_version')::text[]))
-GROUP BY d.channel_name
-ORDER BY active_devices DESC, d.channel_name;
+GROUP BY d.channel_name, d.runtime_version
+ORDER BY active_devices DESC, d.channel_name, d.runtime_version;
 
 -- Resolve an EAS publish group to the concrete update UUIDs stored on
 -- telemetry rows. A publish group can contain one update per platform.

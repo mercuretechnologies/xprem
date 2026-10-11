@@ -815,6 +815,7 @@ export type ObserveFleet = {
 
 export type ObserveChannelAdoption = {
   channel: string;
+  runtimeVersion: string;
   activeDevices: number;
   embeddedDevices: number;
   upToDateDevices: number;
@@ -1581,6 +1582,14 @@ export class ApiClient {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
+    });
+  }
+
+  public async resetUserPassword(userId: string, newPassword: string) {
+    return this.request<void>(`/api/users/${encodeURIComponent(userId)}/password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword }),
     });
   }
 
