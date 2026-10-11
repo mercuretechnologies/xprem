@@ -161,7 +161,7 @@ export async function saveCacheArchive(archive: CacheArchive): Promise<number> {
     await request(`${endpoint}/cache/uploads/${encodeURIComponent(object.id)}/complete`, {
       method: 'POST',
       retry: false,
-      timeout: TRANSFER_TIMEOUT,
+      timeout: transferTimeout(content.size),
     });
     return content.size;
   } finally {
