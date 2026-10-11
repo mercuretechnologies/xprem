@@ -17,8 +17,8 @@ var sourcemapsLocationEnv = map[objectstore.Mode]string{
 }
 
 // SourcemapStore holds the source maps of published bundles at
-// {appId}/sourcemaps/{hash}, under the bucket key prefix. Its location may be
-// the updates one: the directory is reserved there.
+// sourcemaps/{appId}/{hash}.map, under the bucket key prefix. Its location
+// may be the updates one without taking a name from any app's branches.
 type SourcemapStore struct {
 	objectStore   objectstore.Store
 	localUploads  bool
@@ -62,7 +62,7 @@ func (s *SourcemapStore) key(appId, hash string) (string, error) {
 	return SourcemapObjectKey(appId, hash), nil
 }
 
-// indexKey is the map's index, {appId}/sourcemaps/{hash}.idx.
+// indexKey is the map's index, sourcemaps/{appId}/{hash}.map.idx.
 func (s *SourcemapStore) indexKey(appId, hash string) (string, error) {
 	key, err := s.key(appId, hash)
 	if err != nil {

@@ -68,7 +68,9 @@ func exceptionOf(eventName, body string, attributes map[string]any) exception {
 // errorFingerprint names an error by its type and the frames it went through,
 // or by its message without frames. uuid.Nil means the record is not an error.
 func errorFingerprint(row LogRow, attributes map[string]any, traces map[string]stacktrace) uuid.UUID {
-	if !row.IsFatal && row.SeverityNumber < severityError {
+	// Older apps report crashes by event name without setting a severity or
+	// fatal flag. Runtime health and Errors reads recognize the same convention.
+	if !row.IsFatal && row.SeverityNumber < severityError && row.EventName != JSCrashEventName {
 		return uuid.Nil
 	}
 	found := exceptionOf(row.EventName, row.Body, attributes)

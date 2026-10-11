@@ -91,7 +91,16 @@ type span struct{ offset, length uint32 }
 
 // IndexSize is the size in bytes of the index WriteIndex writes for m.
 func IndexSize(m *Map) int {
-	size := headerSize + len(encodeTables(m, encodeStrings(m.Sources), encodeStrings(m.Names))) + segmentSize*len(m.Segments)
+	// Measure the tables without constructing them: this is also the worker's
+	// resource check before it allocates the serialized index.
+	size := headerSize + 16 + 4*(len(m.Sources)+len(m.Names)) + len(m.Ignored) +
+		8*((len(m.Segments)+fenceStride-1)/fenceStride) + 8*len(m.Sources) + segmentSize*len(m.Segments)
+	for _, source := range m.Sources {
+		size += len(source)
+	}
+	for _, name := range m.Names {
+		size += len(name)
+	}
 	for _, content := range m.SourcesContent {
 		size += len(content)
 	}
@@ -370,8 +379,9 @@ func OpenIndex(r io.ReaderAt) (*Index, error) {
 	return x, nil
 }
 
-// SourceText reads the text of one source; "" when the map carried none.
-func (x *Index) SourceText(source int) (string, error) {
+// sourceText reads one source within maxBytes, rejecting oversized spans
+// before allocating or reading their text; "" when the map carried none.
+func (x *Index) sourceText(source int, maxBytes uint32) (string, error) {
 	if source < 0 || source >= len(x.texts) {
 		return "", fmt.Errorf("%w: source %d out of range", ErrInvalidIndex, source)
 	}
@@ -379,7 +389,7 @@ func (x *Index) SourceText(source int) (string, error) {
 	if s.length == 0 {
 		return "", nil
 	}
-	if s.length > maxIndexCacheBytes {
+	if s.length > maxBytes {
 		return "", fmt.Errorf("%w: source %d spans %d bytes", ErrInvalidIndex, source, s.length)
 	}
 	buf := make([]byte, s.length)
@@ -392,7 +402,7 @@ func (x *Index) SourceText(source int) (string, error) {
 // Position is where a generated position comes from.
 type Position struct {
 	Source string
-	// SourceIndex is Source's place in the map, the argument SourceText takes.
+	// SourceIndex is Source's place in the map.
 	SourceIndex int
 	// Line and Column are one-based, as editors count them.
 	Line    int

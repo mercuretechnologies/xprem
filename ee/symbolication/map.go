@@ -7,6 +7,7 @@
 package symbolication
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 // ErrInvalidMap reports a file that is not a usable source map. Retrying
 // cannot fix it.
 var ErrInvalidMap = errors.New("invalid source map")
+
+var errSegmentLimit = fmt.Errorf("%w: source map segment table exceeds its size limit", ErrInvalidMap)
 
 // Map is a parsed source map.
 type Map struct {
@@ -53,11 +56,18 @@ type rawMap struct {
 	GoogleIgnoreList []int     `json:"x_google_ignoreList"`
 }
 
-// Parse decodes a source map. Any shape the index cannot use is ErrInvalidMap.
-func Parse(data []byte) (*Map, error) {
+// parseMap decodes a source map, limiting only its segment table.
+// The worker bounds the raw file and serialized index separately.
+func parseMap(ctx context.Context, data []byte, maxSegmentBytes int) (*Map, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var raw rawMap
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidMap, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if raw.Version != 3 {
 		return nil, fmt.Errorf("%w: version %d, expected 3", ErrInvalidMap, raw.Version)
@@ -65,7 +75,7 @@ func Parse(data []byte) (*Map, error) {
 	if raw.Mappings == "" {
 		return nil, fmt.Errorf("%w: no mappings", ErrInvalidMap)
 	}
-	segments, err := decodeMappings(raw.Mappings, len(raw.Sources), len(raw.Names))
+	segments, err := decodeMappings(ctx, raw.Mappings, len(raw.Sources), len(raw.Names), maxSegmentBytes/segmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -105,19 +115,54 @@ var base64Values = func() [256]int8 {
 	return values
 }()
 
+// countSegments rejects an expanded table before allocating its backing array.
+func countSegments(ctx context.Context, mappings string, maximum int) (int, error) {
+	count, inSegment := 0, false
+	for i := 0; i < len(mappings); i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
+		if mappings[i] == ',' || mappings[i] == ';' {
+			inSegment = false
+		} else if !inSegment {
+			count++
+			if count > maximum {
+				return 0, errSegmentLimit
+			}
+			inSegment = true
+		}
+	}
+	return count, nil
+}
+
 // decodeMappings turns the VLQ string into absolute segments, in generated
 // order, which is the order the string lists them in: "," ends a segment
 // and ";" ends a generated line.
-func decodeMappings(mappings string, sources, names int) ([]Segment, error) {
-	segments := make([]Segment, 0, len(mappings)/5)
+func decodeMappings(ctx context.Context, mappings string, sources, names, maxSegments int) ([]Segment, error) {
+	count, err := countSegments(ctx, mappings, maxSegments)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	segments := make([]Segment, 0, count)
+	var fields [5]int64
 	var totals runningTotals
 	line, start := uint32(0), 0
 	for i := 0; i <= len(mappings); i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if i < len(mappings) && mappings[i] != ',' && mappings[i] != ';' {
 			continue
 		}
 		if encoded := mappings[start:i]; encoded != "" {
-			deltas, err := decodeVLQ(encoded)
+			deltas, err := decodeVLQ(encoded, &fields)
 			if err != nil {
 				return nil, err
 			}
@@ -137,9 +182,9 @@ func decodeMappings(mappings string, sources, names int) ([]Segment, error) {
 	return segments, nil
 }
 
-// decodeVLQ reads the numbers of one segment, such as "SAAS" into 9, 0, 0, 9.
-func decodeVLQ(encoded string) ([]int64, error) {
-	var numbers []int64
+// decodeVLQ reads one segment into reusable fields without allocating.
+func decodeVLQ(encoded string, fields *[5]int64) ([]int64, error) {
+	numbers := fields[:0]
 	var value int64
 	shift := uint(0)
 	for i := 0; i < len(encoded); i++ {

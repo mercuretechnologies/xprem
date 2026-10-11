@@ -64,6 +64,9 @@ func (s *Service) available() bool {
 	return s != nil && s.store != nil && s.indexes != nil && s.jobs != nil && s.licenseValid()
 }
 
+// Available reports feature and license availability without reading an index.
+func (s *Service) Available() bool { return s.available() }
+
 // GetUpdateSourcemap answers ErrNoSourcemap for an update published without a map.
 func (s *Service) GetUpdateSourcemap(ctx context.Context, appId, branch, runtimeVersion, updateId string) (*UpdateSourcemap, error) {
 	if !s.available() {
@@ -265,8 +268,14 @@ func (s *Service) buildIndex(ctx context.Context, appId, hash string, rebuild bo
 	if len(data) > maxMapSize {
 		return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: map %s exceeds %d MB", types.SourcemapIndexReasonMapTooLarge, hash, maxMapSize>>20))
 	}
-	m, err := Parse(data)
+	m, err := parseMap(ctx, data, maxIndexCacheBytes)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return indexOutcome{}, err
+		}
+		if errors.Is(err, errSegmentLimit) {
+			return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonIndexTooLarge, err))
+		}
 		return indexOutcome{}, river.JobCancel(fmt.Errorf("%s: %v", types.SourcemapIndexReasonMapInvalid, err))
 	}
 	if IndexSize(m) > maxIndexCacheBytes {

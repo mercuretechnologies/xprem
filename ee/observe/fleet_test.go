@@ -129,6 +129,7 @@ func TestReadReleasesCountsDevicesOnWhatTheChannelServes(t *testing.T) {
 
 	require.Equal(t, []ChannelAdoption{{
 		Channel:         "production",
+		RuntimeVersion:  "1.0.0",
 		ActiveDevices:   3,
 		EmbeddedDevices: 1,
 		UpToDateDevices: 1,
@@ -139,7 +140,7 @@ func TestReadReleasesCountsDevicesOnWhatTheChannelServes(t *testing.T) {
 		releases, err := explorer.readReleases(ctx, appID, ExplorerQuery{From: time.Now().Add(-30 * 24 * time.Hour)})
 		require.NoError(t, err)
 		require.Equal(t, []ChannelAdoption{{
-			Channel: "production", ActiveDevices: active, EmbeddedDevices: 1, UpToDateDevices: upToDate,
+			Channel: "production", RuntimeVersion: "1.0.0", ActiveDevices: active, EmbeddedDevices: 1, UpToDateDevices: upToDate,
 		}}, releases.Channels)
 	}
 	// The control is current only while the update rollout remains active.

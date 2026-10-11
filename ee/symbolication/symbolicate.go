@@ -182,8 +182,8 @@ type sourceLines struct {
 func (s *sourceLines) around(source, line, column int) *Context {
 	lines, seen := s.lines[source]
 	if !seen {
-		text, err := s.index.SourceText(source)
-		if err == nil && text != "" && len(text) <= maxContextSourceBytes {
+		text, err := s.index.sourceText(source, maxContextSourceBytes)
+		if err == nil && text != "" {
 			// A file ends with a line break; that is not one more line.
 			lines = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 		}

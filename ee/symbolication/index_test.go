@@ -6,6 +6,7 @@ package symbolication
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math/rand"
 	"os"
@@ -26,7 +27,7 @@ func openIndexOf(t *testing.T, m *Map) *Index {
 }
 
 func TestLookupResolvesTheCrashColumn(t *testing.T) {
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	index := openIndexOf(t, m)
 
@@ -55,11 +56,11 @@ func TestSourceTextIsReadBySpan(t *testing.T) {
 	}
 	index := openIndexOf(t, m)
 	for i, want := range m.SourcesContent {
-		got, err := index.SourceText(i)
+		got, err := index.sourceText(i, maxIndexCacheBytes)
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "source %d", i)
 	}
-	_, err := index.SourceText(3)
+	_, err := index.sourceText(3, maxIndexCacheBytes)
 	assert.ErrorIs(t, err, ErrInvalidIndex)
 
 	// The texts sit after the segments: a lookup still reads the right segments.
@@ -75,7 +76,7 @@ func TestOpenIndexRefusesForeignFiles(t *testing.T) {
 }
 
 func TestIndexReadersRejectUnsupportedVersions(t *testing.T) {
-	m, err := Parse([]byte(cartMap))
+	m, err := parseMap(context.Background(), []byte(cartMap), maxIndexCacheBytes)
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, WriteIndex(&buf, m))
@@ -147,7 +148,7 @@ func TestHermesExampleMap(t *testing.T) {
 	}
 	data, err := os.ReadFile(matches[0])
 	require.NoError(t, err)
-	m, err := Parse(data)
+	m, err := parseMap(context.Background(), data, maxIndexCacheBytes)
 	require.NoError(t, err)
 	var raw struct {
 		Sources        []string  `json:"sources"`
@@ -178,7 +179,7 @@ func TestHermesExampleMap(t *testing.T) {
 		assert.Equal(t, int(s.OriginalLine)+1, pos.Line)
 	}
 	for _, i := range []int{0, len(m.Sources) / 2, len(m.Sources) - 1} {
-		text, err := index.SourceText(i)
+		text, err := index.sourceText(i, maxIndexCacheBytes)
 		require.NoError(t, err)
 		want := ""
 		if raw.SourcesContent[i] != nil {

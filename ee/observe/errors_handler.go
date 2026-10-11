@@ -23,6 +23,7 @@ type ErrorReader interface {
 // IndexStateReader says whether an update's index is ready, with the
 // symbolication errors as answers.
 type IndexStateReader interface {
+	Available() bool
 	UpdateIndexState(ctx context.Context, appID, updateUUID string) error
 }
 
@@ -73,7 +74,7 @@ func (h *ErrorsHandler) GetErrorGroupHandler(w http.ResponseWriter, r *http.Requ
 		handlers.RenderError(w, http.StatusBadRequest, "The fingerprint must be a UUID.")
 		return
 	}
-	if h.reader == nil {
+	if h.reader == nil || h.indexes == nil || !h.indexes.Available() {
 		handlers.RenderJSON(w, http.StatusOK, ErrorGroupAnswer{Status: ErrorGroupUnavailable})
 		return
 	}

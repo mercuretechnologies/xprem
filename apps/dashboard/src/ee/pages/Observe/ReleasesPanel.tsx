@@ -18,6 +18,8 @@ import { compactNumber, exactNumber, sinceLabel } from './format';
 import { seriesColors } from './dimensions';
 import { groupTitle, platformLabel } from './updateGroups';
 import {
+  currentRuntime,
+  onRuntime,
   readServingHeads,
   servedReleases,
   servingBranches,
@@ -76,7 +78,7 @@ const Adoption = ({ adoption }: { adoption: ObserveChannelAdoption | undefined }
   return (
     <div
       className="flex items-center gap-3"
-      title={`${exactNumber.format(adoption.upToDateDevices)} of ${exactNumber.format(adoption.activeDevices)} active devices run what this channel serves, ${exactNumber.format(adoption.embeddedDevices)} run the embedded bundle`}>
+      title={`${exactNumber.format(adoption.upToDateDevices)} of ${exactNumber.format(adoption.activeDevices)} active devices on runtime ${shortRuntimeVersion(adoption.runtimeVersion)} run what this channel serves, ${exactNumber.format(adoption.embeddedDevices)} run the embedded bundle`}>
       <div className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div className="bg-primary" style={{ width: `${100 * upToDate}%` }} />
       </div>
@@ -137,10 +139,25 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
       ),
     ])
   );
+  // Only the runtime a channel ships today is worth a row; older runtimes it
+  // still serves to a binary nobody updated are noise here.
+  const releasesByChannel = channels.map(channel => {
+    const base = servedByBranch.get(channel.branchName ?? '') ?? [];
+    const rollout = channel.rollout
+      ? (servedByBranch.get(channel.rollout.rolloutBranchName) ?? [])
+      : [];
+    const runtime = currentRuntime([...base, ...rollout]);
+    return {
+      channel,
+      runtime,
+      served: onRuntime(base, runtime),
+      rollout: onRuntime(rollout, runtime),
+    };
+  });
   const servedIds = Array.from(
     new Set(
-      Array.from(servedByBranch.values()).flatMap(releases =>
-        releases.flatMap(release => release.group?.updateUUIDs ?? [])
+      releasesByChannel.flatMap(entry =>
+        [...entry.served, ...entry.rollout].flatMap(release => release.group?.updateUUIDs ?? [])
       )
     )
   );
@@ -164,21 +181,23 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
       served.group
         ? aggregateUpdateHealth(served.group.updateUUIDs.map(id => healthQuery.data?.updates[id]))
         : undefined;
-    const adoptionByChannel = new Map(
-      (releasesQuery.data?.channels ?? []).map(entry => [entry.channel, entry])
-    );
+    // The server orders a channel's runtimes by active devices, most first.
+    const adoptionByChannel = new Map<string, ObserveChannelAdoption[]>();
+    for (const entry of releasesQuery.data?.channels ?? []) {
+      adoptionByChannel.set(entry.channel, [
+        ...(adoptionByChannel.get(entry.channel) ?? []),
+        entry,
+      ]);
+    }
     return (
-      channels
-        .map(channel => {
+      releasesByChannel
+        .map(({ channel, runtime, served, rollout }) => {
           const baseSelected =
             !filters.query.branch?.length || branches.includes(channel.branchName ?? '');
           const rolloutSelected =
             !!channel.rollout &&
             (!filters.query.branch?.length || branches.includes(channel.rollout.rolloutBranchName));
-          const served = servedByBranch.get(channel.branchName ?? '') ?? [];
-          const rollout = channel.rollout
-            ? (servedByBranch.get(channel.rollout.rolloutBranchName) ?? [])
-            : [];
+          const adoptions = adoptionByChannel.get(channel.releaseChannelName) ?? [];
           // A rollout in trouble is the channel in trouble, whatever the rest of it runs.
           const worst = [...served, ...rollout]
             .map(entry => {
@@ -195,7 +214,9 @@ export const ReleasesPanel = ({ filters }: { filters: ObserveFilters }) => {
             rollout,
             health: worst?.health,
             status,
-            adoption: adoptionByChannel.get(channel.releaseChannelName),
+            adoption: runtime
+              ? adoptions.find(entry => entry.runtimeVersion === runtime)
+              : adoptions[0],
           };
         })
         // A channel that serves nothing to nobody has nothing to report.
