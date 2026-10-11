@@ -133,7 +133,9 @@ func (s *BuildCacheService) Complete(ctx context.Context, appID, identifierID, i
 	defer file.Reader.Close()
 	if err := validateCacheObject(*object, file.Reader); err != nil {
 		if errors.Is(err, ErrBuildCacheIntegrity) || errors.Is(err, ErrBuildCacheArchive) {
-			err = errors.Join(err, s.repo.Delete(ctx, *object))
+			cleanupCtx, cleanupCancel := cleanupContext(ctx)
+			defer cleanupCancel()
+			err = errors.Join(err, s.repo.Delete(cleanupCtx, *object))
 		}
 		return nil, err
 	}
@@ -181,9 +183,14 @@ func (s *BuildCacheService) UploadLocal(ctx context.Context, appID, identifierID
 	case err == nil:
 		err = bucket.ErrCacheObjectExists
 	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	cleanupCtx, cleanupCancel := cleanupContext(ctx)
 	defer cleanupCancel()
 	return errors.Join(err, s.cacheStore.DeleteUpload(cleanupCtx, ref))
+}
+
+// cleanupContext outlives the caller's cancellation so a failed upload still gets tidied up.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
 func validateCacheObject(object types.BuildCacheObject, body io.Reader) error {
