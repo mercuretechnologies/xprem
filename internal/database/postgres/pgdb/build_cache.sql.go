@@ -38,12 +38,12 @@ func (q *Queries) BuildCacheUsage(ctx context.Context, arg BuildCacheUsageParams
 	return i, err
 }
 
-const deleteBuildCacheCleanup = `-- name: DeleteBuildCacheCleanup :exec
-DELETE FROM build_cache_cleanup WHERE id = $1
+const deferBuildCacheCleanup = `-- name: DeferBuildCacheCleanup :exec
+UPDATE build_cache_cleanup SET due_at = final_at WHERE id = $1 AND final_at > now()
 `
 
-func (q *Queries) DeleteBuildCacheCleanup(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteBuildCacheCleanup, id)
+func (q *Queries) DeferBuildCacheCleanup(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deferBuildCacheCleanup, id)
 	return err
 }
 
@@ -63,7 +63,7 @@ func (q *Queries) DeleteBuildCacheObject(ctx context.Context, arg DeleteBuildCac
 }
 
 const dueBuildCacheCleanup = `-- name: DueBuildCacheCleanup :many
-SELECT id, app_id, app_identifier_id, namespace, size, due_at FROM build_cache_cleanup WHERE due_at <= now() ORDER BY due_at LIMIT 4 FOR UPDATE SKIP LOCKED
+SELECT id, app_id, app_identifier_id, namespace, size, due_at, final_at FROM build_cache_cleanup WHERE due_at <= now() ORDER BY due_at LIMIT 4 FOR UPDATE SKIP LOCKED
 `
 
 func (q *Queries) DueBuildCacheCleanup(ctx context.Context) ([]BuildCacheCleanup, error) {
@@ -82,6 +82,7 @@ func (q *Queries) DueBuildCacheCleanup(ctx context.Context) ([]BuildCacheCleanup
 			&i.Namespace,
 			&i.Size,
 			&i.DueAt,
+			&i.FinalAt,
 		); err != nil {
 			return nil, err
 		}
@@ -99,6 +100,18 @@ DELETE FROM build_cache_objects WHERE id IN (SELECT id FROM build_cache_objects 
 
 func (q *Queries) ExpireBuildCacheObjects(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, expireBuildCacheObjects)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finalizeBuildCacheCleanup = `-- name: FinalizeBuildCacheCleanup :execrows
+DELETE FROM build_cache_cleanup WHERE id = $1 AND final_at <= now()
+`
+
+func (q *Queries) FinalizeBuildCacheCleanup(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, finalizeBuildCacheCleanup, id)
 	if err != nil {
 		return 0, err
 	}

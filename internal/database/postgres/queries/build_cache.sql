@@ -35,8 +35,11 @@ DELETE FROM build_cache_objects WHERE id IN (SELECT id FROM build_cache_objects 
 -- name: DueBuildCacheCleanup :many
 SELECT * FROM build_cache_cleanup WHERE due_at <= now() ORDER BY due_at LIMIT 4 FOR UPDATE SKIP LOCKED;
 
--- name: DeleteBuildCacheCleanup :exec
-DELETE FROM build_cache_cleanup WHERE id = $1;
+-- name: FinalizeBuildCacheCleanup :execrows
+DELETE FROM build_cache_cleanup WHERE id = $1 AND final_at <= now();
+
+-- name: DeferBuildCacheCleanup :exec
+UPDATE build_cache_cleanup SET due_at = final_at WHERE id = $1 AND final_at > now();
 
 -- name: RetryBuildCacheCleanup :exec
 UPDATE build_cache_cleanup SET due_at = now() + interval '15 minutes' WHERE id = $1;

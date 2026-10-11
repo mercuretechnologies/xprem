@@ -123,7 +123,6 @@ func (c *BuildCleanup) SweepCache(ctx context.Context) (int, error) {
 	}
 }
 
-// Commit each small batch so a slow bucket cannot roll back earlier deletions.
 func (c *BuildCleanup) sweepCacheBatch(ctx context.Context) (int, int, error) {
 	tx, err := c.db.Begin(ctx)
 	if err != nil {
@@ -144,8 +143,12 @@ func (c *BuildCleanup) sweepCacheBatch(ctx context.Context) (int, int, error) {
 			log.Printf("[BUILD-CACHE] object %s cleanup failed: %v", object.ID.String(), err)
 			err = q.RetryBuildCacheCleanup(ctx, object.ID)
 		} else {
-			err = q.DeleteBuildCacheCleanup(ctx, object.ID)
-			deleted++
+			var finalized int64
+			finalized, err = q.FinalizeBuildCacheCleanup(ctx, object.ID)
+			if err == nil && finalized == 0 {
+				err = q.DeferBuildCacheCleanup(ctx, object.ID)
+			}
+			deleted += int(finalized)
 		}
 		if err != nil {
 			return len(objects), deleted, err

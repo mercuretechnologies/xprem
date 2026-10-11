@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -90,7 +91,7 @@ func TestBuildCacheCleanupRetriesBucketFailure(t *testing.T) {
 	ctx := context.Background()
 	ref := bucket.BuildCacheObject{AppID: uuid.NewString(), IdentifierID: uuid.NewString(), Namespace: types.BuildCacheGradle, ID: uuid.NewString()}
 	key := ref.Key()
-	_, err := pool.Exec(ctx, "INSERT INTO build_cache_cleanup (id, app_id, app_identifier_id, namespace, size, due_at) VALUES ($1, $2, $3, $4, 2048, now())", ref.ID, ref.AppID, ref.IdentifierID, ref.Namespace)
+	_, err := pool.Exec(ctx, "INSERT INTO build_cache_cleanup (id, app_id, app_identifier_id, namespace, size, due_at, final_at) VALUES ($1, $2, $3, $4, 2048, now(), now())", ref.ID, ref.AppID, ref.IdentifierID, ref.Namespace)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM build_cache_cleanup WHERE id = $1", ref.ID) })
 	deleter.failOn[key] = errors.New("bucket unavailable")
@@ -108,6 +109,52 @@ func TestBuildCacheCleanupRetriesBucketFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, deleter.keys(), key)
 	require.ErrorIs(t, pool.QueryRow(ctx, "SELECT true FROM build_cache_cleanup WHERE id = $1", ref.ID).Scan(&postponed), pgx.ErrNoRows)
+}
+
+type directoryCacheDeleter struct{ directory string }
+
+func (d directoryCacheDeleter) Delete(_ context.Context, ref bucket.BuildCacheObject) error {
+	err := os.Remove(filepath.Join(d.directory, ref.ID+".upload"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func TestBuildCacheCleanupRetainsLateUploadsUntilFinalSweep(t *testing.T) {
+	pool, _, cleanup := setupBuildCleanup(t)
+	ctx := context.Background()
+	directory := t.TempDir()
+	cleanup.cacheStore = directoryCacheDeleter{directory}
+	ref := bucket.BuildCacheObject{AppID: uuid.NewString(), IdentifierID: uuid.NewString(), Namespace: types.BuildCacheGradle, ID: uuid.NewString()}
+	file := filepath.Join(directory, ref.ID+".upload")
+	require.NoError(t, os.WriteFile(file, []byte("initial upload"), 0o600))
+	_, err := pool.Exec(ctx, "INSERT INTO build_cache_cleanup (id, app_id, app_identifier_id, namespace, size, due_at) VALUES ($1, $2, $3, $4, 2048, now())", ref.ID, ref.AppID, ref.IdentifierID, ref.Namespace)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM build_cache_cleanup WHERE id = $1", ref.ID) })
+
+	count, err := cleanup.SweepCache(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count, "the first delete retains the cleanup record")
+	require.NoFileExists(t, file)
+	var finalDue bool
+	var finalIn pgtype.Interval
+	require.NoError(t, pool.QueryRow(ctx, "SELECT due_at = final_at, final_at - now() FROM build_cache_cleanup WHERE id = $1", ref.ID).Scan(&finalDue, &finalIn))
+	require.True(t, finalDue)
+	require.Greater(t, duration(finalIn), 99*time.Minute, "cleanup outlives a 75 minute upload and its grace period")
+
+	require.NoError(t, os.WriteFile(file, []byte("late upload"), 0o600))
+	count, err = cleanup.SweepCache(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.FileExists(t, file, "the final sweep waits for its deadline")
+	_, err = pool.Exec(ctx, "UPDATE build_cache_cleanup SET due_at = now(), final_at = now() WHERE id = $1", ref.ID)
+	require.NoError(t, err)
+	count, err = cleanup.SweepCache(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.NoFileExists(t, file)
+	require.ErrorIs(t, pool.QueryRow(ctx, "SELECT true FROM build_cache_cleanup WHERE id = $1", ref.ID).Scan(&finalDue), pgx.ErrNoRows)
 }
 
 type cleanupFixture struct {

@@ -44,6 +44,12 @@ func TestBuildCacheRetiredBytesRemainChargedUntilCleanup(t *testing.T) {
 			_, err = cleanup.SweepCache(ctx)
 			require.NoError(t, err)
 			_, err = repo.Reserve(ctx, object)
+			require.ErrorIs(t, err, repository.ErrBuildCacheFull, "the first cleanup must retain quota for late uploads")
+			_, err = f.pool.Exec(ctx, "UPDATE build_cache_cleanup SET due_at = now(), final_at = now() WHERE app_id = $1", f.app)
+			require.NoError(t, err)
+			_, err = cleanup.SweepCache(ctx)
+			require.NoError(t, err)
+			_, err = repo.Reserve(ctx, object)
 			require.NoError(t, err, "successful bucket cleanup releases the reservation")
 		})
 	}

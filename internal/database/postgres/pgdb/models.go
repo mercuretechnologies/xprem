@@ -180,6 +180,7 @@ type BuildCacheCleanup struct {
 	Namespace       types.BuildCacheNamespace `json:"namespace"`
 	Size            int64                     `json:"size"`
 	DueAt           pgtype.Timestamptz        `json:"due_at"`
+	FinalAt         pgtype.Timestamptz        `json:"final_at"`
 }
 
 type BuildCacheObject struct {
