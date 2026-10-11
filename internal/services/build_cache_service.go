@@ -159,9 +159,15 @@ func (s *BuildCacheService) UploadLocal(ctx context.Context, appID, identifierID
 
 // DownloadURL signs an object returned by Find, which only returns published entries.
 func (s *BuildCacheService) DownloadURL(ctx context.Context, object types.BuildCacheObject) (string, error) {
+	if s.cacheStore == nil {
+		return "", ErrBuildStorageUnavailable
+	}
 	return s.cacheStore.PresignGet(ctx, cacheRef(object), time.Now().Add(5*time.Minute))
 }
 func (s *BuildCacheService) Download(ctx context.Context, object types.BuildCacheObject) (*types.BucketFile, error) {
+	if s.cacheStore == nil {
+		return nil, ErrBuildStorageUnavailable
+	}
 	if object.PublishedAt == nil {
 		return nil, ErrBuildCachePending
 	}

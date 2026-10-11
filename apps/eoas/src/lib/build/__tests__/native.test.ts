@@ -112,7 +112,18 @@ afterEach(async () => {
 });
 
 it('restores after prebuild and saves only after the artifact upload completes', async () => {
-  await expect(runNativeBuild(build, native, directory, buildLog, [])).resolves.toBe(build.output);
+  let finishUpload: (url: string) => void = () => {};
+  vi.mocked(uploadBuildArtifact).mockImplementation(() => {
+    events.push('upload');
+    return new Promise<string>(resolve => {
+      finishUpload = resolve;
+    });
+  });
+  const run = runNativeBuild(build, native, directory, buildLog, []);
+  await vi.waitFor(() => expect(events).toContain('upload'));
+  expect(native.saveCache).not.toHaveBeenCalled();
+  finishUpload('https://example.test/artifacts/app.apk');
+  await expect(run).resolves.toBe(build.output);
   expect(events).toEqual(['prebuild', 'restore', 'compile', 'upload', 'save']);
   expect(native.saveCache).toHaveBeenCalledWith(vi.mocked(native.compile).mock.calls[0][0]);
 });

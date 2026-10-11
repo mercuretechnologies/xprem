@@ -32,6 +32,9 @@ func NewBucketServerInstanceRepository(instanceStore *bucket.InstanceStore, c ca
 // concurrent replicas agree on a single one. A replica that cannot get the
 // lock within instanceIDMaxWaits polls mints anyway rather than blocking boot.
 func (s *BucketServerInstanceRepository) GetOrCreateInstanceID(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	locked := false
 	for attempt := 0; ; attempt++ {
 		id, err := s.instanceStore.ID(ctx)
@@ -48,10 +51,17 @@ func (s *BucketServerInstanceRepository) GetOrCreateInstanceID(ctx context.Conte
 		if locked || attempt >= instanceIDMaxWaits {
 			break
 		}
-		time.Sleep(instanceIDWaitPoll)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(instanceIDWaitPoll):
+		}
 	}
 	if locked {
 		defer s.cache.Delete(instanceIDLockKey)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	id, err := s.instanceStore.ID(ctx)
 	if err != nil {
