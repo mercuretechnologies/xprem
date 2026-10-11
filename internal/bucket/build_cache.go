@@ -73,6 +73,22 @@ func (s *BuildCacheStore) Get(ctx context.Context, ref BuildCacheObject) (*types
 	return s.objectStore.Get(ctx, key)
 }
 
+func (s *BuildCacheStore) Exists(ctx context.Context, ref BuildCacheObject) (bool, error) {
+	key, err := s.key(ref)
+	if err != nil {
+		return false, err
+	}
+	return s.objectStore.Exists(ctx, key)
+}
+
+func (s *BuildCacheStore) UploadExists(ctx context.Context, ref BuildCacheObject) (bool, error) {
+	key, err := s.key(ref)
+	if err != nil {
+		return false, err
+	}
+	return s.objectStore.Exists(ctx, uploadKey(key))
+}
+
 // GetUpload returns the unpublished upload, or nil when it is absent.
 func (s *BuildCacheStore) GetUpload(ctx context.Context, ref BuildCacheObject) (*types.BucketFile, error) {
 	key, err := s.key(ref)

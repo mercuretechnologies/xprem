@@ -271,3 +271,48 @@ func TestBuildCacheCompletePublishesExistingFinalArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, f.downloaded(t))
 }
+
+type pauseCompletion struct{}
+
+// pausedCacheRepository holds a Complete marked with pauseCompletion right after it read its object.
+type pausedCacheRepository struct {
+	services.BuildCacheRepository
+	admitted chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (r *pausedCacheRepository) Get(ctx context.Context, app, identifier, id string) (*types.BuildCacheObject, error) {
+	object, err := r.BuildCacheRepository.Get(ctx, app, identifier, id)
+	if ctx.Value(pauseCompletion{}) != nil {
+		r.once.Do(func() {
+			close(r.admitted)
+			<-r.release
+		})
+	}
+	return object, err
+}
+
+func TestBuildCacheConcurrentCompleteKeepsPublishedBytes(t *testing.T) {
+	original := serviceCacheArchive(t, "verified contents")
+	f := newCacheServiceFixture(t, original)
+	require.NoError(t, f.service.UploadLocal(t.Context(), f.app, f.id, f.upload.Object.ID, bytes.NewReader(original)))
+	paused := &pausedCacheRepository{BuildCacheRepository: f.repo, admitted: make(chan struct{}), release: make(chan struct{})}
+	f.service = services.NewBuildCacheService(paused, f.store)
+	late := make(chan error, 1)
+	go func() {
+		_, err := f.service.Complete(context.WithValue(t.Context(), pauseCompletion{}, true), f.app, f.id, f.upload.Object.ID)
+		late <- err
+	}()
+	select {
+	case <-paused.admitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the late completion was not admitted")
+	}
+	_, err := f.service.Complete(t.Context(), f.app, f.id, f.upload.Object.ID)
+	require.NoError(t, err)
+	require.NoError(t, f.store.Put(t.Context(), f.ref(), bytes.NewReader(serviceCacheArchive(t, "replaced contents"))))
+	close(paused.release)
+	require.NoError(t, <-late)
+	require.Equal(t, original, f.downloaded(t))
+}

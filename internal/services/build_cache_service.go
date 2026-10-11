@@ -120,12 +120,10 @@ func (s *BuildCacheService) Complete(ctx context.Context, appID, identifierID, i
 		return object, err
 	}
 	ref := cacheRef(*object)
-	file, err := s.cacheStore.GetUpload(ctx, ref)
-	staged := file != nil
-	if err == nil && file == nil {
-		// A retry may find the copied archive before its metadata was published.
-		file, err = s.cacheStore.Get(ctx, ref)
+	if err := s.publishUpload(ctx, ref); err != nil {
+		return nil, err
 	}
+	file, err := s.cacheStore.Get(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -139,15 +137,26 @@ func (s *BuildCacheService) Complete(ctx context.Context, appID, identifierID, i
 		}
 		return nil, err
 	}
-	if staged {
+	return s.repo.Publish(ctx, *object)
+}
+
+// publishUpload copies the staged archive to the published key, unless an
+// earlier attempt already did, then drops the staging object.
+func (s *BuildCacheService) publishUpload(ctx context.Context, ref bucket.BuildCacheObject) error {
+	staged, err := s.cacheStore.UploadExists(ctx, ref)
+	if err != nil || !staged {
+		return err
+	}
+	published, err := s.cacheStore.Exists(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if !published {
 		if err := s.cacheStore.Publish(ctx, ref); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	if err := s.cacheStore.DeleteUpload(ctx, ref); err != nil {
-		return nil, err
-	}
-	return s.repo.Publish(ctx, *object)
+	return s.cacheStore.DeleteUpload(ctx, ref)
 }
 
 func (s *BuildCacheService) UploadLocal(ctx context.Context, appID, identifierID, id string, body io.Reader) error {
