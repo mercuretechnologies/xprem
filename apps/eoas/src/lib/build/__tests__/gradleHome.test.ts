@@ -6,7 +6,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { withGradleHome } from '../android/gradleHome';
 
 let home: string;
-const build = { endpoint: 'https://xprem.test/app/build/identifier', options: { profile: 'test' } };
+const build = {
+  endpoint: 'https://xprem.test/app/build/identifier',
+  options: { profile: 'test' },
+  env: {} as NodeJS.ProcessEnv,
+};
 
 beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), 'eoas-gradle-home-'));
@@ -18,7 +22,7 @@ afterEach(async () => {
   await fs.remove(home);
 });
 
-it('retains dependencies between builds without using the shared Gradle home', async () => {
+it('retains dependencies between builds and links the user configuration', async () => {
   const settings = path.join(home, '.gradle/gradle.properties');
   await fs.outputFile(settings, 'private repository credentials');
   const directory = await withGradleHome(build, async directory => {
@@ -30,10 +34,27 @@ it('retains dependencies between builds without using the shared Gradle home', a
     expect(await fs.readFile(path.join(next, 'caches/modules-2/dependency'), 'utf8')).toBe(
       'downloaded jar'
     );
-    expect(await fs.pathExists(path.join(next, 'gradle.properties'))).toBe(false);
+    expect(await fs.readlink(path.join(next, 'gradle.properties'))).toBe(settings);
+    expect(await fs.pathExists(path.join(next, 'init.d'))).toBe(false);
     expect((await fs.stat(next)).mode & 0o777).toBe(0o700);
   });
-  expect(await fs.readFile(settings, 'utf8')).toBe('private repository credentials');
+  await fs.writeFile(settings, 'rotated credentials');
+  await withGradleHome(build, async next => {
+    expect(await fs.readFile(path.join(next, 'gradle.properties'), 'utf8')).toBe(
+      'rotated credentials'
+    );
+  });
+});
+
+it('links the configuration of a custom GRADLE_USER_HOME', async () => {
+  const userHome = path.join(home, 'custom-gradle-home');
+  await fs.outputFile(path.join(userHome, 'init.d/repositories.gradle'), 'allprojects {}');
+  await withGradleHome({ ...build, env: { GRADLE_USER_HOME: userHome } }, async directory => {
+    expect(await fs.readFile(path.join(directory, 'init.d/repositories.gradle'), 'utf8')).toBe(
+      'allprojects {}'
+    );
+    expect(await fs.pathExists(path.join(directory, 'gradle.properties'))).toBe(false);
+  });
 });
 
 it('isolates applications and profiles while rejecting concurrent use of the same home', async () => {
