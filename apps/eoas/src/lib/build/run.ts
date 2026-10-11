@@ -100,7 +100,7 @@ interface OwnedProcess {
   pid: number;
   parent: number;
   state: string;
-  started: string;
+  startedAt: number;
 }
 
 // Snapshot descendants before cancellation reparents them, and check their start times
@@ -132,7 +132,7 @@ async function stopProcessTree(pid?: number): Promise<void> {
       current.some(
         candidate =>
           candidate.pid === process.pid &&
-          candidate.started === process.started &&
+          sameStart(candidate, process) &&
           !candidate.state.startsWith('Z')
       )
     );
@@ -169,30 +169,32 @@ function signalProcess(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-const psOptions = { env: { ...process.env, LC_ALL: 'C' } };
+// ps reports the elapsed time in whole seconds, so two readings of one process differ slightly.
+function sameStart(a: OwnedProcess, b: OwnedProcess): boolean {
+  return Math.abs(a.startedAt - b.startedAt) <= 2000;
+}
 
-// BusyBox ps (Alpine) has no lstart column; survivors are then matched by PID alone.
-let startColumn: Promise<boolean> | undefined;
-
-function hasStartColumn(): Promise<boolean> {
-  return (startColumn ??= spawnAsync('ps', ['-A', '-o', 'lstart='], psOptions).then(
-    () => true,
-    () => false
-  ));
+// The etime column is [[dd-]hh:]mm:ss.
+function elapsedMs(etime: string): number {
+  const [days, clock] = etime.includes('-') ? etime.split('-') : ['0', etime];
+  const seconds = clock.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+  return (Number(days) * 86400 + seconds) * 1000;
 }
 
 async function readProcesses(): Promise<OwnedProcess[]> {
-  const columns = (await hasStartColumn()) ? 'pid=,ppid=,stat=,lstart=' : 'pid=,ppid=,stat=';
-  const { stdout } = await spawnAsync('ps', ['-A', '-o', columns], psOptions);
+  const now = Date.now();
+  const { stdout } = await spawnAsync('ps', ['-A', '-o', 'pid=,ppid=,stat=,etime='], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
   return stdout.split('\n').flatMap(line => {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+?))?\s*$/.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s*$/.exec(line);
     return match
       ? [
           {
             pid: Number(match[1]),
             parent: Number(match[2]),
             state: match[3],
-            started: match[4] ?? '',
+            startedAt: now - elapsedMs(match[4]),
           },
         ]
       : [];
