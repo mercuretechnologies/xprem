@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -48,6 +49,10 @@ type RawBranchMapping struct {
 	} `json:"data"`
 }
 
+// ErrNoExpoUser marks a credential Expo answered without a user: unknown,
+// expired or revoked, or a robot token, which has no username to compare.
+var ErrNoExpoUser = errors.New("expo credential does not resolve to a user")
+
 func HasCredential(auth types.Auth) bool {
 	return (auth.Token != nil && strings.TrimSpace(*auth.Token) != "") ||
 		(auth.SessionSecret != nil && strings.TrimSpace(*auth.SessionSecret) != "")
@@ -64,7 +69,17 @@ func ValidateAuth(appId string, expoAuth types.Auth) (*UserAccount, error) {
 	if expoAccount == nil {
 		return nil, errors.New("no expo account found")
 	}
+	// Both sides must resolve to a real username before they are compared.
+	// FetchSelfUsername answers "" when the server's own token is missing or
+	// Expo is unreachable, and a caller's empty username must never equal it:
+	// two empty strings would read as the same user.
+	if strings.TrimSpace(expoAccount.Username) == "" {
+		return nil, errors.New("expo account has no username")
+	}
 	selfExpoUsername := FetchSelfUsername(appId)
+	if strings.TrimSpace(selfExpoUsername) == "" {
+		return nil, errors.New("could not resolve the Expo user of the server access token")
+	}
 	if selfExpoUsername != expoAccount.Username {
 		return nil, errors.New("expo account does not match self expo username")
 	}
@@ -243,10 +258,17 @@ func FetchUserAccountInformations(expoAuth types.Auth) (*UserAccount, error) {
 		}
 	`
 
+	// Expo answers HTTP 200 with `me: null` (or a GraphQL `errors` array) for a
+	// credential it does not recognize, and a robot token has no user at all.
+	// Decoding into a zero-value UserAccount would turn that into an "account"
+	// with an empty username, so the null is kept visible and rejected below.
 	var resp struct {
 		Data struct {
-			Me UserAccount `json:"me"`
+			Me *UserAccount `json:"me"`
 		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
 	}
 
 	headers := map[string]string{}
@@ -258,18 +280,28 @@ func FetchUserAccountInformations(expoAuth types.Auth) (*UserAccount, error) {
 	if err := MakeGraphQLRequest(ctx, query, nil, expoAuth, &resp, headers); err != nil {
 		return nil, err
 	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("expo rejected the credential: %s", resp.Errors[0].Message)
+	}
+	if resp.Data.Me == nil || strings.TrimSpace(resp.Data.Me.Username) == "" {
+		return nil, ErrNoExpoUser
+	}
 
 	if cacheKey != "" {
 		ttl := userAccountCacheTTLSeconds
-		cache2.SetJSON(accountCache, cacheKey, resp.Data.Me, &ttl)
+		cache2.SetJSON(accountCache, cacheKey, *resp.Data.Me, &ttl)
 	}
 
-	return &resp.Data.Me, nil
+	return resp.Data.Me, nil
 }
 
 func FetchSelfUsername(appId string) string {
 	usernameCache := cache2.GetCache()
 	token := GetAccessToken(appId)
+	if strings.TrimSpace(token) == "" {
+		// No server token (unknown app or none configured): nothing to ask Expo.
+		return ""
+	}
 	cacheKey := selfUsernameCacheKey(token)
 	if cachedValue := usernameCache.Get(cacheKey); cachedValue != "" {
 		return cachedValue
