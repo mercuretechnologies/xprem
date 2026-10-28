@@ -20,6 +20,7 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/cdn"
+	"xprem/internal/dashboard"
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
@@ -346,6 +347,7 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 		oauthHandler = oauth.NewOAuthHandler(oauthService, rateLimiter)
 
 		rbac.MustValidateMCPTools(mcptools.DeclaredPermissions(), eemcptools.DeclaredPermissions())
+		invalidateApiKeys := func(appID string) { cache.GetCache().Delete(dashboard.ComputeGetApiKeysCacheKey(appID)) }
 		mcpHandler = mcp.NewMCPHandler(mcp.NewMCPService(
 			mcptools.Configurator(mcptools.Deps{
 				Apps:                appRepo,
@@ -358,6 +360,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				BranchWriter:        branchService,
 				ChannelWriter:       channelService,
 				Deployments:         deploymentService,
+				ApiKeys:             cliAuthService,
+				OnApiKeysChanged:    invalidateApiKeys,
 				SSOEnabled:          ssoService.Enabled,
 				VisibleApps:         rbacService.VisibleAppsForPrincipal,
 				CanUseSomewhere:     rbacService.MCPCanUseSomewhere,
