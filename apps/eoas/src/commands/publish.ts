@@ -388,6 +388,7 @@ export default class Publish extends Command {
     // Collected rather than logged inline: writing to the terminal under a
     // running spinner interleaves with its frames.
     const unchangedPlatforms: string[] = [];
+    const unchangedUpdates: PublishedUpdateMetadata[] = [];
     try {
       const outcomes = await Promise.all(
         platformsToUpload.map(async ({ runtimeVersion, platform }) => {
@@ -417,6 +418,14 @@ export default class Publish extends Command {
           } catch (error) {
             if (error instanceof NoChangesDetectedError) {
               unchangedPlatforms.push(platform);
+              if (emitMetadata) {
+                if (!error.updateUUID) {
+                  throw new Error(
+                    'The server did not return the unchanged update id. Upgrade the server to use --emitMetadata.'
+                  );
+                }
+                unchangedUpdates.push({ id: error.updateUUID, platform, runtimeVersion, branch });
+              }
               return null;
             }
             throw error;
@@ -427,6 +436,9 @@ export default class Publish extends Command {
         return entry !== null;
       });
       if (!uploadUrls.length) {
+        if (emitMetadata) {
+          await writeUpdateMetadata(path.join(projectDir, outputDir), unchangedUpdates);
+        }
         uploadFilesSpinner.warn('⚠️ No changes found in the update, nothing to deploy');
         for (const skipped of missingBundlePlatforms) {
           Log.withInfo(`⚠️ No bundle exported for ${skipped}, skipping.`);
@@ -639,7 +651,10 @@ export default class Publish extends Command {
             group: groupAcknowledged ? publishGroupId : undefined,
             message: resolvedMessage,
           }));
-          await writeUpdateMetadata(path.join(projectDir, outputDir), metadata);
+          await writeUpdateMetadata(path.join(projectDir, outputDir), [
+            ...metadata,
+            ...unchangedUpdates,
+          ]);
           Log.withInfo(`📝 ${UPDATE_METADATA_FILE} written to ${outputDir}`);
         }
       }

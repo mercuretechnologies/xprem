@@ -516,27 +516,37 @@ func (s *DeploymentService) dedupExistingUploadAssets(ctx context.Context, appId
 	return dedupedAssets
 }
 
-// isIdenticalToLatest reports whether this publish would re-ship the content the
-// branch already serves for the platform. A store that cannot answer never
+// identicalToLatest returns the update whose content this publish would re-ship
+// on the branch for the platform. A store that cannot answer never
 // blocks the publish.
-func (s *DeploymentService) isIdenticalToLatest(ctx context.Context, params RequestUploadURLParams, incoming *types.UpdateAssetMapping) bool {
+func (s *DeploymentService) identicalToLatest(ctx context.Context, params RequestUploadURLParams, incoming *types.UpdateAssetMapping) *types.Update {
 	// Straight to the repo: refusing a publish over a stale cached envelope
 	// would block re-shipping the previous good build after a bad one.
 	latest, err := s.updateRepo.GetLatestUpdate(ctx, params.AppID, params.BranchName, params.RuntimeVersion, params.Platform)
 	if err != nil {
 		log.Printf("[RequestID: %s] Warning: GetLatestUpdate returned error, skipping identical check: %v", params.RequestID, err)
-		return false
+		return nil
 	}
 	if latest == nil {
-		return false
+		return nil
 	}
 	stored, err := s.updateRepo.GetUpdateAssetMapping(ctx, *latest)
 	if err != nil {
 		log.Printf("[RequestID: %s] Warning: GetUpdateAssetMapping returned error, skipping identical check: %v", params.RequestID, err)
-		return false
+		return nil
 	}
-	return update2.AreUpdatesIdentical(stored, incoming)
+	if update2.AreUpdatesIdentical(stored, incoming) {
+		return latest
+	}
+	return nil
 }
+
+type NoChangesDetectedError struct {
+	UpdateUUID string
+}
+
+func (e *NoChangesDetectedError) Error() string { return ErrNoChangesDetected.Error() }
+func (e *NoChangesDetectedError) Unwrap() error { return ErrNoChangesDetected }
 
 func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params RequestUploadURLParams) (*RequestUploadURLResponse, error) {
 	err := s.branchService.UpsertBranchAndRuntimeVersion(ctx, params.AppID, params.BranchName, params.RuntimeVersion)
@@ -562,9 +572,16 @@ func (s *DeploymentService) RequestUploadURLs(ctx context.Context, params Reques
 		log.Printf("[RequestID: %s] %v", params.RequestID, err)
 		return nil, err
 	}
-	if s.isIdenticalToLatest(ctx, params, mapping) {
+	if previous := s.identicalToLatest(ctx, params, mapping); previous != nil {
+		metadata, err := s.updateRepo.RetrieveUpdateStoredMetadata(ctx, *previous)
+		if err != nil {
+			return nil, err
+		}
+		if metadata == nil {
+			return nil, fmt.Errorf("missing stored metadata for unchanged update %s", previous.UpdateId)
+		}
 		log.Printf("[RequestID: %s] Updates are identical, refusing upload", params.RequestID)
-		return nil, ErrNoChangesDetected
+		return nil, &NoChangesDetectedError{UpdateUUID: metadata.UpdateUUID}
 	}
 
 	updateId := update2.GenerateUpdateTimestamp(params.Platform)

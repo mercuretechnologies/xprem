@@ -9,6 +9,7 @@ import { FileDigest, digestFile } from './crypto';
 import { RequestedPlatform } from './expoConfig';
 import { fetchWithRetries } from './fetch';
 import Log, { learnMore } from './log';
+import { readUpdateUUID } from './updateMetadata';
 
 const fileMetadataJoi = Joi.object({
   assets: Joi.array()
@@ -417,7 +418,10 @@ export function activeRolloutConflictMessage(branch: string): string {
 }
 
 export class NoChangesDetectedError extends Error {
-  constructor(readonly platform: string) {
+  constructor(
+    readonly platform: string,
+    readonly updateUUID?: string
+  ) {
     super(`There is no change in the update for ${platform}`);
     this.name = 'NoChangesDetectedError';
   }
@@ -480,7 +484,7 @@ export async function requestUploadUrls({
     throw new Error(activeRolloutConflictMessage(branch));
   }
   if (response.status === 406) {
-    throw new NoChangesDetectedError(platform);
+    throw new NoChangesDetectedError(platform, await readUpdateUUID(response));
   }
   if (!response.ok) {
     const text = (await response.text()).trimEnd();

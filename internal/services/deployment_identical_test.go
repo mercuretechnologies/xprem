@@ -53,6 +53,21 @@ func TestRequestUploadURLs_RefusesAnIdenticalPublish(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoChangesDetected)
 }
 
+func TestRequestUploadURLs_IdenticalPublishReturnsExistingUUID(t *testing.T) {
+	svc, h := newDedupTestHarness(t)
+	files := publishFiles("bundle-v1", "assets/a")
+	seedPublished(t, h, files)
+	ctx := context.Background()
+	previous, err := h.updateRepo.GetLatestUpdate(ctx, h.appId, "main", "1", "ios")
+	require.NoError(t, err)
+	require.NoError(t, h.updateRepo.StoreUpdateUUIDInMetadata(ctx, *previous, "existing-update"))
+	_, err = svc.RequestUploadURLs(ctx, publishParams(h, files))
+	var unchanged *NoChangesDetectedError
+	require.ErrorAs(t, err, &unchanged)
+	assert.Equal(t, "existing-update", unchanged.UpdateUUID)
+	assert.ErrorIs(t, err, ErrNoChangesDetected)
+}
+
 func TestRequestUploadURLs_AcceptsAChangedBundle(t *testing.T) {
 	svc, h := newDedupTestHarness(t)
 	seedPublished(t, h, publishFiles("bundle-v1", "assets/a"))

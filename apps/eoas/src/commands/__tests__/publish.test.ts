@@ -146,7 +146,7 @@ function requestUploadUrlCalls(): string[] {
     .filter(url => url.includes('/requestUploadUrl/'));
 }
 
-function runPublish(platform: string | null = 'ios'): Promise<unknown> {
+function runPublish(platform: string | null = 'ios', emitMetadata = false): Promise<unknown> {
   return Publish.run(
     [
       '--branch',
@@ -154,6 +154,7 @@ function runPublish(platform: string | null = 'ios'): Promise<unknown> {
       ...(platform === null ? [] : ['--platform', platform]),
       '--nonInteractive',
       '--disableRepositoryCheck',
+      ...(emitMetadata ? ['--emitMetadata'] : []),
     ],
     eoasRoot
   );
@@ -183,6 +184,67 @@ afterEach(() => {
   fs.removeSync(secretDir);
   vi.restoreAllMocks();
   vi.clearAllMocks();
+});
+
+describe('unchanged publication receipts', () => {
+  it('includes unchanged and newly published platforms in one receipt', async () => {
+    vi.mocked(spawnAsync).mockImplementation((async () => {
+      writeExport(['ios', 'android']);
+      return { stdout: 'exported', stderr: '' };
+    }) as any);
+    vi.mocked(fetchWithRetries).mockImplementation(async (url: string) => {
+      if (url.includes('/requestUploadUrl/')) {
+        if (new URL(url).searchParams.get('platform') === 'ios') {
+          return {
+            ok: false,
+            status: 406,
+            text: async () => JSON.stringify({ updateUUID: 'existing-ios' }),
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ updateId: 1753800000000, uploadRequests: [] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ updateUUID: 'new-android' }),
+      } as Response;
+    });
+    await runPublish(null, true);
+    expect(fs.readJsonSync(distFile('xprem-update-metadata.json'))).toEqual(
+      expect.arrayContaining([
+        { id: 'existing-ios', platform: 'ios', runtimeVersion: '1.0.0', branch: 'main' },
+        { id: 'new-android', platform: 'android', runtimeVersion: '1.0.0', branch: 'main' },
+      ])
+    );
+    expect(fs.readJsonSync(distFile('xprem-update-metadata.json'))).toHaveLength(2);
+  });
+
+  it('writes the existing identity when no upload is needed', async () => {
+    vi.mocked(fetchWithRetries).mockResolvedValue({
+      ok: false,
+      status: 406,
+      text: async () => JSON.stringify({ updateUUID: 'existing-update' }),
+    } as Response);
+    await runPublish('ios', true);
+    expect(fs.readJsonSync(distFile('xprem-update-metadata.json'))).toEqual([
+      { id: 'existing-update', platform: 'ios', runtimeVersion: '1.0.0', branch: 'main' },
+    ]);
+    expect(putCalls()).toEqual([]);
+  });
+
+  it('fails receipt publication when the server omits the unchanged identity', async () => {
+    vi.mocked(fetchWithRetries).mockResolvedValue({
+      ok: false,
+      status: 406,
+      text: async () => JSON.stringify({ error: 'unchanged' }),
+    } as Response);
+    await expect(runPublish('ios', true)).rejects.toThrow();
+    expect(fs.existsSync(distFile('xprem-update-metadata.json'))).toBe(false);
+  });
 });
 
 describe('publish native platform selection', () => {
