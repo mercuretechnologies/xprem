@@ -528,10 +528,24 @@ func TestStatelessIdenticalPublishIsRefused(t *testing.T) {
 			first := postRequestUploadUrl(t, "DO_NOT_USE", "1", fixture.platform, sample)
 			assert.Equal(t, http.StatusOK, first.Code)
 			markUpdateChecked(t, basePath, "DO_NOT_USE", "1", updateIdFromResponse(t, first))
+			metadataPath := filepath.Join(basePath, "test-app-id", "DO_NOT_USE", "1", strconv.FormatInt(updateIdFromResponse(t, first), 10), "update-metadata.json")
+			stored, err := os.ReadFile(metadataPath)
+			require.NoError(t, err)
+			var metadata map[string]any
+			require.NoError(t, json.Unmarshal(stored, &metadata))
+			metadata["updateUUID"] = "existing-update"
+			stored, err = json.Marshal(metadata)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(metadataPath, stored, 0o644))
 
 			second := postRequestUploadUrl(t, "DO_NOT_USE", "1", fixture.platform, sample)
 			assert.Equal(t, http.StatusNotAcceptable, second.Code)
 			assert.Contains(t, second.Body.String(), "no changes detected")
+			var unchanged struct {
+				UpdateUUID string `json:"updateUUID"`
+			}
+			require.NoError(t, json.Unmarshal(second.Body.Bytes(), &unchanged))
+			assert.Equal(t, "existing-update", unchanged.UpdateUUID)
 		})
 	}
 }

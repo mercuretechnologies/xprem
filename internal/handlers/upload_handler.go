@@ -364,11 +364,13 @@ func (h *UploadHandler) RequestUploadUrlHandler(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if errors.Is(err, services.ErrNoChangesDetected) {
+		var unchanged *services.NoChangesDetectedError
+		if errors.As(err, &unchanged) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotAcceptable)
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "You have already uploaded this update, no changes detected",
+				"error":      "You have already uploaded this update, no changes detected",
+				"updateUUID": unchanged.UpdateUUID,
 			})
 			return
 		}
