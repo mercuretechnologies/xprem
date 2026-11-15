@@ -22,6 +22,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -55,17 +57,20 @@ func CreateHash(data []byte, hashingAlgorithm, encoding string) (string, error) 
 	}
 }
 
+// ConvertSHA256HashToUUID builds the update id from the first 16 bytes of a hex
+// SHA-256 digest. The version (8, RFC 9562) and variant bits are set so strict
+// UUID validators accept the id; without them about 7 ids in 8 are rejected.
 func ConvertSHA256HashToUUID(value string) string {
 	if len(value) < 32 {
 		return ""
 	}
-	return fmt.Sprintf("%s-%s-%s-%s-%s",
-		value[:8],
-		value[8:12],
-		value[12:16],
-		value[16:20],
-		value[20:32],
-	)
+	var id uuid.UUID
+	if _, err := hex.Decode(id[:], []byte(value[:32])); err != nil {
+		return ""
+	}
+	id[6] = (id[6] & 0x0f) | 0x80
+	id[8] = (id[8] & 0x3f) | 0x80
+	return id.String()
 }
 
 func GetBase64URLEncoding(encodedString string) string {
