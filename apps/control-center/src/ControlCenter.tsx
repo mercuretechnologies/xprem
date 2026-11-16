@@ -87,16 +87,7 @@ type TappableProps = Omit<PressableProps, 'style' | 'children' | 'onPressIn' | '
   children: ReactNode;
 };
 
-/**
- * A Pressable whose style is always a plain value, never `({ pressed }) => …`.
- *
- * This package ships as source, so it is compiled by the host app's Babel config
- * and rendered through whatever the host has wrapped around react-native's
- * components. Styling layers that do that (NativeWind is the common one) take
- * `style` to be a value and drop a function — and with it the card, the row
- * layout and the black pill, leaving white text on the light page. Tracking the
- * press here costs one state and makes the panel look the same in every host.
- */
+// A plain `style`, never a function: NativeWind and similar wrappers drop it.
 function Tappable({ style, pressedStyle, children, ...rest }: TappableProps) {
   const [pressed, setPressed] = useState(false);
   return (
