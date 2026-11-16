@@ -3,11 +3,14 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  PressableProps,
   ScrollView,
+  StyleProp,
   StyleSheet,
   Text,
   TextInput,
   View,
+  ViewStyle,
 } from 'react-native';
 import { BranchIcon } from './BranchIcon';
 import { readConfig, readLoadedState, SurfConfig } from './config';
@@ -76,6 +79,35 @@ class ControlCenterBoundary extends Component<{ children: ReactNode }, { failed:
   render() {
     return this.state.failed ? null : this.props.children;
   }
+}
+
+type TappableProps = Omit<PressableProps, 'style' | 'children' | 'onPressIn' | 'onPressOut'> & {
+  style: StyleProp<ViewStyle>;
+  pressedStyle: StyleProp<ViewStyle>;
+  children: ReactNode;
+};
+
+/**
+ * A Pressable whose style is always a plain value, never `({ pressed }) => …`.
+ *
+ * This package ships as source, so it is compiled by the host app's Babel config
+ * and rendered through whatever the host has wrapped around react-native's
+ * components. Styling layers that do that (NativeWind is the common one) take
+ * `style` to be a value and drop a function — and with it the card, the row
+ * layout and the black pill, leaving white text on the light page. Tracking the
+ * press here costs one state and makes the panel look the same in every host.
+ */
+function Tappable({ style, pressedStyle, children, ...rest }: TappableProps) {
+  const [pressed, setPressed] = useState(false);
+  return (
+    <Pressable
+      {...rest}
+      style={[style, pressed && pressedStyle]}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}>
+      {children}
+    </Pressable>
+  );
 }
 
 export function ControlCenter() {
@@ -272,13 +304,14 @@ function ControlCenterPanel() {
             <Text style={[type.hero, styles.heroName]} numberOfLines={1}>
               {loadedBranch ?? 'Embedded build'}
             </Text>
-            <Pressable
-              style={({ pressed }) => [styles.close, pressed && styles.closePressed]}
+            <Tappable
+              style={styles.close}
+              pressedStyle={styles.closePressed}
               onPress={close}
               accessibilityRole="button"
               accessibilityLabel="Close">
               <Text style={styles.closeGlyph}>✕</Text>
-            </Pressable>
+            </Tappable>
           </View>
 
           <View style={styles.chipLine}>
@@ -339,9 +372,10 @@ function ControlCenterPanel() {
           )}
 
           {shown.map(candidate => (
-            <Pressable
+            <Tappable
               key={candidate.name}
-              style={({ pressed }) => [styles.card, styles.row, pressed && styles.rowPressed]}
+              style={[styles.card, styles.row]}
+              pressedStyle={styles.rowPressed}
               disabled={pending !== null}
               onPress={() => void switchTo(candidate.name)}>
               <BranchIcon size={22} color={palette.muted} />
@@ -356,12 +390,13 @@ function ControlCenterPanel() {
               ) : (
                 <Text style={styles.chevron}>›</Text>
               )}
-            </Pressable>
+            </Tappable>
           ))}
 
           {withheld > 0 && !expanded && (
-            <Pressable
-              style={({ pressed }) => [styles.card, styles.seeAll, pressed && styles.rowPressed]}
+            <Tappable
+              style={[styles.card, styles.seeAll]}
+              pressedStyle={styles.rowPressed}
               disabled={expanding}
               onPress={() => void showEverything()}>
               {expanding ? (
@@ -371,7 +406,7 @@ function ControlCenterPanel() {
                   Showing the {page?.branches.length} newest · See all {page?.total}
                 </Text>
               )}
-            </Pressable>
+            </Tappable>
           )}
 
           {withheld > 0 && expanded && (
@@ -388,8 +423,9 @@ function ControlCenterPanel() {
           {note && <Text style={[type.meta, styles.footnote]}>{note}</Text>}
           {error && <Text style={[type.meta, styles.errorText]}>{error}</Text>}
 
-          <Pressable
-            style={({ pressed }) => [styles.pill, pressed && styles.pillPressed]}
+          <Tappable
+            style={styles.pill}
+            pressedStyle={styles.pillPressed}
             disabled={pending !== null}
             onPress={() => void switchTo(null)}>
             {pending === '' ? (
@@ -397,7 +433,7 @@ function ControlCenterPanel() {
             ) : (
               <Text style={type.pill}>Return to this build&rsquo;s branch</Text>
             )}
-          </Pressable>
+          </Tappable>
 
           <View style={styles.brand}>
             <XpremMark size={16} />
