@@ -20,6 +20,7 @@ import (
 	"xprem/internal/bucket"
 	"xprem/internal/cache"
 	"xprem/internal/cdn"
+	"xprem/internal/dashboard"
 	"xprem/internal/database"
 	"xprem/internal/database/clickhouse"
 	"xprem/internal/database/postgres"
@@ -358,6 +359,8 @@ func InitDependencies(ctx context.Context) (*AppContainer, func()) {
 				BranchWriter:        branchService,
 				ChannelWriter:       channelService,
 				Deployments:         deploymentService,
+				AppCreator:          appService,
+				OnAppsChanged:       func() { cache.GetCache().Delete(dashboard.ComputeGetAppsCacheKey()) },
 				SSOEnabled:          ssoService.Enabled,
 				VisibleApps:         rbacService.VisibleAppsForPrincipal,
 				CanUseSomewhere:     rbacService.MCPCanUseSomewhere,

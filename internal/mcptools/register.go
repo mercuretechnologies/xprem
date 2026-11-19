@@ -89,6 +89,10 @@ type ChannelWriter interface {
 	DeleteChannel(ctx context.Context, channelName string, appId string) error
 }
 
+type AppCreator interface {
+	CreateApp(ctx context.Context, displayName string, keysConfig config.KeysConfig) (string, error)
+}
+
 type DeploymentWriter interface {
 	CreateRollback(ctx context.Context, appId string, platform types.Platform, commitHash, runtimeVersion, branchName, message string) (*types.Update, error)
 	RepublishUpdateByID(ctx context.Context, appId, branchName, runtimeVersion, updateId string) (*types.Update, error)
@@ -111,6 +115,10 @@ type Deps struct {
 	BranchWriter   BranchWriter
 	ChannelWriter  ChannelWriter
 	Deployments    DeploymentWriter
+	AppCreator     AppCreator
+	// OnAppsChanged drops what caches the app list, as the dashboard route
+	// does after a create.
+	OnAppsChanged func()
 	// SSOEnabled reports whether enterprise SSO is active; get_server_config
 	// surfaces it.
 	SSOEnabled func(ctx context.Context) bool
@@ -145,6 +153,7 @@ var registrations = []struct {
 	{register: registerGetUpdatePatches},
 	{register: registerGetCertificate, access: &certificateAccess},
 	{register: registerGetServerConfig},
+	{register: registerCreateApp, access: &appCreateAccess},
 	{register: registerCreateBranch, access: &branchCreateAccess},
 	{register: registerDeleteBranch, access: &branchDeleteAccess},
 	{register: registerCreateChannel, access: &channelCreateAccess},
