@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestCreateHash(t *testing.T) {
@@ -42,7 +44,7 @@ func TestCreateHash(t *testing.T) {
 
 func TestConvertSHA256HashToUUID(t *testing.T) {
 	input := "1234567890abcdef1234567890abcdef12345678"
-	expected := "12345678-90ab-cdef-1234-567890abcdef"
+	expected := "12345678-90ab-8def-9234-567890abcdef"
 	result := ConvertSHA256HashToUUID(input)
 	if result != expected {
 		t.Errorf("expected %s, got %s", expected, result)
@@ -52,6 +54,40 @@ func TestConvertSHA256HashToUUID(t *testing.T) {
 	result = ConvertSHA256HashToUUID(shortInput)
 	if result != "" {
 		t.Errorf("expected empty string for short input, got %s", result)
+	}
+
+	notHex := "zz34567890abcdef1234567890abcdef12345678"
+	result = ConvertSHA256HashToUUID(notHex)
+	if result != "" {
+		t.Errorf("expected empty string for non-hex input, got %s", result)
+	}
+}
+
+// Every nibble value in the version and variant positions must come out as a
+// version 8, RFC 4122 variant UUID, with the other 122 bits untouched.
+func TestConvertSHA256HashToUUIDSetsVersionAndVariant(t *testing.T) {
+	const hexDigits = "0123456789abcdef"
+	for _, version := range hexDigits {
+		for variantIndex, variant := range hexDigits {
+			input := "1234567890ab" + string(version) + "def" + string(variant) + "234567890abcdef12345678"
+			result := ConvertSHA256HashToUUID(input)
+			parsed, err := uuid.Parse(result)
+			if err != nil {
+				t.Fatalf("input %s: %q is not a UUID: %v", input, result, err)
+			}
+			if parsed.Version() != 8 {
+				t.Errorf("input %s: expected version 8, got %d (%s)", input, parsed.Version(), result)
+			}
+			if parsed.Variant() != uuid.RFC4122 {
+				t.Errorf("input %s: expected RFC 4122 variant, got %v (%s)", input, parsed.Variant(), result)
+			}
+			if result[19] != hexDigits[variantIndex&0x3|0x8] {
+				t.Errorf("input %s: low variant bits changed: %s", input, result)
+			}
+			if result[:14] != "12345678-90ab-" || result[15:18] != "def" || result[20:] != "234-567890abcdef" {
+				t.Errorf("input %s: bits outside version and variant changed: %s", input, result)
+			}
+		}
 	}
 }
 
