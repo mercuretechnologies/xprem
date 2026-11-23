@@ -35,6 +35,7 @@ func TestRedisSentinelModeRendersRedisAuthAndTLSEnvVars(t *testing.T) {
 	for _, name := range []string{
 		"REDIS_SENTINEL_ADDRS",
 		"REDIS_SENTINEL_MASTER_NAME",
+		"REDIS_SENTINEL_PASSWORD",
 		"REDIS_USE_TLS",
 		"REDIS_PASSWORD",
 		"REDIS_USERNAME",
@@ -47,6 +48,7 @@ func TestRedisSentinelModeRendersRedisAuthAndTLSEnvVars(t *testing.T) {
 
 	for _, name := range []string{
 		"REDIS_SENTINEL_MASTER_NAME",
+		"REDIS_SENTINEL_PASSWORD",
 		"REDIS_PASSWORD",
 		"REDIS_USERNAME",
 		"REDIS_CA_CERT_B64",

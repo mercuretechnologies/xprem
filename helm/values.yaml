@@ -126,6 +126,14 @@ environment:
     enabled:
       - key: "cacheMode"
         is: "redis-sentinel"
+  # Only when the Sentinels themselves require a password (requirepass in
+  # sentinel.conf). REDIS_PASSWORD is sent to the Redis nodes, never to them.
+  - name: "REDIS_SENTINEL_PASSWORD"
+    value: ""
+    required: false
+    enabled:
+      - key: "cacheMode"
+        is: "redis-sentinel"
   - name: "REDIS_HOST"
     value: ""
     required:
