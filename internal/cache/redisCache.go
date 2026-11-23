@@ -61,11 +61,16 @@ func NewRedisCache(host, password, port string, useTLS bool, username, caCertB64
 	return &RedisCache{client: client}
 }
 
-func NewRedisSentinelCache(sentinelAddrs []string, masterName, password string, useTLS bool, username, caCertB64 string) *RedisCache {
+// sentinelFailoverOptions keeps the two credentials apart: password and
+// username authenticate against the Redis nodes, sentinelPassword against the
+// Sentinels themselves. go-redis never reuses the first for the second, so a
+// Sentinel started with requirepass answers NOAUTH unless it gets its own.
+func sentinelFailoverOptions(sentinelAddrs []string, masterName, password, sentinelPassword string, useTLS bool, username, caCertB64 string) *redis.FailoverOptions {
 	opts := &redis.FailoverOptions{
-		SentinelAddrs: sentinelAddrs,
-		MasterName:    masterName,
-		Password:      password,
+		SentinelAddrs:    sentinelAddrs,
+		MasterName:       masterName,
+		Password:         password,
+		SentinelPassword: sentinelPassword,
 	}
 	if username != "" {
 		opts.Username = username
@@ -73,8 +78,11 @@ func NewRedisSentinelCache(sentinelAddrs []string, masterName, password string, 
 	if useTLS {
 		opts.TLSConfig = buildTLSConfig(caCertB64)
 	}
+	return opts
+}
 
-	client := redis.NewFailoverClient(opts)
+func NewRedisSentinelCache(sentinelAddrs []string, masterName, password, sentinelPassword string, useTLS bool, username, caCertB64 string) *RedisCache {
+	client := redis.NewFailoverClient(sentinelFailoverOptions(sentinelAddrs, masterName, password, sentinelPassword, useTLS, username, caCertB64))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

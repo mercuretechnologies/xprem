@@ -18,6 +18,20 @@ func TestParseSentinelAddrsTrimsWhitespaceAndDropsEmptyEntries(t *testing.T) {
 	}
 }
 
+func TestSentinelFailoverOptionsSendTheSentinelPasswordToTheSentinelsOnly(t *testing.T) {
+	opts := sentinelFailoverOptions([]string{"sentinel-0:26379"}, "mymaster", "node-secret", "sentinel-secret", false, "", "")
+
+	require.Equal(t, "node-secret", opts.Password)
+	require.Equal(t, "sentinel-secret", opts.SentinelPassword)
+}
+
+func TestSentinelFailoverOptionsLeaveTheSentinelsUnauthenticatedByDefault(t *testing.T) {
+	opts := sentinelFailoverOptions([]string{"sentinel-0:26379"}, "mymaster", "node-secret", "", false, "", "")
+
+	require.Equal(t, "node-secret", opts.Password)
+	require.Empty(t, opts.SentinelPassword)
+}
+
 func TestParseSentinelAddrsReturnsEmptyForBlankInput(t *testing.T) {
 	got := parseSentinelAddrs(" , \t,")
 

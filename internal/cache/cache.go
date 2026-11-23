@@ -105,10 +105,11 @@ func GetCache() Cache {
 				masterName = "mymaster"
 			}
 			password := config.GetEnv("REDIS_PASSWORD")
+			sentinelPassword := config.GetEnv("REDIS_SENTINEL_PASSWORD")
 			useTLS := config.GetEnv("REDIS_USE_TLS") == "true"
 			username := config.GetEnv("REDIS_USERNAME")
 			caCertB64 := config.GetEnv("REDIS_CA_CERT_B64")
-			cacheInstance = NewRedisSentinelCache(sentinelAddrs, masterName, password, useTLS, username, caCertB64)
+			cacheInstance = NewRedisSentinelCache(sentinelAddrs, masterName, password, sentinelPassword, useTLS, username, caCertB64)
 		default:
 			panic("Unknown cache type")
 		}

@@ -270,6 +270,13 @@ export const ENV_SECTIONS: EnvSection[] = [
         value: () => 'mymaster',
       },
       {
+        name: 'REDIS_SENTINEL_PASSWORD',
+        applies: c => c.cacheMode === 'redis-sentinel',
+        required: false,
+        value: () => '',
+        comment: 'Only if your Sentinels require a password of their own (requirepass).',
+      },
+      {
         name: 'REDIS_PASSWORD',
         applies: c => c.cacheMode !== 'local',
         required: true,
